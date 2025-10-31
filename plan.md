@@ -62,7 +62,7 @@
 | **React** | ~130KB | 中速 | 中 | ⭐⭐⭐ | 高 |
 | **Flutter Web** | ~1500KB | 低速 | 大 | ⭐⭐ | 高 |
 
-### 2.2 推奨フレームワーク: **Svelte + SvelteKit**
+### 2.2 推奨フレームワーク: **Vite + Svelte**
 
 #### 選定理由
 
@@ -83,10 +83,28 @@
 - 優れた TypeScript サポート
 - 高速なビルド（Vite ベース）
 
-**4. エコシステム**:
-- SvelteKit によるルーティングとビルド最適化
-- 豊富なコミュニティライブラリ
-- 2025年時点で成熟した安定版
+**4. 軽量性**:
+- Svelte単体のランタイム（~5KB）のみ
+- 不要なフレームワーク機能を排除
+- 最小限の依存関係
+
+#### なぜSvelteKitを採用しないのか
+
+**SvelteKitの主な機能（このアプリには不要）**:
+- ❌ SSR/SSG（サーバーサイドレンダリング）→ 完全クライアント側アプリ
+- ❌ ファイルベースルーティング → 2-3画面のみで手動ルーティングで十分
+- ❌ APIルート → サーバー機能不要
+- ❌ フルスタック機能 → 静的SPAのみ
+
+**SvelteKitのデメリット**:
+- バンドルサイズ増加（+15-25KB）
+- 不要な規約（+page.svelte, +layout.svelte）
+- 学習コストの増加
+- ビルド設定の複雑化
+
+**結論**: 
+このプロジェクトには **Vite + Svelte（SvelteKitなし）** が最適。
+必要な機能だけを組み合わせることで、最小バンドルサイズと最高のパフォーマンスを実現。
 
 #### 代替案: **Solid.js**
 
@@ -96,10 +114,9 @@
 - React風の構文で移行しやすい
 
 **Svelteを優先する理由**:
-- SvelteKit によるフルスタックフレームワーク
 - より大きなコミュニティとエコシステム
 - 学習コストがやや低い
-- ビルドツールの成熟度
+- ビルドツールの成熟度（Vite統合が安定）
 
 ### 2.3 Vanilla JS の検討
 
@@ -531,24 +548,100 @@ src/
 - IntelliSense
 - リファクタリングサポート
 
-### 4.2 WASM モジュール
+### 4.2 GIFエンコーディング戦略
 
-**exoquant (MIT License)**:
-- 高速な色量子化
-- Rust → WASM コンパイル
-- ~50KB gzipped
+#### プライマリ案: **gif.js（JavaScript実装）**
 
-**gif-lzw (MIT License)**:
-- LZW 圧縮アルゴリズム
-- C/C++ → WASM コンパイル（Emscripten）
-- ~30KB gzipped
+**採用理由**:
+- ✅ MIT License
+- ✅ 実績あり（多数のプロジェクトで使用）
+- ✅ Web Worker対応済み
+- ✅ 確実に動作（ブラウザ互換性高い）
+- ✅ メンテナンス継続中
 
-**dithering (MIT License, optional)**:
-- Floyd-Steinberg ディザリング
-- Rust → WASM コンパイル
-- ~20KB gzipped
+**構成**:
+```
+gif.js (MIT License)
+├── gif.js (~5KB) - メインライブラリ
+├── gif.worker.js (~15KB) - Worker実装
+└── LZW圧縮（組み込み）
+```
 
-**合計 WASM サイズ**: ~100KB gzipped
+**パフォーマンス**:
+- 1920x1080, 300フレーム: 約15-25秒
+- メモリ効率的（Worker内で処理）
+- プログレス報告機能あり
+
+**使用例**:
+```javascript
+import GIF from 'gif.js';
+
+const gif = new GIF({
+  workers: 4,
+  quality: 10,
+  workerScript: '/gif.worker.js'
+});
+
+frames.forEach(frame => gif.addFrame(frame));
+gif.render();
+gif.on('finished', blob => download(blob));
+```
+
+#### セカンダリ案: **カスタムWASM（パフォーマンス最適化時）**
+
+**Phase 3で検証する項目**:
+- **exoquant** (Rust → WASM): 色量子化の高速化
+- **カスタムLZW** (C/C++ → WASM): 圧縮の高速化
+- **dithering** (Rust → WASM): ディザリング処理
+
+**想定構成**:
+```
+カスタムWASM案
+├── exoquant.wasm (~50KB) - 色量子化
+├── lzw-encoder.wasm (~30KB) - LZW圧縮
+└── dithering.wasm (~20KB) - オプション
+
+合計: ~100KB gzipped
+```
+
+**期待効果**:
+- エンコード時間: 15-25秒 → 5-12秒（**50-60%高速化**）
+- メモリ使用量: 同等またはやや削減
+
+**リスク**:
+- ⚠️ ビルド環境の構築が必要（Rust, Emscripten）
+- ⚠️ ブラウザ互換性の検証が必要
+- ⚠️ デバッグが困難
+
+#### 段階的アプローチ
+
+**Phase 1-2（プロトタイプ〜コア機能）**:
+- gif.js で実装（確実に動作）
+
+**Phase 3（WASM統合）**:
+- gif.js をベースラインとして保持
+- カスタムWASMの検証とベンチマーク
+- パフォーマンス向上が**50%以上**なら採用
+
+**Phase 4（最適化）**:
+- gif.js とカスタムWASMの切り替え機能
+- ユーザーが選択可能（設定画面）
+- フォールバック機構（WASMエラー時にgif.jsに切り替え）
+
+#### フォールバック戦略
+
+```javascript
+async function encodeGif(frames, settings) {
+  try {
+    // まずカスタムWASMを試行
+    return await encodeWithWasm(frames, settings);
+  } catch (error) {
+    console.warn('WASM encoding failed, falling back to gif.js', error);
+    // フォールバック: gif.js
+    return await encodeWithGifJs(frames, settings);
+  }
+}
+```
 
 ### 4.3 Web Workers
 
@@ -1075,31 +1168,51 @@ test('should maintain 60 FPS during playback', async ({ page }) => {
 ### 8.1 段階的移行
 
 **Phase 1: プロトタイプ（2週間）**
-- Svelte + SvelteKit セットアップ
+- Vite + Svelte セットアップ（SvelteKitなし）
+- 手動ルーティングの実装（navaidまたは独自実装）
 - キャプチャ機能の実装（画面録画、循環バッファ）
 - 基本UIの構築
+- **マイルストーン**: 画面録画→クリップ作成が動作
 
 **Phase 2: コア機能（3週間）**
 - エディタ画面（タイムライン、フレームナビゲーション）
 - クロップ機能（Canvas操作、リサイズハンドル）
 - Web Workers 統合（サムネイル生成）
+- gif.js の統合（基本的なGIFエクスポート）
+- **マイルストーン**: フレーム編集→GIFエクスポートが動作
 
-**Phase 3: WASM統合（2週間）**
-- WASM モジュールの選定とビルド
-- GIFエンコーダーの実装
-- Worker でのエンコード処理
+**Phase 3: WASM統合検証（3週間）** ← +1週バッファ
+- gif.js をベースライン実装として保持
+- カスタムWASMの調査とビルド環境構築
+  - exoquant (色量子化)
+  - カスタムLZW (圧縮)
+- パフォーマンスベンチマーク（gif.js vs WASM）
+- 50%以上の高速化が確認できた場合のみWASM採用
+- フォールバック機構の実装
+- **マイルストーン**: WASM検証完了、採用判断
 
-**Phase 4: 最適化（2週間）**
+**Phase 4: 最適化（3週間）** ← +1週バッファ
 - パフォーマンスチューニング
-- メモリ使用量の削減
-- バンドルサイズの最適化
+  - Canvas描画最適化
+  - メモリ使用量の削減
+  - バンドルサイズの最適化
+- ブラウザ互換性問題の修正
+- ユーザビリティ改善（キーボードショートカット等）
+- **マイルストーン**: 全パフォーマンス目標達成
 
 **Phase 5: テスト・デプロイ（1週間）**
-- E2E テスト
-- ブラウザ互換性テスト
-- プロダクションデプロイ
+- E2E テスト（Playwright）
+- ブラウザ互換性テスト（Chrome, Firefox, Safari, Edge）
+- パフォーマンステスト（Lighthouse, 手動測定）
+- プロダクションデプロイ（Vercel/Netlify）
+- **マイルストーン**: プロダクションリリース
 
-**合計: 約10週間（2.5ヶ月）**
+**合計: 約12週間（3ヶ月）** ← Phase 3, 4に各+1週
+
+**リスクバッファ**:
+- Phase 3: WASM統合が困難な場合、gif.jsのみで完了可能
+- Phase 4: パフォーマンス目標未達の場合、Phase 4を延長可能
+- 最悪ケース（全Phase遅延）: 14週間（3.5ヶ月）
 
 ### 8.2 データ移行
 
@@ -1150,12 +1263,194 @@ test('should maintain 60 FPS during playback', async ({ page }) => {
 
 ---
 
-## 10. まとめ
+## 10. パフォーマンス測定方法
 
-### 10.1 期待される改善
+### 10.1 バンドルサイズ測定
+
+**ビルド後のファイルサイズ確認**:
+```bash
+npm run build
+
+# 詳細なファイルサイズ確認
+ls -lh dist/ | grep -E '\.(js|css|wasm)$'
+
+# gzip圧縮後のサイズ確認
+gzip -c dist/assets/*.js | wc -c
+```
+
+**目標値**:
+- 初期ロード（HTML + CSS + JS）: < 150KB (gzipped)
+- WASM（遅延ロード）: < 100KB (gzipped)
+- 合計: < 250KB (gzipped)
+
+**測定ツール**:
+- `vite-plugin-compression` でgzip/brotli圧縮サイズを確認
+- Lighthouse の「Performance」スコアで検証
+
+### 10.2 初期ロード時間測定
+
+**Chrome DevToolsで測定**:
+```
+1. DevTools > Network タブを開く
+2. "Disable cache" にチェック
+3. ページをリロード
+4. DOMContentLoaded イベントまでの時間を確認
+```
+
+**目標値**:
+- DOMContentLoaded: < 500ms
+- First Contentful Paint (FCP): < 1.0s
+- Largest Contentful Paint (LCP): < 1.5s
+- Time to Interactive (TTI): < 2.0s
+
+**スロットリングテスト**:
+```
+DevTools > Network > Throttling:
+- Fast 3G: < 3秒
+- Slow 3G: < 5秒
+```
+
+### 10.3 メモリ使用量測定
+
+**Chrome DevTools Performance Monitorで測定**:
+```
+1. DevTools > Performance Monitor を開く
+2. 以下のメトリクスを監視:
+   - JS heap size
+   - DOM Nodes
+   - Event listeners
+```
+
+**目標値**:
+- アイドル時: < 50MB (JS heap)
+- 録画中（300フレーム）: < 500MB
+- エディタ画面: < 300MB
+- ピーク時: < 1.5GB
+
+**メモリリーク検出**:
+```
+1. DevTools > Memory > Heap snapshot
+2. 録画 → クリップ → 編集 → エクスポートのサイクルを3回繰り返す
+3. Heap snapshotを比較
+4. メモリが解放されているか確認
+```
+
+### 10.4 FPS測定
+
+**Chrome DevTools Renderingで測定**:
+```
+1. DevTools > Rendering > Frame Rendering Stats
+2. エディタ画面でフレーム再生
+3. FPS meterで60 FPSを維持できているか確認
+```
+
+**プログラマティック測定**:
+```javascript
+// tests/performance/fps-test.js
+let frameCount = 0;
+let lastTime = performance.now();
+
+function measureFPS() {
+  return new Promise((resolve) => {
+    function countFrames(timestamp) {
+      frameCount++;
+      
+      if (timestamp - lastTime >= 1000) {
+        resolve(frameCount);
+      } else {
+        requestAnimationFrame(countFrames);
+      }
+    }
+    requestAnimationFrame(countFrames);
+  });
+}
+
+// テストで使用
+const fps = await measureFPS();
+expect(fps).toBeGreaterThanOrEqual(60);
+```
+
+**目標値**:
+- エディタ画面（フレーム再生中）: 60 FPS維持
+- タイムラインスクロール: 60 FPS維持
+- クロップエリア操作: 60 FPS維持
+
+### 10.5 エンコード速度測定
+
+**ベンチマーク条件**:
+```
+解像度: 1920x1080
+フレーム数: 300フレーム（10秒 @ 30 FPS）
+品質: 80%
+ディザリング: ON
+```
+
+**測定方法**:
+```javascript
+const startTime = performance.now();
+
+await encodeGif(frames, settings);
+
+const elapsedTime = (performance.now() - startTime) / 1000;
+console.log(`Encoding time: ${elapsedTime.toFixed(2)}s`);
+```
+
+**目標値**:
+- gif.js（JavaScript）: 15-25秒
+- カスタムWASM: 5-12秒（**50-60%高速化**）
+
+### 10.6 継続的パフォーマンス監視
+
+**CI/CDでの自動測定**:
+```yaml
+# .github/workflows/performance.yml
+name: Performance Test
+
+on: [push, pull_request]
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: npm ci
+      - run: npm run build
+      - uses: treosh/lighthouse-ci-action@v9
+        with:
+          urls: |
+            http://localhost:5173
+          budgetPath: ./lighthouse-budget.json
+```
+
+**Lighthouse予算設定**:
+```json
+// lighthouse-budget.json
+{
+  "budgets": [
+    {
+      "path": "/*",
+      "timings": [
+        { "metric": "first-contentful-paint", "budget": 1000 },
+        { "metric": "largest-contentful-paint", "budget": 1500 },
+        { "metric": "interactive", "budget": 2000 }
+      ],
+      "resourceSizes": [
+        { "resourceType": "script", "budget": 150 },
+        { "resourceType": "stylesheet", "budget": 20 }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 11. まとめ
+
+### 11.1 期待される改善
 
 **パフォーマンス**:
-- バンドルサイズ: 1.5MB → 0.25MB（**83%削減**）
+- バンドルサイズ: 1.5MB → 80-120KB（**92-95%削減**）
 - 初期ロード: 3-5秒 → < 1秒（**80%短縮**）
 - メモリ使用量: 高 → 低（**推定50%削減**）
 - UI応答性: 30-40 FPS → 60 FPS（**安定化**）
@@ -1168,25 +1463,29 @@ test('should maintain 60 FPS during playback', async ({ page }) => {
 **ユーザー体験**:
 - 初回ロード: 遅い → 高速
 - 操作感: カクつく → 滑らか
-- エクスポート: 遅い → 高速（WASM最適化）
+- エクスポート: gif.jsで確実に動作、将来的にWASM最適化
 
-### 10.2 技術的優位性
+### 11.2 技術的優位性
 
-**Svelte + WASM + Web Workers**:
+**Vite + Svelte + gif.js + Web Workers**:
 - ブラウザAPIへの直接アクセス
 - ゼロオーバーヘッドの状態管理
 - 並列処理による高速化
 - 最小限のメモリフットプリント
+- 確実に動作するエンコーディング
 
-### 10.3 次のステップ
+### 11.3 次のステップ
 
 1. **プロトタイプ作成** - Phase 1 開始
 2. **Flutter版との機能比較** - チェックリスト作成
-3. **WASM モジュール調査** - exoquant, gif-lzw の詳細検証
-4. **デザインシステム移植** - Figma または Flutterコードから抽出
+3. **gif.jsの統合** - Phase 1-2で実装
+4. **WASMの検証** - Phase 3で性能評価
+5. **デザインシステム移植** - Figma または Flutterコードから抽出
 
 ---
 
-**文書バージョン**: 1.0  
+**文書バージョン**: 1.1  
 **最終更新**: 2025-10-31  
-**承認**: 未承認（レビュー待ち）
+**変更履歴**:
+- v1.1: Vite + Svelte採用、gif.js優先、パフォーマンス測定方法追加
+- v1.0: 初版作成
