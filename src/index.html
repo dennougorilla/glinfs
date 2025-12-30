@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Glinfs - Screen Capture to GIF</title>
+  <link rel="stylesheet" href="./styles/reset.css">
+  <link rel="stylesheet" href="./styles/variables.css">
+  <link rel="stylesheet" href="./styles/global.css">
+  <link rel="stylesheet" href="./styles/form-controls.css">
+  <link rel="stylesheet" href="./styles/capture.css">
+  <link rel="stylesheet" href="./styles/editor.css">
+  <link rel="stylesheet" href="./styles/export.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <div id="app">
+    <header class="app-header" role="banner">
+      <a href="#/capture" class="app-logo">
+        <span class="app-logo-icon">G</span>
+        <span>Glinfs</span>
+      </a>
+      <nav class="step-indicator" role="navigation" aria-label="Progress">
+        <a href="#/capture" class="step step--active" data-step="capture">
+          <span class="step-number">1</span>
+          <span class="step-label">Capture</span>
+        </a>
+        <span class="step-connector"></span>
+        <a href="#/editor" class="step step--disabled" data-step="editor">
+          <span class="step-number">2</span>
+          <span class="step-label">Edit</span>
+        </a>
+        <span class="step-connector"></span>
+        <a href="#/export" class="step step--disabled" data-step="export">
+          <span class="step-number">3</span>
+          <span class="step-label">Export</span>
+        </a>
+      </nav>
+    </header>
+    <main id="main-content" role="main"></main>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

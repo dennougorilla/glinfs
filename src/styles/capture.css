@@ -1,0 +1,399 @@
+/* Capture Screen - Professional Layout */
+
+.capture-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Main content area */
+.capture-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Preview Panel */
+.capture-preview-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.capture-preview-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  min-height: 0;
+  position: relative;
+}
+
+/* Video Preview */
+.video-preview {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  background: #000;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.video-preview--active {
+  box-shadow: 0 0 0 3px var(--color-primary), var(--shadow-lg);
+}
+
+.video-preview--recording {
+  box-shadow: 0 0 0 3px var(--color-recording), var(--shadow-lg);
+}
+
+.preview-video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Recording badge */
+.recording-badge {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-recording);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: white;
+  animation: pulse-badge 1s infinite;
+}
+
+.recording-badge .dot {
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: var(--radius-full);
+}
+
+/* Empty State - Uses unified .empty-state from global.css */
+.preview-empty {
+  /* Inherits from .empty-state */
+}
+
+/* Capture-specific icon styling */
+.preview-empty .empty-state-icon {
+  background: var(--gradient-glinfs-subtle);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.preview-empty .empty-state-icon svg {
+  color: var(--color-primary);
+}
+
+/* Steps specific to capture */
+.preview-empty .empty-state-steps {
+  max-width: 280px;
+}
+
+/* Sidebar Panel */
+.capture-sidebar {
+  flex-shrink: 0;
+  width: var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel);
+  border-left: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+/* Control Section */
+.control-section {
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.control-section:last-child {
+  border-bottom: none;
+}
+
+.control-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.control-section-title {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Main Actions */
+.capture-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.btn-capture {
+  width: 100%;
+  height: var(--control-height-lg);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  border-radius: var(--radius-lg);
+}
+
+.btn-capture-start {
+  background: var(--gradient-glinfs);
+  color: white;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
+  transition: all var(--transition-normal);
+}
+
+.btn-capture-start:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+}
+
+.btn-capture-start:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-capture-stop {
+  background: var(--color-recording);
+  color: white;
+  animation: pulse-recording 2s infinite;
+}
+
+@keyframes pulse-recording {
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-recording-glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
+}
+
+.btn-capture-stop:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.btn-create-clip {
+  width: 100%;
+  height: var(--control-height-lg);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  border-radius: var(--radius-lg);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+/* Wrapper for clip button with badge */
+.btn-clip-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+/* Active state during recording */
+.btn-create-clip--active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.btn-create-clip--active:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+/* Pulse animation on clip creation */
+.btn-create-clip--creating {
+  animation: clip-pulse 0.3s ease-out;
+}
+
+@keyframes clip-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5);
+  }
+  50% {
+    transform: scale(0.97);
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.2);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+/* Clip count badge */
+.clip-count-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-success);
+  color: white;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  animation: badge-pop 0.3s ease-out;
+  z-index: 1;
+}
+
+@keyframes badge-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Stats Display */
+.capture-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+.stat-item:hover {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+.stat-label {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-value {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+
+.stat-value--highlight {
+  color: var(--color-primary);
+}
+
+/* Settings */
+.capture-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.setting-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.setting-value {
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* Slider with value */
+.slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Status Bar */
+.capture-status-bar {
+  flex-shrink: 0;
+  height: var(--statusbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-5);
+  background: var(--color-panel-header);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.status-section {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.status-item .value {
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+/* Recording status indicator */
+.status-recording {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-recording);
+  font-weight: 500;
+}
+
+.status-recording .dot {
+  width: 8px;
+  height: 8px;
+  background: var(--color-recording);
+  border-radius: var(--radius-full);
+  animation: pulse-dot 1s infinite;
+}

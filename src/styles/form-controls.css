@@ -1,0 +1,381 @@
+/* Custom Form Controls - Styled Select & Slider Components */
+
+/* ============================================
+   Native Range Input (Slider) Enhancement
+   Professional styling for consistency across features
+   ============================================ */
+
+/* Base range styling (overrides global.css) */
+input[type="range"] {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  outline: none;
+  transition: background-color var(--transition-fast);
+}
+
+/* Webkit/Chrome/Safari/Edge slider track */
+input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 6px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+}
+
+/* Webkit/Chrome/Safari/Edge slider thumb */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  background: var(--color-primary);
+  border: 2px solid white;
+  border-radius: var(--radius-full);
+  cursor: grab;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: var(--color-primary-hover);
+  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.4);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.05);
+  background: var(--color-primary);
+}
+
+/* Focus ring for accessibility */
+input[type="range"]:focus-visible {
+  outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--color-primary-muted), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Firefox range input styles */
+input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+  border: none;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--color-primary);
+  border: 2px solid white;
+  border-radius: var(--radius-full);
+  cursor: grab;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+  background: var(--color-primary-hover);
+  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.4);
+}
+
+input[type="range"]::-moz-range-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.05);
+}
+
+input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--color-primary-muted), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Firefox focus ring */
+input[type="range"]::-moz-focus-outer {
+  border: 0;
+}
+
+/* ============================================
+   Native Select Enhancement
+   Professional styling with custom chevron
+   ============================================ */
+
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: auto;
+  min-width: 100px;
+  height: var(--control-height-md);
+  padding: 0 var(--space-8) 0 var(--space-3);
+  background-color: var(--color-bg-tertiary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M2.5 4.5L6 8l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  background-size: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+}
+
+select:hover {
+  border-color: var(--color-text-muted);
+  background-color: var(--color-surface);
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-muted);
+}
+
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-muted);
+}
+
+/* Disabled state */
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================
+   Custom Select
+   ============================================ */
+
+.custom-select {
+  position: relative;
+  display: inline-flex;
+  min-width: 140px;
+}
+
+.custom-select--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.custom-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.custom-select__trigger:hover {
+  border-color: var(--color-surface-hover);
+}
+
+.custom-select__trigger:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.custom-select__trigger[aria-expanded="true"] {
+  border-color: var(--color-primary);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.custom-select__value {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select__arrow {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  transition: transform var(--transition-fast);
+}
+
+.custom-select__trigger[aria-expanded="true"] .custom-select__arrow {
+  transform: rotate(180deg);
+}
+
+.custom-select__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: var(--z-dropdown);
+  max-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-primary);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  transition: max-height var(--transition-normal), opacity var(--transition-fast);
+}
+
+.custom-select__dropdown--open {
+  max-height: 240px;
+  overflow-y: auto;
+  opacity: 1;
+}
+
+.custom-select__dropdown:focus {
+  outline: none;
+}
+
+.custom-select__option {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.custom-select__option:hover,
+.custom-select__option--focused {
+  background: var(--color-surface);
+}
+
+.custom-select__option--selected {
+  color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
+
+.custom-select__option--selected:hover,
+.custom-select__option--selected.custom-select__option--focused {
+  background: var(--color-primary-muted);
+}
+
+/* ============================================
+   Custom Slider
+   ============================================ */
+
+.custom-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 120px;
+}
+
+.custom-slider--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.custom-slider__track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.custom-slider__fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: var(--radius-full);
+  pointer-events: none;
+}
+
+.custom-slider__thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  transform: translateY(-50%);
+  background: var(--color-text);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-full);
+  cursor: grab;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.custom-slider__thumb:hover {
+  transform: translateY(-50%) scale(1.1);
+}
+
+.custom-slider__thumb:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.custom-slider__thumb:active {
+  cursor: grabbing;
+  transform: translateY(-50%) scale(1.05);
+}
+
+.custom-slider__value {
+  min-width: 48px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+/* ============================================
+   Utility Variants
+   ============================================ */
+
+/* Small size variants */
+.custom-select--sm .custom-select__trigger {
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.custom-slider--sm .custom-slider__track {
+  height: 4px;
+}
+
+.custom-slider--sm .custom-slider__thumb {
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+}
+
+/* Large size variants */
+.custom-select--lg .custom-select__trigger {
+  height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  font-size: var(--font-size-base);
+}
+
+.custom-slider--lg .custom-slider__track {
+  height: 8px;
+}
+
+.custom-slider--lg .custom-slider__thumb {
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+}

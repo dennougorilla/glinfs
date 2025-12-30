@@ -1,0 +1,1025 @@
+/* Editor Screen - Professional Video Editor Layout */
+
+.editor-screen {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+	padding: var(--space-2);
+	box-sizing: border-box;
+}
+
+/* Toolbar */
+.editor-toolbar {
+	flex-shrink: 0;
+	height: var(--toolbar-height);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 var(--space-5);
+	background: var(--color-panel);
+	border-bottom: 1px solid var(--color-border);
+	position: relative;
+}
+
+.editor-toolbar-left,
+.editor-toolbar-right {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.editor-toolbar-left {
+	left: var(--space-5);
+}
+
+.editor-toolbar-right {
+	right: var(--space-5);
+}
+
+/* Playback Controls - Center */
+.playback-controls {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex-shrink: 0;
+	min-width: 0;
+}
+
+.btn-playback {
+	width: 36px;
+	height: 36px;
+	min-width: 36px;
+	padding: 0;
+	border-radius: var(--radius-md);
+	background: transparent;
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-lg);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	transition: all var(--transition-fast);
+}
+
+.btn-playback:hover:not(:disabled) {
+	background: var(--color-surface);
+	color: var(--color-text);
+}
+
+.btn-playback:focus-visible {
+	outline: 2px solid var(--color-primary);
+	outline-offset: 2px;
+}
+
+.btn-playback.active,
+.btn-play.playing {
+	background: var(--color-primary-muted);
+	color: var(--color-primary);
+}
+
+.btn-play {
+	width: 30px;
+	height: 30px;
+	min-width: 30px;
+	margin: 0 var(--space-2);
+	border-radius: var(--radius-full);
+	background: var(--gradient-glinfs);
+	color: white;
+	font-size: var(--font-size-xl);
+	flex-shrink: 0;
+	box-shadow:
+		0 2px 12px var(--color-primary-glow),
+		0 0 0 3px rgba(59, 130, 246, 0.1);
+	transition: all var(--transition-normal);
+}
+
+.btn-play:hover:not(:disabled) {
+	transform: scale(1.08);
+	box-shadow:
+		0 4px 16px var(--color-primary-glow),
+		0 0 0 4px rgba(59, 130, 246, 0.15);
+}
+
+.btn-play:focus-visible {
+	outline: 2px solid white;
+	outline-offset: 2px;
+}
+
+.btn-play:active:not(:disabled) {
+	transform: scale(0.98);
+}
+
+.btn-play.playing {
+	background: var(--gradient-recording);
+	box-shadow:
+		0 2px 12px var(--color-recording-glow),
+		0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+/* Frame Grid Button (Timeline Header) - Clickable accent button */
+.btn-frame-grid-compact {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-1) var(--space-3);
+	background: rgba(59, 130, 246, 0.15);
+	border: 1px solid rgba(59, 130, 246, 0.4);
+	border-radius: var(--radius-sm);
+	color: #60a5fa;
+	font-size: var(--font-size-xs);
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.15s;
+}
+
+.btn-frame-grid-compact:hover {
+	background: rgba(59, 130, 246, 0.25);
+	border-color: rgba(59, 130, 246, 0.6);
+	color: #93c5fd;
+}
+
+.btn-frame-grid-compact:active {
+	transform: scale(0.96);
+	background: rgba(59, 130, 246, 0.3);
+}
+
+/* Time Display */
+.time-display {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-left: var(--space-5);
+	padding: var(--space-2) var(--space-3);
+	background: var(--color-bg-tertiary);
+	border-radius: var(--radius-md);
+	font-family: var(--font-mono);
+	font-size: var(--font-size-sm);
+	color: var(--color-text-secondary);
+}
+
+.time-display .current {
+	color: var(--color-text);
+	font-weight: 600;
+}
+
+.time-display .separator {
+	color: var(--color-text-muted);
+}
+
+/* Main Content */
+.editor-content {
+	flex: 1;
+	display: flex;
+	gap: var(--space-1);
+	overflow: hidden;
+	min-height: 0;
+}
+
+/* Preview Panel */
+.editor-preview-panel {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	background: var(--color-bg);
+	overflow: hidden;
+	min-width: 0;
+}
+
+.editor-preview-wrapper {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-6);
+	min-height: 0;
+	min-width: 0;
+	position: relative;
+	overflow: hidden;
+}
+
+/* Canvas Preview */
+.editor-canvas-container {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	background: #000;
+	border-radius: var(--radius-lg);
+	overflow: hidden;
+	box-shadow: var(--shadow-lg);
+}
+
+.editor-canvas {
+	display: block;
+	max-width: 100%;
+	max-height: 100%;
+	width: auto;
+	height: auto;
+	object-fit: contain;
+	position: relative;
+	z-index: 0;
+}
+
+/* Overlay Canvas - positioned over base canvas for crop interaction */
+.editor-canvas-overlay {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	max-width: 100%;
+	max-height: 100%;
+	pointer-events: auto;
+	z-index: 1;
+}
+
+/* Frame indicator */
+.frame-indicator {
+	position: absolute;
+	bottom: var(--space-4);
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	padding: var(--space-2) var(--space-4);
+	background: rgba(0, 0, 0, 0.8);
+	border-radius: var(--radius-full);
+	font-size: var(--font-size-sm);
+	color: white;
+	font-family: var(--font-mono);
+}
+
+/* Empty State - Uses unified .empty-state from global.css */
+.editor-empty {
+	/* Inherits from .empty-state */
+}
+
+/* Editor-specific icon styling */
+.editor-empty .empty-state-icon {
+	background: var(--gradient-glinfs-subtle);
+	border-color: rgba(139, 92, 246, 0.2);
+}
+
+.editor-empty .empty-state-icon svg {
+	color: var(--color-highlight);
+}
+
+/* Sidebar Panel */
+.editor-sidebar {
+	flex-shrink: 0;
+	width: var(--sidebar-width);
+	display: flex;
+	flex-direction: column;
+	background: var(--color-panel);
+	border-left: 1px solid var(--color-border);
+	overflow: hidden;
+}
+
+/* Panel Content */
+.panel-content {
+	flex: 1;
+	overflow-y: auto;
+	padding: var(--space-5);
+}
+
+/* Property Group */
+.property-group {
+	margin-bottom: var(--space-5);
+}
+
+.property-group:last-child {
+	margin-bottom: 0;
+}
+
+.property-group-title {
+	font-size: var(--font-size-xs);
+	font-weight: 600;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	margin-bottom: var(--space-3);
+}
+
+.property-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: var(--space-2) 0;
+	gap: var(--space-3);
+}
+
+.property-label {
+	font-size: var(--font-size-sm);
+	color: var(--color-text-secondary);
+}
+
+.property-value {
+	font-size: var(--font-size-sm);
+	font-family: var(--font-mono);
+	color: var(--color-text);
+}
+
+/* Aspect Ratio Buttons */
+.aspect-ratio-buttons {
+	display: flex;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+}
+
+.aspect-btn {
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--font-size-sm);
+	font-weight: 500;
+	color: var(--color-text-secondary);
+	background: var(--color-bg-tertiary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.aspect-btn:hover {
+	border-color: var(--color-text-muted);
+	color: var(--color-text);
+	background: var(--color-surface);
+}
+
+.aspect-btn.active {
+	background: var(--color-primary-muted);
+	border-color: var(--color-primary);
+	color: var(--color-primary);
+}
+
+/* Export Button */
+.btn-export {
+	width: 100%;
+	height: var(--control-height-md);
+	margin-top: auto;
+	background: var(--color-primary);
+	color: white;
+	font-weight: 600;
+}
+
+.btn-export:hover:not(:disabled) {
+	background: var(--color-primary-hover);
+}
+
+/* Timeline Panel */
+.editor-timeline {
+	flex-shrink: 0;
+	height: var(--timeline-height);
+	display: flex;
+	flex-direction: column;
+	background: var(--color-panel);
+	border-top: 1px solid var(--color-border);
+	margin-top: var(--space-2);
+}
+
+/* Timeline Container - rendered by timeline.js */
+.editor-timeline-container {
+	flex: 1;
+	position: relative;
+	overflow: hidden;
+	min-height: 0;
+}
+
+/* Timeline Header */
+.timeline-header {
+	flex-shrink: 0;
+	height: 36px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 var(--space-5);
+	background: var(--color-panel-header);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.timeline-header-left {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.timeline-title {
+	font-size: var(--font-size-xs);
+	font-weight: 600;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.timeline-info {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	font-size: var(--font-size-sm);
+}
+
+/* Timeline In/Out/Duration points */
+.timeline-point {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	background: var(--color-bg-tertiary);
+	border-radius: var(--radius-sm);
+}
+
+.timeline-point .label {
+	font-size: var(--font-size-2xs);
+	font-weight: 600;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.timeline-point .value {
+	font-family: var(--font-mono);
+	font-size: var(--font-size-sm);
+	font-weight: 500;
+	color: var(--color-text);
+	letter-spacing: 0.02em;
+}
+
+.timeline-point .frames {
+	font-family: var(--font-mono);
+	font-size: var(--font-size-xs);
+	color: var(--color-text-muted);
+	margin-left: var(--space-1);
+}
+
+/* Duration highlight */
+.timeline-duration {
+	background: var(--color-selection-bg);
+	border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.timeline-duration .label {
+	color: var(--color-selection);
+}
+
+.timeline-duration .value {
+	color: var(--color-selection-handle);
+}
+
+/* Selection info display - shows frame count and duration */
+.timeline-selection-info {
+	background: var(--color-selection-bg);
+	border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.timeline-selection-info .label {
+	color: var(--color-selection);
+}
+
+.timeline-selection-info .value {
+	color: var(--color-selection-handle);
+	font-weight: 600;
+}
+
+/* Playhead position display */
+.timeline-playhead {
+	background: var(--color-primary-muted);
+	border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.timeline-playhead .label {
+	color: var(--color-primary);
+}
+
+.timeline-playhead .value {
+	color: var(--color-primary);
+	font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIMELINE - Precision Instrument Design
+   Inspired by DaVinci Resolve, Premiere Pro, CapCut
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.tl {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	background: var(--color-bg);
+	user-select: none;
+	overflow: hidden;
+}
+
+.tl:focus {
+	outline: none;
+}
+
+.tl:focus-visible {
+	box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   TIME RULER
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-ruler {
+	position: relative;
+	height: 24px;
+	background: linear-gradient(
+		180deg,
+		var(--color-bg-tertiary) 0%,
+		var(--color-bg) 100%
+	);
+	border-bottom: 1px solid var(--color-border);
+	flex-shrink: 0;
+	overflow: hidden;
+}
+
+.tl-tick {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 1px;
+	background: var(--color-border);
+}
+
+.tl-tick::after {
+	content: "";
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	width: 1px;
+	height: 6px;
+	background: var(--color-text-muted);
+}
+
+.tl-tick--major::after {
+	height: 10px;
+	background: var(--color-text-secondary);
+}
+
+.tl-tick-label {
+	position: absolute;
+	top: 3px;
+	left: 4px;
+	font-size: 10px;
+	font-family: var(--font-mono);
+	color: var(--color-text-muted);
+	white-space: nowrap;
+	letter-spacing: 0.02em;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   MAIN TRACK
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-track {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	cursor: pointer;
+	overflow: hidden;
+}
+
+.tl--scrubbing .tl-track {
+	cursor: ew-resize;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   FILMSTRIP (Thumbnails)
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-filmstrip {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	gap: 1px;
+	padding: 4px;
+}
+
+.tl-frame {
+	flex: 1;
+	min-width: 0;
+	background: var(--color-surface);
+	border-radius: 2px;
+	overflow: hidden;
+}
+
+.tl-frame img,
+.tl-frame canvas,
+.tl-frame-canvas {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	opacity: 0.9;
+	display: block;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SELECTION LAYER
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-selection-layer {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+/* Dimmed areas outside selection */
+.tl-dim {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.6);
+	backdrop-filter: grayscale(0.5) brightness(0.7);
+	transition:
+		width 0.05s ease-out,
+		left 0.05s ease-out;
+}
+
+.tl-dim--left {
+	left: 0;
+	border-right: 1px solid var(--color-selection);
+}
+
+.tl-dim--right {
+	border-left: 1px solid var(--color-selection);
+}
+
+/* Selection box */
+.tl-selection {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	box-shadow:
+		inset 0 0 0 2px var(--color-selection),
+		0 0 20px rgba(245, 158, 11, 0.15);
+	border-radius: 3px;
+	transition:
+		left 0.05s ease-out,
+		width 0.05s ease-out;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   HANDLES - Large Touch Targets
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-handle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 44px;
+	display: flex;
+	align-items: center;
+	cursor: ew-resize;
+	pointer-events: auto;
+	z-index: 10;
+}
+
+.tl-handle--in {
+	left: -22px;
+	justify-content: flex-end;
+}
+
+.tl-handle--out {
+	right: -22px;
+	justify-content: flex-start;
+}
+
+/* Handle Wing - Extended hit area visualization */
+.tl-handle-wing {
+	width: 12px;
+	height: 100%;
+	background: linear-gradient(
+		to right,
+		transparent 0%,
+		rgba(245, 158, 11, 0.1) 100%
+	);
+	opacity: 0;
+	transition: opacity var(--transition-fast);
+}
+
+.tl-handle--out .tl-handle-wing {
+	background: linear-gradient(
+		to left,
+		transparent 0%,
+		rgba(245, 158, 11, 0.1) 100%
+	);
+}
+
+.tl-handle:hover .tl-handle-wing {
+	opacity: 1;
+}
+
+/* Handle Grip - Visual grab target */
+.tl-handle-grip {
+	width: 14px;
+	height: 64px;
+	max-height: 80%;
+	background: var(--color-selection);
+	border-radius: 3px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: white;
+	box-shadow:
+		0 0 0 1px rgba(0, 0, 0, 0.3),
+		0 2px 8px rgba(0, 0, 0, 0.3);
+	transition: all var(--transition-fast);
+}
+
+.tl-handle-grip svg {
+	width: 8px;
+	height: 24px;
+	opacity: 0.8;
+}
+
+.tl-handle:hover .tl-handle-grip {
+	background: var(--color-selection-handle);
+	transform: scaleY(1.05);
+	box-shadow:
+		0 0 0 1px rgba(0, 0, 0, 0.2),
+		0 0 16px rgba(251, 191, 36, 0.4),
+		0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.tl-handle--dragging .tl-handle-grip {
+	background: #fcd34d;
+	transform: scaleY(1.08) scaleX(1.1);
+	box-shadow:
+		0 0 0 2px rgba(252, 211, 77, 0.5),
+		0 0 24px rgba(251, 191, 36, 0.6),
+		0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PLAYHEAD
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-playhead {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	pointer-events: none;
+	z-index: 30;
+	transform: translateX(-50%);
+	transition: left 0.016s linear;
+}
+
+.tl-playhead-head {
+	position: absolute;
+	top: -2px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 0;
+	height: 0;
+	border-left: 10px solid transparent;
+	border-right: 10px solid transparent;
+	border-top: 14px solid var(--color-recording);
+	filter: drop-shadow(0 2px 4px rgba(239, 68, 68, 0.5));
+}
+
+.tl-playhead-line {
+	position: absolute;
+	top: 10px;
+	bottom: 0;
+	left: 50%;
+	width: 2px;
+	background: var(--color-recording);
+	transform: translateX(-50%);
+	box-shadow:
+		0 0 8px rgba(239, 68, 68, 0.6),
+		0 0 16px rgba(239, 68, 68, 0.3);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   HOVER INDICATOR
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-hover {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	pointer-events: none;
+	z-index: 25;
+	transform: translateX(-50%);
+}
+
+.tl-hover-line {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 1px;
+	background: var(--color-primary);
+	transform: translateX(-50%);
+	opacity: 0.6;
+}
+
+.tl-hover-time {
+	position: absolute;
+	top: 4px;
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 2px 6px;
+	background: var(--color-primary);
+	border-radius: 3px;
+	font-size: 10px;
+	font-family: var(--font-mono);
+	font-weight: 500;
+	color: white;
+	white-space: nowrap;
+	box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   DRAW SELECTION INDICATOR
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl-draw-selection {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	background: linear-gradient(
+		180deg,
+		rgba(59, 130, 246, 0.3) 0%,
+		rgba(59, 130, 246, 0.15) 50%,
+		rgba(59, 130, 246, 0.3) 100%
+	);
+	border: 2px solid var(--color-primary);
+	border-radius: 4px;
+	pointer-events: none;
+	z-index: 20;
+	box-shadow:
+		0 0 20px rgba(59, 130, 246, 0.3),
+		inset 0 0 30px rgba(59, 130, 246, 0.1);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   DRAWING STATE
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl--drawing .tl-track {
+	cursor: col-resize;
+}
+
+.tl--drawing .tl-hover-time {
+	background: var(--color-primary);
+	box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+}
+
+.tl--drawing .tl-hover-line {
+	background: var(--color-primary);
+	opacity: 1;
+	width: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   DRAGGING STATE (Handle drag)
+   ───────────────────────────────────────────────────────────────────────────── */
+.tl--dragging .tl-track {
+	cursor: ew-resize;
+}
+
+.tl--dragging .tl-hover-time {
+	background: var(--color-selection);
+	box-shadow: 0 2px 8px rgba(245, 158, 11, 0.5);
+}
+
+.tl--dragging .tl-hover-line {
+	background: var(--color-selection);
+	opacity: 1;
+	width: 2px;
+}
+
+/* Status Bar */
+.editor-status-bar {
+	flex-shrink: 0;
+	height: var(--statusbar-height);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 var(--space-5);
+	background: var(--color-panel-header);
+	border-top: 1px solid var(--color-border);
+	font-size: var(--font-size-sm);
+	color: var(--color-text-muted);
+}
+
+.status-section {
+	display: flex;
+	align-items: center;
+	gap: var(--space-5);
+}
+
+/* Keyboard shortcuts hint */
+.shortcuts-hint {
+	display: flex;
+	align-items: center;
+	gap: var(--space-5);
+}
+
+.shortcut {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.kbd {
+	padding: var(--space-1) var(--space-2);
+	background: var(--color-bg-tertiary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	font-family: var(--font-mono);
+	font-size: var(--font-size-xs);
+	color: var(--color-text-secondary);
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+	.editor-sidebar {
+		width: 240px;
+	}
+
+	.timeline-info {
+		gap: var(--space-3);
+	}
+}
+
+@media (max-width: 900px) {
+	.editor-content {
+		flex-direction: column;
+	}
+
+	.editor-sidebar {
+		width: 100%;
+		height: auto;
+		max-height: 200px;
+		border-left: none;
+		border-top: 1px solid var(--color-border);
+		flex-direction: row;
+	}
+
+	.panel-content {
+		padding: var(--space-3);
+	}
+
+	.property-group {
+		margin-bottom: var(--space-3);
+	}
+
+	.editor-toolbar-left,
+	.editor-toolbar-right {
+		position: static;
+	}
+
+	.editor-toolbar {
+		flex-wrap: wrap;
+		height: auto;
+		padding: var(--space-3);
+		gap: var(--space-3);
+	}
+
+	.playback-controls {
+		order: -1;
+		width: 100%;
+		justify-content: center;
+	}
+
+	.time-display {
+		margin-left: 0;
+	}
+
+	.shortcuts-hint {
+		display: none;
+	}
+}
+
+@media (max-width: 600px) {
+	.editor-timeline {
+		height: 100px;
+	}
+
+	.timeline-header {
+		height: 28px;
+		padding: 0 var(--space-3);
+	}
+
+	.timeline-info span:first-child {
+		display: none;
+	}
+
+	.timeline-thumb {
+		width: 40px;
+	}
+
+	.btn-playback {
+		width: 32px;
+		height: 32px;
+	}
+
+	.btn-play {
+		width: 38px;
+		height: 38px;
+	}
+
+	.frame-indicator {
+		font-size: var(--font-size-xs);
+		padding: var(--space-1) var(--space-3);
+		gap: var(--space-2);
+	}
+}

@@ -1,0 +1,142 @@
+/* CSS Custom Properties - Professional Video Editor Theme */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Colors - Professional dark theme inspired by DaVinci Resolve / Premiere Pro */
+  --color-bg: #18181b;
+  --color-bg-secondary: #1f1f23;
+  --color-bg-tertiary: #27272a;
+  --color-surface: #3f3f46;
+  --color-surface-hover: #52525b;
+  --color-surface-active: #71717a;
+
+  /* Panel backgrounds */
+  --color-panel: #27272a;
+  --color-panel-header: #1f1f23;
+  --color-panel-border: #3f3f46;
+
+  /* Primary accent - Professional blue */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #60a5fa;
+  --color-primary-muted: rgba(59, 130, 246, 0.15);
+  --color-primary-glow: rgba(59, 130, 246, 0.3);
+
+  /* Glinfs Brand Colors */
+  --color-accent: #06b6d4;          /* Cyan - lightness, speed */
+  --color-accent-hover: #22d3ee;
+  --color-accent-muted: rgba(6, 182, 212, 0.15);
+  --color-highlight: #8b5cf6;       /* Purple - creativity */
+  --color-highlight-muted: rgba(139, 92, 246, 0.15);
+
+  /* Glinfs Signature Gradients */
+  --gradient-glinfs: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  --gradient-glinfs-subtle: linear-gradient(135deg, var(--color-primary-muted) 0%, var(--color-accent-muted) 100%);
+  --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  --gradient-recording: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+
+  /* Recording accent - Vivid red */
+  --color-recording: #ef4444;
+  --color-recording-glow: rgba(239, 68, 68, 0.4);
+
+  /* Success / Export complete */
+  --color-success: #22c55e;
+  --color-success-glow: rgba(34, 197, 94, 0.3);
+
+  /* Selection / Active range */
+  --color-selection: #f59e0b;
+  --color-selection-bg: rgba(245, 158, 11, 0.15);
+  --color-selection-handle: #fbbf24;
+
+  /* Text hierarchy */
+  --color-text: #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-text-disabled: #52525b;
+
+  /* Borders */
+  --color-border: #3f3f46;
+  --color-border-subtle: #27272a;
+  --color-border-focus: var(--color-primary);
+
+  /* Status colors */
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+
+  /* Focus ring */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-primary);
+
+  /* Typography - Inter for UI */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+
+  /* Type scale - Balanced for readability */
+  --font-size-2xs: 0.625rem;  /* 10px */
+  --font-size-xs: 0.6875rem;  /* 11px */
+  --font-size-sm: 0.8125rem;  /* 13px */
+  --font-size-base: 0.875rem; /* 14px */
+  --font-size-md: 0.9375rem;  /* 15px */
+  --font-size-lg: 1.0625rem;  /* 17px */
+  --font-size-xl: 1.25rem;    /* 20px */
+  --font-size-2xl: 1.5rem;    /* 24px */
+
+  /* Line heights */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.625;
+
+  /* Spacing scale - Balanced for comfortable UI */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Border radius */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-panel: 0 0 0 1px var(--color-panel-border), 0 4px 16px rgba(0, 0, 0, 0.4);
+
+  /* Transitions - Subtle and professional */
+  --transition-fast: 100ms ease;
+  --transition-normal: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --easing-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --easing-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --easing-accelerate: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Z-index layers */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-tooltip: 500;
+
+  /* Layout dimensions - Comfortable proportions */
+  --header-height: 52px;
+  --toolbar-height: 48px;
+  --sidebar-width: 320px;
+  --timeline-height: 160px;
+  --statusbar-height: 32px;
+  --panel-gap: 1px;
+
+  /* Control sizes */
+  --control-height-sm: 28px;
+  --control-height-md: 36px;
+  --control-height-lg: 44px;
+}

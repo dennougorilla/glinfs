@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+coverage/
+
+# Temp files
+*.tmp
+*.temp
+
+# WASM build artifacts
+*.wasm.d.ts
+
+# Vite
+*.local
+
+# Playwright
+test-results/
+playwright-report/
+screenshots/
+
+# ===== PUBLIC REPO EXCLUSIONS =====
+
+# Claude Code / SpecKit AI Agent configuration
+.claude/
+.specify/
+
+# Project metadata for AI agents
+CLAUDE.md
+
+# Specification & planning artifacts (development only)
+specs/
+
+# Reference implementations (development reference only)
+reference/
+
+# Development documentation
+docs/
