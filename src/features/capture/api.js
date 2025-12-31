@@ -154,3 +154,26 @@ export function createFrameProcessor(track) {
   });
   return processor.readable.getReader();
 }
+
+/**
+ * Create VideoFrame from HTMLVideoElement
+ * This works even when the video content hasn't changed (static screen)
+ * @param {HTMLVideoElement} video - Video element with active stream
+ * @returns {VideoFrame | null} VideoFrame or null if video not ready
+ */
+export function createVideoFrameFromElement(video) {
+  if (!video || video.readyState < 2) {
+    return null;
+  }
+
+  try {
+    // Create VideoFrame directly from video element
+    // This works even when screen content is static
+    return new VideoFrame(video, {
+      timestamp: performance.now() * 1000, // microseconds
+    });
+  } catch (err) {
+    console.error('[Capture] Failed to create VideoFrame from video element:', err);
+    return null;
+  }
+}

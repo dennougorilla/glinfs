@@ -7,11 +7,10 @@
 import { createElement, on } from '../../shared/utils/dom.js';
 import { createThumbnailCanvas } from './api.js';
 import { normalizeSelectionRange, isFrameInRange } from './core.js';
+import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 
-/** Default thumbnail size for grid */
-const DEFAULT_THUMBNAIL_SIZE = 120;
-const MIN_THUMBNAIL_SIZE = 60;
-const MAX_THUMBNAIL_SIZE = 240;
+/** Thumbnail sizes from quality settings (device-adaptive) */
+const { gridDefault: DEFAULT_THUMBNAIL_SIZE, gridMin: MIN_THUMBNAIL_SIZE, gridMax: MAX_THUMBNAIL_SIZE } = getThumbnailSizes();
 
 /** CSS styles for frame grid modal */
 const FRAME_GRID_STYLES = `
@@ -773,12 +772,9 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
    */
   function setEndFrame(index) {
     endFrame = index;
-    // Auto-set start if not set
-    if (startFrame === null) {
+    // Auto-set start if not set, or if end < start, set single frame selection (IN=OUT)
+    if (startFrame === null || startFrame > endFrame) {
       startFrame = index;
-    } else if (startFrame > endFrame) {
-      // Swap
-      [startFrame, endFrame] = [endFrame, startFrame];
     }
     focusedFrame = index;
     updateVisualState();

@@ -4,7 +4,14 @@
  */
 
 import { emit } from '../../shared/bus.js';
-import { setClipPayload } from '../../shared/app-store.js';
+import {
+  setClipPayload,
+  getClipPayload,
+  clearClipPayload,
+  getEditorPayload,
+  clearEditorPayload,
+  clearExportResult,
+} from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import {
@@ -20,7 +27,7 @@ import {
   startScreenCapture,
   stopScreenCapture,
   createVideoElement,
-  createFrameProcessor,
+  createVideoFrameFromElement,
 } from './api.js';
 import { renderCaptureScreen, updateBufferStatus } from './ui.js';
 
@@ -33,8 +40,8 @@ let captureAbortController = null;
 /** @type {HTMLVideoElement | null} */
 let videoElement = null;
 
-/** @type {ReadableStreamDefaultReader<VideoFrame> | null} */
-let frameReader = null;
+/** @type {number | null} */
+let captureIntervalId = null;
 
 /** @type {(() => void) | null} */
 let uiCleanup = null;
@@ -50,6 +57,9 @@ let streamEndedCleanup = null;
 
 /** @type {MediaStreamTrack | null} */
 let captureTrack = null;
+
+/** @type {ReturnType<typeof throttle> | null} */
+let throttledUpdate = null;
 
 /** Maximum consecutive frame errors before emitting warning */
 const MAX_CONSECUTIVE_FRAME_ERRORS = 5;
@@ -70,14 +80,15 @@ export function initCapture(settings) {
   // Initial render
   render(container);
 
-  // Subscribe to state changes
-  store.subscribe(
-    throttle(() => {
-      const state = store.getState();
-      // Update buffer status without full re-render
-      updateBufferStatus(container, state.stats);
-    }, 100)
-  );
+  // Subscribe to state changes with cancellable throttle
+  throttledUpdate = throttle(() => {
+    if (!store) return; // Guard against cleanup race condition
+    const state = store.getState();
+    // Update buffer status without full re-render
+    updateBufferStatus(container, state.stats);
+  }, 100);
+
+  store.subscribe(throttledUpdate);
 
   return cleanup;
 }
@@ -106,138 +117,121 @@ function render(container) {
 }
 
 /**
- * Start VideoFrame capture loop using ReadableStream
- * @param {MediaStreamTrack} track - Video track from MediaStream
+ * Start VideoFrame capture loop using setInterval
+ * Creates VideoFrames from video element at specified FPS
+ * Works reliably even with static screen content
+ * @param {HTMLVideoElement} video - Video element with active stream
  * @param {number} fps - Target frames per second
  * @param {AbortSignal} signal - Abort signal for cleanup
  */
-async function startCaptureLoop(track, fps, signal) {
+function startCaptureLoop(video, fps, signal) {
   if (!store) return;
 
   console.debug('[Capture] Starting capture loop', {
     fps,
-    trackId: track.id,
-    trackState: track.readyState,
+    videoWidth: video.videoWidth,
+    videoHeight: video.videoHeight,
   });
 
-  let reader;
-  try {
-    reader = createFrameProcessor(track);
-  } catch (err) {
-    console.error('[Capture] Failed to create frame processor:', err);
-    emit('capture:error', {
-      error: err instanceof Error ? err.message : 'Failed to initialize capture',
-    });
-    return;
-  }
-
-  frameReader = reader;
   const frameInterval = 1000 / fps;
-  let lastFrameTime = 0;
-  let totalFramesRead = 0;
   let framesAddedToBuffer = 0;
 
-  try {
-    while (!signal.aborted && store.getState().isCapturing) {
-      // Wrap reader.read() in try-catch to catch stream errors
-      let readResult;
-      try {
-        readResult = await reader.read();
-      } catch (readErr) {
-        console.error('[Capture] reader.read() threw:', readErr);
-        emit('capture:error', {
-          error: 'Frame reader failed: ' + (readErr instanceof Error ? readErr.message : 'Unknown'),
-        });
-        break;
-      }
-
-      const { done, value: videoFrame } = readResult;
-
-      if (done) {
-        console.debug('[Capture] Stream ended (done=true)', {
-          totalFramesRead,
-          framesAddedToBuffer,
-        });
-        break;
-      }
-
-      if (signal.aborted) {
-        console.debug('[Capture] Signal aborted');
-        videoFrame.close();
-        break;
-      }
-
-      totalFramesRead++;
-      const now = performance.now();
-
-      // Frame rate limiting
-      if (now - lastFrameTime >= frameInterval) {
-        try {
-          // Clone VideoFrame for buffer storage
-          const frame = {
-            id: crypto.randomUUID(),
-            frame: videoFrame.clone(),
-            timestamp: videoFrame.timestamp,
-            width: videoFrame.codedWidth,
-            height: videoFrame.codedHeight,
-          };
-
-          store.setState((state) => addFrameToState(state, frame));
-          lastFrameTime = now;
-          framesAddedToBuffer++;
-
-          // Reset error counter on successful frame
-          consecutiveFrameErrors = 0;
-
-          const currentState = store.getState();
-          emit('capture:frame', { frame, stats: currentState.stats });
-        } catch (err) {
-          // Handle GPU memory exhaustion (QuotaExceededError)
-          if (
-            err instanceof DOMException &&
-            (err.name === 'QuotaExceededError' || err.message.includes('resource'))
-          ) {
-            console.error('[Capture] GPU memory exhaustion:', err);
-            emit('capture:resource-error', {
-              message: 'GPU memory limit reached. Stopping capture to preserve frames.',
-            });
-            videoFrame.close();
-            break;
-          }
-
-          consecutiveFrameErrors++;
-          console.error('[Capture] Frame processing error:', err);
-
-          if (consecutiveFrameErrors >= MAX_CONSECUTIVE_FRAME_ERRORS) {
-            errorBatchCount++;
-            emit('capture:frame-errors', {
-              count: consecutiveFrameErrors,
-              batchNumber: errorBatchCount,
-              message: 'Multiple frame capture failures detected.',
-              lastError: err instanceof Error ? err.message : 'Unknown error',
-            });
-            consecutiveFrameErrors = 0;
-          }
-        }
-      }
-
-      // Always close original VideoFrame to prevent backpressure
-      videoFrame.close();
+  // Capture function called by setInterval
+  const captureFrame = () => {
+    if (!store || signal.aborted || !store.getState().isCapturing) {
+      stopCaptureInterval();
+      return;
     }
-  } finally {
-    console.debug('[Capture] Loop cleanup', {
-      totalFramesRead,
-      framesAddedToBuffer,
-      isCapturing: store?.getState()?.isCapturing,
-      signalAborted: signal.aborted,
-    });
+
+    const videoFrame = createVideoFrameFromElement(video);
+    if (!videoFrame) {
+      console.warn('[Capture] Failed to create VideoFrame from video element');
+      return;
+    }
+
     try {
-      reader.releaseLock();
-    } catch {
-      // Ignore if already released
+      const frame = {
+        id: crypto.randomUUID(),
+        frame: videoFrame,
+        timestamp: videoFrame.timestamp,
+        width: videoFrame.codedWidth,
+        height: videoFrame.codedHeight,
+      };
+
+      store.setState((state) => addFrameToState(state, frame));
+      framesAddedToBuffer++;
+
+      // Log every 10th frame to avoid console spam
+      if (framesAddedToBuffer % 10 === 1 || framesAddedToBuffer <= 5) {
+        console.debug('[Capture] Frame added', {
+          framesAddedToBuffer,
+          bufferSize: store.getState().buffer.size,
+        });
+      }
+
+      // Reset error counter on successful frame
+      consecutiveFrameErrors = 0;
+
+      const currentState = store.getState();
+      emit('capture:frame', { frame, stats: currentState.stats });
+    } catch (err) {
+      // Handle GPU memory exhaustion (QuotaExceededError)
+      if (
+        err instanceof DOMException &&
+        (err.name === 'QuotaExceededError' || err.message.includes('resource'))
+      ) {
+        console.error('[Capture] GPU memory exhaustion:', err);
+        emit('capture:resource-error', {
+          message: 'GPU memory limit reached. Stopping capture to preserve frames.',
+        });
+        videoFrame.close();
+        stopCaptureInterval();
+        return;
+      }
+
+      consecutiveFrameErrors++;
+      console.error('[Capture] Frame processing error:', err);
+      videoFrame.close();
+
+      if (consecutiveFrameErrors >= MAX_CONSECUTIVE_FRAME_ERRORS) {
+        errorBatchCount++;
+        emit('capture:frame-errors', {
+          count: consecutiveFrameErrors,
+          batchNumber: errorBatchCount,
+          message: 'Multiple frame capture failures detected.',
+          lastError: err instanceof Error ? err.message : 'Unknown error',
+        });
+        consecutiveFrameErrors = 0;
+      }
     }
-    frameReader = null;
-  }
+  };
+
+  // Helper to stop interval
+  const stopCaptureInterval = () => {
+    if (captureIntervalId !== null) {
+      clearInterval(captureIntervalId);
+      captureIntervalId = null;
+      console.debug('[Capture] Interval stopped', {
+        framesAddedToBuffer,
+        isCapturing: store?.getState()?.isCapturing,
+        signalAborted: signal.aborted,
+      });
+    }
+  };
+
+  // Listen for abort signal
+  signal.addEventListener('abort', stopCaptureInterval);
+
+  // Start capture interval
+  captureIntervalId = setInterval(captureFrame, frameInterval);
+
+  // Capture first frame immediately
+  captureFrame();
+
+  console.debug('[Capture] Capture interval started', {
+    intervalMs: frameInterval,
+    fps,
+  });
 }
 
 /**
@@ -249,45 +243,36 @@ async function handleStart() {
   try {
     const stream = await startScreenCapture();
 
-    // Get original video track
-    const originalTrack = stream.getVideoTracks()[0];
+    // Get video track for event handling
+    const videoTrack = stream.getVideoTracks()[0];
+    captureTrack = videoTrack;
 
-    // Use original track directly for MediaStreamTrackProcessor
-    // Note: Cloned tracks don't work with MediaStreamTrackProcessor in some browsers
-    captureTrack = originalTrack;
-    console.log('[Capture] Using original track for processor', {
-      trackId: captureTrack.id,
-      trackState: captureTrack.readyState,
+    console.log('[Capture] Stream started', {
+      trackId: videoTrack.id,
+      trackState: videoTrack.readyState,
     });
 
-    // Create video element for stream (needed for preview) - uses original stream
+    // Create video element for capture and preview
     videoElement = await createVideoElement(stream);
 
-    // Listen for stream end on original track with cleanup tracking
+    // Listen for stream end
     const handleStreamEnded = () => {
-      // Also stop the cloned track when original ends
-      if (captureTrack) {
-        captureTrack.stop();
-      }
       handleStop();
       emit('capture:stopped', {});
     };
-    originalTrack.addEventListener('ended', handleStreamEnded);
-    streamEndedCleanup = () => originalTrack.removeEventListener('ended', handleStreamEnded);
+    videoTrack.addEventListener('ended', handleStreamEnded);
+    streamEndedCleanup = () => videoTrack.removeEventListener('ended', handleStreamEnded);
 
     // Update state
     store.setState((state) => startCapture(state, stream));
     emit('capture:started', { stream });
 
-    // Start capture loop with abort controller using CLONED track
+    // Start capture loop with abort controller using video element
     captureAbortController = new AbortController();
     const fps = store.getState().settings.fps;
 
-    // Start async capture loop (non-blocking) with cloned track
-    startCaptureLoop(captureTrack, fps, captureAbortController.signal).catch((err) => {
-      console.error('Capture loop error:', err);
-      emit('capture:error', { error: err instanceof Error ? err.message : 'Capture loop failed' });
-    });
+    // Start capture loop (uses setInterval internally)
+    startCaptureLoop(videoElement, fps, captureAbortController.signal);
 
     // Re-render with video preview
     const container = qsRequired('#main-content');
@@ -297,7 +282,7 @@ async function handleStart() {
     store.setState((state) => setError(state, message));
     emit('capture:error', { error: message });
 
-    // Clean up cloned track on error
+    // Clean up on error
     if (captureTrack) {
       captureTrack.stop();
       captureTrack = null;
@@ -319,7 +304,13 @@ function handleStop(preserveBuffer = true) {
 
   console.debug('[Capture] Stopping capture');
 
-  // Abort capture loop
+  // Stop capture interval
+  if (captureIntervalId !== null) {
+    clearInterval(captureIntervalId);
+    captureIntervalId = null;
+  }
+
+  // Abort capture loop (triggers cleanup via signal)
   if (captureAbortController) {
     captureAbortController.abort();
     captureAbortController = null;
@@ -331,13 +322,13 @@ function handleStop(preserveBuffer = true) {
     streamEndedCleanup = null;
   }
 
-  // Stop cloned capture track
+  // Stop capture track
   if (captureTrack) {
     captureTrack.stop();
     captureTrack = null;
   }
 
-  // Stop original stream (stops all tracks including original video track)
+  // Stop stream (stops all tracks)
   const state = store.getState();
   if (state.stream) {
     stopScreenCapture(state.stream);
@@ -383,22 +374,60 @@ export function clearCaptureBuffer() {
 
 /**
  * Handle create clip
+ *
+ * OWNERSHIP TRANSFER:
+ * - Clones VideoFrames from capture buffer (originals stay in buffer)
+ * - Transfers ownership of clones to Editor via app-store
+ * - Capture buffer retains originals (may be cleared independently)
+ * - Editor is responsible for closing cloned frames on cleanup
+ *
+ * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
 function handleCreateClip() {
   if (!store) return;
 
+  // Clear old payloads and their VideoFrames before creating new clip
+  // This prevents memory leaks when creating multiple clips
+  const oldClipPayload = getClipPayload();
+  if (oldClipPayload) {
+    for (const frame of oldClipPayload.frames ?? []) {
+      if (frame?.frame?.close) {
+        try { frame.frame.close(); } catch (e) { /* ignore */ }
+      }
+    }
+    clearClipPayload();
+  }
+
+  const oldEditorPayload = getEditorPayload();
+  if (oldEditorPayload) {
+    for (const frame of oldEditorPayload.frames ?? []) {
+      if (frame?.frame?.close) {
+        try { frame.frame.close(); } catch (e) { /* ignore */ }
+      }
+    }
+    clearEditorPayload();
+  }
+
+  clearExportResult();
+
   const state = store.getState();
   const frames = getFrames(state.buffer);
 
+  // Clone VideoFrames for editor (original will be closed on cleanup)
+  const clonedFrames = frames.map((frame) => ({
+    ...frame,
+    frame: frame.frame.clone(),
+  }));
+
   // Store clip payload for editor via app store
   setClipPayload({
-    frames,
+    frames: clonedFrames,
     fps: state.settings.fps,
     capturedAt: Date.now(),
   });
 
   emit('capture:clip-created', {
-    frameCount: frames.length,
+    frameCount: clonedFrames.length,
     fps: state.settings.fps,
   });
 }
@@ -418,6 +447,12 @@ function handleSettingsChange(newSettings) {
  * Cleanup capture feature
  */
 function cleanup() {
+  // Cancel pending throttled updates before store = null
+  if (throttledUpdate) {
+    throttledUpdate.cancel();
+    throttledUpdate = null;
+  }
+
   // Stop capture and clear buffer to release all VideoFrame resources
   handleStop(false);
 

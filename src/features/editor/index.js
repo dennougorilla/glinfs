@@ -6,7 +6,7 @@
 import { emit } from '../../shared/bus.js';
 import {
   getClipPayload,
-  clearClipPayload,
+  getEditorPayload,
   setEditorPayload,
   validateClipPayload,
 } from '../../shared/app-store.js';
@@ -16,6 +16,7 @@ import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import {
   createEditorStore,
+  createEditorStoreFromClip,
   goToFrame,
   nextFrame,
   previousFrame,
@@ -29,7 +30,7 @@ import {
 } from './state.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
 import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
-import { renderTimeline, updateTimelineRange } from './timeline.js';
+import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
 let store = null;
@@ -97,6 +98,10 @@ export function initEditor() {
     };
   }
 
+  // Check if returning from Export - restore state from EditorPayload
+  const editorPayload = getEditorPayload();
+  const hasValidEditorPayload = editorPayload?.clip?.frames?.length > 0;
+
   const frames = clipPayload?.frames || [];
   const fps = clipPayload?.fps || DEFAULT_FPS;
 
@@ -132,8 +137,15 @@ export function initEditor() {
     };
   }
 
-  // Create store with FPS from capture
-  store = createEditorStore(frames, fps);
+  // Create store - restore from EditorPayload if returning from Export, otherwise create fresh
+  if (hasValidEditorPayload) {
+    // Restore state from EditorPayload (preserves selection range, crop area)
+    store = createEditorStoreFromClip(editorPayload.clip);
+    emit('editor:restored', { fromExport: true });
+  } else {
+    // Create fresh store from ClipPayload
+    store = createEditorStore(frames, fps);
+  }
 
   // Initial render
   render(container);
@@ -161,7 +173,7 @@ export function initEditor() {
         }
       }
 
-      // Update current time display
+      // Update current time display and playhead position
       if (state.currentFrame !== prevState.currentFrame) {
         const currentTimeEl = container.querySelector('.time-display .current');
         if (currentTimeEl) {
@@ -172,6 +184,16 @@ export function initEditor() {
             Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1)
           );
           currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
+        }
+
+        // Update playhead position on timeline
+        const timelineContainer = container.querySelector('.editor-timeline-container');
+        if (timelineContainer && state.clip) {
+          updatePlayheadPosition(
+            /** @type {HTMLElement} */ (timelineContainer),
+            state.currentFrame,
+            state.clip.frames.length
+          );
         }
       }
 
@@ -443,6 +465,11 @@ function handleSpeedChange(speed) {
 
 /**
  * Handle export
+ *
+ * OWNERSHIP TRANSFER:
+ * - Clones VideoFrames from editor for export ownership
+ * - Export is responsible for closing its cloned frames
+ * - Editor retains originals (will close them on its own cleanup)
  */
 function handleExport() {
   if (!store) return;
@@ -450,22 +477,39 @@ function handleExport() {
   const state = store.getState();
   if (!state.clip) return;
 
+  const selectedFrames = getSelectedFrames(state.clip);
+
+  // Clone VideoFrames for Export ownership
+  // Export will be responsible for closing these clones
+  const clonedForExport = selectedFrames.map((frame) => ({
+    ...frame,
+    frame: frame.frame.clone(),
+  }));
+
   // Store editor payload for export via app store
   setEditorPayload({
-    frames: getSelectedFrames(state.clip),
+    frames: clonedForExport,
     cropArea: state.cropArea,
     clip: state.clip,
     fps: state.clip.fps,
   });
 
   emit('editor:export-ready', {
-    frameCount: getSelectedFrames(state.clip).length,
+    frameCount: clonedForExport.length,
     fps: state.clip.fps,
   });
 }
 
 /**
  * Cleanup editor feature
+ *
+ * OWNERSHIP RESPONSIBILITY:
+ * - Editor owns VideoFrame clones received from Capture via handleCreateClip()
+ * - Must close ALL frames in state.clip.frames before destruction
+ * - Export only uses references; this cleanup releases the actual frames
+ * - Uses try/catch to handle already-closed frames gracefully
+ *
+ * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
 function cleanup() {
   stopPlayback();
@@ -480,8 +524,9 @@ function cleanup() {
     timelineCleanup = null;
   }
 
-  // Clear clip payload (editor is done with it)
-  clearClipPayload();
+  // NOTE: Do NOT close VideoFrames here - they are shared with ClipPayload
+  // and may be needed for re-entry from Export.
+  // Frames are cleaned up in Capture's handleCreateClip when creating a new clip.
 
   baseCanvas = null;
   overlayCanvas = null;

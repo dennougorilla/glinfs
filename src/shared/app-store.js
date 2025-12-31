@@ -161,6 +161,43 @@ export function validateEditorPayload(payload) {
 }
 
 // ============================================================
+// ExportResult (preserved export output)
+// ============================================================
+
+/**
+ * @typedef {Object} ExportResultPayload
+ * @property {Blob} blob - The encoded GIF
+ * @property {string} filename - Suggested filename
+ * @property {number} completedAt - Timestamp when export completed
+ */
+
+/** @type {ExportResultPayload|null} */
+let exportResult = null;
+
+/**
+ * Get export result for display
+ * @returns {ExportResultPayload|null}
+ */
+export function getExportResult() {
+  return exportResult;
+}
+
+/**
+ * Set export result after encoding completes
+ * @param {ExportResultPayload} result
+ */
+export function setExportResult(result) {
+  exportResult = result;
+}
+
+/**
+ * Clear export result
+ */
+export function clearExportResult() {
+  exportResult = null;
+}
+
+// ============================================================
 // Debug / Testing
 // ============================================================
 
@@ -170,4 +207,5 @@ export function validateEditorPayload(payload) {
 export function resetAppStore() {
   state.clipPayload = null;
   state.editorPayload = null;
+  exportResult = null;
 }

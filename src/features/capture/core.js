@@ -63,6 +63,8 @@ export function addFrame(buffer, frame) {
   let newSize = buffer.size;
 
   // Calculate memory for new frame (O(1) incremental update)
+  // VideoFrames are GPU-resident; CPU overhead is ~1/10 of raw RGBA pixel data
+  // Raw: width × height × 4 bytes (RGBA). See: shared/utils/memory-monitor.js
   const frameMemory = (frame.width * frame.height * 4) / 10;
   let newTotalMemoryBytes = buffer.totalMemoryBytes + frameMemory;
 
@@ -73,7 +75,7 @@ export function addFrame(buffer, frame) {
     // Buffer is full - close evicted frame's VideoFrame before overwriting
     const evictedFrame = newFrames[buffer.head];
     if (evictedFrame?.frame) {
-      // Subtract evicted frame's memory
+      // Subtract evicted frame's memory (same GPU-resident formula as above)
       const evictedMemory = (evictedFrame.width * evictedFrame.height * 4) / 10;
       newTotalMemoryBytes -= evictedMemory;
       evictedFrame.frame.close();
@@ -103,8 +105,12 @@ export function clearBuffer(buffer) {
   for (let i = 0; i < buffer.size; i++) {
     const index = (buffer.head + i) % buffer.maxFrames;
     const frame = buffer.frames[index];
-    if (frame?.frame) {
-      frame.frame.close();
+    if (frame?.frame && typeof frame.frame.close === 'function') {
+      try {
+        frame.frame.close();
+      } catch (e) {
+        // Ignore errors from already-closed frames
+      }
     }
   }
   return createBuffer(buffer.maxFrames);

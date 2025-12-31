@@ -4,11 +4,13 @@
  * @module shared/utils/thumbnail-cache
  */
 
+import { getThumbnailSizes } from './quality-settings.js';
+
 /** @type {number} デフォルトキャッシュサイズ */
 const DEFAULT_CACHE_SIZE = 300;
 
-/** @type {number} デフォルトサムネイルサイズ */
-const DEFAULT_THUMBNAIL_SIZE = 80;
+/** @type {number} デフォルトサムネイルサイズ (デバイス適応型) */
+const DEFAULT_THUMBNAIL_SIZE = getThumbnailSizes().timeline;
 
 /**
  * LRU Thumbnail Cache
