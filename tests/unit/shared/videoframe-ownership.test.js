@@ -38,42 +38,44 @@ describe('VideoFrame Ownership Contract', () => {
   });
 
   describe('Editor → Export transfer', () => {
-    it('export receives references, not ownership', () => {
-      // Export uses getSelectedFrames() which returns slice (references)
-      // Editor is still responsible for close()
-      // Implementation: editor/core.js getSelectedFrames() returns clip.frames.slice()
+    it('export receives its own clones via handleExport', () => {
+      // Editor clones frames for Export in handleExport()
+      // Both Editor and Export own their respective clones
+      // Implementation: editor/index.js handleExport() lines 484-487
       const contract = {
         transferPoint: 'handleExport()',
-        action: 'reference pass (no clone)',
-        ownershipBefore: 'Editor',
-        ownershipAfter: 'Editor (unchanged)',
-        file: 'src/features/editor/index.js:454-459',
+        action: 'clone() for export',
+        ownershipBefore: 'Editor (originals)',
+        ownershipAfter: 'Export (clones)',
+        file: 'src/features/editor/index.js:484-487',
       };
-      expect(contract.action).toContain('no clone');
+      expect(contract.action).toContain('clone');
     });
 
-    it('export must NOT close frames on cleanup', () => {
-      // Export only clears references, does not close VideoFrames
-      // Implementation: export/index.js cleanup() calls clearEditorPayload()
+    it('export must close its cloned frames on cleanup', () => {
+      // Export owns its cloned frames and must close them
+      // Implementation: export/index.js cleanup() lines 506-514
       const contract = {
         responsible: 'Export',
-        action: 'clear references only, no close()',
-        reason: 'Editor still owns the cloned frames',
+        action: 'close() all frames in frames array',
+        reason: 'Export owns clones from handleExport()',
+        file: 'src/features/export/index.js:506-514',
       };
-      expect(contract.action).toContain('no close');
+      expect(contract.action).toContain('close');
     });
   });
 
   describe('Cleanup responsibilities', () => {
     it('editor cleanup must close all cloned frames', () => {
-      // Editor is the owner of cloned frames
+      // Editor is the owner of cloned frames from Capture
       // Must close ALL frames in state.clip.frames before destruction
-      // Implementation: editor/index.js cleanup() lines 484-495
+      // Also clears ClipPayload to prevent double-close attempts
+      // Implementation: editor/index.js cleanup() lines 528-544
       const contract = {
         responsible: 'Editor',
-        location: 'cleanup() in editor/index.js:484-495',
-        action: 'close() all frames in state.clip.frames',
-        pattern: 'for (const frame of state.clip?.frames ?? [])',
+        location: 'cleanup() in editor/index.js:528-544',
+        action: 'close() all frames in state.clip.frames, then clearClipPayload()',
+        pattern: 'for (const frame of state.clip.frames)',
       };
       expect(contract.responsible).toBe('Editor');
     });

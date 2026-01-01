@@ -1,58 +1,58 @@
 /**
  * Encoder Type Definitions
- * WASM対応を後から追加可能な分離設計
+ * Modular design allowing WASM support to be added later
  * @module features/export/encoders/types
  */
 
 /**
- * エンコーダー初期化設定
+ * Encoder initialization config
  * @typedef {Object} EncoderConfig
- * @property {number} width - 出力幅
- * @property {number} height - 出力高さ
- * @property {number} maxColors - 最大色数 (16-256)
- * @property {number} frameDelayMs - フレーム間隔 (ms)
- * @property {number} loopCount - ループ回数 (0 = 無限)
+ * @property {number} width - Output width
+ * @property {number} height - Output height
+ * @property {number} maxColors - Maximum colors (16-256)
+ * @property {number} frameDelayMs - Frame delay (ms)
+ * @property {number} loopCount - Loop count (0 = infinite)
  */
 
 /**
- * フレームデータ
+ * Frame data
  * @typedef {Object} FrameData
- * @property {Uint8ClampedArray} rgba - RGBA ピクセルデータ
- * @property {number} width - フレーム幅
- * @property {number} height - フレーム高さ
+ * @property {Uint8ClampedArray} rgba - RGBA pixel data
+ * @property {number} width - Frame width
+ * @property {number} height - Frame height
  */
 
 /**
- * 進捗報告
+ * Progress report
  * @typedef {Object} EncoderProgress
- * @property {number} frameIndex - 処理中のフレームインデックス
- * @property {number} totalFrames - 合計フレーム数
- * @property {number} percent - 進捗率 (0-100)
+ * @property {number} frameIndex - Frame index being processed
+ * @property {number} totalFrames - Total frame count
+ * @property {number} percent - Progress percentage (0-100)
  */
 
 /**
- * エンコーダーメタデータ
+ * Encoder metadata
  * @typedef {Object} EncoderMetadata
- * @property {string} id - エンコーダー識別子
- * @property {string} name - 表示名
- * @property {boolean} isWasm - WASM エンコーダーかどうか
- * @property {string} version - バージョン
+ * @property {string} id - Encoder identifier
+ * @property {string} name - Display name
+ * @property {boolean} isWasm - Whether WASM encoder
+ * @property {string} version - Version
  */
 
 /**
- * エンコーダーインターフェース
- * 将来的に WASM エンコーダーを追加可能
+ * Encoder interface
+ * Allows adding WASM encoders in the future
  *
  * @typedef {Object} EncoderInterface
- * @property {EncoderMetadata} metadata - エンコーダーメタデータ
- * @property {(config: EncoderConfig) => void} init - 初期化
- * @property {(frameData: FrameData, frameIndex: number) => void} addFrame - フレーム追加
- * @property {() => Uint8Array} finish - エンコード完了・バイト配列取得
- * @property {() => void} dispose - リソース解放
+ * @property {EncoderMetadata} metadata - Encoder metadata
+ * @property {(config: EncoderConfig) => void} init - Initialize
+ * @property {(frameData: FrameData, frameIndex: number) => void} addFrame - Add frame
+ * @property {() => Uint8Array} finish - Complete encoding and get byte array
+ * @property {() => void} dispose - Release resources
  */
 
 /**
- * エンコーダーファクトリー関数
+ * Encoder factory function
  * @callback EncoderFactory
  * @returns {EncoderInterface}
  */

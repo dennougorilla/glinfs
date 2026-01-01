@@ -1,24 +1,24 @@
 /**
  * Thumbnail Cache
- * LRU キャッシュによるサムネイル管理
+ * LRU cache for thumbnail management
  * @module shared/utils/thumbnail-cache
  */
 
 import { getThumbnailSizes } from './quality-settings.js';
 
-/** @type {number} デフォルトキャッシュサイズ */
+/** @type {number} Default cache size */
 const DEFAULT_CACHE_SIZE = 300;
 
-/** @type {number} デフォルトサムネイルサイズ (デバイス適応型) */
+/** @type {number} Default thumbnail size (device adaptive) */
 const DEFAULT_THUMBNAIL_SIZE = getThumbnailSizes().timeline;
 
 /**
  * LRU Thumbnail Cache
- * OffscreenCanvas を使用した効率的なサムネイル生成
+ * Efficient thumbnail generation using OffscreenCanvas
  */
 export class ThumbnailCache {
   /**
-   * @param {number} [maxSize=300] - 最大キャッシュエントリ数
+   * @param {number} [maxSize=300] - Maximum cache entries
    */
   constructor(maxSize = DEFAULT_CACHE_SIZE) {
     /** @type {Map<string, HTMLCanvasElement>} */
@@ -29,14 +29,14 @@ export class ThumbnailCache {
   }
 
   /**
-   * キャッシュからサムネイルを取得
-   * @param {string} frameId - フレームID
+   * Get thumbnail from cache
+   * @param {string} frameId - Frame ID
    * @returns {HTMLCanvasElement | null}
    */
   get(frameId) {
     const cached = this.cache.get(frameId);
     if (cached) {
-      // LRU: アクセスしたエントリを末尾に移動
+      // LRU: Move accessed entry to end
       this.cache.delete(frameId);
       this.cache.set(frameId, cached);
       return cached;
@@ -45,8 +45,8 @@ export class ThumbnailCache {
   }
 
   /**
-   * サムネイルが存在するかチェック
-   * @param {string} frameId - フレームID
+   * Check if thumbnail exists
+   * @param {string} frameId - Frame ID
    * @returns {boolean}
    */
   has(frameId) {
@@ -54,22 +54,22 @@ export class ThumbnailCache {
   }
 
   /**
-   * サムネイルを生成してキャッシュ
-   * @param {import('../../features/capture/types.js').Frame} frame - フレーム
-   * @param {number} [maxDimension=80] - 最大サイズ
+   * Generate thumbnail and cache
+   * @param {import('../../features/capture/types.js').Frame} frame - Frame
+   * @param {number} [maxDimension=80] - Maximum size
    * @returns {Promise<HTMLCanvasElement>}
    */
   async generate(frame, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
-    // キャッシュにあれば返す
+    // Return if cached
     const cached = this.get(frame.id);
     if (cached) return cached;
 
-    // スケール計算
+    // Calculate scale
     const scale = Math.min(maxDimension / frame.width, maxDimension / frame.height);
     const thumbWidth = Math.round(frame.width * scale);
     const thumbHeight = Math.round(frame.height * scale);
 
-    // OffscreenCanvas で描画（バックグラウンド処理可能）
+    // Draw with OffscreenCanvas (can be processed in background)
     const offscreen = new OffscreenCanvas(thumbWidth, thumbHeight);
     const ctx = offscreen.getContext('2d');
 
@@ -78,14 +78,14 @@ export class ThumbnailCache {
     }
 
     if (!frame?.frame) {
-      // 無効なフレームはプレースホルダー
+      // Invalid frame gets placeholder
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, thumbWidth, thumbHeight);
     } else {
       ctx.drawImage(frame.frame, 0, 0, thumbWidth, thumbHeight);
     }
 
-    // 通常の Canvas に変換（DOM 表示用）
+    // Convert to regular Canvas (for DOM display)
     const canvas = document.createElement('canvas');
     canvas.width = thumbWidth;
     canvas.height = thumbHeight;
@@ -97,18 +97,18 @@ export class ThumbnailCache {
 
     canvasCtx.drawImage(offscreen, 0, 0);
 
-    // キャッシュに追加
+    // Add to cache
     this._addToCache(frame.id, canvas);
 
     return canvas;
   }
 
   /**
-   * 複数フレームのサムネイルをバッチ生成
-   * requestIdleCallback で非ブロッキング処理
-   * @param {import('../../features/capture/types.js').Frame[]} frames - フレーム配列
-   * @param {number} [maxDimension=80] - 最大サイズ
-   * @param {(progress: number) => void} [onProgress] - 進捗コールバック
+   * Batch generate thumbnails for multiple frames
+   * Non-blocking processing with requestIdleCallback
+   * @param {import('../../features/capture/types.js').Frame[]} frames - Frame array
+   * @param {number} [maxDimension=80] - Maximum size
+   * @param {(progress: number) => void} [onProgress] - Progress callback
    * @returns {Promise<void>}
    */
   async generateBatch(frames, maxDimension = DEFAULT_THUMBNAIL_SIZE, onProgress) {
@@ -130,7 +130,7 @@ export class ThumbnailCache {
       processed += batch.length;
       onProgress?.(Math.round((processed / uncached.length) * 100));
 
-      // メインスレッドに譲る
+      // Yield to main thread
       await new Promise((resolve) => {
         if (typeof requestIdleCallback === 'function') {
           requestIdleCallback(resolve, { timeout: 16 });
@@ -142,13 +142,13 @@ export class ThumbnailCache {
   }
 
   /**
-   * キャッシュに追加（LRU）
+   * Add to cache (LRU)
    * @param {string} frameId
    * @param {HTMLCanvasElement} canvas
    * @private
    */
   _addToCache(frameId, canvas) {
-    // LRU: 容量超過時は最古のエントリを削除
+    // LRU: Remove oldest entry when over capacity
     if (this.cache.size >= this.maxSize) {
       const firstKey = this.cache.keys().next().value;
       if (firstKey) {
@@ -159,7 +159,7 @@ export class ThumbnailCache {
   }
 
   /**
-   * 特定フレームのキャッシュを無効化
+   * Invalidate cache for specific frame
    * @param {string} frameId
    */
   invalidate(frameId) {
@@ -167,14 +167,14 @@ export class ThumbnailCache {
   }
 
   /**
-   * キャッシュをクリア
+   * Clear cache
    */
   clear() {
     this.cache.clear();
   }
 
   /**
-   * キャッシュサイズを取得
+   * Get cache size
    * @returns {number}
    */
   get size() {
@@ -186,7 +186,7 @@ export class ThumbnailCache {
 let instance = null;
 
 /**
- * シングルトンインスタンスを取得
+ * Get singleton instance
  * @returns {ThumbnailCache}
  */
 export function getThumbnailCache() {
@@ -197,7 +197,7 @@ export function getThumbnailCache() {
 }
 
 /**
- * シングルトンインスタンスをリセット（テスト用）
+ * Reset singleton instance (for testing)
  */
 export function resetThumbnailCache() {
   if (instance) {

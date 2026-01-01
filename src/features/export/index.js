@@ -7,6 +7,7 @@ import { emit } from '../../shared/bus.js';
 import { getEditorPayload, validateEditorPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
+import { closeAllFrames } from '../../shared/utils/videoframe.js';
 import {
   createExportStore,
   updateSettings,
@@ -503,15 +504,7 @@ function cleanup() {
   }
 
   // Close VideoFrames that Export owns (cloned from Editor)
-  for (const frame of frames) {
-    if (frame?.frame && typeof frame.frame.close === 'function') {
-      try {
-        frame.frame.close();
-      } catch (e) {
-        // Ignore errors from already-closed frames
-      }
-    }
-  }
+  closeAllFrames(frames);
 
   // NOTE: Do NOT clear EditorPayload here - Editor may need it on return
   // EditorPayload is cleared when Capture creates a new clip

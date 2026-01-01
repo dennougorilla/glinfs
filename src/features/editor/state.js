@@ -124,9 +124,16 @@ export function setPlaybackSpeed(state, speed) {
 export function updateRange(state, range) {
   if (!state.clip) return state;
 
+  // If currentFrame is outside new range, move to IN point
+  const currentFrame =
+    state.currentFrame < range.start || state.currentFrame > range.end
+      ? range.start
+      : state.currentFrame;
+
   return {
     ...state,
     selectedRange: range,
+    currentFrame,
     clip: setFrameRange(state.clip, range),
   };
 }

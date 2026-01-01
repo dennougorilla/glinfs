@@ -125,9 +125,8 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
         canvasClone.className = 'tl-frame-canvas';
         canvasClone.setAttribute('draggable', 'false');
         thumb.appendChild(canvasClone);
-      } catch (error) {
+      } catch {
         // Graceful degradation - show empty frame on error
-        console.warn(`Failed to create thumbnail for frame ${i}:`, error);
       }
     }
 

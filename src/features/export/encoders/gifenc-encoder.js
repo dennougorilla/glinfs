@@ -1,6 +1,6 @@
 /**
  * gifenc Encoder Implementation
- * Pure JavaScript GIF エンコーダー
+ * Pure JavaScript GIF encoder
  * @module features/export/encoders/gifenc-encoder
  */
 
@@ -22,7 +22,7 @@ const METADATA = {
 };
 
 /**
- * gifenc エンコーダーを作成
+ * Create gifenc encoder
  * @returns {EncoderInterface}
  */
 export function createGifencEncoder() {
@@ -36,7 +36,7 @@ export function createGifencEncoder() {
     metadata: METADATA,
 
     /**
-     * エンコーダーを初期化
+     * Initialize encoder
      * @param {EncoderConfig} encoderConfig
      */
     init(encoderConfig) {
@@ -45,7 +45,7 @@ export function createGifencEncoder() {
     },
 
     /**
-     * フレームを追加
+     * Add frame
      * @param {FrameData} frameData
      * @param {number} frameIndex
      */
@@ -56,13 +56,13 @@ export function createGifencEncoder() {
 
       const { rgba, width, height } = frameData;
 
-      // 色量子化（パレット生成）
+      // Color quantization (palette generation)
       const palette = quantize(rgba, config.maxColors);
 
-      // ピクセルをパレットインデックスにマップ
+      // Map pixels to palette indices
       const index = applyPalette(rgba, palette);
 
-      // フレームを書き込み
+      // Write frame
       encoder.writeFrame(index, width, height, {
         palette,
         delay: config.frameDelayMs,
@@ -71,7 +71,7 @@ export function createGifencEncoder() {
     },
 
     /**
-     * エンコード完了・バイト配列取得
+     * Complete encoding and get byte array
      * @returns {Uint8Array}
      */
     finish() {
@@ -86,7 +86,7 @@ export function createGifencEncoder() {
     },
 
     /**
-     * リソース解放
+     * Release resources
      */
     dispose() {
       encoder = null;
@@ -96,7 +96,7 @@ export function createGifencEncoder() {
 }
 
 /**
- * gifenc エンコーダーのメタデータを取得
+ * Get gifenc encoder metadata
  * @returns {EncoderMetadata}
  */
 export function getGifencMetadata() {

@@ -1,35 +1,34 @@
 /**
  * Memory Monitor
- * リアルタイムメモリ監視とアラート
+ * Real-time memory monitoring and alerts
  * @module shared/utils/memory-monitor
  */
 
-/** @type {number} 警告閾値 (MB) */
+/** @type {number} Warning threshold (MB) */
 const WARNING_THRESHOLD_MB = 400;
 
-/** @type {number} 危険閾値 (MB) */
+/** @type {number} Critical threshold (MB) */
 const CRITICAL_THRESHOLD_MB = 500;
 
 /**
- * メモリ状態レベル
+ * Memory status level
  * @typedef {'normal' | 'warning' | 'critical'} MemoryLevel
  */
 
 /**
- * メモリステータス
+ * Memory status
  * @typedef {Object} MemoryStatus
- * @property {number} usedMB - 使用中メモリ (MB)
- * @property {number} limitMB - 制限値 (MB)
- * @property {MemoryLevel} level - 状態レベル
- * @property {number} percent - 使用率 (0-100)
+ * @property {number} usedMB - Used memory (MB)
+ * @property {number} limitMB - Memory limit (MB)
+ * @property {MemoryLevel} level - Status level
+ * @property {number} percent - Usage percentage (0-100)
  */
 
 /**
- * 現在のメモリステータスを取得
- * @returns {MemoryStatus | null} - performance.memory が利用できない場合は null
+ * Get current memory status
+ * @returns {MemoryStatus | null} - null if performance.memory is not available
  */
 export function getMemoryStatus() {
-  // performance.memory は Chrome 限定 API
   // @ts-ignore - Chrome-specific API
   const memory = performance.memory;
 
@@ -53,10 +52,10 @@ export function getMemoryStatus() {
 }
 
 /**
- * 定期的なメモリ監視を開始
- * @param {(status: MemoryStatus) => void} callback - ステータスコールバック
- * @param {number} [intervalMs=1000] - 監視間隔 (ms)
- * @returns {() => void} - 停止関数
+ * Start periodic memory monitoring
+ * @param {(status: MemoryStatus) => void} callback - Status callback
+ * @param {number} [intervalMs=1000] - Monitoring interval (ms)
+ * @returns {() => void} - Stop function
  */
 export function startMemoryMonitor(callback, intervalMs = 1000) {
   const interval = setInterval(() => {
@@ -70,23 +69,23 @@ export function startMemoryMonitor(callback, intervalMs = 1000) {
 }
 
 /**
- * VideoFrame バッファのメモリ使用量を推定
- * VideoFrame は GPU メモリに格納されるため、CPU メモリ使用量は少ない
- * @param {number} frameCount - フレーム数
- * @param {number} width - フレーム幅
- * @param {number} height - フレーム高さ
- * @returns {number} - 推定 MB
+ * Estimate memory usage for VideoFrame buffer
+ * VideoFrames are stored in GPU memory, so CPU memory usage is lower
+ * @param {number} frameCount - Number of frames
+ * @param {number} width - Frame width
+ * @param {number} height - Frame height
+ * @returns {number} - Estimated MB
  */
 export function estimateBufferMemory(frameCount, width, height) {
-  // VideoFrame は GPU メモリに格納
-  // CPU 側のオーバーヘッドは約 1/10
+  // VideoFrames are stored in GPU memory
+  // CPU-side overhead is approximately 1/10
   const bytesPerFrame = (width * height * 4) / 10;
   return (frameCount * bytesPerFrame) / (1024 * 1024);
 }
 
 /**
- * メモリ使用量のフォーマット
- * @param {number} mb - メモリ (MB)
+ * Format memory usage
+ * @param {number} mb - Memory (MB)
  * @returns {string}
  */
 export function formatMemory(mb) {
@@ -97,9 +96,9 @@ export function formatMemory(mb) {
 }
 
 /**
- * メモリレベルに応じた色を取得
+ * Get color for memory level
  * @param {MemoryLevel} level
- * @returns {string} - CSS 色
+ * @returns {string} - CSS color
  */
 export function getMemoryLevelColor(level) {
   switch (level) {
@@ -113,27 +112,27 @@ export function getMemoryLevelColor(level) {
 }
 
 /**
- * メモリレベルに応じたメッセージを取得
+ * Get message for memory level
  * @param {MemoryLevel} level
  * @returns {string}
  */
 export function getMemoryLevelMessage(level) {
   switch (level) {
     case 'critical':
-      return 'メモリ使用量が危険レベルです。録画を停止してください。';
+      return 'Memory usage critical. Please stop recording.';
     case 'warning':
-      return 'メモリ使用量が増加しています。録画時間を短くすることを推奨します。';
+      return 'Memory usage increasing. Consider shorter recording.';
     default:
-      return 'メモリ使用量は正常です。';
+      return 'Memory usage normal.';
   }
 }
 
 /**
- * 最大フレーム数を推定（メモリ制限に基づく）
- * @param {number} width - フレーム幅
- * @param {number} height - フレーム高さ
- * @param {number} [targetMemoryMB=400] - 目標メモリ使用量
- * @returns {number} - 推定最大フレーム数
+ * Estimate maximum frame count based on memory limit
+ * @param {number} width - Frame width
+ * @param {number} height - Frame height
+ * @param {number} [targetMemoryMB=400] - Target memory usage
+ * @returns {number} - Estimated maximum frame count
  */
 export function estimateMaxFrames(width, height, targetMemoryMB = WARNING_THRESHOLD_MB) {
   const bytesPerFrame = (width * height * 4) / 10;

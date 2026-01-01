@@ -142,12 +142,6 @@ export function createFrameProcessor(track) {
     throw new Error('MediaStreamTrackProcessor not supported in this browser');
   }
 
-  console.debug('[Capture] Creating frame processor', {
-    trackId: track.id,
-    trackState: track.readyState,
-    trackLabel: track.label,
-  });
-
   const processor = new MediaStreamTrackProcessor({
     track,
     maxBufferSize: 30, // Backpressure control: auto-drop old frames when processing lags

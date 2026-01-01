@@ -22,7 +22,7 @@ import {
   updateSettings,
   setError,
 } from './state.js';
-import { getFrames, clearBuffer } from './core.js';
+import { getFrames, clearBuffer, closeAllFrames } from './core.js';
 import {
   startScreenCapture,
   stopScreenCapture,
@@ -127,12 +127,6 @@ function render(container) {
 function startCaptureLoop(video, fps, signal) {
   if (!store) return;
 
-  console.debug('[Capture] Starting capture loop', {
-    fps,
-    videoWidth: video.videoWidth,
-    videoHeight: video.videoHeight,
-  });
-
   const frameInterval = 1000 / fps;
   let framesAddedToBuffer = 0;
 
@@ -145,7 +139,6 @@ function startCaptureLoop(video, fps, signal) {
 
     const videoFrame = createVideoFrameFromElement(video);
     if (!videoFrame) {
-      console.warn('[Capture] Failed to create VideoFrame from video element');
       return;
     }
 
@@ -160,14 +153,6 @@ function startCaptureLoop(video, fps, signal) {
 
       store.setState((state) => addFrameToState(state, frame));
       framesAddedToBuffer++;
-
-      // Log every 10th frame to avoid console spam
-      if (framesAddedToBuffer % 10 === 1 || framesAddedToBuffer <= 5) {
-        console.debug('[Capture] Frame added', {
-          framesAddedToBuffer,
-          bufferSize: store.getState().buffer.size,
-        });
-      }
 
       // Reset error counter on successful frame
       consecutiveFrameErrors = 0;
@@ -211,11 +196,6 @@ function startCaptureLoop(video, fps, signal) {
     if (captureIntervalId !== null) {
       clearInterval(captureIntervalId);
       captureIntervalId = null;
-      console.debug('[Capture] Interval stopped', {
-        framesAddedToBuffer,
-        isCapturing: store?.getState()?.isCapturing,
-        signalAborted: signal.aborted,
-      });
     }
   };
 
@@ -227,11 +207,6 @@ function startCaptureLoop(video, fps, signal) {
 
   // Capture first frame immediately
   captureFrame();
-
-  console.debug('[Capture] Capture interval started', {
-    intervalMs: frameInterval,
-    fps,
-  });
 }
 
 /**
@@ -246,11 +221,6 @@ async function handleStart() {
     // Get video track for event handling
     const videoTrack = stream.getVideoTracks()[0];
     captureTrack = videoTrack;
-
-    console.log('[Capture] Stream started', {
-      trackId: videoTrack.id,
-      trackState: videoTrack.readyState,
-    });
 
     // Create video element for capture and preview
     videoElement = await createVideoElement(stream);
@@ -301,8 +271,6 @@ async function handleStart() {
  */
 function handleStop(preserveBuffer = true) {
   if (!store) return;
-
-  console.debug('[Capture] Stopping capture');
 
   // Stop capture interval
   if (captureIntervalId !== null) {
@@ -390,21 +358,13 @@ function handleCreateClip() {
   // This prevents memory leaks when creating multiple clips
   const oldClipPayload = getClipPayload();
   if (oldClipPayload) {
-    for (const frame of oldClipPayload.frames ?? []) {
-      if (frame?.frame?.close) {
-        try { frame.frame.close(); } catch (e) { /* ignore */ }
-      }
-    }
+    closeAllFrames(oldClipPayload.frames ?? []);
     clearClipPayload();
   }
 
   const oldEditorPayload = getEditorPayload();
   if (oldEditorPayload) {
-    for (const frame of oldEditorPayload.frames ?? []) {
-      if (frame?.frame?.close) {
-        try { frame.frame.close(); } catch (e) { /* ignore */ }
-      }
-    }
+    closeAllFrames(oldEditorPayload.frames ?? []);
     clearEditorPayload();
   }
 
