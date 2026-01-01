@@ -7,7 +7,7 @@
  * @typedef {'/capture' | '/editor' | '/export'} Route
  */
 
-/** @type {Map<string, () => void>} */
+/** @type {Map<string, () => (() => void) | void>} */
 let routes = new Map();
 
 /** @type {Set<(route: Route) => void>} */
@@ -15,6 +15,9 @@ const listeners = new Set();
 
 /** @type {Route} */
 let currentRoute = '/capture';
+
+/** @type {(() => void) | null} */
+let currentCleanup = null;
 
 /**
  * Initialize router with route handlers
@@ -38,6 +41,16 @@ function handleHashChange() {
   const route = /** @type {Route} */ (hash);
 
   if (routes.has(route)) {
+    // Call cleanup from previous route before switching
+    if (currentCleanup) {
+      try {
+        currentCleanup();
+      } catch (err) {
+        console.error('[Router] Cleanup error:', err);
+      }
+      currentCleanup = null;
+    }
+
     currentRoute = route;
 
     // Clear main content
@@ -46,10 +59,13 @@ function handleHashChange() {
       main.innerHTML = '';
     }
 
-    // Call route handler
+    // Call route handler and store cleanup function
     const handler = routes.get(route);
     if (handler) {
-      handler();
+      const cleanup = handler();
+      if (typeof cleanup === 'function') {
+        currentCleanup = cleanup;
+      }
     }
 
     // Notify listeners

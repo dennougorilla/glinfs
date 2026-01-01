@@ -15,7 +15,7 @@ import { createClip, setFrameRange, clampCropArea } from './core.js';
 export function initEditorState(clip) {
   return {
     clip,
-    currentFrame: 0,
+    currentFrame: clip.selectedRange.start,
     selectedRange: clip.selectedRange,
     cropArea: clip.cropArea,
     selectedAspectRatio: clip.cropArea?.aspectRatio ?? 'free',
@@ -124,9 +124,16 @@ export function setPlaybackSpeed(state, speed) {
 export function updateRange(state, range) {
   if (!state.clip) return state;
 
+  // If currentFrame is outside new range, move to IN point
+  const currentFrame =
+    state.currentFrame < range.start || state.currentFrame > range.end
+      ? range.start
+      : state.currentFrame;
+
   return {
     ...state,
     selectedRange: range,
+    currentFrame,
     clip: setFrameRange(state.clip, range),
   };
 }
@@ -212,5 +219,14 @@ export function setMode(state, mode) {
  */
 export function createEditorStore(frames, fps) {
   const clip = createClip(frames, fps);
+  return createStore(initEditorState(clip));
+}
+
+/**
+ * Create editor store from existing clip (for restoring state)
+ * @param {import('./types.js').Clip} clip - Existing clip with preserved state
+ * @returns {ReturnType<typeof createStore<import('./types.js').EditorState>>}
+ */
+export function createEditorStoreFromClip(clip) {
   return createStore(initEditorState(clip));
 }

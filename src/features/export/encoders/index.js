@@ -26,13 +26,13 @@ import { registerEncoder } from './encoder-registry.js';
 import { createGifencEncoder } from './gifenc-encoder.js';
 
 /**
- * デフォルトエンコーダーを登録
- * モジュール読み込み時に自動実行
+ * Register default encoders
+ * Automatically executed on module load
  */
 function initializeDefaultEncoders() {
-  // gifenc (JS) をデフォルトエンコーダーとして登録
+  // Register gifenc (JS) as default encoder
   registerEncoder('gifenc-js', createGifencEncoder, true);
 }
 
-// 初期化実行
+// Execute initialization
 initializeDefaultEncoders();

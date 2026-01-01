@@ -203,6 +203,7 @@ function renderCaptureActions(state, handlers, cleanups) {
         try {
           await handlers.onStart();
         } catch {
+          // User cancelled or permission denied - reset button state
           selectBtn.removeAttribute('disabled');
           selectBtn.textContent = 'Select Screen';
         }

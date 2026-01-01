@@ -37,6 +37,7 @@ function createExportIcon() {
  * @property {() => void} onOpenInTab
  * @property {() => void} onBackToEditor
  * @property {() => void} onTogglePlay - Toggle preview playback
+ * @property {() => void} onAdjustSettings - Return to settings after export complete
  */
 
 /** @type {readonly [1, 2, 3, 4, 5]} */
@@ -416,39 +417,171 @@ function renderEncodingProgress(job, handlers, cleanups) {
 function renderComplete(job, handlers, cleanups) {
   const size = job.result?.size || 0;
 
-  const complete = createElement('div', { className: 'export-complete' }, [
-    createElement('div', { className: 'complete-icon' }, ['\u2713']),
-    createElement('h2', { className: 'complete-title' }, ['Export Complete!']),
-    createElement('p', { className: 'complete-subtitle' }, ['Your GIF is ready to download']),
-    createElement('div', { className: 'file-info' }, [
-      createElement('div', { className: 'file-info-item' }, [
-        createElement('div', { className: 'file-info-label' }, ['File Size']),
-        createElement('div', { className: 'file-info-value' }, [formatBytes(size)]),
+  // Create the main container with two-column layout
+  const complete = createElement('div', { className: 'export-complete-v2' });
+
+  // Left: GIF Preview
+  const previewSection = createElement('div', { className: 'complete-preview-section' });
+
+  if (job.result) {
+    const blobUrl = URL.createObjectURL(job.result);
+    const previewImg = createElement('img', {
+      className: 'complete-preview-img',
+      src: blobUrl,
+      alt: 'Exported GIF preview',
+    });
+    previewSection.appendChild(previewImg);
+
+    // Cleanup blob URL when done
+    cleanups.push(() => URL.revokeObjectURL(blobUrl));
+  }
+
+  complete.appendChild(previewSection);
+
+  // Right: Info and Actions
+  const infoSection = createElement('div', { className: 'complete-info-section' });
+
+  // Success header with animated checkmark
+  const header = createElement('div', { className: 'complete-header' }, [
+    createElement('div', { className: 'complete-icon-ring' }, [
+      createElement('div', { className: 'complete-icon-check' }, [
+        createCheckmarkSVG(),
       ]),
     ]),
+    createElement('div', { className: 'complete-header-text' }, [
+      createElement('h2', { className: 'complete-title' }, ['Ready to share']),
+      createElement('p', { className: 'complete-subtitle' }, ['Your GIF has been created successfully']),
+    ]),
   ]);
+  infoSection.appendChild(header);
 
-  const actions = createElement('div', { className: 'complete-actions' });
+  // File info cards
+  const fileStats = createElement('div', { className: 'complete-stats' }, [
+    createElement('div', { className: 'complete-stat-card complete-stat-primary' }, [
+      createElement('div', { className: 'stat-value' }, [formatBytes(size)]),
+      createElement('div', { className: 'stat-label' }, ['File Size']),
+    ]),
+  ]);
+  infoSection.appendChild(fileStats);
+
+  // Primary action: Download
+  const primaryActions = createElement('div', { className: 'complete-primary-actions' });
 
   const downloadBtn = createElement(
     'button',
-    { className: 'btn btn-download', type: 'button' },
-    ['\u2B07 Download']
+    { className: 'btn-download-large', type: 'button' },
+    [
+      createDownloadSVG(),
+      createElement('span', {}, ['Download GIF']),
+    ]
   );
   cleanups.push(on(downloadBtn, 'click', handlers.onDownload));
-  actions.appendChild(downloadBtn);
+  primaryActions.appendChild(downloadBtn);
+  infoSection.appendChild(primaryActions);
+
+  // Secondary actions
+  const secondaryActions = createElement('div', { className: 'complete-secondary-actions' });
 
   const openBtn = createElement(
     'button',
-    { className: 'btn btn-secondary', type: 'button' },
-    ['Open in Tab']
+    { className: 'btn-action-secondary', type: 'button' },
+    [
+      createExternalLinkSVG(),
+      createElement('span', {}, ['Open in New Tab']),
+    ]
   );
   cleanups.push(on(openBtn, 'click', handlers.onOpenInTab));
-  actions.appendChild(openBtn);
+  secondaryActions.appendChild(openBtn);
 
-  complete.appendChild(actions);
+  const adjustBtn = createElement(
+    'button',
+    { className: 'btn-action-secondary', type: 'button' },
+    [
+      createSettingsSVG(),
+      createElement('span', {}, ['Adjust & Re-export']),
+    ]
+  );
+  cleanups.push(on(adjustBtn, 'click', handlers.onAdjustSettings));
+  secondaryActions.appendChild(adjustBtn);
+
+  infoSection.appendChild(secondaryActions);
+
+  // Back to editor link
+  const backLink = createElement('div', { className: 'complete-back-link' }, [
+    createElement('button', { className: 'btn-text-link', type: 'button' }, [
+      '\u2190 Back to Editor',
+    ]),
+  ]);
+  cleanups.push(on(backLink.querySelector('button'), 'click', handlers.onBackToEditor));
+  infoSection.appendChild(backLink);
+
+  complete.appendChild(infoSection);
 
   return complete;
+}
+
+/**
+ * Create checkmark SVG icon
+ * @returns {SVGSVGElement}
+ */
+function createCheckmarkSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '3');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = '<polyline points="20 6 9 17 4 12"></polyline>';
+  return svg;
+}
+
+/**
+ * Create download SVG icon
+ * @returns {SVGSVGElement}
+ */
+function createDownloadSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>';
+  return svg;
+}
+
+/**
+ * Create external link SVG icon
+ * @returns {SVGSVGElement}
+ */
+function createExternalLinkSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>';
+  return svg;
+}
+
+/**
+ * Create settings/gear SVG icon
+ * @returns {SVGSVGElement}
+ */
+function createSettingsSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>';
+  return svg;
 }
 
 /**

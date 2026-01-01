@@ -8,6 +8,8 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { clamp } from '../../shared/utils/math.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { createThumbnailCanvas } from './api.js';
+import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
+import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 
 /**
  * @typedef {Object} TimelineHandlers
@@ -37,6 +39,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   const totalFrames = clip.frames.length;
   const fps = clip.fps || DEFAULT_FPS;
   const duration = totalFrames / fps;
+  const { timeline: thumbnailSize } = getThumbnailSizes();
 
   // ═══════════════════════════════════════════════════════════
   // SHARED STATE - Single source of truth for range
@@ -90,9 +93,10 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   // ═══════════════════════════════════════════════════════════
   const track = createElement('div', { className: 'tl-track' });
 
-  // Filmstrip background (thumbnails)
+  // Filmstrip background (thumbnails) - uses ThumbnailCache for performance
   const filmstrip = createElement('div', { className: 'tl-filmstrip' });
   const sampleStep = Math.max(1, Math.floor(totalFrames / MAX_THUMBNAILS));
+  const thumbnailCache = getThumbnailCache();
 
   for (let i = 0; i < totalFrames; i += sampleStep) {
     const thumb = createElement('div', {
@@ -103,13 +107,26 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     const frame = clip.frames[i];
     if (frame) {
       try {
-        const canvas = createThumbnailCanvas(frame, 80);
-        canvas.className = 'tl-frame-canvas';
-        canvas.setAttribute('draggable', 'false');
-        thumb.appendChild(canvas);
-      } catch (error) {
+        // Check cache first (sync) - reuse on subsequent renders
+        let canvas = thumbnailCache.get(frame.id);
+        if (!canvas) {
+          // Generate and cache for future renders
+          canvas = createThumbnailCanvas(frame, thumbnailSize);
+          thumbnailCache._addToCache(frame.id, canvas);
+        }
+        // Copy canvas content using drawImage (cloneNode doesn't copy pixel data)
+        const canvasClone = document.createElement('canvas');
+        canvasClone.width = canvas.width;
+        canvasClone.height = canvas.height;
+        const cloneCtx = canvasClone.getContext('2d');
+        if (cloneCtx) {
+          cloneCtx.drawImage(canvas, 0, 0);
+        }
+        canvasClone.className = 'tl-frame-canvas';
+        canvasClone.setAttribute('draggable', 'false');
+        thumb.appendChild(canvasClone);
+      } catch {
         // Graceful degradation - show empty frame on error
-        console.warn(`Failed to create thumbnail for frame ${i}:`, error);
       }
     }
 
@@ -184,7 +201,20 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   track.appendChild(hoverIndicator);
 
   // ═══════════════════════════════════════════════════════════
-  // LAYER 5: Draw Selection Indicator (during drag)
+  // LAYER 5: Playhead (Current Position Indicator)
+  // ═══════════════════════════════════════════════════════════
+  const playhead = createElement('div', { className: 'tl-playhead' });
+  playhead.innerHTML = `
+    <div class="tl-playhead-head"></div>
+    <div class="tl-playhead-line"></div>
+  `;
+  // Set initial position
+  const initialPercent = (currentFrame / Math.max(1, totalFrames - 1)) * 100;
+  playhead.style.left = `${initialPercent}%`;
+  track.appendChild(playhead);
+
+  // ═══════════════════════════════════════════════════════════
+  // LAYER 6: Draw Selection Indicator (during drag)
   // ═══════════════════════════════════════════════════════════
   const drawIndicator = createElement('div', { className: 'tl-draw-selection' });
   drawIndicator.style.display = 'none';
@@ -482,4 +512,18 @@ export function updateTimelineRange(container, range, totalFrames) {
       totalFrames
     );
   }
+}
+
+/**
+ * Update playhead position (external API)
+ * @param {HTMLElement} container - Timeline container element
+ * @param {number} currentFrame - Current frame index
+ * @param {number} totalFrames - Total number of frames
+ */
+export function updatePlayheadPosition(container, currentFrame, totalFrames) {
+  const playhead = container.querySelector('.tl-playhead');
+  if (!playhead) return;
+
+  const percent = (currentFrame / Math.max(1, totalFrames - 1)) * 100;
+  /** @type {HTMLElement} */ (playhead).style.left = `${percent}%`;
 }

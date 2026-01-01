@@ -4,7 +4,7 @@
  */
 
 import { createStore } from '../../shared/store.js';
-import { createBuffer, addFrame, calculateStats, createDefaultSettings } from './core.js';
+import { createBuffer, addFrame, calculateStats, createDefaultSettings, clearBuffer } from './core.js';
 
 /**
  * Initialize capture state
@@ -92,6 +92,8 @@ export function updateSettings(state, settings) {
   // If fps or bufferDuration changed, recreate buffer
   if (settings.fps !== undefined || settings.bufferDuration !== undefined) {
     const maxFrames = newSettings.fps * newSettings.bufferDuration;
+    // Clear old buffer to release VideoFrame resources before creating new one
+    clearBuffer(state.buffer);
     return {
       ...state,
       settings: newSettings,

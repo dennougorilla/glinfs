@@ -43,33 +43,45 @@ export function cancelIdleCallback(handle) {
 }
 
 /**
+ * @typedef {Function & { cancel: () => void }} ThrottledFunction
+ */
+
+/**
  * Throttle function calls
  * @template {(...args: any[]) => any} T
  * @param {T} fn - Function to throttle
  * @param {number} ms - Minimum interval in milliseconds
- * @returns {T} Throttled function
+ * @returns {T & { cancel: () => void }} Throttled function with cancel method
  */
 export function throttle(fn, ms) {
   let lastCall = 0;
   let timeoutId = null;
 
-  return /** @type {T} */ (
-    function (...args) {
-      const now = Date.now();
-      const timeSinceLastCall = now - lastCall;
+  const throttled = function (...args) {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCall;
 
-      if (timeSinceLastCall >= ms) {
-        lastCall = now;
+    if (timeSinceLastCall >= ms) {
+      lastCall = now;
+      fn.apply(this, args);
+    } else if (!timeoutId) {
+      timeoutId = setTimeout(() => {
+        lastCall = Date.now();
+        timeoutId = null;
         fn.apply(this, args);
-      } else if (!timeoutId) {
-        timeoutId = setTimeout(() => {
-          lastCall = Date.now();
-          timeoutId = null;
-          fn.apply(this, args);
-        }, ms - timeSinceLastCall);
-      }
+      }, ms - timeSinceLastCall);
     }
-  );
+  };
+
+  // Cancel any pending throttled call
+  throttled.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+
+  return /** @type {T & { cancel: () => void }} */ (throttled);
 }
 
 /**

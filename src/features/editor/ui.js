@@ -213,8 +213,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
    * Open frame grid modal
    */
   function handleOpenFrameGrid() {
-    if (state.clip && state.clip.frames.length > 0 && !frameGridCleanup) {
-      frameGridCleanup = openFrameGridModal(container, state, handlers, () => {
+    const currentState = handlers.getState?.() ?? state;
+    if (currentState.clip && currentState.clip.frames.length > 0 && !frameGridCleanup) {
+      frameGridCleanup = openFrameGridModal(container, currentState, handlers, () => {
         frameGridCleanup = null;
       });
     }

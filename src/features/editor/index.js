@@ -6,16 +6,20 @@
 import { emit } from '../../shared/bus.js';
 import {
   getClipPayload,
-  clearClipPayload,
+  getEditorPayload,
   setEditorPayload,
+  clearEditorPayload,
   validateClipPayload,
+  clearClipPayload,
 } from '../../shared/app-store.js';
 import { qsRequired, createElement, on } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { closeAllFrames } from '../../shared/utils/videoframe.js';
 import {
   createEditorStore,
+  createEditorStoreFromClip,
   goToFrame,
   nextFrame,
   previousFrame,
@@ -29,7 +33,7 @@ import {
 } from './state.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
 import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
-import { renderTimeline, updateTimelineRange } from './timeline.js';
+import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
 let store = null;
@@ -61,44 +65,57 @@ export function initEditor() {
   // Register test hooks
   registerTestHooks();
 
+  // Check if returning from Export - restore state from EditorPayload FIRST
+  // This takes priority over ClipPayload since Export preserves editor state
+  const editorPayload = getEditorPayload();
+  const hasValidEditorPayload = editorPayload?.clip?.frames?.length > 0;
+
   // Get clip payload from capture via app store
   const clipPayload = getClipPayload();
 
-  // Validate payload structure
-  const validation = validateClipPayload(clipPayload);
-  if (!validation.valid) {
-    const backBtn = createElement('button', {
-      className: 'btn btn-primary',
-      type: 'button',
-    }, ['\u2190 Back to Capture']);
+  // Validate payload structure ONLY if not returning from Export
+  // When returning from Export, EditorPayload contains all needed data
+  if (!hasValidEditorPayload) {
+    const validation = validateClipPayload(clipPayload);
+    if (!validation.valid) {
+      const backBtn = createElement('button', {
+        className: 'btn btn-primary',
+        type: 'button',
+      }, ['\u2190 Back to Capture']);
 
-    const errorState = createElement('section', {
-      className: 'screen editor-screen',
-      'aria-labelledby': 'editor-title',
-    }, [
-      createElement('header', { className: 'screen-header' }, [
-        createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
-      ]),
-      createElement('div', { className: 'editor-empty editor-error' }, [
-        createElement('p', {}, ['Invalid clip data: ' + validation.errors.join(', ')]),
-        backBtn,
-      ]),
-    ]);
+      const errorState = createElement('section', {
+        className: 'screen editor-screen',
+        'aria-labelledby': 'editor-title',
+      }, [
+        createElement('header', { className: 'screen-header' }, [
+          createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
+        ]),
+        createElement('div', { className: 'editor-empty editor-error' }, [
+          createElement('p', {}, ['Invalid clip data: ' + validation.errors.join(', ')]),
+          backBtn,
+        ]),
+      ]);
 
-    container.innerHTML = '';
-    container.appendChild(errorState);
+      container.innerHTML = '';
+      container.appendChild(errorState);
 
-    const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
-    emit('editor:validation-error', { errors: validation.errors });
+      const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
+      emit('editor:validation-error', { errors: validation.errors });
 
-    return () => {
-      cleanupBackBtn();
-      cleanup();
-    };
+      return () => {
+        cleanupBackBtn();
+        cleanup();
+      };
+    }
   }
 
-  const frames = clipPayload?.frames || [];
-  const fps = clipPayload?.fps || DEFAULT_FPS;
+  // Determine frames source: prefer EditorPayload when returning from Export
+  const frames = hasValidEditorPayload
+    ? editorPayload.clip.frames
+    : (clipPayload?.frames || []);
+  const fps = hasValidEditorPayload
+    ? editorPayload.clip.fps
+    : (clipPayload?.fps || DEFAULT_FPS);
 
   if (frames.length === 0) {
     // Build empty state with proper event handlers
@@ -132,8 +149,17 @@ export function initEditor() {
     };
   }
 
-  // Create store with FPS from capture
-  store = createEditorStore(frames, fps);
+  // Create store - restore from EditorPayload if returning from Export, otherwise create fresh
+  if (hasValidEditorPayload) {
+    // Restore state from EditorPayload (preserves selection range, crop area)
+    store = createEditorStoreFromClip(editorPayload.clip);
+    // Clear EditorPayload after consuming to prevent stale frame references on subsequent navigations
+    clearEditorPayload();
+    emit('editor:restored', { fromExport: true });
+  } else {
+    // Create fresh store from ClipPayload
+    store = createEditorStore(frames, fps);
+  }
 
   // Initial render
   render(container);
@@ -161,7 +187,7 @@ export function initEditor() {
         }
       }
 
-      // Update current time display
+      // Update current time display and playhead position
       if (state.currentFrame !== prevState.currentFrame) {
         const currentTimeEl = container.querySelector('.time-display .current');
         if (currentTimeEl) {
@@ -172,6 +198,16 @@ export function initEditor() {
             Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1)
           );
           currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
+        }
+
+        // Update playhead position on timeline
+        const timelineContainer = container.querySelector('.editor-timeline-container');
+        if (timelineContainer && state.clip) {
+          updatePlayheadPosition(
+            /** @type {HTMLElement} */ (timelineContainer),
+            state.currentFrame,
+            state.clip.frames.length
+          );
         }
       }
 
@@ -443,6 +479,11 @@ function handleSpeedChange(speed) {
 
 /**
  * Handle export
+ *
+ * OWNERSHIP TRANSFER:
+ * - Clones VideoFrames from editor for export ownership
+ * - Export is responsible for closing its cloned frames
+ * - Editor retains originals (will close them on its own cleanup)
  */
 function handleExport() {
   if (!store) return;
@@ -450,22 +491,49 @@ function handleExport() {
   const state = store.getState();
   if (!state.clip) return;
 
+  const selectedFrames = getSelectedFrames(state.clip);
+
+  // Clone VideoFrames for Export ownership
+  // Export will be responsible for closing these clones
+  const clonedForExport = selectedFrames.map((frame) => ({
+    ...frame,
+    frame: frame.frame.clone(),
+  }));
+
+  // Clone ALL clip frames for EditorPayload (for return navigation)
+  // This ensures frames remain valid after Editor cleanup when returning from Export
+  const clonedClipForReturn = {
+    ...state.clip,
+    frames: state.clip.frames.map((frame) => ({
+      ...frame,
+      frame: frame.frame.clone(),
+    })),
+  };
+
   // Store editor payload for export via app store
   setEditorPayload({
-    frames: getSelectedFrames(state.clip),
+    frames: clonedForExport,
     cropArea: state.cropArea,
-    clip: state.clip,
+    clip: clonedClipForReturn,
     fps: state.clip.fps,
   });
 
   emit('editor:export-ready', {
-    frameCount: getSelectedFrames(state.clip).length,
+    frameCount: clonedForExport.length,
     fps: state.clip.fps,
   });
 }
 
 /**
  * Cleanup editor feature
+ *
+ * OWNERSHIP RESPONSIBILITY:
+ * - Editor owns VideoFrame clones received from Capture via handleCreateClip()
+ * - Must close ALL frames in state.clip.frames before destruction
+ * - Export receives its own clones via handleExport(), so closing here is safe
+ * - Uses try/catch to handle already-closed frames gracefully
+ *
+ * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
 function cleanup() {
   stopPlayback();
@@ -480,7 +548,14 @@ function cleanup() {
     timelineCleanup = null;
   }
 
-  // Clear clip payload (editor is done with it)
+  // Close VideoFrames that Editor owns (cloned from Capture)
+  // Export has its own clones via handleExport(), so this is safe
+  const state = store?.getState();
+  if (state?.clip?.frames) {
+    closeAllFrames(state.clip.frames);
+  }
+
+  // Clear ClipPayload since we've closed the frames
   clearClipPayload();
 
   baseCanvas = null;

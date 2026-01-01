@@ -1,6 +1,6 @@
 /**
  * GIF Encoder Worker
- * メインスレッドからオフロードして GIF エンコードを実行
+ * Offload GIF encoding from main thread
  * @module workers/gif-encoder-worker
  */
 
@@ -20,7 +20,7 @@ let framesProcessed = 0;
 let startTime = 0;
 
 /**
- * イベントをメインスレッドに送信
+ * Send event to main thread
  * @param {import('./worker-protocol.js').WorkerEvent} event
  * @param {Transferable[]} [transfer]
  */
@@ -33,21 +33,21 @@ function postEvent(event, transfer) {
 }
 
 /**
- * 初期化コマンドを処理
+ * Handle initialization command
  * @param {import('./worker-protocol.js').InitMessage} message
  */
 function handleInit(message) {
   try {
-    // 既存のエンコーダーがあれば破棄
+    // Dispose existing encoder if any
     if (encoder) {
       encoder.dispose();
     }
 
-    // 新しいエンコーダーを作成
-    // TODO: encoderId に基づいてエンコーダーを選択（WASM対応時）
+    // Create new encoder
+    // TODO: Select encoder based on encoderId (for future WASM support)
     encoder = createGifencEncoder();
 
-    // 初期化
+    // Initialize
     encoder.init({
       width: message.width,
       height: message.height,
@@ -74,7 +74,7 @@ function handleInit(message) {
 }
 
 /**
- * フレーム追加コマンドを処理
+ * Handle add frame command
  * @param {import('./worker-protocol.js').AddFrameMessage} message
  */
 function handleAddFrame(message) {
@@ -96,7 +96,7 @@ function handleAddFrame(message) {
 
     framesProcessed++;
 
-    // 進捗報告
+    // Report progress
     const percent = Math.round((framesProcessed / totalFrames) * 100);
     postEvent({
       event: Events.PROGRESS,
@@ -114,7 +114,7 @@ function handleAddFrame(message) {
 }
 
 /**
- * 完了コマンドを処理
+ * Handle finish command
  */
 function handleFinish() {
   try {
@@ -125,7 +125,7 @@ function handleFinish() {
     const bytes = encoder.finish();
     const duration = Date.now() - startTime;
 
-    // ArrayBuffer を Transferable として送信
+    // Send ArrayBuffer as Transferable
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
     postEvent(
@@ -137,7 +137,7 @@ function handleFinish() {
       [buffer]
     );
 
-    // クリーンアップ
+    // Cleanup
     encoder.dispose();
     encoder = null;
     totalFrames = 0;
@@ -152,7 +152,7 @@ function handleFinish() {
 }
 
 /**
- * キャンセルコマンドを処理
+ * Handle cancel command
  */
 function handleCancel() {
   if (encoder) {
@@ -169,7 +169,7 @@ function handleCancel() {
 }
 
 /**
- * メッセージハンドラー
+ * Message handler
  * @param {MessageEvent<import('./worker-protocol.js').WorkerMessage>} event
  */
 self.onmessage = (event) => {
@@ -202,7 +202,7 @@ self.onmessage = (event) => {
 };
 
 /**
- * エラーハンドラー
+ * Error handler
  * @param {ErrorEvent} error
  */
 self.onerror = (error) => {

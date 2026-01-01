@@ -1,7 +1,7 @@
 /**
  * Encoder Registry
- * エンコーダーの登録・取得を管理
- * WASM エンコーダーを後から追加可能
+ * Manages encoder registration and retrieval
+ * WASM encoders can be added later
  * @module features/export/encoders/encoder-registry
  */
 
@@ -18,16 +18,12 @@ const encoderFactories = new Map();
 let defaultEncoderId = null;
 
 /**
- * エンコーダーファクトリーを登録
- * @param {string} id - エンコーダー識別子
- * @param {EncoderFactory} factory - エンコーダーファクトリー関数
- * @param {boolean} [setAsDefault=false] - デフォルトとして設定するか
+ * Register encoder factory
+ * @param {string} id - Encoder identifier
+ * @param {EncoderFactory} factory - Encoder factory function
+ * @param {boolean} [setAsDefault=false] - Whether to set as default
  */
 export function registerEncoder(id, factory, setAsDefault = false) {
-  if (encoderFactories.has(id)) {
-    console.warn(`[EncoderRegistry] Encoder "${id}" is already registered, overwriting`);
-  }
-
   encoderFactories.set(id, factory);
 
   if (setAsDefault || defaultEncoderId === null) {
@@ -36,15 +32,15 @@ export function registerEncoder(id, factory, setAsDefault = false) {
 }
 
 /**
- * エンコーダーの登録を解除
- * @param {string} id - エンコーダー識別子
- * @returns {boolean} 解除成功かどうか
+ * Unregister encoder
+ * @param {string} id - Encoder identifier
+ * @returns {boolean} Whether unregistration succeeded
  */
 export function unregisterEncoder(id) {
   const removed = encoderFactories.delete(id);
 
   if (removed && defaultEncoderId === id) {
-    // 別のエンコーダーをデフォルトに設定
+    // Set another encoder as default
     const firstKey = encoderFactories.keys().next().value;
     defaultEncoderId = firstKey ?? null;
   }
@@ -53,10 +49,10 @@ export function unregisterEncoder(id) {
 }
 
 /**
- * エンコーダーインスタンスを作成
- * @param {string} [id] - エンコーダー識別子（省略時はデフォルト）
+ * Create encoder instance
+ * @param {string} [id] - Encoder identifier (defaults to default encoder)
  * @returns {EncoderInterface}
- * @throws {Error} エンコーダーが見つからない場合
+ * @throws {Error} If encoder not found
  */
 export function createEncoder(id) {
   const encoderId = id ?? defaultEncoderId;
@@ -75,13 +71,13 @@ export function createEncoder(id) {
 }
 
 /**
- * 登録されているエンコーダー一覧を取得
+ * Get list of registered encoders
  * @returns {EncoderMetadata[]}
  */
 export function getAvailableEncoders() {
   const encoders = [];
 
-  for (const [id, factory] of encoderFactories) {
+  for (const [, factory] of encoderFactories) {
     try {
       const encoder = factory();
       encoders.push(encoder.metadata);
@@ -95,7 +91,7 @@ export function getAvailableEncoders() {
 }
 
 /**
- * デフォルトエンコーダーIDを取得
+ * Get default encoder ID
  * @returns {string | null}
  */
 export function getDefaultEncoderId() {
@@ -103,9 +99,9 @@ export function getDefaultEncoderId() {
 }
 
 /**
- * デフォルトエンコーダーIDを設定
- * @param {string} id - エンコーダー識別子
- * @throws {Error} エンコーダーが見つからない場合
+ * Set default encoder ID
+ * @param {string} id - Encoder identifier
+ * @throws {Error} If encoder not found
  */
 export function setDefaultEncoder(id) {
   if (!encoderFactories.has(id)) {
@@ -115,8 +111,8 @@ export function setDefaultEncoder(id) {
 }
 
 /**
- * エンコーダーが利用可能かチェック
- * @param {string} id - エンコーダー識別子
+ * Check if encoder is available
+ * @param {string} id - Encoder identifier
  * @returns {boolean}
  */
 export function isEncoderAvailable(id) {
@@ -124,7 +120,7 @@ export function isEncoderAvailable(id) {
 }
 
 /**
- * すべてのエンコーダー登録をクリア（テスト用）
+ * Clear all encoder registrations (for testing)
  */
 export function clearRegistry() {
   encoderFactories.clear();

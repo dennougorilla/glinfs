@@ -142,15 +142,32 @@ export function createFrameProcessor(track) {
     throw new Error('MediaStreamTrackProcessor not supported in this browser');
   }
 
-  console.debug('[Capture] Creating frame processor', {
-    trackId: track.id,
-    trackState: track.readyState,
-    trackLabel: track.label,
-  });
-
   const processor = new MediaStreamTrackProcessor({
     track,
     maxBufferSize: 30, // Backpressure control: auto-drop old frames when processing lags
   });
   return processor.readable.getReader();
+}
+
+/**
+ * Create VideoFrame from HTMLVideoElement
+ * This works even when the video content hasn't changed (static screen)
+ * @param {HTMLVideoElement} video - Video element with active stream
+ * @returns {VideoFrame | null} VideoFrame or null if video not ready
+ */
+export function createVideoFrameFromElement(video) {
+  if (!video || video.readyState < 2) {
+    return null;
+  }
+
+  try {
+    // Create VideoFrame directly from video element
+    // This works even when screen content is static
+    return new VideoFrame(video, {
+      timestamp: performance.now() * 1000, // microseconds
+    });
+  } catch (err) {
+    console.error('[Capture] Failed to create VideoFrame from video element:', err);
+    return null;
+  }
 }

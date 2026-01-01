@@ -4,9 +4,10 @@
  */
 
 import { emit } from '../../shared/bus.js';
-import { getEditorPayload, clearEditorPayload, validateEditorPayload } from '../../shared/app-store.js';
+import { getEditorPayload, validateEditorPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
+import { closeAllFrames } from '../../shared/utils/videoframe.js';
 import {
   createExportStore,
   updateSettings,
@@ -123,6 +124,12 @@ export function initExport() {
   // Create store
   store = createExportStore();
 
+  // Restore saved export result if available (user returning to Export screen)
+  const savedResult = getExportResult();
+  if (savedResult) {
+    store.setState((s) => completeEncoding(s, savedResult.blob));
+  }
+
   // Check encoder status
   checkEncoderStatus().then((status) => {
     if (store) {
@@ -175,6 +182,7 @@ function render(container) {
     onOpenInTab: handleOpenInTab,
     onBackToEditor: handleBackToEditor,
     onTogglePlay: handleTogglePlay,
+    onAdjustSettings: handleAdjustSettings,
   }, clipInfo);
 
   uiCleanup = cleanup;
@@ -248,6 +256,14 @@ async function handleExport() {
     if (!store) return;
 
     store.setState((s) => completeEncoding(s, result));
+
+    // Save export result for later retrieval (e.g., when returning to Export screen)
+    setExportResult({
+      blob: result,
+      filename: generateFilename(),
+      completedAt: Date.now(),
+    });
+
     emit('export:complete', { blob: result, size: result.size });
 
     // Re-render to show complete state
@@ -318,6 +334,26 @@ function handleBackToEditor() {
 
   store.setState(resetExport);
   navigate('/editor');
+}
+
+/**
+ * Handle adjust settings button click (after export complete)
+ * Resets to preview state so user can change settings and re-export
+ */
+function handleAdjustSettings() {
+  if (!store) return;
+
+  // Reset job state to show settings again
+  store.setState(resetExport);
+
+  // Clear saved export result so it doesn't auto-restore
+  clearExportResult();
+
+  // Re-render to show settings panel
+  render(qsRequired('#main-content'));
+
+  // Start playback loop for preview
+  startPlaybackLoop();
 }
 
 // ============================================================
@@ -447,6 +483,10 @@ function handleTogglePlay() {
 
 /**
  * Cleanup export feature
+ *
+ * OWNERSHIP RESPONSIBILITY:
+ * - Export owns VideoFrame clones received from Editor via handleExport()
+ * - Must close ALL frames before clearing the array
  */
 function cleanup() {
   // Stop playback loop
@@ -463,8 +503,11 @@ function cleanup() {
     encodingController = null;
   }
 
-  // Clear editor payload (export is done with it)
-  clearEditorPayload();
+  // Close VideoFrames that Export owns (cloned from Editor)
+  closeAllFrames(frames);
+
+  // NOTE: Do NOT clear EditorPayload here - Editor may need it on return
+  // EditorPayload is cleared when Capture creates a new clip
 
   frames = [];
   cropArea = null;

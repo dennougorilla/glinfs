@@ -3,31 +3,15 @@
  * @module features/capture/core
  */
 
+// Import and re-export VideoFrame utilities
+import { safeClose, safeCloseFrame, closeAllFrames } from '../../shared/utils/videoframe.js';
+export { safeClose, safeCloseFrame, closeAllFrames };
+
 /**
  * Valid FPS values
  * @type {readonly [15, 30, 60]}
  */
 const VALID_FPS = /** @type {const} */ ([15, 30, 60]);
-
-/**
- * Safely close a VideoFrame, handling edge cases
- * Prevents errors when frame is already closed or invalid
- * @param {VideoFrame | null | undefined} videoFrame - VideoFrame to close
- * @returns {boolean} True if close was called, false if frame was invalid
- */
-export function safeClose(videoFrame) {
-  if (!videoFrame) return false;
-
-  try {
-    // Check if frame is already closed (accessing codedWidth throws if closed)
-    // Note: There's no official "isClosed" property, so we try/catch
-    videoFrame.close();
-    return true;
-  } catch {
-    // Frame was already closed or invalid - ignore
-    return false;
-  }
-}
 
 /**
  * Create a new circular buffer
@@ -63,6 +47,8 @@ export function addFrame(buffer, frame) {
   let newSize = buffer.size;
 
   // Calculate memory for new frame (O(1) incremental update)
+  // VideoFrames are GPU-resident; CPU overhead is ~1/10 of raw RGBA pixel data
+  // Raw: width × height × 4 bytes (RGBA). See: shared/utils/memory-monitor.js
   const frameMemory = (frame.width * frame.height * 4) / 10;
   let newTotalMemoryBytes = buffer.totalMemoryBytes + frameMemory;
 
@@ -73,7 +59,7 @@ export function addFrame(buffer, frame) {
     // Buffer is full - close evicted frame's VideoFrame before overwriting
     const evictedFrame = newFrames[buffer.head];
     if (evictedFrame?.frame) {
-      // Subtract evicted frame's memory
+      // Subtract evicted frame's memory (same GPU-resident formula as above)
       const evictedMemory = (evictedFrame.width * evictedFrame.height * 4) / 10;
       newTotalMemoryBytes -= evictedMemory;
       evictedFrame.frame.close();
@@ -99,12 +85,12 @@ export function addFrame(buffer, frame) {
  * @returns {import('./types.js').Buffer} Empty buffer with same capacity
  */
 export function clearBuffer(buffer) {
-  // Release all VideoFrame resources
+  // Release all VideoFrame resources using shared utility
   for (let i = 0; i < buffer.size; i++) {
     const index = (buffer.head + i) % buffer.maxFrames;
     const frame = buffer.frames[index];
     if (frame?.frame) {
-      frame.frame.close();
+      safeClose(frame.frame);
     }
   }
   return createBuffer(buffer.maxFrames);
