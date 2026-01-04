@@ -16,9 +16,6 @@ class MockOffscreenCanvas {
   }
 }
 
-// Mock document.createElement for canvas
-const originalCreateElement = document.createElement.bind(document);
-
 describe('Timeline thumbnail caching', () => {
   beforeEach(() => {
     resetThumbnailCache();

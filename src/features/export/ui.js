@@ -512,7 +512,10 @@ function renderComplete(job, handlers, cleanups) {
       '\u2190 Back to Editor',
     ]),
   ]);
-  cleanups.push(on(backLink.querySelector('button'), 'click', handlers.onBackToEditor));
+  const backButton = backLink.querySelector('button');
+  if (backButton) {
+    cleanups.push(on(backButton, 'click', handlers.onBackToEditor));
+  }
   infoSection.appendChild(backLink);
 
   complete.appendChild(infoSection);

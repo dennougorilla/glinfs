@@ -105,7 +105,7 @@ describe('Event Bus', () => {
 
       // Act
       const unsub1 = on('test:event', handler1);
-      const unsub2 = on('test:event', handler2);
+      const _unsub2 = on('test:event', handler2);
 
       emit('test:event', {});
       unsub1();

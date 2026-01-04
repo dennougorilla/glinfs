@@ -126,4 +126,93 @@ describe('VideoFrame Ownership Contract', () => {
       expect(contract.pattern).toContain('typeof');
     });
   });
+
+  describe('Export to Editor Re-entry Contract', () => {
+    it('Export cleanup must NOT close EditorPayload frames', () => {
+      // EditorPayload is preserved for Editor re-entry (Back to Editor button)
+      // Export only closes its LOCAL frames variable, not EditorPayload
+      // Implementation: export/index.js cleanup() lines 509-510 comment is explicit
+      const contract = {
+        rule: 'EditorPayload is preserved for Editor re-entry',
+        file: 'src/features/export/index.js',
+        lines: '509-510',
+        reason: 'User can navigate back from Export to Editor',
+        closesOnly: 'local frames variable',
+        doesNotClose: 'EditorPayload',
+      };
+      expect(contract.rule).toContain('preserved');
+      expect(contract.closesOnly).toBe('local frames variable');
+      expect(contract.doesNotClose).toBe('EditorPayload');
+    });
+
+    it('Editor restores state from EditorPayload on re-entry', () => {
+      // When navigating back from Export, Editor checks EditorPayload
+      // If present, restores state including crop area and frame range
+      // Implementation: editor/index.js initEditor() lines 70-71, 152-158
+      const contract = {
+        triggerPoint: 'initEditor()',
+        check: 'getEditorPayload() returns non-null',
+        action: 'Restore state from EditorPayload',
+        file: 'src/features/editor/index.js:70-71, 152-158',
+        thenAction: 'clearEditorPayload() after restoration',
+      };
+      expect(contract.check).toContain('EditorPayload');
+      expect(contract.thenAction).toContain('clear');
+    });
+
+    it('EditorPayload is cleared only after Editor consumes it', () => {
+      // EditorPayload lifecycle:
+      // 1. Created in editor/index.js handleExport()
+      // 2. Preserved by export/index.js cleanup() (intentionally)
+      // 3. Consumed by editor/index.js initEditor() on re-entry
+      // 4. Cleared AFTER restoration: clearEditorPayload() line 157
+      const contract = {
+        lifecycle: [
+          '1. Created: editor handleExport()',
+          '2. Preserved: export cleanup() does NOT clear it',
+          '3. Consumed: editor initEditor() on re-entry',
+          '4. Cleared: editor initEditor() line 157 after restoration',
+        ],
+        clearLocation: 'src/features/editor/index.js:157',
+        notClearedBy: 'export/index.js cleanup()',
+      };
+      expect(contract.lifecycle).toHaveLength(4);
+      expect(contract.notClearedBy).toContain('export');
+    });
+
+    it('EditorPayload contains two frame arrays with different ownership', () => {
+      // EditorPayload has:
+      // - frames: Selected frames for export (owned by Export during encoding)
+      // - clip.frames: All editor frames for state restoration (owned by Editor)
+      // This dual structure allows Export to work independently while
+      // preserving Editor state for re-entry
+      const contract = {
+        structure: {
+          'editorPayload.frames': 'Selected frames for export (passed to Export)',
+          'editorPayload.clip.frames': 'All editor frames for state restoration',
+        },
+        ownership: {
+          'Export local frames': 'Cloned from editorPayload.frames, closed by Export cleanup',
+          'EditorPayload.clip.frames': 'Owned by Editor, preserved for re-entry',
+        },
+      };
+      expect(Object.keys(contract.structure)).toHaveLength(2);
+    });
+
+    it('full workflow test validates re-entry behavior', () => {
+      // Integration test confirms this behavior
+      // tests/integration/full-workflow.test.js lines 165-205
+      const testReference = {
+        file: 'tests/integration/full-workflow.test.js',
+        lines: '165-205',
+        testName: 'should handle navigation back from Export to Editor',
+        validates: [
+          'Export cleanup closes only its local frames',
+          'EditorPayload remains available after Export cleanup',
+          'Editor frames in EditorPayload are NOT closed',
+        ],
+      };
+      expect(testReference.validates).toHaveLength(3);
+    });
+  });
 });

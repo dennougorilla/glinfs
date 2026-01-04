@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   setEditorPayload,
   getEditorPayload,
-  clearEditorPayload,
   validateEditorPayload,
   resetAppStore,
 } from '../../src/shared/app-store.js';
