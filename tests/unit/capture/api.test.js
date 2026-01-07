@@ -45,7 +45,6 @@ describe('startScreenCapture', () => {
     // Assert
     expect(mockGetDisplayMedia).toHaveBeenCalledWith({
       video: {
-        displaySurface: 'monitor',
         frameRate: { ideal: 30, max: 60 },
       },
       audio: false,
