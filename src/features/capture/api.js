@@ -26,7 +26,6 @@ export async function startScreenCapture() {
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
-        displaySurface: 'monitor',
         frameRate: { ideal: 30, max: 60 },
       },
       audio: false,
