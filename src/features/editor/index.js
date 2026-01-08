@@ -17,6 +17,7 @@ import { navigate } from '../../shared/router.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { closeAllFrames } from '../../shared/utils/videoframe.js';
+import { acquire, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   createEditorStore,
   createEditorStoreFromClip,
@@ -480,10 +481,11 @@ function handleSpeedChange(speed) {
 /**
  * Handle export
  *
- * OWNERSHIP TRANSFER:
- * - Clones VideoFrames from editor for export ownership
- * - Export is responsible for closing its cloned frames
- * - Editor retains originals (will close them on its own cleanup)
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Adds 'export' as owner to selected frames via acquire() - NO cloning needed
+ * - Editor retains 'editor' ownership
+ * - Export releases ownership on cleanup via releaseAll('export')
+ * - Editor can safely return since it still owns frames
  */
 function handleExport() {
   if (!store) return;
@@ -493,33 +495,24 @@ function handleExport() {
 
   const selectedFrames = getSelectedFrames(state.clip);
 
-  // Clone VideoFrames for Export ownership
-  // Export will be responsible for closing these clones
-  const clonedForExport = selectedFrames.map((frame) => ({
-    ...frame,
-    frame: frame.frame.clone(),
-  }));
-
-  // Clone ALL clip frames for EditorPayload (for return navigation)
-  // This ensures frames remain valid after Editor cleanup when returning from Export
-  const clonedClipForReturn = {
-    ...state.clip,
-    frames: state.clip.frames.map((frame) => ({
-      ...frame,
-      frame: frame.frame.clone(),
-    })),
-  };
+  // Add 'export' as owner to selected frames - NO cloning needed
+  // Frames now have owners: ['capture', 'editor', 'export'] (or subset)
+  selectedFrames.forEach((frame) => {
+    acquire(frame.id, 'export');
+  });
 
   // Store editor payload for export via app store
+  // Pass the same frame references (not clones)
+  // Also store clip reference for return navigation (no cloning needed)
   setEditorPayload({
-    frames: clonedForExport,
+    frames: selectedFrames,
     cropArea: state.cropArea,
-    clip: clonedClipForReturn,
+    clip: state.clip,  // Same reference - Editor keeps ownership
     fps: state.clip.fps,
   });
 
   emit('editor:export-ready', {
-    frameCount: clonedForExport.length,
+    frameCount: selectedFrames.length,
     fps: state.clip.fps,
   });
 }
@@ -527,11 +520,10 @@ function handleExport() {
 /**
  * Cleanup editor feature
  *
- * OWNERSHIP RESPONSIBILITY:
- * - Editor owns VideoFrame clones received from Capture via handleCreateClip()
- * - Must close ALL frames in state.clip.frames before destruction
- * - Export receives its own clones via handleExport(), so closing here is safe
- * - Uses try/catch to handle already-closed frames gracefully
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Editor releases 'editor' ownership via releaseAll('editor')
+ * - Frames with other owners (e.g., 'capture', 'export') will NOT be closed
+ * - Frames are only closed when all owners have released
  *
  * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
@@ -548,14 +540,11 @@ function cleanup() {
     timelineCleanup = null;
   }
 
-  // Close VideoFrames that Editor owns (cloned from Capture)
-  // Export has its own clones via handleExport(), so this is safe
-  const state = store?.getState();
-  if (state?.clip?.frames) {
-    closeAllFrames(state.clip.frames);
-  }
+  // Release 'editor' ownership from all frames via pool
+  // Frames with other owners (capture, export) will remain valid
+  releaseAll('editor');
 
-  // Clear ClipPayload since we've closed the frames
+  // Clear ClipPayload reference
   clearClipPayload();
 
   baseCanvas = null;

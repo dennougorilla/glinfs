@@ -16,13 +16,17 @@ import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import {
   createCaptureStore,
+  initCaptureState,
   startCapture,
   stopCapture,
+  pauseCapture as pauseCaptureState,
+  resumeCapture as resumeCaptureState,
   addFrameToState,
   updateSettings,
   setError,
 } from './state.js';
 import { getFrames, clearBuffer, closeAllFrames } from './core.js';
+import { register, acquire, release, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   startScreenCapture,
   stopScreenCapture,
@@ -64,6 +68,12 @@ let throttledUpdate = null;
 /** Maximum consecutive frame errors before emitting warning */
 const MAX_CONSECUTIVE_FRAME_ERRORS = 5;
 
+/** @type {import('./types.js').CaptureState | null} */
+let pausedCaptureState = null;
+
+/** @type {boolean} */
+let isPausedForEditor = false;
+
 /**
  * Initialize capture feature
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
@@ -74,7 +84,44 @@ export function initCapture(settings) {
   // Register test hooks
   registerTestHooks();
 
-  // Create store
+  // Check if we're resuming from a paused state (returning from Editor)
+  if (isPausedForEditor && pausedCaptureState) {
+    // Resume from paused state
+    store = createCaptureStore(pausedCaptureState.settings);
+    // Restore the paused state
+    store.setState(() => pausedCaptureState);
+
+    // Initial render (will show paused state with existing buffer)
+    render(container);
+
+    // Subscribe to state changes
+    throttledUpdate = throttle(() => {
+      if (!store) return;
+      const state = store.getState();
+      updateBufferStatus(container, state.stats);
+    }, 100);
+    store.subscribe(throttledUpdate);
+
+    // Resume capture loop if we have video element
+    if (videoElement && store.getState().stream) {
+      const fps = store.getState().settings.fps;
+      captureAbortController = new AbortController();
+      store.setState((state) => resumeCaptureState(state));
+      startCaptureLoop(videoElement, fps, captureAbortController.signal);
+      emit('capture:resumed', {});
+
+      // Re-render to show capturing state
+      render(container);
+    }
+
+    // Clear paused state
+    isPausedForEditor = false;
+    pausedCaptureState = null;
+
+    return cleanup;
+  }
+
+  // Normal initialization (fresh start)
   store = createCaptureStore(settings);
 
   // Initial render
@@ -143,13 +190,27 @@ function startCaptureLoop(video, fps, signal) {
     }
 
     try {
+      const frameId = crypto.randomUUID();
       const frame = {
-        id: crypto.randomUUID(),
+        id: frameId,
         frame: videoFrame,
         timestamp: videoFrame.timestamp,
         width: videoFrame.codedWidth,
         height: videoFrame.codedHeight,
       };
+
+      // Register frame in pool with 'capture' as owner
+      register(frameId, videoFrame, 'capture');
+
+      // Release evicted frame before adding new one (if buffer is full)
+      // This must happen before addFrameToState since core.js is now pure
+      const currentState = store.getState();
+      if (currentState.buffer.size >= currentState.buffer.maxFrames) {
+        const evictedFrame = currentState.buffer.frames[currentState.buffer.head];
+        if (evictedFrame) {
+          release(evictedFrame.id, 'capture');
+        }
+      }
 
       store.setState((state) => addFrameToState(state, frame));
       framesAddedToBuffer++;
@@ -157,8 +218,8 @@ function startCaptureLoop(video, fps, signal) {
       // Reset error counter on successful frame
       consecutiveFrameErrors = 0;
 
-      const currentState = store.getState();
-      emit('capture:frame', { frame, stats: currentState.stats });
+      const updatedState = store.getState();
+      emit('capture:frame', { frame, stats: updatedState.stats });
     } catch (err) {
       // Handle GPU memory exhaustion (QuotaExceededError)
       if (
@@ -227,6 +288,23 @@ async function handleStart() {
 
     // Listen for stream end
     const handleStreamEnded = () => {
+      // If paused for editor, clean up paused state since stream is gone
+      if (isPausedForEditor) {
+        // Release all capture-owned frames to prevent memory leak
+        releaseAll('capture');
+        pausedCaptureState = null;
+        isPausedForEditor = false;
+        if (videoElement) {
+          videoElement.pause();
+          videoElement.srcObject = null;
+          videoElement = null;
+        }
+        captureTrack = null;
+        streamEndedCleanup = null;
+        emit('capture:stopped', {});
+        return;
+      }
+
       handleStop();
       emit('capture:stopped', {});
     };
@@ -310,6 +388,10 @@ function handleStop(preserveBuffer = true) {
   }
 
   // Update state - optionally clear buffer to release VideoFrame resources
+  // Release frames via pool BEFORE clearing buffer (since clearBuffer is now pure)
+  if (!preserveBuffer) {
+    releaseAll('capture');
+  }
   store.setState((currentState) => {
     const stopped = stopCapture(currentState);
     if (!preserveBuffer) {
@@ -343,28 +425,28 @@ export function clearCaptureBuffer() {
 /**
  * Handle create clip
  *
- * OWNERSHIP TRANSFER:
- * - Clones VideoFrames from capture buffer (originals stay in buffer)
- * - Transfers ownership of clones to Editor via app-store
- * - Capture buffer retains originals (may be cleared independently)
- * - Editor is responsible for closing cloned frames on cleanup
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Adds 'editor' as owner to frames via acquire() - NO cloning needed
+ * - Capture retains 'capture' ownership (frames stay in buffer)
+ * - Editor releases ownership on cleanup via releaseAll('editor')
+ * - Frames are only closed when all owners have released
  *
  * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
 function handleCreateClip() {
   if (!store) return;
 
-  // Clear old payloads and their VideoFrames before creating new clip
-  // This prevents memory leaks when creating multiple clips
+  // Clear old payloads before creating new clip
+  // Release 'editor' ownership for old payload frames (if any)
   const oldClipPayload = getClipPayload();
-  if (oldClipPayload) {
-    closeAllFrames(oldClipPayload.frames ?? []);
+  if (oldClipPayload?.frames?.length) {
+    releaseAll('editor');
     clearClipPayload();
   }
 
   const oldEditorPayload = getEditorPayload();
-  if (oldEditorPayload) {
-    closeAllFrames(oldEditorPayload.frames ?? []);
+  if (oldEditorPayload?.frames?.length) {
+    releaseAll('export');
     clearEditorPayload();
   }
 
@@ -373,21 +455,22 @@ function handleCreateClip() {
   const state = store.getState();
   const frames = getFrames(state.buffer);
 
-  // Clone VideoFrames for editor (original will be closed on cleanup)
-  const clonedFrames = frames.map((frame) => ({
-    ...frame,
-    frame: frame.frame.clone(),
-  }));
+  // Add 'editor' as owner to each frame - NO cloning needed
+  // Frames now have owners: ['capture', 'editor']
+  frames.forEach((frame) => {
+    acquire(frame.id, 'editor');
+  });
 
   // Store clip payload for editor via app store
+  // Pass the same frame references (not clones)
   setClipPayload({
-    frames: clonedFrames,
+    frames,
     fps: state.settings.fps,
     capturedAt: Date.now(),
   });
 
   emit('capture:clip-created', {
-    frameCount: clonedFrames.length,
+    frameCount: frames.length,
     fps: state.settings.fps,
   });
 }
@@ -399,14 +482,72 @@ function handleCreateClip() {
 function handleSettingsChange(newSettings) {
   if (!store) return;
 
+  // If fps or bufferDuration changed, release current frames before clearing buffer
+  // This is needed because updateSettings calls clearBuffer which is now a pure function
+  if (newSettings.fps !== undefined || newSettings.bufferDuration !== undefined) {
+    releaseAll('capture');
+  }
+
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
 }
 
 /**
- * Cleanup capture feature
+ * Pause capture (preserves stream and buffer for resume)
+ * Called when navigating to Editor to allow resuming on return
  */
-function cleanup() {
+function handlePause() {
+  if (!store) return;
+
+  // Stop capture interval
+  if (captureIntervalId !== null) {
+    clearInterval(captureIntervalId);
+    captureIntervalId = null;
+  }
+
+  // Abort capture loop
+  if (captureAbortController) {
+    captureAbortController.abort();
+    captureAbortController = null;
+  }
+
+  // Update state to paused (keep stream and buffer)
+  store.setState((state) => pauseCaptureState(state));
+
+  // Store state for resume
+  pausedCaptureState = store.getState();
+  isPausedForEditor = true;
+
+  emit('capture:paused', {});
+}
+
+/**
+ * Cleanup capture feature
+ * @param {import('../../shared/router.js').Route} [targetRoute] - Route we're navigating to
+ */
+function cleanup(targetRoute) {
+  // If navigating to Editor, pause instead of full cleanup
+  if (targetRoute === '/editor' && store?.getState()?.isCapturing) {
+    handlePause();
+
+    // Cleanup UI only (keep capture resources)
+    if (throttledUpdate) {
+      throttledUpdate.cancel();
+      throttledUpdate = null;
+    }
+
+    if (uiCleanup) {
+      uiCleanup();
+      uiCleanup = null;
+    }
+
+    consecutiveFrameErrors = 0;
+    errorBatchCount = 0;
+    store = null;
+    return;
+  }
+
+  // Full cleanup for other routes or when not capturing
   // Cancel pending throttled updates before store = null
   if (throttledUpdate) {
     throttledUpdate.cancel();
@@ -415,6 +556,10 @@ function cleanup() {
 
   // Stop capture and clear buffer to release all VideoFrame resources
   handleStop(false);
+
+  // Clear paused state on full cleanup
+  pausedCaptureState = null;
+  isPausedForEditor = false;
 
   if (uiCleanup) {
     uiCleanup();
