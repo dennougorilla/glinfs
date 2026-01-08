@@ -16,8 +16,11 @@ import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import {
   createCaptureStore,
+  initCaptureState,
   startCapture,
   stopCapture,
+  pauseCapture as pauseCaptureState,
+  resumeCapture as resumeCaptureState,
   addFrameToState,
   updateSettings,
   setError,
@@ -65,6 +68,12 @@ let throttledUpdate = null;
 /** Maximum consecutive frame errors before emitting warning */
 const MAX_CONSECUTIVE_FRAME_ERRORS = 5;
 
+/** @type {import('./types.js').CaptureState | null} */
+let pausedCaptureState = null;
+
+/** @type {boolean} */
+let isPausedForEditor = false;
+
 /**
  * Initialize capture feature
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
@@ -75,7 +84,44 @@ export function initCapture(settings) {
   // Register test hooks
   registerTestHooks();
 
-  // Create store
+  // Check if we're resuming from a paused state (returning from Editor)
+  if (isPausedForEditor && pausedCaptureState) {
+    // Resume from paused state
+    store = createCaptureStore(pausedCaptureState.settings);
+    // Restore the paused state
+    store.setState(() => pausedCaptureState);
+
+    // Initial render (will show paused state with existing buffer)
+    render(container);
+
+    // Subscribe to state changes
+    throttledUpdate = throttle(() => {
+      if (!store) return;
+      const state = store.getState();
+      updateBufferStatus(container, state.stats);
+    }, 100);
+    store.subscribe(throttledUpdate);
+
+    // Resume capture loop if we have video element
+    if (videoElement && store.getState().stream) {
+      const fps = store.getState().settings.fps;
+      captureAbortController = new AbortController();
+      store.setState((state) => resumeCaptureState(state));
+      startCaptureLoop(videoElement, fps, captureAbortController.signal);
+      emit('capture:resumed', {});
+
+      // Re-render to show capturing state
+      render(container);
+    }
+
+    // Clear paused state
+    isPausedForEditor = false;
+    pausedCaptureState = null;
+
+    return cleanup;
+  }
+
+  // Normal initialization (fresh start)
   store = createCaptureStore(settings);
 
   // Initial render
@@ -232,6 +278,21 @@ async function handleStart() {
 
     // Listen for stream end
     const handleStreamEnded = () => {
+      // If paused for editor, clean up paused state since stream is gone
+      if (isPausedForEditor) {
+        pausedCaptureState = null;
+        isPausedForEditor = false;
+        if (videoElement) {
+          videoElement.pause();
+          videoElement.srcObject = null;
+          videoElement = null;
+        }
+        captureTrack = null;
+        streamEndedCleanup = null;
+        emit('capture:stopped', {});
+        return;
+      }
+
       handleStop();
       emit('capture:stopped', {});
     };
@@ -410,9 +471,61 @@ function handleSettingsChange(newSettings) {
 }
 
 /**
- * Cleanup capture feature
+ * Pause capture (preserves stream and buffer for resume)
+ * Called when navigating to Editor to allow resuming on return
  */
-function cleanup() {
+function handlePause() {
+  if (!store) return;
+
+  // Stop capture interval
+  if (captureIntervalId !== null) {
+    clearInterval(captureIntervalId);
+    captureIntervalId = null;
+  }
+
+  // Abort capture loop
+  if (captureAbortController) {
+    captureAbortController.abort();
+    captureAbortController = null;
+  }
+
+  // Update state to paused (keep stream and buffer)
+  store.setState((state) => pauseCaptureState(state));
+
+  // Store state for resume
+  pausedCaptureState = store.getState();
+  isPausedForEditor = true;
+
+  emit('capture:paused', {});
+}
+
+/**
+ * Cleanup capture feature
+ * @param {import('../../shared/router.js').Route} [targetRoute] - Route we're navigating to
+ */
+function cleanup(targetRoute) {
+  // If navigating to Editor, pause instead of full cleanup
+  if (targetRoute === '/editor' && store?.getState()?.isCapturing) {
+    handlePause();
+
+    // Cleanup UI only (keep capture resources)
+    if (throttledUpdate) {
+      throttledUpdate.cancel();
+      throttledUpdate = null;
+    }
+
+    if (uiCleanup) {
+      uiCleanup();
+      uiCleanup = null;
+    }
+
+    consecutiveFrameErrors = 0;
+    errorBatchCount = 0;
+    store = null;
+    return;
+  }
+
+  // Full cleanup for other routes or when not capturing
   // Cancel pending throttled updates before store = null
   if (throttledUpdate) {
     throttledUpdate.cancel();
@@ -421,6 +534,10 @@ function cleanup() {
 
   // Stop capture and clear buffer to release all VideoFrame resources
   handleStop(false);
+
+  // Clear paused state on full cleanup
+  pausedCaptureState = null;
+  isPausedForEditor = false;
 
   if (uiCleanup) {
     uiCleanup();

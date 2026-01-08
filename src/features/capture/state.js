@@ -17,6 +17,7 @@ export function initCaptureState(settings = {}) {
 
   return {
     isCapturing: false,
+    isPaused: false,
     isSharing: false,
     stream: null,
     buffer: createBuffer(maxFrames),
@@ -58,8 +59,36 @@ export function stopCapture(state) {
   return {
     ...state,
     isCapturing: false,
+    isPaused: false,
     isSharing: false,
     stream: null,
+  };
+}
+
+/**
+ * Pause capturing (preserves stream and buffer, can resume)
+ * @param {import('./types.js').CaptureState} state
+ * @returns {import('./types.js').CaptureState}
+ */
+export function pauseCapture(state) {
+  return {
+    ...state,
+    isCapturing: false,
+    isPaused: true,
+    // Keep isSharing and stream intact for resume
+  };
+}
+
+/**
+ * Resume capturing from paused state
+ * @param {import('./types.js').CaptureState} state
+ * @returns {import('./types.js').CaptureState}
+ */
+export function resumeCapture(state) {
+  return {
+    ...state,
+    isCapturing: true,
+    isPaused: false,
   };
 }
 
