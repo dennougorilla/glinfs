@@ -25,7 +25,9 @@ beforeEach(() => {
 });
 
 describe('updateSettings - VideoFrame cleanup', () => {
-  it('should close VideoFrames in old buffer when fps changes', () => {
+  it('does NOT close VideoFrames (caller responsibility)', () => {
+    // updateSettings is now a pure function - it does NOT call releaseAll()
+    // Caller (handleSettingsChange in index.js) is responsible for releasing frames
     // Arrange
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frame1 = createMockFrame('1');
@@ -42,18 +44,19 @@ describe('updateSettings - VideoFrame cleanup', () => {
       },
     }));
 
-    // Act - change fps setting (this triggers clearBuffer which calls releaseAll('capture'))
+    // Act - change fps setting (clearBuffer is called but does NOT release frames)
     store.setState((s) => updateSettings(s, { fps: 15 }));
 
-    // Assert - old frames should be closed via releaseAll('capture')
-    expect(frame1.frame.close).toHaveBeenCalledOnce();
-    expect(frame2.frame.close).toHaveBeenCalledOnce();
-    // Frames should be removed from pool
-    expect(getFrame('1')).toBeNull();
-    expect(getFrame('2')).toBeNull();
+    // Assert - frames should NOT be closed (updateSettings is pure)
+    expect(frame1.frame.close).not.toHaveBeenCalled();
+    expect(frame2.frame.close).not.toHaveBeenCalled();
+    // Frames are still in pool (caller must release them separately)
+    expect(getFrame('1')).not.toBeNull();
+    expect(getFrame('2')).not.toBeNull();
   });
 
-  it('should close VideoFrames when bufferDuration changes', () => {
+  it('does NOT close VideoFrames when bufferDuration changes (caller responsibility)', () => {
+    // updateSettings is now a pure function - it does NOT call releaseAll()
     // Arrange
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frame = createMockFrame('1');
@@ -68,12 +71,13 @@ describe('updateSettings - VideoFrame cleanup', () => {
       },
     }));
 
-    // Act - change bufferDuration (triggers clearBuffer which calls releaseAll('capture'))
+    // Act - change bufferDuration (clearBuffer is called but does NOT release frames)
     store.setState((s) => updateSettings(s, { bufferDuration: 5 }));
 
-    // Assert - frame should be closed via releaseAll('capture')
-    expect(frame.frame.close).toHaveBeenCalledOnce();
-    expect(getFrame('1')).toBeNull();
+    // Assert - frame should NOT be closed (updateSettings is pure)
+    expect(frame.frame.close).not.toHaveBeenCalled();
+    // Frame is still in pool (caller must release it separately)
+    expect(getFrame('1')).not.toBeNull();
   });
 
   it('should NOT close frames when unrelated settings change', () => {

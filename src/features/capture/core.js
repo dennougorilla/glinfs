@@ -7,9 +7,6 @@
 import { safeClose, safeCloseFrame, closeAllFrames } from '../../shared/utils/videoframe.js';
 export { safeClose, safeCloseFrame, closeAllFrames };
 
-// Import VideoFrame pool for ownership management
-import { release, releaseAll, acquire } from '../../shared/videoframe-pool.js';
-
 /**
  * Valid FPS values
  * @type {readonly [15, 30, 60]}
@@ -35,7 +32,7 @@ export function createBuffer(maxFrames) {
 
 /**
  * Add frame to buffer, evicting oldest if full
- * Uses VideoFramePool for ownership management - evicted frames are released
+ * Pure function - caller is responsible for releasing evicted frames via pool
  * Uses incremental memory calculation for O(1) performance
  * Note: Modifies buffer.frames in place for efficiency, but returns new buffer object
  * @param {import('./types.js').Buffer} buffer - Current buffer
@@ -58,14 +55,13 @@ export function addFrame(buffer, frame) {
     buffer.frames[buffer.tail] = frame;
     newSize++;
   } else {
-    // Buffer is full - release evicted frame via pool before overwriting
+    // Buffer is full - overwrite oldest frame
+    // Note: Caller is responsible for releasing evicted frame via pool BEFORE calling addFrame
     const evictedFrame = buffer.frames[buffer.head];
     if (evictedFrame) {
       // Subtract evicted frame's memory (same GPU-resident formula as above)
       const evictedMemory = (evictedFrame.width * evictedFrame.height * 4) / 10;
       newTotalMemoryBytes -= evictedMemory;
-      // Release from pool - will close if no other owners
-      release(evictedFrame.id, 'capture');
     }
     buffer.frames[buffer.tail] = frame;
     // Advance head to evict oldest
@@ -84,14 +80,12 @@ export function addFrame(buffer, frame) {
 }
 
 /**
- * Clear buffer and release all VideoFrame resources via pool
+ * Clear buffer and return empty buffer with same capacity
+ * Note: Caller is responsible for releasing frames via releaseAll('capture') BEFORE calling
  * @param {import('./types.js').Buffer} buffer - Buffer to clear
  * @returns {import('./types.js').Buffer} Empty buffer with same capacity
  */
 export function clearBuffer(buffer) {
-  // Release all frames owned by 'capture' via pool
-  // Frames with other owners (e.g., 'editor') will not be closed
-  releaseAll('capture');
   return createBuffer(buffer.maxFrames);
 }
 

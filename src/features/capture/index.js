@@ -26,7 +26,7 @@ import {
   setError,
 } from './state.js';
 import { getFrames, clearBuffer, closeAllFrames } from './core.js';
-import { register, acquire, releaseAll } from '../../shared/videoframe-pool.js';
+import { register, acquire, release, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   startScreenCapture,
   stopScreenCapture,
@@ -202,14 +202,24 @@ function startCaptureLoop(video, fps, signal) {
       // Register frame in pool with 'capture' as owner
       register(frameId, videoFrame, 'capture');
 
+      // Release evicted frame before adding new one (if buffer is full)
+      // This must happen before addFrameToState since core.js is now pure
+      const currentState = store.getState();
+      if (currentState.buffer.size >= currentState.buffer.maxFrames) {
+        const evictedFrame = currentState.buffer.frames[currentState.buffer.head];
+        if (evictedFrame) {
+          release(evictedFrame.id, 'capture');
+        }
+      }
+
       store.setState((state) => addFrameToState(state, frame));
       framesAddedToBuffer++;
 
       // Reset error counter on successful frame
       consecutiveFrameErrors = 0;
 
-      const currentState = store.getState();
-      emit('capture:frame', { frame, stats: currentState.stats });
+      const updatedState = store.getState();
+      emit('capture:frame', { frame, stats: updatedState.stats });
     } catch (err) {
       // Handle GPU memory exhaustion (QuotaExceededError)
       if (
@@ -280,6 +290,8 @@ async function handleStart() {
     const handleStreamEnded = () => {
       // If paused for editor, clean up paused state since stream is gone
       if (isPausedForEditor) {
+        // Release all capture-owned frames to prevent memory leak
+        releaseAll('capture');
         pausedCaptureState = null;
         isPausedForEditor = false;
         if (videoElement) {
@@ -376,6 +388,10 @@ function handleStop(preserveBuffer = true) {
   }
 
   // Update state - optionally clear buffer to release VideoFrame resources
+  // Release frames via pool BEFORE clearing buffer (since clearBuffer is now pure)
+  if (!preserveBuffer) {
+    releaseAll('capture');
+  }
   store.setState((currentState) => {
     const stopped = stopCapture(currentState);
     if (!preserveBuffer) {
@@ -465,6 +481,12 @@ function handleCreateClip() {
  */
 function handleSettingsChange(newSettings) {
   if (!store) return;
+
+  // If fps or bufferDuration changed, release current frames before clearing buffer
+  // This is needed because updateSettings calls clearBuffer which is now a pure function
+  if (newSettings.fps !== undefined || newSettings.bufferDuration !== undefined) {
+    releaseAll('capture');
+  }
 
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
