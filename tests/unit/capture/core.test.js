@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createBuffer,
   addFrame,
@@ -8,6 +8,7 @@ import {
   clearBuffer,
   safeClose,
 } from '../../../src/features/capture/core.js';
+import { register, clearPool, getFrame } from '../../../src/shared/videoframe-pool.js';
 
 /**
  * Create a mock VideoFrame for testing
@@ -31,19 +32,28 @@ function createMockVideoFrame(width = 100, height = 100) {
 
 /**
  * Create a mock frame for testing with VideoFrame
+ * Registers frame in VideoFramePool with 'capture' as owner
  * @param {string} id
  * @param {number} timestamp
  * @returns {import('../../../src/features/capture/types.js').Frame}
  */
 function createMockFrame(id, timestamp = 0) {
+  const videoFrame = createMockVideoFrame(100, 100);
+  // Register in pool as 'capture' owner (mimics real capture behavior)
+  register(id, videoFrame, 'capture');
   return {
     id,
-    frame: /** @type {VideoFrame} */ (createMockVideoFrame(100, 100)),
+    frame: /** @type {VideoFrame} */ (videoFrame),
     timestamp,
     width: 100,
     height: 100,
   };
 }
+
+// Clear pool before each test to ensure isolation
+beforeEach(() => {
+  clearPool();
+});
 
 describe('createBuffer', () => {
   it('creates empty buffer with correct capacity', () => {
@@ -127,12 +137,15 @@ describe('addFrame', () => {
     // Frame 1's VideoFrame.close() should not be called yet
     expect(frame1.frame.close).not.toHaveBeenCalled();
 
-    // Adding frame 3 should evict frame 1 and call close()
+    // Adding frame 3 should evict frame 1 via release() from pool
+    // Since frame 1 only has 'capture' as owner, it will be closed
     buffer = addFrame(buffer, frame3);
 
     expect(frame1.frame.close).toHaveBeenCalledTimes(1);
     expect(frame2.frame.close).not.toHaveBeenCalled();
     expect(frame3.frame.close).not.toHaveBeenCalled();
+    // Frame 1 should be removed from pool
+    expect(getFrame('1')).toBeNull();
   });
 
   it('does not call close() when buffer is not full', () => {
@@ -161,12 +174,18 @@ describe('clearBuffer', () => {
     buffer = addFrame(buffer, frame2);
     buffer = addFrame(buffer, frame3);
 
-    // Clear the buffer - all VideoFrames should be closed
+    // Clear the buffer - all VideoFrames should be released via releaseAll('capture')
+    // Since frames only have 'capture' as owner, they will be closed
     const clearedBuffer = clearBuffer(buffer);
 
     expect(frame1.frame.close).toHaveBeenCalledTimes(1);
     expect(frame2.frame.close).toHaveBeenCalledTimes(1);
     expect(frame3.frame.close).toHaveBeenCalledTimes(1);
+
+    // Frames should be removed from pool
+    expect(getFrame('1')).toBeNull();
+    expect(getFrame('2')).toBeNull();
+    expect(getFrame('3')).toBeNull();
 
     // Buffer should be empty
     expect(clearedBuffer.size).toBe(0);

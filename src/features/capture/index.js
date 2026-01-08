@@ -23,6 +23,7 @@ import {
   setError,
 } from './state.js';
 import { getFrames, clearBuffer, closeAllFrames } from './core.js';
+import { register, acquire, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   startScreenCapture,
   stopScreenCapture,
@@ -143,13 +144,17 @@ function startCaptureLoop(video, fps, signal) {
     }
 
     try {
+      const frameId = crypto.randomUUID();
       const frame = {
-        id: crypto.randomUUID(),
+        id: frameId,
         frame: videoFrame,
         timestamp: videoFrame.timestamp,
         width: videoFrame.codedWidth,
         height: videoFrame.codedHeight,
       };
+
+      // Register frame in pool with 'capture' as owner
+      register(frameId, videoFrame, 'capture');
 
       store.setState((state) => addFrameToState(state, frame));
       framesAddedToBuffer++;
@@ -343,28 +348,28 @@ export function clearCaptureBuffer() {
 /**
  * Handle create clip
  *
- * OWNERSHIP TRANSFER:
- * - Clones VideoFrames from capture buffer (originals stay in buffer)
- * - Transfers ownership of clones to Editor via app-store
- * - Capture buffer retains originals (may be cleared independently)
- * - Editor is responsible for closing cloned frames on cleanup
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Adds 'editor' as owner to frames via acquire() - NO cloning needed
+ * - Capture retains 'capture' ownership (frames stay in buffer)
+ * - Editor releases ownership on cleanup via releaseAll('editor')
+ * - Frames are only closed when all owners have released
  *
  * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  */
 function handleCreateClip() {
   if (!store) return;
 
-  // Clear old payloads and their VideoFrames before creating new clip
-  // This prevents memory leaks when creating multiple clips
+  // Clear old payloads before creating new clip
+  // Release 'editor' ownership for old payload frames (if any)
   const oldClipPayload = getClipPayload();
-  if (oldClipPayload) {
-    closeAllFrames(oldClipPayload.frames ?? []);
+  if (oldClipPayload?.frames?.length) {
+    releaseAll('editor');
     clearClipPayload();
   }
 
   const oldEditorPayload = getEditorPayload();
-  if (oldEditorPayload) {
-    closeAllFrames(oldEditorPayload.frames ?? []);
+  if (oldEditorPayload?.frames?.length) {
+    releaseAll('export');
     clearEditorPayload();
   }
 
@@ -373,21 +378,22 @@ function handleCreateClip() {
   const state = store.getState();
   const frames = getFrames(state.buffer);
 
-  // Clone VideoFrames for editor (original will be closed on cleanup)
-  const clonedFrames = frames.map((frame) => ({
-    ...frame,
-    frame: frame.frame.clone(),
-  }));
+  // Add 'editor' as owner to each frame - NO cloning needed
+  // Frames now have owners: ['capture', 'editor']
+  frames.forEach((frame) => {
+    acquire(frame.id, 'editor');
+  });
 
   // Store clip payload for editor via app store
+  // Pass the same frame references (not clones)
   setClipPayload({
-    frames: clonedFrames,
+    frames,
     fps: state.settings.fps,
     capturedAt: Date.now(),
   });
 
   emit('capture:clip-created', {
-    frameCount: clonedFrames.length,
+    frameCount: frames.length,
     fps: state.settings.fps,
   });
 }
