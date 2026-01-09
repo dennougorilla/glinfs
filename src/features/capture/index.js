@@ -18,18 +18,17 @@ import {
   createCaptureStore,
   startCapture,
   stopCapture,
-  addFrameToState,
   updateSettings,
   setError,
 } from './state.js';
-import { getFrames, clearBuffer, closeAllFrames } from './core.js';
+import { closeAllFrames, calculateMaxFrames } from './core.js';
 import {
   startScreenCapture,
   stopScreenCapture,
   createVideoElement,
-  createVideoFrameFromElement,
 } from './api.js';
 import { renderCaptureScreen, updateBufferStatus } from './ui.js';
+import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
 let store = null;
@@ -40,17 +39,8 @@ let captureAbortController = null;
 /** @type {HTMLVideoElement | null} */
 let videoElement = null;
 
-/** @type {number | null} */
-let captureIntervalId = null;
-
 /** @type {(() => void) | null} */
 let uiCleanup = null;
-
-/** @type {number} */
-let consecutiveFrameErrors = 0;
-
-/** @type {number} */
-let errorBatchCount = 0;
 
 /** @type {(() => void) | null} */
 let streamEndedCleanup = null;
@@ -58,11 +48,11 @@ let streamEndedCleanup = null;
 /** @type {MediaStreamTrack | null} */
 let captureTrack = null;
 
+/** @type {CaptureWorkerManager | null} */
+let workerManager = null;
+
 /** @type {ReturnType<typeof throttle> | null} */
 let throttledUpdate = null;
-
-/** Maximum consecutive frame errors before emitting warning */
-const MAX_CONSECUTIVE_FRAME_ERRORS = 5;
 
 /**
  * Initialize capture feature
@@ -116,98 +106,8 @@ function render(container) {
   });
 }
 
-/**
- * Start VideoFrame capture loop using setInterval
- * Creates VideoFrames from video element at specified FPS
- * Works reliably even with static screen content
- * @param {HTMLVideoElement} video - Video element with active stream
- * @param {number} fps - Target frames per second
- * @param {AbortSignal} signal - Abort signal for cleanup
- */
-function startCaptureLoop(video, fps, signal) {
-  if (!store) return;
-
-  const frameInterval = 1000 / fps;
-  let framesAddedToBuffer = 0;
-
-  // Capture function called by setInterval
-  const captureFrame = () => {
-    if (!store || signal.aborted || !store.getState().isCapturing) {
-      stopCaptureInterval();
-      return;
-    }
-
-    const videoFrame = createVideoFrameFromElement(video);
-    if (!videoFrame) {
-      return;
-    }
-
-    try {
-      const frame = {
-        id: crypto.randomUUID(),
-        frame: videoFrame,
-        timestamp: videoFrame.timestamp,
-        width: videoFrame.codedWidth,
-        height: videoFrame.codedHeight,
-      };
-
-      store.setState((state) => addFrameToState(state, frame));
-      framesAddedToBuffer++;
-
-      // Reset error counter on successful frame
-      consecutiveFrameErrors = 0;
-
-      const currentState = store.getState();
-      emit('capture:frame', { frame, stats: currentState.stats });
-    } catch (err) {
-      // Handle GPU memory exhaustion (QuotaExceededError)
-      if (
-        err instanceof DOMException &&
-        (err.name === 'QuotaExceededError' || err.message.includes('resource'))
-      ) {
-        console.error('[Capture] GPU memory exhaustion:', err);
-        emit('capture:resource-error', {
-          message: 'GPU memory limit reached. Stopping capture to preserve frames.',
-        });
-        videoFrame.close();
-        stopCaptureInterval();
-        return;
-      }
-
-      consecutiveFrameErrors++;
-      console.error('[Capture] Frame processing error:', err);
-      videoFrame.close();
-
-      if (consecutiveFrameErrors >= MAX_CONSECUTIVE_FRAME_ERRORS) {
-        errorBatchCount++;
-        emit('capture:frame-errors', {
-          count: consecutiveFrameErrors,
-          batchNumber: errorBatchCount,
-          message: 'Multiple frame capture failures detected.',
-          lastError: err instanceof Error ? err.message : 'Unknown error',
-        });
-        consecutiveFrameErrors = 0;
-      }
-    }
-  };
-
-  // Helper to stop interval
-  const stopCaptureInterval = () => {
-    if (captureIntervalId !== null) {
-      clearInterval(captureIntervalId);
-      captureIntervalId = null;
-    }
-  };
-
-  // Listen for abort signal
-  signal.addEventListener('abort', stopCaptureInterval);
-
-  // Start capture interval
-  captureIntervalId = setInterval(captureFrame, frameInterval);
-
-  // Capture first frame immediately
-  captureFrame();
-}
+// Note: Frame capture timing is now handled by CaptureWorkerManager
+// Worker setInterval is NOT throttled in background tabs
 
 /**
  * Handle start capture
@@ -237,12 +137,32 @@ async function handleStart() {
     store.setState((state) => startCapture(state, stream));
     emit('capture:started', { stream });
 
-    // Start capture loop with abort controller using video element
+    // Initialize worker manager with video element
+    workerManager = new CaptureWorkerManager();
+    workerManager.init(videoElement, {
+      onStatsUpdate: (stats) => {
+        if (!store) return;
+        store.setState((state) => ({
+          ...state,
+          stats: {
+            frameCount: stats.frameCount,
+            duration: stats.frameCount / stats.fps,
+            // Estimate memory: ImageBitmap uses ~width*height*4 bytes (RGBA)
+            // Assume 1920x1080 average, divide by 10 for GPU-resident estimate
+            memoryMB: (stats.frameCount * 1920 * 1080 * 4) / 10 / (1024 * 1024),
+            fps: stats.fps,
+          },
+        }));
+      },
+    });
+
+    // Start worker capture
     captureAbortController = new AbortController();
     const fps = store.getState().settings.fps;
+    const maxFrames = calculateMaxFrames(store.getState().settings);
+    workerManager.start(fps, maxFrames);
 
-    // Start capture loop (uses setInterval internally)
-    startCaptureLoop(videoElement, fps, captureAbortController.signal);
+    console.log('[Capture] Started hybrid worker capture at', fps, 'fps, maxFrames:', maxFrames);
 
     // Re-render with video preview
     const container = qsRequired('#main-content');
@@ -256,6 +176,10 @@ async function handleStart() {
     if (captureTrack) {
       captureTrack.stop();
       captureTrack = null;
+    }
+    if (workerManager) {
+      workerManager.terminate();
+      workerManager = null;
     }
 
     // Re-render to show error
@@ -272,16 +196,18 @@ async function handleStart() {
 function handleStop(preserveBuffer = true) {
   if (!store) return;
 
-  // Stop capture interval
-  if (captureIntervalId !== null) {
-    clearInterval(captureIntervalId);
-    captureIntervalId = null;
-  }
-
-  // Abort capture loop (triggers cleanup via signal)
+  // Abort capture
   if (captureAbortController) {
     captureAbortController.abort();
     captureAbortController = null;
+  }
+
+  // Stop worker capture (but preserve buffer for clip creation)
+  if (workerManager) {
+    workerManager.stop();
+    if (!preserveBuffer) {
+      workerManager.clear();
+    }
   }
 
   // Remove stream event listener before stopping stream
@@ -302,25 +228,18 @@ function handleStop(preserveBuffer = true) {
     stopScreenCapture(state.stream);
   }
 
-  // Cleanup elements
+  // Cleanup video element
   if (videoElement) {
     videoElement.pause();
     videoElement.srcObject = null;
     videoElement = null;
   }
 
-  // Update state - optionally clear buffer to release VideoFrame resources
-  store.setState((currentState) => {
-    const stopped = stopCapture(currentState);
-    if (!preserveBuffer) {
-      return {
-        ...stopped,
-        buffer: clearBuffer(stopped.buffer),
-      };
-    }
-    return stopped;
-  });
+  // Update state
+  store.setState((currentState) => stopCapture(currentState));
   emit('capture:stopped', {});
+
+  console.log('[Capture] Stopped capture, preserveBuffer:', preserveBuffer);
 
   // Re-render
   const container = qsRequired('#main-content');
@@ -328,31 +247,40 @@ function handleStop(preserveBuffer = true) {
 }
 
 /**
- * Clear all VideoFrame resources from buffer
+ * Clear all frame resources from buffer
  * Call this after clip creation or when discarding captured frames
  */
 export function clearCaptureBuffer() {
-  if (!store) return;
-
-  store.setState((state) => ({
-    ...state,
-    buffer: clearBuffer(state.buffer),
-  }));
+  if (workerManager) {
+    workerManager.clear();
+  }
+  if (store) {
+    store.setState((state) => ({
+      ...state,
+      stats: {
+        frameCount: 0,
+        duration: 0,
+        memoryMB: 0,
+        fps: state.stats.fps,
+      },
+    }));
+  }
 }
 
 /**
  * Handle create clip
  *
  * OWNERSHIP TRANSFER:
- * - Clones VideoFrames from capture buffer (originals stay in buffer)
- * - Transfers ownership of clones to Editor via app-store
- * - Capture buffer retains originals (may be cleared independently)
- * - Editor is responsible for closing cloned frames on cleanup
+ * - Gets ImageBitmaps from worker and converts to VideoFrames
+ * - Transfers ownership of VideoFrames to Editor via app-store
+ * - Worker buffer is cleared after transfer
+ * - Editor is responsible for closing VideoFrames on cleanup
  *
  * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
+ * @returns {Promise<void>}
  */
-function handleCreateClip() {
-  if (!store) return;
+async function handleCreateClip() {
+  if (!store || !workerManager) return;
 
   // Clear old payloads and their VideoFrames before creating new clip
   // This prevents memory leaks when creating multiple clips
@@ -370,26 +298,47 @@ function handleCreateClip() {
 
   clearExportResult();
 
-  const state = store.getState();
-  const frames = getFrames(state.buffer);
+  // Request frames from worker (transfers ImageBitmap ownership to main thread)
+  const imageBitmapFrames = await workerManager.requestFrames();
 
-  // Clone VideoFrames for editor (original will be closed on cleanup)
-  const clonedFrames = frames.map((frame) => ({
-    ...frame,
-    frame: frame.frame.clone(),
-  }));
+  if (imageBitmapFrames.length === 0) {
+    console.warn('[Capture] No frames to create clip');
+    return;
+  }
+
+  // Convert ImageBitmaps to VideoFrames for Editor
+  // VideoFrame constructor accepts ImageBitmap as source
+  const videoFrames = imageBitmapFrames.map((item) => {
+    const videoFrame = new VideoFrame(item.bitmap, {
+      timestamp: item.timestamp * 1000, // Convert ms to microseconds
+    });
+    // Close ImageBitmap after conversion to release memory
+    item.bitmap.close();
+
+    return {
+      id: item.id,
+      frame: videoFrame,
+      timestamp: item.timestamp * 1000, // microseconds
+      width: videoFrame.codedWidth,
+      height: videoFrame.codedHeight,
+    };
+  });
+
+  const fps = store.getState().settings.fps;
 
   // Store clip payload for editor via app store
   setClipPayload({
-    frames: clonedFrames,
-    fps: state.settings.fps,
+    frames: videoFrames,
+    fps,
     capturedAt: Date.now(),
   });
 
   emit('capture:clip-created', {
-    frameCount: clonedFrames.length,
-    fps: state.settings.fps,
+    frameCount: videoFrames.length,
+    fps,
   });
+
+  console.log('[Capture] Created clip with', videoFrames.length, 'frames');
 }
 
 /**
@@ -413,16 +362,20 @@ function cleanup() {
     throttledUpdate = null;
   }
 
-  // Stop capture and clear buffer to release all VideoFrame resources
+  // Stop capture and clear buffer
   handleStop(false);
+
+  // Terminate worker
+  if (workerManager) {
+    workerManager.terminate();
+    workerManager = null;
+  }
 
   if (uiCleanup) {
     uiCleanup();
     uiCleanup = null;
   }
 
-  consecutiveFrameErrors = 0;
-  errorBatchCount = 0;
   store = null;
 }
 
@@ -435,12 +388,12 @@ export function getCaptureState() {
 }
 
 /**
- * Get captured frames
- * @returns {import('./types.js').Frame[]}
+ * Get captured frames count
+ * Note: Frames are stored in worker, use handleCreateClip to get actual frames
+ * @returns {number}
  */
-export function getCapturedFrames() {
-  if (!store) return [];
-  return getFrames(store.getState().buffer);
+export function getCapturedFramesCount() {
+  return store?.getState()?.stats?.frameCount ?? 0;
 }
 
 // ============================================================

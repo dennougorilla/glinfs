@@ -33,7 +33,7 @@ function createCaptureIcon() {
  * @typedef {Object} CaptureUIHandlers
  * @property {() => Promise<void>} onStart - Start capture handler
  * @property {() => void} onStop - Stop capture handler
- * @property {() => void} onCreateClip - Create clip handler
+ * @property {() => Promise<void>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
  */
 
@@ -224,9 +224,17 @@ function renderCaptureActions(state, handlers, cleanups) {
     actions.appendChild(clipBtn);
 
     cleanups.push(
-      on(clipBtn, 'click', () => {
-        handlers.onCreateClip();
-        navigate('/editor');
+      on(clipBtn, 'click', async () => {
+        clipBtn.setAttribute('disabled', 'true');
+        clipBtn.textContent = 'Creating...';
+        try {
+          await handlers.onCreateClip();
+          navigate('/editor');
+        } catch (err) {
+          console.error('[Capture UI] Failed to create clip:', err);
+          clipBtn.removeAttribute('disabled');
+          clipBtn.textContent = 'Create Clip';
+        }
       })
     );
   }
