@@ -46,6 +46,7 @@
  * Capture feature state
  * @typedef {Object} CaptureState
  * @property {boolean} isCapturing - Currently capturing
+ * @property {boolean} isPaused - Capture paused (stream preserved, can resume)
  * @property {boolean} isSharing - Screen share active
  * @property {MediaStream|null} stream - Active media stream
  * @property {Buffer} buffer - Frame buffer

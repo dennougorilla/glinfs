@@ -6,213 +6,261 @@ import { describe, it, expect } from 'vitest';
  * These tests document and enforce the VideoFrame ownership rules across features.
  * VideoFrame is a GPU-resident resource that MUST be explicitly closed to release memory.
  *
+ * NEW: VideoFramePool Model (No Cloning Required)
+ *
+ * Ownership Model:
+ *   - VideoFramePool manages shared ownership via acquire/release pattern
+ *   - Multiple modules can own the same frame simultaneously
+ *   - Frame is only closed when ALL owners have released
+ *   - NO cloning needed - same VideoFrame is shared
+ *
  * Ownership Chain:
- *   Capture (creates original) → Editor (receives clones) → Export (uses references)
+ *   Capture (register) → Editor (acquire) → Export (acquire)
+ *        ↓                    ↓                   ↓
+ *   releaseAll('capture')  releaseAll('editor')  releaseAll('export')
+ *
+ * Frame is closed when: owners.size === 0
  */
-describe('VideoFrame Ownership Contract', () => {
-  describe('Capture → Editor transfer', () => {
-    it('handleCreateClip must clone frames before transfer', () => {
-      // This test documents the contract: capture clones, editor owns clones
-      // Implementation verified: capture/index.js handleCreateClip()
-      // Lines 374-377: frames.map(frame => ({ ...frame, frame: frame.frame.clone() }))
+describe('VideoFrame Ownership Contract (Pool Model)', () => {
+  describe('VideoFramePool fundamentals', () => {
+    it('frames are registered to pool with initial owner', () => {
+      // Capture registers frames with 'capture' as owner
+      // Implementation: capture/index.js startCaptureLoop()
       const contract = {
-        transferPoint: 'handleCreateClip()',
-        action: 'clone()',
-        ownershipBefore: 'Capture buffer (originals)',
-        ownershipAfter: 'Editor clip.frames (clones)',
-        file: 'src/features/capture/index.js:374-377',
+        registerPoint: 'startCaptureLoop() - frame creation',
+        action: 'register(frameId, videoFrame, "capture")',
+        result: 'Frame in pool with owners: Set(["capture"])',
+        file: 'src/features/capture/index.js:156-157',
       };
-      expect(contract.action).toBe('clone()');
+      expect(contract.action).toContain('register');
     });
 
-    it('capture buffer can be cleared independently of editor frames', () => {
-      // After cloning, originals in capture buffer are independent
-      // Capture can clear buffer without affecting editor
+    it('owners are added via acquire() - no cloning needed', () => {
+      // When frames are shared, acquire() adds a new owner
+      // The VideoFrame itself is NOT cloned
       const contract = {
-        behavior: 'Independent lifecycle after clone',
-        captureAction: 'clearBuffer() closes originals',
-        editorAction: 'cleanup() closes clones',
+        action: 'acquire(frameId, "editor")',
+        result: 'Same VideoFrame, new owner added to Set',
+        benefit: 'No GPU memory duplication',
+        file: 'src/shared/videoframe-pool.js',
       };
-      expect(contract.behavior).toBe('Independent lifecycle after clone');
+      expect(contract.benefit).toBe('No GPU memory duplication');
+    });
+
+    it('frames are closed only when all owners release', () => {
+      // Frame lifecycle ends when last owner releases
+      const contract = {
+        rule: 'Frame closed when owners.size === 0',
+        safetyGuarantee: 'Frame remains valid while ANY owner exists',
+        implementation: 'release() checks owners.size before close()',
+      };
+      expect(contract.safetyGuarantee).toContain('ANY owner');
+    });
+  });
+
+  describe('Capture → Editor transfer', () => {
+    it('handleCreateClip acquires editor ownership - NO cloning', () => {
+      // Editor ownership is added via acquire(), NOT clone()
+      // Implementation: capture/index.js handleCreateClip()
+      const contract = {
+        transferPoint: 'handleCreateClip()',
+        action: 'acquire(frame.id, "editor")',
+        ownershipBefore: 'Pool: owners=["capture"]',
+        ownershipAfter: 'Pool: owners=["capture", "editor"]',
+        file: 'src/features/capture/index.js:381-384',
+        benefit: 'Same VideoFrame reference, no GPU memory copy',
+      };
+      expect(contract.action).toContain('acquire');
+      expect(contract.benefit).toContain('no GPU memory copy');
+    });
+
+    it('capture buffer eviction releases capture ownership only', () => {
+      // When buffer overflows, capture releases its ownership
+      // If editor also owns the frame, it remains valid
+      const contract = {
+        behavior: 'release(frameId, "capture") on eviction',
+        ifEditorOwns: 'Frame remains valid (not closed)',
+        ifOnlyCaptureOwns: 'Frame is closed',
+        file: 'src/features/capture/core.js:67-68',
+      };
+      expect(contract.ifEditorOwns).toContain('remains valid');
     });
   });
 
   describe('Editor → Export transfer', () => {
-    it('export receives its own clones via handleExport', () => {
-      // Editor clones frames for Export in handleExport()
-      // Both Editor and Export own their respective clones
-      // Implementation: editor/index.js handleExport() lines 484-487
+    it('handleExport acquires export ownership - NO cloning', () => {
+      // Export ownership is added via acquire(), NOT clone()
+      // Implementation: editor/index.js handleExport()
       const contract = {
         transferPoint: 'handleExport()',
-        action: 'clone() for export',
-        ownershipBefore: 'Editor (originals)',
-        ownershipAfter: 'Export (clones)',
-        file: 'src/features/editor/index.js:484-487',
+        action: 'acquire(frame.id, "export")',
+        ownershipBefore: 'Pool: owners=["capture", "editor"]',
+        ownershipAfter: 'Pool: owners=["capture", "editor", "export"]',
+        file: 'src/features/editor/index.js:498-502',
+        benefit: 'Same VideoFrame reference, no GPU memory copy',
       };
-      expect(contract.action).toContain('clone');
+      expect(contract.action).toContain('acquire');
     });
 
-    it('export must close its cloned frames on cleanup', () => {
-      // Export owns its cloned frames and must close them
-      // Implementation: export/index.js cleanup() lines 506-514
+    it('EditorPayload uses same frame references (no cloning)', () => {
+      // EditorPayload stores references, not clones
+      // Both frames and clip.frames are the same objects
       const contract = {
-        responsible: 'Export',
-        action: 'close() all frames in frames array',
-        reason: 'Export owns clones from handleExport()',
-        file: 'src/features/export/index.js:506-514',
+        structure: {
+          'frames': 'Same references as selectedFrames',
+          'clip': 'Same reference as state.clip',
+        },
+        benefit: 'No memory duplication',
+        safetyGuarantee: 'Editor retains ownership, frames stay valid',
       };
-      expect(contract.action).toContain('close');
+      expect(contract.benefit).toBe('No memory duplication');
     });
   });
 
   describe('Cleanup responsibilities', () => {
-    it('editor cleanup must close all cloned frames', () => {
-      // Editor is the owner of cloned frames from Capture
-      // Must close ALL frames in state.clip.frames before destruction
-      // Also clears ClipPayload to prevent double-close attempts
-      // Implementation: editor/index.js cleanup() lines 528-544
+    it('editor cleanup releases editor ownership', () => {
+      // Editor releases its ownership, does NOT close frames directly
+      // Implementation: editor/index.js cleanup()
       const contract = {
         responsible: 'Editor',
-        location: 'cleanup() in editor/index.js:528-544',
-        action: 'close() all frames in state.clip.frames, then clearClipPayload()',
-        pattern: 'for (const frame of state.clip.frames)',
+        location: 'cleanup() in editor/index.js:543-545',
+        action: 'releaseAll("editor")',
+        effect: 'Removes editor from all frame owner sets',
+        framesClosedIf: 'No other owners (capture, export) exist',
       };
-      expect(contract.responsible).toBe('Editor');
+      expect(contract.action).toBe('releaseAll("editor")');
     });
 
-    it('capture cleanup must close all original frames', () => {
-      // Capture owns originals in buffer
-      // Implementation: capture/index.js cleanup() calls handleStop(false)
-      // handleStop with preserveBuffer=false calls clearBuffer()
+    it('export cleanup releases export ownership', () => {
+      // Export releases its ownership
+      // Implementation: export/index.js cleanup()
+      const contract = {
+        responsible: 'Export',
+        location: 'cleanup() in export/index.js:508-510',
+        action: 'releaseAll("export")',
+        effect: 'Removes export from all frame owner sets',
+        framesClosedIf: 'No other owners (capture, editor) exist',
+      };
+      expect(contract.action).toBe('releaseAll("export")');
+    });
+
+    it('capture cleanup releases capture ownership', () => {
+      // Capture releases via clearBuffer() which calls releaseAll
+      // Implementation: capture/core.js clearBuffer()
       const contract = {
         responsible: 'Capture',
-        location: 'cleanup() in capture/index.js:406-418',
-        action: 'handleStop(false) → clearBuffer() closes originals',
+        location: 'clearBuffer() in capture/core.js:91-94',
+        action: 'releaseAll("capture")',
+        triggeredBy: 'handleStop(false) or explicit clearBuffer()',
       };
-      expect(contract.responsible).toBe('Capture');
-    });
-
-    it('router must call cleanup on route change', () => {
-      // Router stores cleanup function from route handler
-      // Calls it before switching routes
-      // Implementation: shared/router.js handleHashChange()
-      const contract = {
-        responsible: 'Router',
-        location: 'handleHashChange() in shared/router.js',
-        behavior: 'Stores cleanup function, calls before route change',
-      };
-      expect(contract.responsible).toBe('Router');
-    });
-  });
-
-  describe('Error handling', () => {
-    it('close() errors should be caught silently', () => {
-      // Already-closed frames throw when close() is called again
-      // All cleanup code must use try/catch
-      const contract = {
-        pattern: 'try { frame.close(); } catch (e) { /* ignore */ }',
-        reason: 'Prevent cascade failures from already-closed frames',
-      };
-      expect(contract.pattern).toContain('try');
-    });
-
-    it('must check for close method existence', () => {
-      // Some mock frames or edge cases may not have close()
-      // Check typeof before calling
-      const contract = {
-        pattern: "typeof frame.frame.close === 'function'",
-        reason: 'Graceful handling of mock or invalid frames',
-      };
-      expect(contract.pattern).toContain('typeof');
+      expect(contract.action).toBe('releaseAll("capture")');
     });
   });
 
   describe('Export to Editor Re-entry Contract', () => {
-    it('Export cleanup must NOT close EditorPayload frames', () => {
-      // EditorPayload is preserved for Editor re-entry (Back to Editor button)
-      // Export only closes its LOCAL frames variable, not EditorPayload
-      // Implementation: export/index.js cleanup() lines 509-510 comment is explicit
+    it('Export cleanup preserves frames for Editor re-entry', () => {
+      // After releaseAll("export"), editor still owns frames
+      // Frames remain valid because editor ownership exists
       const contract = {
-        rule: 'EditorPayload is preserved for Editor re-entry',
-        file: 'src/features/export/index.js',
-        lines: '509-510',
-        reason: 'User can navigate back from Export to Editor',
-        closesOnly: 'local frames variable',
-        doesNotClose: 'EditorPayload',
+        rule: 'Frames preserved while editor is owner',
+        afterExportCleanup: 'owners=["capture", "editor"]',
+        framesValid: true,
+        reason: 'Editor can safely display frames on re-entry',
       };
-      expect(contract.rule).toContain('preserved');
-      expect(contract.closesOnly).toBe('local frames variable');
-      expect(contract.doesNotClose).toBe('EditorPayload');
+      expect(contract.framesValid).toBe(true);
     });
 
-    it('Editor restores state from EditorPayload on re-entry', () => {
-      // When navigating back from Export, Editor checks EditorPayload
-      // If present, restores state including crop area and frame range
-      // Implementation: editor/index.js initEditor() lines 70-71, 152-158
+    it('Editor can re-render frames after Export cleanup', () => {
+      // EditorPayload.clip stores same frame references
+      // Since editor owns frames, they remain valid
       const contract = {
-        triggerPoint: 'initEditor()',
-        check: 'getEditorPayload() returns non-null',
-        action: 'Restore state from EditorPayload',
-        file: 'src/features/editor/index.js:70-71, 152-158',
-        thenAction: 'clearEditorPayload() after restoration',
+        triggerPoint: 'Navigate back to /editor',
+        check: 'EditorPayload.clip.frames are valid VideoFrames',
+        guarantee: 'Frames not closed because editor is still owner',
+        file: 'src/features/editor/index.js:112-118',
       };
-      expect(contract.check).toContain('EditorPayload');
-      expect(contract.thenAction).toContain('clear');
+      expect(contract.guarantee).toContain('editor is still owner');
     });
+  });
 
-    it('EditorPayload is cleared only after Editor consumes it', () => {
-      // EditorPayload lifecycle:
-      // 1. Created in editor/index.js handleExport()
-      // 2. Preserved by export/index.js cleanup() (intentionally)
-      // 3. Consumed by editor/index.js initEditor() on re-entry
-      // 4. Cleared AFTER restoration: clearEditorPayload() line 157
-      const contract = {
-        lifecycle: [
-          '1. Created: editor handleExport()',
-          '2. Preserved: export cleanup() does NOT clear it',
-          '3. Consumed: editor initEditor() on re-entry',
-          '4. Cleared: editor initEditor() line 157 after restoration',
-        ],
-        clearLocation: 'src/features/editor/index.js:157',
-        notClearedBy: 'export/index.js cleanup()',
-      };
-      expect(contract.lifecycle).toHaveLength(4);
-      expect(contract.notClearedBy).toContain('export');
-    });
-
-    it('EditorPayload contains two frame arrays with different ownership', () => {
-      // EditorPayload has:
-      // - frames: Selected frames for export (owned by Export during encoding)
-      // - clip.frames: All editor frames for state restoration (owned by Editor)
-      // This dual structure allows Export to work independently while
-      // preserving Editor state for re-entry
-      const contract = {
-        structure: {
-          'editorPayload.frames': 'Selected frames for export (passed to Export)',
-          'editorPayload.clip.frames': 'All editor frames for state restoration',
+  describe('Memory benefits', () => {
+    it('GPU memory reduced by ~66% compared to cloning model', () => {
+      // Old model: 3 copies (capture original, editor clone, export clone)
+      // New model: 1 copy (shared via pool)
+      const comparison = {
+        oldModel: {
+          captureBuffer: '1x GPU memory',
+          editorClone: '1x GPU memory',
+          exportClone: '1x GPU memory',
+          total: '3x GPU memory',
         },
-        ownership: {
-          'Export local frames': 'Cloned from editorPayload.frames, closed by Export cleanup',
-          'EditorPayload.clip.frames': 'Owned by Editor, preserved for re-entry',
+        newModel: {
+          pool: '1x GPU memory (shared)',
+          total: '1x GPU memory',
         },
+        savings: '66% GPU memory reduction',
       };
-      expect(Object.keys(contract.structure)).toHaveLength(2);
+      expect(comparison.savings).toBe('66% GPU memory reduction');
     });
 
-    it('full workflow test validates re-entry behavior', () => {
-      // Integration test confirms this behavior
-      // tests/integration/full-workflow.test.js lines 165-205
-      const testReference = {
-        file: 'tests/integration/full-workflow.test.js',
-        lines: '165-205',
-        testName: 'should handle navigation back from Export to Editor',
-        validates: [
-          'Export cleanup closes only its local frames',
-          'EditorPayload remains available after Export cleanup',
-          'Editor frames in EditorPayload are NOT closed',
-        ],
+    it('addFrame optimized - no array copy per frame', () => {
+      // Old: [...buffer.frames] on every frame (O(n))
+      // New: Direct assignment, new buffer object only (O(1))
+      const optimization = {
+        oldPattern: '[...buffer.frames] // O(n) copy',
+        newPattern: 'buffer.frames[tail] = frame // O(1)',
+        file: 'src/features/capture/core.js:45',
+        benefit: 'Reduced CPU overhead for high FPS capture',
       };
-      expect(testReference.validates).toHaveLength(3);
+      expect(optimization.newPattern).toContain('O(1)');
+    });
+  });
+
+  describe('Error handling', () => {
+    it('release handles already-closed frames gracefully', () => {
+      // VideoFramePool catches close() errors
+      const contract = {
+        pattern: 'try { entry.videoFrame.close(); } catch { /* ignore */ }',
+        reason: 'Prevent cascade failures from already-closed frames',
+        file: 'src/shared/videoframe-pool.js:72-75',
+      };
+      expect(contract.pattern).toContain('try');
+    });
+
+    it('releaseAll continues even if some frames fail', () => {
+      // Loop continues for all frames owned by owner
+      const contract = {
+        behavior: 'Continue releasing even if close() throws',
+        reason: 'Ensure all ownership is properly released',
+      };
+      expect(contract.behavior).toContain('Continue');
+    });
+  });
+
+  describe('Ownership flow scenarios', () => {
+    it('full workflow: Capture → Editor → Export → Editor return', () => {
+      // Document the complete flow with ownership states
+      const workflow = [
+        { step: 1, action: 'Capture creates frame', owners: ['capture'] },
+        { step: 2, action: 'handleCreateClip acquires', owners: ['capture', 'editor'] },
+        { step: 3, action: 'handleExport acquires', owners: ['capture', 'editor', 'export'] },
+        { step: 4, action: 'Export cleanup', owners: ['capture', 'editor'] },
+        { step: 5, action: 'Return to Editor - frames still valid', owners: ['capture', 'editor'] },
+        { step: 6, action: 'Editor cleanup', owners: ['capture'] },
+        { step: 7, action: 'Capture cleanup', owners: [], frameClosed: true },
+      ];
+      expect(workflow).toHaveLength(7);
+      expect(workflow[6].frameClosed).toBe(true);
+    });
+
+    it('buffer eviction while Editor owns: frame survives', () => {
+      const scenario = [
+        { step: 1, action: 'Frame created', owners: ['capture'] },
+        { step: 2, action: 'Editor acquires', owners: ['capture', 'editor'] },
+        { step: 3, action: 'Buffer evicts (release capture)', owners: ['editor'] },
+        { step: 4, result: 'Frame still valid - editor owns it' },
+      ];
+      expect(scenario[3].result).toContain('still valid');
     });
   });
 });

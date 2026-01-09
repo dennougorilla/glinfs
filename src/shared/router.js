@@ -42,9 +42,10 @@ function handleHashChange() {
 
   if (routes.has(route)) {
     // Call cleanup from previous route before switching
+    // Pass target route so cleanup can decide whether to pause or fully cleanup
     if (currentCleanup) {
       try {
-        currentCleanup();
+        currentCleanup(route);
       } catch (err) {
         console.error('[Router] Cleanup error:', err);
       }

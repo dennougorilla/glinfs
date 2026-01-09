@@ -31,17 +31,15 @@ export function createBuffer(maxFrames) {
 }
 
 /**
- * Add frame to buffer, evicting oldest if full (immutable)
- * Closes VideoFrame on evicted frames to release GPU memory
+ * Add frame to buffer, evicting oldest if full
+ * Pure function - caller is responsible for releasing evicted frames via pool
  * Uses incremental memory calculation for O(1) performance
+ * Note: Modifies buffer.frames in place for efficiency, but returns new buffer object
  * @param {import('./types.js').Buffer} buffer - Current buffer
  * @param {import('./types.js').Frame} frame - Frame to add
  * @returns {import('./types.js').Buffer} New buffer state
  */
 export function addFrame(buffer, frame) {
-  // Create shallow copy for immutability
-  const newFrames = [...buffer.frames];
-
   const newTail = (buffer.tail + 1) % buffer.maxFrames;
   let newHead = buffer.head;
   let newSize = buffer.size;
@@ -53,25 +51,27 @@ export function addFrame(buffer, frame) {
   let newTotalMemoryBytes = buffer.totalMemoryBytes + frameMemory;
 
   if (buffer.size < buffer.maxFrames) {
-    newFrames[buffer.tail] = frame;
+    // Buffer has space - just add frame
+    buffer.frames[buffer.tail] = frame;
     newSize++;
   } else {
-    // Buffer is full - close evicted frame's VideoFrame before overwriting
-    const evictedFrame = newFrames[buffer.head];
-    if (evictedFrame?.frame) {
+    // Buffer is full - overwrite oldest frame
+    // Note: Caller is responsible for releasing evicted frame via pool BEFORE calling addFrame
+    const evictedFrame = buffer.frames[buffer.head];
+    if (evictedFrame) {
       // Subtract evicted frame's memory (same GPU-resident formula as above)
       const evictedMemory = (evictedFrame.width * evictedFrame.height * 4) / 10;
       newTotalMemoryBytes -= evictedMemory;
-      evictedFrame.frame.close();
     }
-    newFrames[buffer.tail] = frame;
+    buffer.frames[buffer.tail] = frame;
     // Advance head to evict oldest
     newHead = (buffer.head + 1) % buffer.maxFrames;
   }
 
+  // Return new buffer object (frames array is same reference for efficiency)
+  // React detects state change via buffer object reference, not array contents
   return {
     ...buffer,
-    frames: newFrames,
     head: newHead,
     tail: newTail,
     size: newSize,
@@ -80,19 +80,12 @@ export function addFrame(buffer, frame) {
 }
 
 /**
- * Clear buffer and release all VideoFrame resources
+ * Clear buffer and return empty buffer with same capacity
+ * Note: Caller is responsible for releasing frames via releaseAll('capture') BEFORE calling
  * @param {import('./types.js').Buffer} buffer - Buffer to clear
  * @returns {import('./types.js').Buffer} Empty buffer with same capacity
  */
 export function clearBuffer(buffer) {
-  // Release all VideoFrame resources using shared utility
-  for (let i = 0; i < buffer.size; i++) {
-    const index = (buffer.head + i) % buffer.maxFrames;
-    const frame = buffer.frames[index];
-    if (frame?.frame) {
-      safeClose(frame.frame);
-    }
-  }
   return createBuffer(buffer.maxFrames);
 }
 

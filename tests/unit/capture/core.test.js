@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createBuffer,
   addFrame,
@@ -8,6 +8,7 @@ import {
   clearBuffer,
   safeClose,
 } from '../../../src/features/capture/core.js';
+import { register, clearPool, getFrame } from '../../../src/shared/videoframe-pool.js';
 
 /**
  * Create a mock VideoFrame for testing
@@ -31,19 +32,28 @@ function createMockVideoFrame(width = 100, height = 100) {
 
 /**
  * Create a mock frame for testing with VideoFrame
+ * Registers frame in VideoFramePool with 'capture' as owner
  * @param {string} id
  * @param {number} timestamp
  * @returns {import('../../../src/features/capture/types.js').Frame}
  */
 function createMockFrame(id, timestamp = 0) {
+  const videoFrame = createMockVideoFrame(100, 100);
+  // Register in pool as 'capture' owner (mimics real capture behavior)
+  register(id, videoFrame, 'capture');
   return {
     id,
-    frame: /** @type {VideoFrame} */ (createMockVideoFrame(100, 100)),
+    frame: /** @type {VideoFrame} */ (videoFrame),
     timestamp,
     width: 100,
     height: 100,
   };
 }
+
+// Clear pool before each test to ensure isolation
+beforeEach(() => {
+  clearPool();
+});
 
 describe('createBuffer', () => {
   it('creates empty buffer with correct capacity', () => {
@@ -113,7 +123,9 @@ describe('addFrame', () => {
     expect(newBuffer.size).toBe(1);
   });
 
-  it('calls VideoFrame.close() on evicted frame when buffer is full (T016)', () => {
+  it('does NOT close evicted frame (caller responsibility) (T016)', () => {
+    // addFrame is now a pure function - it does NOT call release()
+    // Caller (index.js) is responsible for releasing evicted frames before calling addFrame
     let buffer = createBuffer(2);
 
     // Create frames with trackable close functions
@@ -123,16 +135,16 @@ describe('addFrame', () => {
 
     buffer = addFrame(buffer, frame1);
     buffer = addFrame(buffer, frame2);
-
-    // Frame 1's VideoFrame.close() should not be called yet
-    expect(frame1.frame.close).not.toHaveBeenCalled();
-
-    // Adding frame 3 should evict frame 1 and call close()
     buffer = addFrame(buffer, frame3);
 
-    expect(frame1.frame.close).toHaveBeenCalledTimes(1);
+    // addFrame does NOT close frames - it's a pure function
+    // Frame 1 should NOT be closed by addFrame
+    expect(frame1.frame.close).not.toHaveBeenCalled();
     expect(frame2.frame.close).not.toHaveBeenCalled();
     expect(frame3.frame.close).not.toHaveBeenCalled();
+
+    // Frame 1 is still in pool (caller must release it separately)
+    expect(getFrame('1')).not.toBeNull();
   });
 
   it('does not call close() when buffer is not full', () => {
@@ -150,7 +162,9 @@ describe('addFrame', () => {
 });
 
 describe('clearBuffer', () => {
-  it('releases all VideoFrame resources when clearing buffer (T017)', () => {
+  it('does NOT release VideoFrame resources (caller responsibility) (T017)', () => {
+    // clearBuffer is now a pure function - it does NOT call releaseAll()
+    // Caller (index.js) is responsible for releasing frames via releaseAll('capture')
     let buffer = createBuffer(5);
 
     const frame1 = createMockFrame('1');
@@ -161,12 +175,18 @@ describe('clearBuffer', () => {
     buffer = addFrame(buffer, frame2);
     buffer = addFrame(buffer, frame3);
 
-    // Clear the buffer - all VideoFrames should be closed
+    // Clear the buffer - NO frames should be released (pure function)
     const clearedBuffer = clearBuffer(buffer);
 
-    expect(frame1.frame.close).toHaveBeenCalledTimes(1);
-    expect(frame2.frame.close).toHaveBeenCalledTimes(1);
-    expect(frame3.frame.close).toHaveBeenCalledTimes(1);
+    // clearBuffer does NOT close frames - it's a pure function
+    expect(frame1.frame.close).not.toHaveBeenCalled();
+    expect(frame2.frame.close).not.toHaveBeenCalled();
+    expect(frame3.frame.close).not.toHaveBeenCalled();
+
+    // Frames are still in pool (caller must release them separately)
+    expect(getFrame('1')).not.toBeNull();
+    expect(getFrame('2')).not.toBeNull();
+    expect(getFrame('3')).not.toBeNull();
 
     // Buffer should be empty
     expect(clearedBuffer.size).toBe(0);

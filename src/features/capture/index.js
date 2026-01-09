@@ -21,7 +21,8 @@ import {
   updateSettings,
   setError,
 } from './state.js';
-import { closeAllFrames, calculateMaxFrames } from './core.js';
+import { calculateMaxFrames } from './core.js';
+import { register, acquire, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   startScreenCapture,
   stopScreenCapture,
@@ -268,25 +269,14 @@ export function clearCaptureBuffer() {
 }
 
 /**
- * Clear old payload and its VideoFrames
- * @param {import('./types.js').ClipPayload | null} payload
- * @param {() => void} clearFn
- */
-function clearOldPayload(payload, clearFn) {
-  if (payload) {
-    closeAllFrames(payload.frames ?? []);
-    clearFn();
-  }
-}
-
-/**
  * Handle create clip
  *
- * OWNERSHIP TRANSFER:
+ * OWNERSHIP MODEL (VideoFramePool):
  * - Gets ImageBitmaps from worker and converts to VideoFrames
- * - Transfers ownership of VideoFrames to Editor via app-store
+ * - Registers frames in pool with 'capture' as initial owner
+ * - Adds 'editor' as owner via acquire() - NO cloning needed
  * - Worker buffer is cleared after transfer
- * - Editor is responsible for closing VideoFrames on cleanup
+ * - Editor releases ownership on cleanup via releaseAll('editor')
  *
  * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
  * @returns {Promise<void>}
@@ -294,10 +284,20 @@ function clearOldPayload(payload, clearFn) {
 async function handleCreateClip() {
   if (!store || !workerManager) return;
 
-  // Clear old payloads and their VideoFrames before creating new clip
-  // This prevents memory leaks when creating multiple clips
-  clearOldPayload(getClipPayload(), clearClipPayload);
-  clearOldPayload(getEditorPayload(), clearEditorPayload);
+  // Clear old payloads before creating new clip
+  // Release 'editor' ownership for old payload frames (if any)
+  const oldClipPayload = getClipPayload();
+  if (oldClipPayload?.frames?.length) {
+    releaseAll('editor');
+    clearClipPayload();
+  }
+
+  const oldEditorPayload = getEditorPayload();
+  if (oldEditorPayload?.frames?.length) {
+    releaseAll('export');
+    clearEditorPayload();
+  }
+
   clearExportResult();
 
   // Request frames from worker (transfers ImageBitmap ownership to main thread)
@@ -317,18 +317,30 @@ async function handleCreateClip() {
     // Close ImageBitmap after conversion to release memory
     item.bitmap.close();
 
-    return {
+    const frame = {
       id: item.id,
       frame: videoFrame,
       timestamp: item.timestamp * 1000, // microseconds
       width: videoFrame.codedWidth,
       height: videoFrame.codedHeight,
     };
+
+    // Register frame in pool with 'capture' as initial owner
+    register(item.id, videoFrame, 'capture');
+
+    return frame;
+  });
+
+  // Add 'editor' as owner to each frame - NO cloning needed
+  // Frames now have owners: ['capture', 'editor']
+  videoFrames.forEach((frame) => {
+    acquire(frame.id, 'editor');
   });
 
   const fps = store.getState().settings.fps;
 
   // Store clip payload for editor via app store
+  // Pass the same frame references (not clones)
   setClipPayload({
     frames: videoFrames,
     fps,
@@ -356,6 +368,11 @@ function handleSettingsChange(newSettings) {
 
 /**
  * Cleanup capture feature
+ *
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Capture releases 'capture' ownership via releaseAll('capture')
+ * - Frames with other owners (e.g., 'editor') will NOT be closed
+ * - Frames are only closed when all owners have released
  */
 function cleanup() {
   // Cancel pending throttled updates before store = null
@@ -366,6 +383,10 @@ function cleanup() {
 
   // Stop capture and clear buffer
   handleStop(false);
+
+  // Release 'capture' ownership from all frames via pool
+  // Frames with other owners (editor, export) will remain valid
+  releaseAll('capture');
 
   // Terminate worker
   if (workerManager) {

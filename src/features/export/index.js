@@ -8,6 +8,7 @@ import { getEditorPayload, validateEditorPayload, getExportResult, setExportResu
 import { qsRequired } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
 import { closeAllFrames } from '../../shared/utils/videoframe.js';
+import { releaseAll } from '../../shared/videoframe-pool.js';
 import {
   createExportStore,
   updateSettings,
@@ -484,9 +485,10 @@ function handleTogglePlay() {
 /**
  * Cleanup export feature
  *
- * OWNERSHIP RESPONSIBILITY:
- * - Export owns VideoFrame clones received from Editor via handleExport()
- * - Must close ALL frames before clearing the array
+ * OWNERSHIP MODEL (VideoFramePool):
+ * - Export releases 'export' ownership via releaseAll('export')
+ * - Frames with other owners (e.g., 'capture', 'editor') will NOT be closed
+ * - Frames are only closed when all owners have released
  */
 function cleanup() {
   // Stop playback loop
@@ -503,8 +505,9 @@ function cleanup() {
     encodingController = null;
   }
 
-  // Close VideoFrames that Export owns (cloned from Editor)
-  closeAllFrames(frames);
+  // Release 'export' ownership from all frames via pool
+  // Frames with other owners (capture, editor) will remain valid
+  releaseAll('export');
 
   // NOTE: Do NOT clear EditorPayload here - Editor may need it on return
   // EditorPayload is cleared when Capture creates a new clip
