@@ -9,6 +9,23 @@ import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
 /**
+ * Create a control section with title and content
+ * @param {string} title
+ * @param {HTMLElement} content
+ * @returns {HTMLElement}
+ */
+function createControlSection(title, content) {
+  const section = createElement('div', { className: 'control-section' });
+  section.appendChild(
+    createElement('div', { className: 'control-section-header' }, [
+      createElement('span', { className: 'control-section-title' }, [title]),
+    ])
+  );
+  section.appendChild(content);
+  return section;
+}
+
+/**
  * Create SVG capture icon
  * @returns {SVGElement}
  */
@@ -33,7 +50,7 @@ function createCaptureIcon() {
  * @typedef {Object} CaptureUIHandlers
  * @property {() => Promise<void>} onStart - Start capture handler
  * @property {() => void} onStop - Stop capture handler
- * @property {() => void} onCreateClip - Create clip handler
+ * @property {() => Promise<void>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
  */
 
@@ -65,36 +82,9 @@ export function renderCaptureScreen(container, state, handlers) {
 
   // Sidebar
   const sidebar = createElement('div', { className: 'capture-sidebar' });
-
-  // Actions Section
-  const actionsSection = createElement('div', { className: 'control-section' });
-  actionsSection.appendChild(
-    createElement('div', { className: 'control-section-header' }, [
-      createElement('span', { className: 'control-section-title' }, ['Capture']),
-    ])
-  );
-  actionsSection.appendChild(renderCaptureActions(state, handlers, cleanups));
-  sidebar.appendChild(actionsSection);
-
-  // Stats Section
-  const statsSection = createElement('div', { className: 'control-section' });
-  statsSection.appendChild(
-    createElement('div', { className: 'control-section-header' }, [
-      createElement('span', { className: 'control-section-title' }, ['Buffer']),
-    ])
-  );
-  statsSection.appendChild(renderStats(state.stats));
-  sidebar.appendChild(statsSection);
-
-  // Settings Section
-  const settingsSection = createElement('div', { className: 'control-section' });
-  settingsSection.appendChild(
-    createElement('div', { className: 'control-section-header' }, [
-      createElement('span', { className: 'control-section-title' }, ['Settings']),
-    ])
-  );
-  settingsSection.appendChild(renderSettings(state.settings, handlers, cleanups));
-  sidebar.appendChild(settingsSection);
+  sidebar.appendChild(createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)));
+  sidebar.appendChild(createControlSection('Buffer', renderStats(state.stats)));
+  sidebar.appendChild(createControlSection('Settings', renderSettings(state.settings, handlers, cleanups)));
 
   content.appendChild(sidebar);
   screen.appendChild(content);
@@ -117,20 +107,17 @@ export function renderCaptureScreen(container, state, handlers) {
  * @returns {HTMLElement}
  */
 function renderVideoPreview(state) {
-  const isRecording = state.isCapturing;
-  const isActive = state.isSharing;
-
   if (state.isSharing && state.stream) {
     const previewClasses = [
       'video-preview',
-      isActive ? 'video-preview--active' : '',
-      isRecording ? 'video-preview--recording' : '',
+      'video-preview--active',
+      state.isCapturing ? 'video-preview--recording' : '',
     ].filter(Boolean).join(' ');
 
     const preview = createElement('div', { className: previewClasses });
 
     // Recording badge
-    if (isRecording) {
+    if (state.isCapturing) {
       preview.appendChild(
         createElement('div', { className: 'recording-badge' }, [
           createElement('span', { className: 'dot' }),
@@ -224,9 +211,17 @@ function renderCaptureActions(state, handlers, cleanups) {
     actions.appendChild(clipBtn);
 
     cleanups.push(
-      on(clipBtn, 'click', () => {
-        handlers.onCreateClip();
-        navigate('/editor');
+      on(clipBtn, 'click', async () => {
+        clipBtn.setAttribute('disabled', 'true');
+        clipBtn.textContent = 'Creating...';
+        try {
+          await handlers.onCreateClip();
+          navigate('/editor');
+        } catch (err) {
+          console.error('[Capture UI] Failed to create clip:', err);
+          clipBtn.removeAttribute('disabled');
+          clipBtn.textContent = 'Create Clip';
+        }
       })
     );
   }
@@ -242,30 +237,29 @@ function renderCaptureActions(state, handlers, cleanups) {
 }
 
 /**
+ * Create a stat item element
+ * @param {string} label
+ * @param {string} value
+ * @returns {HTMLElement}
+ */
+function createStatItem(label, value) {
+  return createElement('div', { className: 'stat-item' }, [
+    createElement('span', { className: 'stat-label' }, [label]),
+    createElement('span', { className: 'stat-value' }, [value]),
+  ]);
+}
+
+/**
  * Render buffer stats
  * @param {import('./types.js').BufferStats} stats
  * @returns {HTMLElement}
  */
 function renderStats(stats) {
-  const memoryBytes = stats.memoryMB * 1024 * 1024;
-
   return createElement('div', { className: 'capture-stats' }, [
-    createElement('div', { className: 'stat-item' }, [
-      createElement('span', { className: 'stat-label' }, ['Frames']),
-      createElement('span', { className: 'stat-value' }, [String(stats.frameCount)]),
-    ]),
-    createElement('div', { className: 'stat-item' }, [
-      createElement('span', { className: 'stat-label' }, ['Duration']),
-      createElement('span', { className: 'stat-value' }, [formatDuration(stats.duration)]),
-    ]),
-    createElement('div', { className: 'stat-item' }, [
-      createElement('span', { className: 'stat-label' }, ['Memory']),
-      createElement('span', { className: 'stat-value' }, [formatBytes(memoryBytes)]),
-    ]),
-    createElement('div', { className: 'stat-item' }, [
-      createElement('span', { className: 'stat-label' }, ['FPS']),
-      createElement('span', { className: 'stat-value' }, [String(stats.fps)]),
-    ]),
+    createStatItem('Frames', String(stats.frameCount)),
+    createStatItem('Duration', formatDuration(stats.duration)),
+    createStatItem('Memory', formatBytes(stats.memoryMB * 1024 * 1024)),
+    createStatItem('FPS', String(stats.fps)),
   ]);
 }
 
