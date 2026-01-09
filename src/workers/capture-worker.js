@@ -153,17 +153,11 @@ function sendStats() {
  * After this call, the buffer will be empty
  */
 function sendFrames() {
-  const frames = frameBuffer.map((f) => ({
-    id: f.id,
-    bitmap: f.bitmap,
-    timestamp: f.timestamp,
-  }));
-
   // Transfer ownership of all ImageBitmaps to main thread
-  const transferables = frames.map((f) => f.bitmap);
+  const transferables = frameBuffer.map((f) => f.bitmap);
 
   self.postMessage(
-    { type: 'FRAMES_RESPONSE', payload: { frames } },
+    { type: 'FRAMES_RESPONSE', payload: { frames: frameBuffer } },
     transferables
   );
 
@@ -175,11 +169,9 @@ function sendFrames() {
  * Clear buffer and release all ImageBitmap resources
  */
 function clearBuffer() {
-  frameBuffer.forEach((f) => {
-    if (f.bitmap) {
-      f.bitmap.close();
-    }
-  });
+  for (const frame of frameBuffer) {
+    frame.bitmap?.close();
+  }
   frameBuffer = [];
   sendStats();
   console.log('[CaptureWorker] Buffer cleared');

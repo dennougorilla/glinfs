@@ -185,18 +185,28 @@ export class CaptureWorkerManager {
   }
 
   /**
+   * Send frame response to worker
+   * @param {ImageBitmap | null} bitmap
+   * @param {number} timestamp
+   */
+  #sendFrameResponse(bitmap, timestamp) {
+    const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp } };
+    if (bitmap) {
+      this.#worker?.postMessage(message, [bitmap]);
+    } else {
+      this.#worker?.postMessage(message);
+    }
+  }
+
+  /**
    * Capture a frame from video and send to worker
    * Uses createImageBitmap which works even on static screens!
    * @param {number} timestamp
    */
   async #captureAndSendFrame(timestamp) {
-    // Check video is ready
+    // Check video is ready (HTMLMediaElement.HAVE_CURRENT_DATA = 2)
     if (!this.#video || this.#video.readyState < 2) {
-      // HTMLMediaElement.HAVE_CURRENT_DATA = 2
-      this.#worker?.postMessage({
-        type: 'FRAME_RESPONSE',
-        payload: { bitmap: null, timestamp },
-      });
+      this.#sendFrameResponse(null, timestamp);
       return;
     }
 
@@ -204,26 +214,10 @@ export class CaptureWorkerManager {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
       const bitmap = await createImageBitmap(this.#video);
-
-      // Transfer ownership to worker (zero-copy)
-      this.#worker?.postMessage(
-        { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp } },
-        [bitmap]
-      );
+      this.#sendFrameResponse(bitmap, timestamp);
     } catch (err) {
       console.error('[CaptureWorkerManager] Frame capture error:', err);
-      this.#worker?.postMessage({
-        type: 'FRAME_RESPONSE',
-        payload: { bitmap: null, timestamp },
-      });
+      this.#sendFrameResponse(null, timestamp);
     }
   }
-}
-
-/**
- * Create a new CaptureWorkerManager instance
- * @returns {CaptureWorkerManager}
- */
-export function createCaptureWorkerManager() {
-  return new CaptureWorkerManager();
 }

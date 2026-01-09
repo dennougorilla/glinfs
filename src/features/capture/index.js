@@ -268,6 +268,18 @@ export function clearCaptureBuffer() {
 }
 
 /**
+ * Clear old payload and its VideoFrames
+ * @param {import('./types.js').ClipPayload | null} payload
+ * @param {() => void} clearFn
+ */
+function clearOldPayload(payload, clearFn) {
+  if (payload) {
+    closeAllFrames(payload.frames ?? []);
+    clearFn();
+  }
+}
+
+/**
  * Handle create clip
  *
  * OWNERSHIP TRANSFER:
@@ -284,18 +296,8 @@ async function handleCreateClip() {
 
   // Clear old payloads and their VideoFrames before creating new clip
   // This prevents memory leaks when creating multiple clips
-  const oldClipPayload = getClipPayload();
-  if (oldClipPayload) {
-    closeAllFrames(oldClipPayload.frames ?? []);
-    clearClipPayload();
-  }
-
-  const oldEditorPayload = getEditorPayload();
-  if (oldEditorPayload) {
-    closeAllFrames(oldEditorPayload.frames ?? []);
-    clearEditorPayload();
-  }
-
+  clearOldPayload(getClipPayload(), clearClipPayload);
+  clearOldPayload(getEditorPayload(), clearEditorPayload);
   clearExportResult();
 
   // Request frames from worker (transfers ImageBitmap ownership to main thread)
