@@ -10,14 +10,11 @@ import {
   setEditorPayload,
   clearEditorPayload,
   validateClipPayload,
-  clearClipPayload,
 } from '../../shared/app-store.js';
 import { qsRequired, createElement, on } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
-import { closeAllFrames } from '../../shared/utils/videoframe.js';
-import { acquire, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   createEditorStore,
   createEditorStoreFromClip,
@@ -481,11 +478,10 @@ function handleSpeedChange(speed) {
 /**
  * Handle export
  *
- * OWNERSHIP MODEL (VideoFramePool):
- * - Adds 'export' as owner to selected frames via acquire() - NO cloning needed
- * - Editor retains 'editor' ownership
- * - Export releases ownership on cleanup via releaseAll('export')
- * - Editor can safely return since it still owns frames
+ * SIMPLIFIED MODEL:
+ * - Stores only selection range and crop settings in EditorPayload
+ * - Export reads frames directly from clipPayload using selectedRange
+ * - No frame cloning or ownership tracking needed
  */
 function handleExport() {
   if (!store) return;
@@ -493,26 +489,19 @@ function handleExport() {
   const state = store.getState();
   if (!state.clip) return;
 
-  const selectedFrames = getSelectedFrames(state.clip);
-
-  // Add 'export' as owner to selected frames - NO cloning needed
-  // Frames now have owners: ['capture', 'editor', 'export'] (or subset)
-  selectedFrames.forEach((frame) => {
-    acquire(frame.id, 'export');
-  });
-
-  // Store editor payload for export via app store
-  // Pass the same frame references (not clones)
-  // Also store clip reference for return navigation (no cloning needed)
+  // Store editor settings (NOT frames) for Export
+  // Export will read frames from clipPayload using selectedRange
   setEditorPayload({
-    frames: selectedFrames,
+    selectedRange: state.selectedRange,
     cropArea: state.cropArea,
-    clip: state.clip,  // Same reference - Editor keeps ownership
+    clip: state.clip,  // For returning to Editor with preserved state
     fps: state.clip.fps,
   });
 
+  const selectedCount = state.selectedRange.end - state.selectedRange.start + 1;
+
   emit('editor:export-ready', {
-    frameCount: selectedFrames.length,
+    frameCount: selectedCount,
     fps: state.clip.fps,
   });
 }
@@ -520,12 +509,9 @@ function handleExport() {
 /**
  * Cleanup editor feature
  *
- * OWNERSHIP MODEL (VideoFramePool):
- * - Editor releases 'editor' ownership via releaseAll('editor')
- * - Frames with other owners (e.g., 'capture', 'export') will NOT be closed
- * - Frames are only closed when all owners have released
- *
- * @see tests/unit/shared/videoframe-ownership.test.js for ownership contract
+ * SIMPLIFIED MODEL:
+ * - Does NOT close frames (they live in clipPayload)
+ * - Frames are only closed when a new clip is created
  */
 function cleanup() {
   stopPlayback();
@@ -539,13 +525,6 @@ function cleanup() {
     timelineCleanup();
     timelineCleanup = null;
   }
-
-  // Release 'editor' ownership from all frames via pool
-  // Frames with other owners (capture, export) will remain valid
-  releaseAll('editor');
-
-  // Clear ClipPayload reference
-  clearClipPayload();
 
   baseCanvas = null;
   overlayCanvas = null;

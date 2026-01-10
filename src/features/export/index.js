@@ -4,11 +4,9 @@
  */
 
 import { emit } from '../../shared/bus.js';
-import { getEditorPayload, validateEditorPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
+import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
-import { closeAllFrames } from '../../shared/utils/videoframe.js';
-import { releaseAll } from '../../shared/videoframe-pool.js';
 import {
   createExportStore,
   updateSettings,
@@ -60,6 +58,11 @@ const DEFAULT_FPS = 30;
 
 /**
  * Initialize export feature
+ *
+ * SIMPLIFIED MODEL:
+ * - Reads frames from clipPayload (single source of truth)
+ * - Uses selectedRange from editorPayload to get the right frames
+ * - No ownership tracking needed
  */
 export function initExport() {
   const container = qsRequired('#main-content');
@@ -67,30 +70,21 @@ export function initExport() {
   // Register test hooks
   registerTestHooks();
 
-  // Get data from editor via app store
+  // Get settings from editor and frames from clip
   const editorPayload = getEditorPayload();
+  const clipPayload = getClipPayload();
 
-  // Validate payload structure
-  const validation = validateEditorPayload(editorPayload);
-  if (!validation.valid) {
-    container.innerHTML = `
-      <section class="screen export-screen" aria-labelledby="export-title">
-        <header class="screen-header">
-          <h1 id="export-title" class="screen-title">Export GIF</h1>
-        </header>
-        <div class="export-empty export-error">
-          <p>Invalid export data: ${validation.errors.join(', ')}</p>
-          <button class="btn btn-primary" onclick="location.hash = '#/editor'">
-            Back to Editor
-          </button>
-        </div>
-      </section>
-    `;
-    emit('export:validation-error', { errors: validation.errors });
+  // Validate we have the required data
+  if (!editorPayload?.selectedRange || !clipPayload?.frames?.length) {
+    // Static error message - safe HTML
+    container.innerHTML = '<section class="screen export-screen" aria-labelledby="export-title"><header class="screen-header"><h1 id="export-title" class="screen-title">Export GIF</h1></header><div class="export-empty export-error"><p>No clip data available. Please capture and edit a clip first.</p><button class="btn btn-primary" onclick="location.hash = \'#/editor\'">Back to Editor</button></div></section>';
+    emit('export:validation-error', { errors: ['No clip data available'] });
     return cleanup;
   }
 
-  frames = editorPayload?.frames || [];
+  // Get selected frames from clipPayload using range from editorPayload
+  const { start, end } = editorPayload.selectedRange;
+  frames = clipPayload.frames.slice(start, end + 1);
   cropArea = editorPayload?.cropArea || null;
   const fps = editorPayload?.fps || DEFAULT_FPS;
 
@@ -329,6 +323,10 @@ function handleOpenInTab() {
 
 /**
  * Handle back to editor button click
+ *
+ * SIMPLIFIED MODEL:
+ * - Just navigate back (frames live in clipPayload)
+ * - No ownership tracking needed
  */
 function handleBackToEditor() {
   if (!store) return;
@@ -369,8 +367,8 @@ function handleAdjustSettings() {
  * @param {import('../editor/types.js').CropArea | null} crop
  */
 function renderCroppedFrame(ctx, frame, crop) {
-  // Handle missing or invalid frame
-  if (!frame?.frame) {
+  // Handle missing, invalid, or closed frame
+  if (!frame?.frame || frame.frame.closed) {
     const canvas = ctx.canvas;
     ctx.fillStyle = '#333';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -485,10 +483,9 @@ function handleTogglePlay() {
 /**
  * Cleanup export feature
  *
- * OWNERSHIP MODEL (VideoFramePool):
- * - Export releases 'export' ownership via releaseAll('export')
- * - Frames with other owners (e.g., 'capture', 'editor') will NOT be closed
- * - Frames are only closed when all owners have released
+ * SIMPLIFIED MODEL:
+ * - Does NOT close frames (they live in clipPayload)
+ * - Frames are only closed when a new clip is created
  */
 function cleanup() {
   // Stop playback loop
@@ -504,13 +501,6 @@ function cleanup() {
     encodingController.abort();
     encodingController = null;
   }
-
-  // Release 'export' ownership from all frames via pool
-  // Frames with other owners (capture, editor) will remain valid
-  releaseAll('export');
-
-  // NOTE: Do NOT clear EditorPayload here - Editor may need it on return
-  // EditorPayload is cleared when Capture creates a new clip
 
   frames = [];
   cropArea = null;

@@ -71,8 +71,8 @@ function renderFramePlaceholder(ctx, width, height) {
 export function renderFrame(ctx, frame, crop, options = {}) {
   const canvas = ctx.canvas;
 
-  // Handle missing or invalid frame
-  if (!frame?.frame) {
+  // Handle missing, invalid, or closed frame
+  if (!frame?.frame || frame.frame.closed) {
     renderFramePlaceholder(ctx, canvas.width || 640, canvas.height || 480);
     return;
   }
@@ -324,8 +324,8 @@ export function createThumbnailCanvas(frame, maxDimension = 80) {
     throw new Error('Failed to get thumbnail canvas context');
   }
 
-  // Handle missing or invalid frame
-  if (!frame?.frame) {
+  // Handle missing, invalid, or closed frame
+  if (!frame?.frame || frame.frame.closed) {
     // Gray placeholder for invalid frames
     thumbCtx.fillStyle = '#333';
     thumbCtx.fillRect(0, 0, thumbWidth, thumbHeight);
@@ -447,6 +447,15 @@ export function getCursorForHandle(handle) {
 }
 
 /**
+ * Check if a VideoFrame is valid (not null and not closed)
+ * @param {VideoFrame | null | undefined} videoFrame
+ * @returns {boolean}
+ */
+function isVideoFrameValid(videoFrame) {
+  return videoFrame != null && !videoFrame.closed;
+}
+
+/**
  * Render only the frame data to base canvas (no overlays)
  * @param {CanvasRenderingContext2D} ctx
  * @param {import('../capture/types.js').Frame} frame
@@ -454,8 +463,8 @@ export function getCursorForHandle(handle) {
 export function renderFrameOnly(ctx, frame) {
   const canvas = ctx.canvas;
 
-  // Handle missing or invalid frame
-  if (!frame?.frame) {
+  // Handle missing, invalid, or closed frame
+  if (!frame?.frame || !isVideoFrameValid(frame.frame)) {
     renderFramePlaceholder(ctx, canvas.width || 640, canvas.height || 480);
     return;
   }

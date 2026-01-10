@@ -1,15 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createCaptureStore, updateSettings } from '../../../src/features/capture/state.js';
-import { register, clearPool, getFrame } from '../../../src/shared/videoframe-pool.js';
 
 /**
  * Create a mock VideoFrame for testing
- * Registers frame in VideoFramePool with 'capture' as owner
  */
 function createMockFrame(id) {
   const videoFrame = { close: vi.fn(), clone: vi.fn() };
-  // Register in pool as 'capture' owner (mimics real capture behavior)
-  register(id, videoFrame, 'capture');
   return {
     id,
     frame: videoFrame,
@@ -19,16 +15,9 @@ function createMockFrame(id) {
   };
 }
 
-// Clear pool before each test to ensure isolation
-beforeEach(() => {
-  clearPool();
-});
-
 describe('updateSettings - VideoFrame cleanup', () => {
-  it('does NOT close VideoFrames (caller responsibility)', () => {
-    // updateSettings is now a pure function - it does NOT call releaseAll()
-    // Caller (handleSettingsChange in index.js) is responsible for releasing frames
-    // Arrange
+  it('does NOT close VideoFrames (pure function)', () => {
+    // updateSettings is a pure function - it does NOT close frames
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frame1 = createMockFrame('1');
     const frame2 = createMockFrame('2');
@@ -44,20 +33,15 @@ describe('updateSettings - VideoFrame cleanup', () => {
       },
     }));
 
-    // Act - change fps setting (clearBuffer is called but does NOT release frames)
+    // Act - change fps setting
     store.setState((s) => updateSettings(s, { fps: 15 }));
 
     // Assert - frames should NOT be closed (updateSettings is pure)
     expect(frame1.frame.close).not.toHaveBeenCalled();
     expect(frame2.frame.close).not.toHaveBeenCalled();
-    // Frames are still in pool (caller must release them separately)
-    expect(getFrame('1')).not.toBeNull();
-    expect(getFrame('2')).not.toBeNull();
   });
 
-  it('does NOT close VideoFrames when bufferDuration changes (caller responsibility)', () => {
-    // updateSettings is now a pure function - it does NOT call releaseAll()
-    // Arrange
+  it('does NOT close VideoFrames when bufferDuration changes', () => {
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frame = createMockFrame('1');
 
@@ -71,17 +55,14 @@ describe('updateSettings - VideoFrame cleanup', () => {
       },
     }));
 
-    // Act - change bufferDuration (clearBuffer is called but does NOT release frames)
+    // Act - change bufferDuration
     store.setState((s) => updateSettings(s, { bufferDuration: 5 }));
 
-    // Assert - frame should NOT be closed (updateSettings is pure)
+    // Assert - frame should NOT be closed
     expect(frame.frame.close).not.toHaveBeenCalled();
-    // Frame is still in pool (caller must release it separately)
-    expect(getFrame('1')).not.toBeNull();
   });
 
   it('should NOT close frames when unrelated settings change', () => {
-    // Arrange
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frame = createMockFrame('1');
 
@@ -100,11 +81,9 @@ describe('updateSettings - VideoFrame cleanup', () => {
 
     // Assert - frames should NOT be closed
     expect(frame.frame.close).not.toHaveBeenCalled();
-    expect(getFrame('1')).not.toBeNull();
   });
 
   it('should handle buffer with no frames gracefully', () => {
-    // Arrange
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
 
     // Act & Assert - should not throw
@@ -114,11 +93,8 @@ describe('updateSettings - VideoFrame cleanup', () => {
   });
 
   it('should handle frames without close method gracefully', () => {
-    // Arrange
     const store = createCaptureStore({ fps: 30, bufferDuration: 10 });
     const frameWithoutClose = { id: '1', frame: {}, timestamp: 0, width: 100, height: 100 };
-    // Register in pool (even though close method is missing)
-    register('1', {}, 'capture');
 
     store.setState((s) => ({
       ...s,
@@ -130,7 +106,7 @@ describe('updateSettings - VideoFrame cleanup', () => {
       },
     }));
 
-    // Act & Assert - should not throw (VideoFramePool handles close errors gracefully)
+    // Act & Assert - should not throw
     expect(() => {
       store.setState((s) => updateSettings(s, { fps: 15 }));
     }).not.toThrow();
