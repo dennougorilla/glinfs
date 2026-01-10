@@ -329,9 +329,19 @@ function handleOpenInTab() {
 
 /**
  * Handle back to editor button click
+ *
+ * IMPORTANT: Must acquire 'editor' ownership BEFORE navigating.
+ * When navigate() is called, router cleans up Export which releases 'export' ownership.
+ * If we don't acquire 'editor' first, frames will have no owners and be closed.
  */
 function handleBackToEditor() {
   if (!store) return;
+
+  // Acquire 'editor' ownership BEFORE cleanup releases 'export'
+  // This ensures frames remain valid when returning to Editor
+  frames.forEach((frame) => {
+    acquire(frame.id, 'editor');
+  });
 
   store.setState(resetExport);
   navigate('/editor');
@@ -369,8 +379,8 @@ function handleAdjustSettings() {
  * @param {import('../editor/types.js').CropArea | null} crop
  */
 function renderCroppedFrame(ctx, frame, crop) {
-  // Handle missing or invalid frame
-  if (!frame?.frame) {
+  // Handle missing, invalid, or closed frame
+  if (!frame?.frame || frame.frame.closed) {
     const canvas = ctx.canvas;
     ctx.fillStyle = '#333';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
