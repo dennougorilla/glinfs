@@ -288,6 +288,7 @@ async function handleCreateClip() {
   for (const item of imageBitmapFrames) {
     // Validate ImageBitmap
     if (!item.bitmap || item.bitmap.width === 0 || item.bitmap.height === 0) {
+      item.bitmap?.close();
       continue;
     }
 
@@ -297,12 +298,14 @@ async function handleCreateClip() {
         timestamp: item.timestamp * 1000, // Convert ms to microseconds
       });
     } catch {
+      item.bitmap.close();
       continue;
     }
 
     // Validate VideoFrame
     if (videoFrame.closed || videoFrame.codedWidth === 0 || videoFrame.codedHeight === 0) {
       videoFrame.close();
+      item.bitmap.close();
       continue;
     }
 
