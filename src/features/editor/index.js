@@ -118,6 +118,13 @@ export function initEditor() {
     ? editorPayload.clip.fps
     : (clipPayload?.fps || DEFAULT_FPS);
 
+  // ALWAYS acquire 'editor' ownership for all frames before use
+  // This is defensive - ensures frames are valid regardless of navigation path
+  // acquire() is idempotent (Set operations), so safe to call even if already owned
+  frames.forEach((frame) => {
+    acquire(frame.id, 'editor');
+  });
+
   if (frames.length === 0) {
     // Build empty state with proper event handlers
     const backBtn = createElement('button', {
