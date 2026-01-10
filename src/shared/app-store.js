@@ -36,6 +36,28 @@ const state = {
 };
 
 // ============================================================
+// Internal: Frame Cleanup
+// ============================================================
+
+/**
+ * Close all VideoFrames in a ClipPayload
+ * Called only when setting a NEW clipPayload (not on navigation)
+ * @param {ClipPayload|null} payload
+ */
+function closePayloadFrames(payload) {
+  if (!payload?.frames) return;
+  for (const frame of payload.frames) {
+    if (frame?.frame && !frame.frame.closed) {
+      try {
+        frame.frame.close();
+      } catch {
+        // Ignore errors - frame may already be closed
+      }
+    }
+  }
+}
+
+// ============================================================
 // ClipPayload (capture -> editor)
 // ============================================================
 
@@ -49,10 +71,15 @@ export function getClipPayload() {
 
 /**
  * Set clip payload from capture feature
+ * Closes old frames ONLY when setting new ones (not on navigation)
  * @param {ClipPayload} payload
  */
 export function setClipPayload(payload) {
+  // Close old VideoFrames before replacing with new ones
+  closePayloadFrames(state.clipPayload);
   state.clipPayload = payload;
+  // Clear old editor state since frames are now different
+  state.editorPayload = null;
 }
 
 /**

@@ -169,7 +169,7 @@ export class CaptureWorkerManager {
       case 'FRAMES_RESPONSE':
         // Call pending callback with received frames
         if (this.#pendingFramesCallback) {
-          this.#pendingFramesCallback(payload.frames);
+          this.#pendingFramesCallback(payload.frames || []);
           this.#pendingFramesCallback = null;
         }
         break;
