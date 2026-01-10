@@ -3,16 +3,11 @@
  * @module features/editor/api
  */
 
-/**
- * @typedef {Object} RenderOptions
- * @property {boolean} [showCropOverlay] - Show crop overlay
- * @property {boolean} [showGrid] - Show grid overlay
- * @property {number} [gridDivisions] - Grid divisions (3, 6, 9)
- * @property {string} [cropColor] - Crop overlay color
- * @property {import('./types.js').HandlePosition} [hoveredHandle] - Currently hovered handle
- * @property {import('./types.js').HandlePosition} [activeHandle] - Currently active (dragging) handle
- * @property {import('./types.js').BoundaryHit} [boundaryHit] - Boundary collision state
- */
+import {
+  syncCanvasSize,
+  isVideoFrameValid,
+  renderFramePlaceholder,
+} from '../../shared/utils/canvas.js';
 
 /**
  * @typedef {Object} OverlayOptions
@@ -33,76 +28,6 @@ const HANDLE_HOVER_SCALE = 1.15;
 
 /** Handle active scale factor */
 const HANDLE_ACTIVE_SCALE = 1.3;
-
-/**
- * Render placeholder for missing or invalid frames
- * @param {CanvasRenderingContext2D} ctx
- * @param {number} width
- * @param {number} height
- */
-function renderFramePlaceholder(ctx, width, height) {
-  const canvas = ctx.canvas;
-
-  // Ensure canvas is sized
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-
-  // Gray background (#333)
-  ctx.fillStyle = '#333';
-  ctx.fillRect(0, 0, width, height);
-
-  // White "Frame unavailable" text, centered
-  ctx.fillStyle = 'white';
-  ctx.font = '16px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Frame unavailable', width / 2, height / 2);
-}
-
-/**
- * Render frame to canvas with optional overlays
- * @param {CanvasRenderingContext2D} ctx
- * @param {import('../capture/types.js').Frame} frame
- * @param {import('./types.js').CropArea | null} crop
- * @param {RenderOptions} options
- */
-export function renderFrame(ctx, frame, crop, options = {}) {
-  const canvas = ctx.canvas;
-
-  // Handle missing, invalid, or closed frame
-  if (!frame?.frame || frame.frame.closed) {
-    renderFramePlaceholder(ctx, canvas.width || 640, canvas.height || 480);
-    return;
-  }
-
-  // Resize canvas if needed
-  if (canvas.width !== frame.width || canvas.height !== frame.height) {
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-  }
-
-  // Draw VideoFrame directly to canvas
-  ctx.drawImage(frame.frame, 0, 0);
-
-  // Draw crop overlay
-  if (crop && options.showCropOverlay) {
-    renderCropOverlay(ctx, crop, {
-      color: options.cropColor || 'rgba(77, 166, 255, 0.8)',
-      hoveredHandle: options.hoveredHandle,
-      activeHandle: options.activeHandle,
-      boundaryHit: options.boundaryHit,
-    });
-  }
-
-  // Draw grid overlay
-  if (options.showGrid) {
-    const divisions = options.gridDivisions || 3;
-    const area = crop || { x: 0, y: 0, width: frame.width, height: frame.height };
-    renderGridInArea(ctx, area, divisions);
-  }
-}
 
 /**
  * @typedef {Object} CropOverlayOptions
@@ -257,20 +182,6 @@ export function renderCropOverlay(ctx, crop, options = {}) {
 }
 
 /**
- * Render grid overlay
- * @param {CanvasRenderingContext2D} ctx
- * @param {number} divisions - Grid divisions (3, 6, or 9)
- */
-export function renderGrid(ctx, divisions = 3) {
-  const canvas = ctx.canvas;
-  renderGridInArea(
-    ctx,
-    { x: 0, y: 0, width: canvas.width, height: canvas.height },
-    divisions
-  );
-}
-
-/**
  * Render grid in specific area
  * @param {CanvasRenderingContext2D} ctx
  * @param {{ x: number, y: number, width: number, height: number }} area
@@ -325,10 +236,9 @@ export function createThumbnailCanvas(frame, maxDimension = 80) {
   }
 
   // Handle missing, invalid, or closed frame
-  if (!frame?.frame || frame.frame.closed) {
-    // Gray placeholder for invalid frames
-    thumbCtx.fillStyle = '#333';
-    thumbCtx.fillRect(0, 0, thumbWidth, thumbHeight);
+  if (!frame?.frame || !isVideoFrameValid(frame.frame)) {
+    // Gray placeholder for invalid frames (no message for thumbnails)
+    renderFramePlaceholder(thumbCtx, thumbWidth, thumbHeight, { showMessage: false });
     return thumbCanvas;
   }
 
@@ -447,15 +357,6 @@ export function getCursorForHandle(handle) {
 }
 
 /**
- * Check if a VideoFrame is valid (not null and not closed)
- * @param {VideoFrame | null | undefined} videoFrame
- * @returns {boolean}
- */
-function isVideoFrameValid(videoFrame) {
-  return videoFrame != null && !videoFrame.closed;
-}
-
-/**
  * Render only the frame data to base canvas (no overlays)
  * @param {CanvasRenderingContext2D} ctx
  * @param {import('../capture/types.js').Frame} frame
@@ -470,10 +371,7 @@ export function renderFrameOnly(ctx, frame) {
   }
 
   // Resize canvas if needed
-  if (canvas.width !== frame.width || canvas.height !== frame.height) {
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-  }
+  syncCanvasSize(canvas, frame.width, frame.height);
 
   // Draw VideoFrame directly to canvas
   ctx.drawImage(frame.frame, 0, 0);
@@ -491,10 +389,7 @@ export function renderOverlay(ctx, crop, frameWidth, frameHeight, options = {}) 
   const canvas = ctx.canvas;
 
   // Resize canvas if needed
-  if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
-    canvas.width = frameWidth;
-    canvas.height = frameHeight;
-  }
+  syncCanvasSize(canvas, frameWidth, frameHeight);
 
   // Clear overlay
   ctx.clearRect(0, 0, canvas.width, canvas.height);

@@ -3,7 +3,6 @@ import {
   getCursorForHandle,
   hitTestCropHandle,
   renderCropOverlay,
-  renderFrame,
 } from '../../../src/features/editor/api.js';
 
 describe('getCursorForHandle', () => {
