@@ -314,8 +314,8 @@ async function handleCreateClip() {
     const videoFrame = new VideoFrame(item.bitmap, {
       timestamp: item.timestamp * 1000, // Convert ms to microseconds
     });
-    // Close ImageBitmap after conversion to release memory
-    item.bitmap.close();
+    // NOTE: Do NOT close ImageBitmap here - VideoFrame may still reference it
+    // ImageBitmap will be garbage collected when no longer needed
 
     const frame = {
       id: item.id,
