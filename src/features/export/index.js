@@ -8,7 +8,7 @@ import { getEditorPayload, validateEditorPayload, getExportResult, setExportResu
 import { qsRequired } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
 import { closeAllFrames } from '../../shared/utils/videoframe.js';
-import { releaseAll } from '../../shared/videoframe-pool.js';
+import { acquire, releaseAll } from '../../shared/videoframe-pool.js';
 import {
   createExportStore,
   updateSettings,
