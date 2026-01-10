@@ -812,19 +812,11 @@ input[type="checkbox"] {
 }
 
 /* ========================================
-   APP FOOTER
+   CAPTURE FOOTER (replaces status bar)
    ======================================== */
 
-.app-footer {
-  flex-shrink: 0;
-  height: var(--statusbar-height);
-  display: flex;
-  align-items: center;
+.capture-footer {
   justify-content: space-between;
-  padding: 0 var(--space-6);
-  background: var(--color-panel-header);
-  border-top: 1px solid var(--color-border);
-  font-size: var(--font-size-xs);
 }
 
 .footer-link {
@@ -842,6 +834,8 @@ input[type="checkbox"] {
 
 .footer-link svg {
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
 }
 
 .footer-sponsor {
