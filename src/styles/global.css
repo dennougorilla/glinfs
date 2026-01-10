@@ -810,3 +810,52 @@ input[type="checkbox"] {
   font-weight: 600;
   color: var(--color-primary);
 }
+
+/* ========================================
+   APP FOOTER
+   ======================================== */
+
+.app-footer {
+  flex-shrink: 0;
+  height: var(--statusbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-6);
+  background: var(--color-panel-header);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+}
+
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.footer-link:hover {
+  color: var(--color-text);
+}
+
+.footer-link svg {
+  flex-shrink: 0;
+}
+
+.footer-sponsor {
+  color: var(--color-text-secondary);
+}
+
+.footer-sponsor svg {
+  color: #db61a2;
+}
+
+.footer-sponsor:hover {
+  color: var(--color-text);
+}
+
+.footer-sponsor:hover svg {
+  color: #ff6eb4;
+}
