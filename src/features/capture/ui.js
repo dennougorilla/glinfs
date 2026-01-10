@@ -8,6 +8,13 @@ import { formatDuration, formatBytes } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
+/** @constant {string} GitHub repository URL */
+const GITHUB_REPO_URL = 'https://github.com/dennougorilla/glinfs';
+/** @constant {string} GitHub Sponsors URL */
+const GITHUB_SPONSOR_URL = 'https://github.com/sponsors/dennougorilla';
+/** @constant {string} Author profile URL */
+const AUTHOR_URL = 'https://github.com/dennougorilla';
+
 /**
  * Create a control section with title and content
  * @param {string} title
@@ -119,8 +126,8 @@ export function renderCaptureScreen(container, state, handlers) {
   content.appendChild(sidebar);
   screen.appendChild(content);
 
-  // Status Bar
-  screen.appendChild(renderStatusBar(state));
+  // Footer
+  screen.appendChild(renderFooter());
 
   container.innerHTML = '';
   container.appendChild(screen);
@@ -361,15 +368,15 @@ function renderSettings(settings, handlers, cleanups) {
 }
 
 /**
- * Render footer with links (replaces non-functional status bar)
+ * Render footer with links
  * @returns {HTMLElement}
  */
-function renderStatusBar() {
+function renderFooter() {
   const footer = createElement('div', { className: 'capture-status-bar capture-footer' });
 
   // GitHub link
   const githubLink = createElement('a', {
-    href: 'https://github.com/dennougorilla/glinfs',
+    href: GITHUB_REPO_URL,
     target: '_blank',
     rel: 'noopener noreferrer',
     className: 'footer-link',
@@ -380,7 +387,7 @@ function renderStatusBar() {
 
   // Sponsor link
   const sponsorLink = createElement('a', {
-    href: 'https://github.com/sponsors/dennougorilla',
+    href: GITHUB_SPONSOR_URL,
     target: '_blank',
     rel: 'noopener noreferrer',
     className: 'footer-link footer-sponsor',
@@ -391,7 +398,7 @@ function renderStatusBar() {
 
   // Author link
   const authorLink = createElement('a', {
-    href: 'https://github.com/dennougorilla',
+    href: AUTHOR_URL,
     target: '_blank',
     rel: 'noopener noreferrer',
     className: 'footer-link',

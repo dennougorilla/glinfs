@@ -62,6 +62,10 @@
   --color-warning: #f59e0b;
   --color-error: #ef4444;
 
+  /* Sponsor colors (GitHub Sponsors pink) */
+  --color-sponsor: #db61a2;
+  --color-sponsor-hover: #ff6eb4;
+
   /* Focus ring */
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-primary);
 
