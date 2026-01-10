@@ -2,8 +2,8 @@
  * Canvas Utilities
  * @module shared/utils/canvas
  *
- * Common canvas operations used across capture, editor, and export features.
- * All functions are pure side-effect utilities for canvas manipulation.
+ * Common canvas operations used across editor and export features.
+ * Includes both pure validation functions and side-effect utilities for canvas manipulation.
  */
 
 // ============================================================================

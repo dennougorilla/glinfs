@@ -6,6 +6,7 @@
 import { emit } from '../../shared/bus.js';
 import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
+import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder } from '../../shared/utils/canvas.js';
 import { navigate } from '../../shared/router.js';
 import {
   createExportStore,
@@ -368,25 +369,15 @@ function handleAdjustSettings() {
  */
 function renderCroppedFrame(ctx, frame, crop) {
   // Handle missing, invalid, or closed frame
-  if (!frame?.frame || frame.frame.closed) {
+  if (!frame?.frame || !isVideoFrameValid(frame.frame)) {
     const canvas = ctx.canvas;
-    ctx.fillStyle = '#333';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'white';
-    ctx.font = '16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Frame unavailable', canvas.width / 2, canvas.height / 2);
+    renderFramePlaceholder(ctx, canvas.width, canvas.height);
     return;
   }
 
   if (crop) {
     // Set canvas size to crop dimensions
-    const canvas = ctx.canvas;
-    if (canvas.width !== crop.width || canvas.height !== crop.height) {
-      canvas.width = crop.width;
-      canvas.height = crop.height;
-    }
+    syncCanvasSize(ctx.canvas, crop.width, crop.height);
 
     // Draw cropped region directly from VideoFrame (no intermediate canvas needed)
     ctx.drawImage(
@@ -396,11 +387,7 @@ function renderCroppedFrame(ctx, frame, crop) {
     );
   } else {
     // No crop - draw full frame directly from VideoFrame
-    const canvas = ctx.canvas;
-    if (canvas.width !== frame.width || canvas.height !== frame.height) {
-      canvas.width = frame.width;
-      canvas.height = frame.height;
-    }
+    syncCanvasSize(ctx.canvas, frame.width, frame.height);
     ctx.drawImage(frame.frame, 0, 0);
   }
 }
