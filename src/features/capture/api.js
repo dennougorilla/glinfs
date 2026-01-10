@@ -55,43 +55,6 @@ export function stopScreenCapture(stream) {
 }
 
 /**
- * Capture a single frame from video element to ImageData
- * @deprecated Use createFrameProcessor() with VideoFrame API instead
- * @param {HTMLVideoElement} video
- * @param {HTMLCanvasElement} canvas
- * @returns {import('./types.js').Frame}
- */
-export function captureFrame(video, canvas) {
-  const width = video.videoWidth;
-  const height = video.videoHeight;
-
-  // Ensure canvas matches video dimensions
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) {
-    throw new Error('Failed to get canvas 2D context');
-  }
-
-  // Draw video frame to canvas
-  ctx.drawImage(video, 0, 0, width, height);
-
-  // Extract pixel data
-  const data = ctx.getImageData(0, 0, width, height);
-
-  return {
-    id: generateId(),
-    data,
-    timestamp: performance.now(),
-    width,
-    height,
-  };
-}
-
-/**
  * Create a video element for the given stream
  * @param {MediaStream} stream
  * @returns {Promise<HTMLVideoElement>}

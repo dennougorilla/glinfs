@@ -27,6 +27,84 @@ export const HANDLE_SIZE = 10;
 /** Default FPS if not provided */
 const DEFAULT_FPS = 30;
 
+// ============================================================================
+// Handle Resize Configuration
+// ============================================================================
+
+/**
+ * @typedef {Object} HandleConfig
+ * @property {boolean} affectsX - Does this handle move the X position?
+ * @property {boolean} affectsY - Does this handle move the Y position?
+ * @property {number} widthSign - Multiplier for dx when calculating width change (+1, -1, or 0)
+ * @property {number} heightSign - Multiplier for dy when calculating height change (+1, -1, or 0)
+ */
+
+/**
+ * Handle resize configuration
+ * Each handle defines how dx/dy affect position and dimensions
+ * @type {Record<import('./types.js').HandlePosition, HandleConfig>}
+ */
+const HANDLE_CONFIG = {
+  'top-left':     { affectsX: true,  affectsY: true,  widthSign: -1, heightSign: -1 },
+  'top':          { affectsX: false, affectsY: true,  widthSign:  0, heightSign: -1 },
+  'top-right':    { affectsX: false, affectsY: true,  widthSign: +1, heightSign: -1 },
+  'left':         { affectsX: true,  affectsY: false, widthSign: -1, heightSign:  0 },
+  'right':        { affectsX: false, affectsY: false, widthSign: +1, heightSign:  0 },
+  'bottom-left':  { affectsX: true,  affectsY: false, widthSign: -1, heightSign: +1 },
+  'bottom':       { affectsX: false, affectsY: false, widthSign:  0, heightSign: +1 },
+  'bottom-right': { affectsX: false, affectsY: false, widthSign: +1, heightSign: +1 },
+};
+
+/**
+ * @typedef {'horizontal' | 'vertical' | 'corner'} HandleType
+ */
+
+/**
+ * @typedef {Object} CornerAnchor
+ * @property {boolean} anchorRight - X is anchored to right edge
+ * @property {boolean} anchorBottom - Y is anchored to bottom edge
+ */
+
+/**
+ * Position anchor configuration for corner handles
+ * Defines which edge is anchored (fixed) during resize
+ * @type {Record<string, CornerAnchor>}
+ */
+const CORNER_ANCHORS = {
+  'top-left':     { anchorRight: true,  anchorBottom: true },
+  'top-right':    { anchorRight: false, anchorBottom: true },
+  'bottom-left':  { anchorRight: true,  anchorBottom: false },
+  'bottom-right': { anchorRight: false, anchorBottom: false },
+};
+
+/**
+ * Determine handle type for aspect ratio calculation
+ * @param {import('./types.js').HandlePosition} handle
+ * @returns {HandleType}
+ */
+function getHandleType(handle) {
+  if (handle === 'left' || handle === 'right') return 'horizontal';
+  if (handle === 'top' || handle === 'bottom') return 'vertical';
+  return 'corner';
+}
+
+/**
+ * Apply handle drag to crop dimensions using config-driven approach
+ * @param {import('./types.js').CropArea} crop - Current crop
+ * @param {HandleConfig} config - Handle configuration
+ * @param {number} dx - Horizontal delta
+ * @param {number} dy - Vertical delta
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function applyHandleDrag(crop, config, dx, dy) {
+  return {
+    x: config.affectsX ? crop.x + dx : crop.x,
+    y: config.affectsY ? crop.y + dy : crop.y,
+    width: crop.width + config.widthSign * dx,
+    height: crop.height + config.heightSign * dy,
+  };
+}
+
 /**
  * Create a clip from buffer frames
  * @param {import('../capture/types.js').Frame[]} frames - Source frames
@@ -293,57 +371,103 @@ export function getHandlePositions(crop) {
 }
 
 /**
+ * Apply aspect ratio for horizontal handle (left/right)
+ * Width is primary axis, height adjusts and centers vertically
+ * @param {{x: number, y: number, width: number, height: number}} proposed
+ * @param {import('./types.js').CropArea} original
+ * @param {number} targetRatio
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function applyRatioForHorizontalHandle(proposed, original, targetRatio) {
+  const width = Math.max(MIN_CROP_SIZE, proposed.width);
+  const height = Math.round(width / targetRatio);
+  const heightDiff = height - original.height;
+
+  return {
+    x: proposed.x,
+    y: original.y - heightDiff / 2,
+    width,
+    height,
+  };
+}
+
+/**
+ * Apply aspect ratio for vertical handle (top/bottom)
+ * Height is primary axis, width adjusts and centers horizontally
+ * @param {{x: number, y: number, width: number, height: number}} proposed
+ * @param {import('./types.js').CropArea} original
+ * @param {number} targetRatio
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function applyRatioForVerticalHandle(proposed, original, targetRatio) {
+  const height = Math.max(MIN_CROP_SIZE, proposed.height);
+  const width = Math.round(height * targetRatio);
+  const widthDiff = width - original.width;
+
+  return {
+    x: original.x - widthDiff / 2,
+    y: proposed.y,
+    width,
+    height,
+  };
+}
+
+/**
+ * Apply aspect ratio for corner handle
+ * Uses larger change as primary axis, anchors to opposite corner
+ * @param {{x: number, y: number, width: number, height: number}} proposed
+ * @param {import('./types.js').CropArea} original
+ * @param {import('./types.js').HandlePosition} handle
+ * @param {number} targetRatio
+ * @returns {{x: number, y: number, width: number, height: number}}
+ */
+function applyRatioForCornerHandle(proposed, original, handle, targetRatio) {
+  let width = Math.max(MIN_CROP_SIZE, proposed.width);
+  let height = Math.max(MIN_CROP_SIZE, proposed.height);
+
+  // Determine primary axis from larger change
+  const widthChange = Math.abs(proposed.width - original.width);
+  const heightChange = Math.abs(proposed.height - original.height);
+
+  if (widthChange >= heightChange) {
+    height = Math.round(width / targetRatio);
+  } else {
+    width = Math.round(height * targetRatio);
+  }
+
+  // Calculate position based on anchor
+  const anchor = CORNER_ANCHORS[handle];
+  const x = anchor.anchorRight ? original.x + original.width - width : proposed.x;
+  const y = anchor.anchorBottom ? original.y + original.height - height : proposed.y;
+
+  return { x, y, width, height };
+}
+
+/**
  * Apply aspect ratio constraint to resize operation
- * @param {{x: number, y: number, width: number, height: number}} proposed - Proposed dimensions after resize
- * @param {import('./types.js').CropArea} original - Original crop before resize
- * @param {import('./types.js').HandlePosition} handle - Which handle is being dragged
- * @param {string} ratio - Aspect ratio to apply
+ * Dispatches to appropriate handler based on handle type
+ * @param {{x: number, y: number, width: number, height: number}} proposed
+ * @param {import('./types.js').CropArea} original
+ * @param {import('./types.js').HandlePosition} handle
+ * @param {string} ratio
  * @returns {{x: number, y: number, width: number, height: number}}
  */
 function applyAspectRatioToResize(proposed, original, handle, ratio) {
   const targetRatio = ASPECT_RATIOS[ratio];
   if (!targetRatio) return proposed;
 
-  const isHorizontalHandle = handle === 'left' || handle === 'right';
-  const isVerticalHandle = handle === 'top' || handle === 'bottom';
+  const handleType = getHandleType(handle);
 
-  let { x, y, width, height } = proposed;
-
-  // Ensure minimum size before ratio calculation
-  width = Math.max(MIN_CROP_SIZE, width);
-  height = Math.max(MIN_CROP_SIZE, height);
-
-  if (isHorizontalHandle) {
-    // Width is primary axis: adjust height to match
-    height = Math.round(width / targetRatio);
-    const heightDiff = height - original.height;
-    y = original.y - heightDiff / 2;
-  } else if (isVerticalHandle) {
-    // Height is primary axis: adjust width to match
-    width = Math.round(height * targetRatio);
-    const widthDiff = width - original.width;
-    x = original.x - widthDiff / 2;
-  } else {
-    // Corner handle: use larger change as primary axis
-    const widthChange = Math.abs(proposed.width - original.width);
-    const heightChange = Math.abs(proposed.height - original.height);
-
-    if (widthChange >= heightChange) {
-      height = Math.round(width / targetRatio);
-    } else {
-      width = Math.round(height * targetRatio);
-    }
-
-    // Adjust position based on anchor point
-    if (handle.includes('left')) {
-      x = original.x + original.width - width;
-    }
-    if (handle.includes('top')) {
-      y = original.y + original.height - height;
-    }
+  switch (handleType) {
+    case 'horizontal':
+      return applyRatioForHorizontalHandle(proposed, original, targetRatio);
+    case 'vertical':
+      return applyRatioForVerticalHandle(proposed, original, targetRatio);
+    case 'corner':
+      return applyRatioForCornerHandle(proposed, original, handle, targetRatio);
+    default:
+      return proposed;
   }
-
-  return { x, y, width, height };
 }
 
 /**
@@ -358,64 +482,18 @@ function applyAspectRatioToResize(proposed, original, handle, ratio) {
 export function resizeCropByHandle(crop, handle, start, current, frame) {
   const dx = current.x - start.x;
   const dy = current.y - start.y;
-  let x = crop.x;
-  let y = crop.y;
-  let width = crop.width;
-  let height = crop.height;
 
-  switch (handle) {
-    case 'top-left':
-      x = crop.x + dx;
-      y = crop.y + dy;
-      width = crop.width - dx;
-      height = crop.height - dy;
-      break;
-    case 'top-right':
-      y = crop.y + dy;
-      width = crop.width + dx;
-      height = crop.height - dy;
-      break;
-    case 'bottom-left':
-      x = crop.x + dx;
-      width = crop.width - dx;
-      height = crop.height + dy;
-      break;
-    case 'bottom-right':
-      width = crop.width + dx;
-      height = crop.height + dy;
-      break;
-    case 'top':
-      y = crop.y + dy;
-      height = crop.height - dy;
-      break;
-    case 'bottom':
-      height = crop.height + dy;
-      break;
-    case 'left':
-      x = crop.x + dx;
-      width = crop.width - dx;
-      break;
-    case 'right':
-      width = crop.width + dx;
-      break;
-  }
+  // Get handle configuration and apply drag
+  const config = HANDLE_CONFIG[handle];
+  let proposed = applyHandleDrag(crop, config, dx, dy);
 
   // Apply aspect ratio constraint if not free
   if (crop.aspectRatio !== 'free') {
-    const adjusted = applyAspectRatioToResize(
-      { x, y, width, height },
-      crop,
-      handle,
-      crop.aspectRatio
-    );
-    x = adjusted.x;
-    y = adjusted.y;
-    width = adjusted.width;
-    height = adjusted.height;
+    proposed = applyAspectRatioToResize(proposed, crop, handle, crop.aspectRatio);
   }
 
   return clampCropArea(
-    { x, y, width, height, aspectRatio: crop.aspectRatio },
+    { ...proposed, aspectRatio: crop.aspectRatio },
     frame.width,
     frame.height
   );
