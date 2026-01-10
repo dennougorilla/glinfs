@@ -333,13 +333,21 @@ function handleOpenInTab() {
  * IMPORTANT: Must acquire 'editor' ownership BEFORE navigating.
  * When navigate() is called, router cleans up Export which releases 'export' ownership.
  * If we don't acquire 'editor' first, frames will have no owners and be closed.
+ *
+ * NOTE: We must acquire ownership for ALL clip frames, not just selected frames.
+ * - `frames` variable = selected frames only (used for export preview)
+ * - `editorPayload.clip.frames` = all frames (used by Editor on return)
  */
 function handleBackToEditor() {
   if (!store) return;
 
-  // Acquire 'editor' ownership BEFORE cleanup releases 'export'
-  // This ensures frames remain valid when returning to Editor
-  frames.forEach((frame) => {
+  // Get EditorPayload to access ALL clip frames, not just selected ones
+  const editorPayload = getEditorPayload();
+  const clipFrames = editorPayload?.clip?.frames || [];
+
+  // Acquire 'editor' ownership for ALL frames BEFORE cleanup releases 'export'
+  // This ensures all frames remain valid when returning to Editor
+  clipFrames.forEach((frame) => {
     acquire(frame.id, 'editor');
   });
 
