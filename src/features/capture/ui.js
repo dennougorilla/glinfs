@@ -119,8 +119,8 @@ export function renderCaptureScreen(container, state, handlers) {
   content.appendChild(sidebar);
   screen.appendChild(content);
 
-  // Status Bar
-  screen.appendChild(renderStatusBar(state));
+  // Footer
+  screen.appendChild(renderStatusBar());
 
   container.innerHTML = '';
   container.appendChild(screen);
