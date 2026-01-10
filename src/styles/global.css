@@ -843,7 +843,7 @@ input[type="checkbox"] {
 }
 
 .footer-sponsor svg {
-  color: #db61a2;
+  color: var(--color-sponsor);
 }
 
 .footer-sponsor:hover {
@@ -851,5 +851,5 @@ input[type="checkbox"] {
 }
 
 .footer-sponsor:hover svg {
-  color: #ff6eb4;
+  color: var(--color-sponsor-hover);
 }
