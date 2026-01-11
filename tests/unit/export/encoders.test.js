@@ -311,5 +311,65 @@ describe('gifenc Encoder', () => {
       };
       expect(() => encoder.addFrame(frameData, 0)).toThrow();
     });
+
+    it('should accept rgb565 quantize format', () => {
+      const encoder = createGifencEncoder();
+
+      encoder.init({
+        width: 10,
+        height: 10,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb565',
+      });
+
+      const rgba = new Uint8ClampedArray(10 * 10 * 4).fill(255);
+      encoder.addFrame({ rgba, width: 10, height: 10 }, 0);
+
+      const bytes = encoder.finish();
+      expect(bytes[0]).toBe(0x47); // G
+
+      encoder.dispose();
+    });
+
+    it('should accept rgb444 quantize format', () => {
+      const encoder = createGifencEncoder();
+
+      encoder.init({
+        width: 10,
+        height: 10,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb444',
+      });
+
+      const rgba = new Uint8ClampedArray(10 * 10 * 4).fill(255);
+      encoder.addFrame({ rgba, width: 10, height: 10 }, 0);
+
+      const bytes = encoder.finish();
+      expect(bytes[0]).toBe(0x47); // G
+
+      encoder.dispose();
+    });
+
+    it('should default to rgb565 when quantize format not specified', () => {
+      const encoder = createGifencEncoder();
+
+      // No quantizeFormat specified
+      encoder.init({
+        width: 10,
+        height: 10,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      const rgba = new Uint8ClampedArray(10 * 10 * 4).fill(255);
+      expect(() => encoder.addFrame({ rgba, width: 10, height: 10 }, 0)).not.toThrow();
+
+      encoder.dispose();
+    });
   });
 });

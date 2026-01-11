@@ -6,6 +6,16 @@
 
 import { Commands, Events } from './worker-protocol.js';
 import { createGifencEncoder } from '../features/export/encoders/gifenc-encoder.js';
+import { createGifsicleEncoder } from '../features/export/encoders/gifsicle-encoder.js';
+
+/**
+ * Encoder factory map
+ * @type {Record<string, () => import('../features/export/encoders/types.js').EncoderInterface>}
+ */
+const encoderFactories = {
+  'gifenc-js': createGifencEncoder,
+  'gifsicle-wasm': createGifsicleEncoder,
+};
 
 /** @type {import('../features/export/encoders/types.js').EncoderInterface | null} */
 let encoder = null;
@@ -36,24 +46,31 @@ function postEvent(event, transfer) {
  * Handle initialization command
  * @param {import('./worker-protocol.js').InitMessage} message
  */
-function handleInit(message) {
+async function handleInit(message) {
   try {
     // Dispose existing encoder if any
     if (encoder) {
       encoder.dispose();
     }
 
-    // Create new encoder
-    // TODO: Select encoder based on encoderId (for future WASM support)
-    encoder = createGifencEncoder();
+    // Select encoder based on encoderId
+    const encoderId = message.encoderId || 'gifenc-js';
+    const factory = encoderFactories[encoderId];
 
-    // Initialize
-    encoder.init({
+    if (!factory) {
+      throw new Error(`Unknown encoder: ${encoderId}`);
+    }
+
+    encoder = factory();
+
+    // Initialize (may be async for WASM encoders)
+    await encoder.init({
       width: message.width,
       height: message.height,
       maxColors: message.maxColors,
       frameDelayMs: message.frameDelayMs,
       loopCount: message.loopCount,
+      quantizeFormat: message.quantizeFormat,
     });
 
     totalFrames = message.totalFrames;
@@ -62,7 +79,7 @@ function handleInit(message) {
 
     postEvent({
       event: Events.READY,
-      encoderId: message.encoderId,
+      encoderId: encoderId,
     });
   } catch (error) {
     postEvent({

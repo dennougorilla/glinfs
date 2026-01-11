@@ -3,6 +3,9 @@ import {
   createDefaultSettings,
   validateSettings,
   estimateSize,
+  ENCODER_PRESETS,
+  getEncoderPreset,
+  calculateMaxColors,
 } from '../../../src/features/export/core.js';
 
 describe('createDefaultSettings', () => {
@@ -15,6 +18,7 @@ describe('createDefaultSettings', () => {
     expect(settings.dithering).toBe(true);
     expect(settings.loopCount).toBe(0);
     expect(settings.openInNewTab).toBe(false);
+    expect(settings.encoderPreset).toBe('balanced');
   });
 });
 
@@ -27,6 +31,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: 0,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(true);
@@ -41,6 +46,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: 0,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(false);
@@ -55,6 +61,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: 0,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(false);
@@ -69,6 +76,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: 0,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(false);
@@ -83,6 +91,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: 0,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(false);
@@ -97,10 +106,42 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: -1,
       openInNewTab: false,
+      encoderPreset: 'balanced',
     });
 
     expect(result.valid).toBe(false);
     expect(result.errors).toContain('Loop count cannot be negative');
+  });
+
+  it('rejects invalid encoderPreset', () => {
+    const result = validateSettings({
+      quality: 0.8,
+      frameSkip: 1,
+      playbackSpeed: 1,
+      dithering: true,
+      loopCount: 0,
+      openInNewTab: false,
+      encoderPreset: /** @type {any} */ ('invalid'),
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Invalid encoder preset');
+  });
+
+  it('accepts all valid encoder presets', () => {
+    const presets = ['quality', 'balanced', 'fast'];
+    for (const preset of presets) {
+      const result = validateSettings({
+        quality: 0.8,
+        frameSkip: 1,
+        playbackSpeed: 1,
+        dithering: true,
+        loopCount: 0,
+        openInNewTab: false,
+        encoderPreset: /** @type {any} */ (preset),
+      });
+      expect(result.valid).toBe(true);
+    }
   });
 
   it('collects multiple errors', () => {
@@ -111,6 +152,7 @@ describe('validateSettings', () => {
       dithering: true,
       loopCount: -1,
       openInNewTab: false,
+      encoderPreset: /** @type {any} */ ('invalid'),
     });
 
     expect(result.valid).toBe(false);
@@ -200,6 +242,126 @@ describe('estimateSize', () => {
 
     // With skip of 2, should be roughly half the size
     expect(withSkip).toBeLessThan(noSkip);
+  });
+
+  it('fast preset produces smaller estimated size than quality preset', () => {
+    const baseParams = {
+      frameCount: 30,
+      width: 640,
+      height: 480,
+      quality: 0.8,
+      dithering: false,
+      frameSkip: 1,
+    };
+
+    const qualitySize = estimateSize({ ...baseParams, encoderPreset: 'quality' });
+    const fastSize = estimateSize({ ...baseParams, encoderPreset: 'fast' });
+
+    expect(fastSize).toBeLessThan(qualitySize);
+  });
+
+  it('balanced preset produces intermediate size', () => {
+    const baseParams = {
+      frameCount: 30,
+      width: 640,
+      height: 480,
+      quality: 0.8,
+      dithering: false,
+      frameSkip: 1,
+    };
+
+    const qualitySize = estimateSize({ ...baseParams, encoderPreset: 'quality' });
+    const balancedSize = estimateSize({ ...baseParams, encoderPreset: 'balanced' });
+    const fastSize = estimateSize({ ...baseParams, encoderPreset: 'fast' });
+
+    expect(balancedSize).toBeLessThan(qualitySize);
+    expect(balancedSize).toBeGreaterThan(fastSize);
+  });
+});
+
+describe('ENCODER_PRESETS', () => {
+  it('should have three presets', () => {
+    expect(ENCODER_PRESETS).toHaveLength(3);
+  });
+
+  it('should have valid preset structure', () => {
+    ENCODER_PRESETS.forEach((preset) => {
+      expect(preset).toHaveProperty('id');
+      expect(preset).toHaveProperty('name');
+      expect(preset).toHaveProperty('description');
+      expect(preset).toHaveProperty('format');
+      expect(preset).toHaveProperty('maxColorsMultiplier');
+    });
+  });
+
+  it('should include quality, balanced, and fast presets', () => {
+    const ids = ENCODER_PRESETS.map((p) => p.id);
+    expect(ids).toContain('quality');
+    expect(ids).toContain('balanced');
+    expect(ids).toContain('fast');
+  });
+
+  it('should have valid format values', () => {
+    ENCODER_PRESETS.forEach((preset) => {
+      expect(['rgb565', 'rgb444']).toContain(preset.format);
+    });
+  });
+});
+
+describe('getEncoderPreset', () => {
+  it('should return preset for quality id', () => {
+    const preset = getEncoderPreset('quality');
+    expect(preset.id).toBe('quality');
+    expect(preset.format).toBe('rgb565');
+    expect(preset.maxColorsMultiplier).toBe(1.0);
+  });
+
+  it('should return preset for balanced id', () => {
+    const preset = getEncoderPreset('balanced');
+    expect(preset.id).toBe('balanced');
+    expect(preset.format).toBe('rgb565');
+    expect(preset.maxColorsMultiplier).toBe(0.5);
+  });
+
+  it('should return preset for fast id', () => {
+    const preset = getEncoderPreset('fast');
+    expect(preset.id).toBe('fast');
+    expect(preset.format).toBe('rgb444');
+    expect(preset.maxColorsMultiplier).toBe(0.25);
+  });
+
+  it('should throw for invalid preset id', () => {
+    expect(() => getEncoderPreset(/** @type {any} */ ('invalid'))).toThrow(
+      'Unknown encoder preset: invalid'
+    );
+  });
+});
+
+describe('calculateMaxColors', () => {
+  it('should return full colors for quality preset at max quality', () => {
+    const colors = calculateMaxColors(1.0, 'quality');
+    expect(colors).toBe(256);
+  });
+
+  it('should return reduced colors for balanced preset', () => {
+    const colors = calculateMaxColors(1.0, 'balanced');
+    expect(colors).toBe(128); // 256 * 0.5
+  });
+
+  it('should return further reduced colors for fast preset', () => {
+    const colors = calculateMaxColors(1.0, 'fast');
+    expect(colors).toBe(64); // 256 * 0.25
+  });
+
+  it('should respect minimum of 16 colors', () => {
+    const colors = calculateMaxColors(0.1, 'fast');
+    expect(colors).toBeGreaterThanOrEqual(16);
+  });
+
+  it('should scale with quality setting', () => {
+    const highQuality = calculateMaxColors(1.0, 'quality');
+    const lowQuality = calculateMaxColors(0.5, 'quality');
+    expect(highQuality).toBeGreaterThan(lowQuality);
   });
 });
 

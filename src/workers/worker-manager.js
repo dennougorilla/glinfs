@@ -55,6 +55,7 @@ function createWorkerError(message, code, context) {
  * @property {number} maxColors - Maximum colors
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count
+ * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
  */
 
 /**
@@ -189,6 +190,7 @@ export class GifEncoderManager {
           maxColors: config.maxColors,
           frameDelayMs: config.frameDelayMs,
           loopCount: config.loopCount,
+          quantizeFormat: config.quantizeFormat,
         });
 
         this.worker.postMessage(initMessage);

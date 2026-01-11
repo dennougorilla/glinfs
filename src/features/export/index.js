@@ -197,6 +197,10 @@ function render(container) {
 function handleSettingsChange(settings) {
   if (!store) return;
 
+  // Check if encoder is changing (requires full re-render)
+  const encoderChanging = settings.encoderId !== undefined &&
+    settings.encoderId !== store.getState().settings.encoderId;
+
   store.setState((state) =>
     updateSettings(state, settings, {
       frameCount: clipInfo.frameCount,
@@ -210,6 +214,11 @@ function handleSettingsChange(settings) {
   // Reset frame index when settings change
   currentFrameIndex = 0;
   lastFrameTime = 0;
+
+  // Re-render UI when encoder changes (shows different settings panel)
+  if (encoderChanging) {
+    render(qsRequired('#main-content'));
+  }
 }
 
 /**

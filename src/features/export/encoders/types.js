@@ -5,6 +5,21 @@
  */
 
 /**
+ * Quantization format for color reduction
+ * @typedef {'rgb565'|'rgb444'} QuantizeFormat
+ */
+
+/**
+ * Encoder preset configuration
+ * @typedef {Object} EncoderPresetConfig
+ * @property {string} id - Preset identifier
+ * @property {string} name - Display name
+ * @property {string} description - User-facing description
+ * @property {QuantizeFormat} format - Quantization format
+ * @property {number} maxColorsMultiplier - Multiplier for quality-based maxColors
+ */
+
+/**
  * Encoder initialization config
  * @typedef {Object} EncoderConfig
  * @property {number} width - Output width
@@ -12,6 +27,7 @@
  * @property {number} maxColors - Maximum colors (16-256)
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count (0 = infinite)
+ * @property {QuantizeFormat} [quantizeFormat='rgb565'] - Quantization format
  */
 
 /**
@@ -31,12 +47,27 @@
  */
 
 /**
+ * Encoder capabilities - what features the encoder supports
+ * @typedef {Object} EncoderCapabilities
+ * @property {boolean} supportsMaxColors - Supports color count limit
+ * @property {boolean} supportsQuantizeFormat - Supports quantization format selection
+ * @property {boolean} supportsDithering - Supports dithering option
+ */
+
+/**
  * Encoder metadata
  * @typedef {Object} EncoderMetadata
- * @property {string} id - Encoder identifier
+ * @property {EncoderId} id - Encoder identifier
  * @property {string} name - Display name
+ * @property {string} description - User-facing description
  * @property {boolean} isWasm - Whether WASM encoder
  * @property {string} version - Version
+ * @property {EncoderCapabilities} capabilities - Supported features
+ */
+
+/**
+ * Encoder ID
+ * @typedef {'gifenc-js'|'gifsicle-wasm'} EncoderId
  */
 
 /**
@@ -45,7 +76,7 @@
  *
  * @typedef {Object} EncoderInterface
  * @property {EncoderMetadata} metadata - Encoder metadata
- * @property {(config: EncoderConfig) => void} init - Initialize
+ * @property {(config: EncoderConfig) => void | Promise<void>} init - Initialize (sync or async)
  * @property {(frameData: FrameData, frameIndex: number) => void} addFrame - Add frame
  * @property {() => Uint8Array} finish - Complete encoding and get byte array
  * @property {() => void} dispose - Release resources

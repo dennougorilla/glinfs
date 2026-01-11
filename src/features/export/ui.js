@@ -7,6 +7,27 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { formatBytes, formatRemaining, formatPercent, formatDuration } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { ENCODER_PRESETS } from './core.js';
+
+/**
+ * Static encoder definitions for UI display
+ * More reliable than dynamic fetching which can fail
+ * @type {ReadonlyArray<{id: import('./encoders/types.js').EncoderId, name: string, description: string, isWasm: boolean}>}
+ */
+const ENCODER_OPTIONS = [
+  {
+    id: 'gifenc-js',
+    name: 'gifenc (JavaScript)',
+    description: 'Fast encoding with quality controls',
+    isWasm: false,
+  },
+  {
+    id: 'gifsicle-wasm',
+    name: 'libimagequant (WASM)',
+    description: 'Blazing fast, best quality color quantization',
+    isWasm: true,
+  },
+];
 
 /**
  * Create SVG export icon
@@ -205,6 +226,280 @@ function renderCanvasPreview(previewState, handlers, clipInfo, cleanups) {
 }
 
 /**
+ * Render encoder selection cards
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderEncoderSelection(state, handlers, cleanups) {
+  const group = createElement('div', { className: 'settings-group encoder-selection-group' }, [
+    createElement('div', { className: 'settings-group-title' }, ['Select Encoder']),
+  ]);
+
+  const cardsContainer = createElement('div', { className: 'encoder-cards' });
+
+  for (const encoder of ENCODER_OPTIONS) {
+    const isSelected = state.settings.encoderId === encoder.id;
+    const card = createElement(
+      'div',
+      {
+        className: `encoder-card ${isSelected ? 'selected' : ''}`,
+        'data-encoder-id': encoder.id,
+      },
+      [
+        createElement('div', { className: 'encoder-card-header' }, [
+          createElement('div', { className: 'encoder-card-radio' }, [
+            isSelected ? '\u25C9' : '\u25CB',
+          ]),
+          createElement('div', { className: 'encoder-card-info' }, [
+            createElement('div', { className: 'encoder-card-name' }, [encoder.name]),
+            createElement('span', {
+              className: `encoder-card-badge ${encoder.isWasm ? 'wasm' : 'js'}`,
+            }, [encoder.isWasm ? 'WASM' : 'JS']),
+          ]),
+        ]),
+        createElement('div', { className: 'encoder-card-description' }, [
+          encoder.description,
+        ]),
+      ]
+    );
+
+    cleanups.push(
+      on(card, 'click', () => {
+        handlers.onSettingsChange({
+          encoderId: /** @type {import('./encoders/types.js').EncoderId} */ (encoder.id),
+        });
+      })
+    );
+
+    cardsContainer.appendChild(card);
+  }
+
+  group.appendChild(cardsContainer);
+  return group;
+}
+
+/**
+ * Render gifenc-specific settings (quality controls)
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderGifencSettings(state, handlers, cleanups) {
+  const group = createElement('div', { className: 'settings-group encoder-settings-section' }, [
+    createElement('div', { className: 'settings-group-title' }, ['Quality Settings']),
+  ]);
+
+  // Quality slider
+  const qualityRow = createElement('div', { className: 'setting-row' }, [
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Quality']),
+      createElement('span', { className: 'setting-value' }, [
+        `${Math.round(state.settings.quality * 100)}%`,
+      ]),
+    ]),
+  ]);
+
+  const qualityInput = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'range',
+      min: '0.1',
+      max: '1.0',
+      step: '0.1',
+    })
+  );
+  qualityInput.value = String(state.settings.quality);
+
+  cleanups.push(
+    on(qualityInput, 'input', () => {
+      const valueEl = qualityRow.querySelector('.setting-value');
+      if (valueEl) {
+        valueEl.textContent = `${Math.round(Number(qualityInput.value) * 100)}%`;
+      }
+    })
+  );
+  cleanups.push(
+    on(qualityInput, 'change', () => {
+      handlers.onSettingsChange({ quality: Number(qualityInput.value) });
+    })
+  );
+
+  qualityRow.appendChild(qualityInput);
+  group.appendChild(qualityRow);
+
+  // Preset dropdown
+  const presetRow = createElement('div', { className: 'setting-row' }, [
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Preset']),
+    ]),
+  ]);
+
+  const presetSelect = /** @type {HTMLSelectElement} */ (
+    createElement(
+      'select',
+      {},
+      ENCODER_PRESETS.map((preset) =>
+        createElement('option', { value: preset.id }, [preset.name])
+      )
+    )
+  );
+  presetSelect.value = state.settings.encoderPreset;
+
+  const currentPreset = ENCODER_PRESETS.find((p) => p.id === state.settings.encoderPreset);
+  const presetDesc = createElement('div', { className: 'setting-description' }, [
+    currentPreset?.description || '',
+  ]);
+
+  cleanups.push(
+    on(presetSelect, 'change', () => {
+      const preset = ENCODER_PRESETS.find((p) => p.id === presetSelect.value);
+      if (preset) {
+        presetDesc.textContent = preset.description;
+      }
+      handlers.onSettingsChange({
+        encoderPreset: /** @type {import('./types.js').EncoderPreset} */ (presetSelect.value),
+      });
+    })
+  );
+
+  presetRow.appendChild(presetSelect);
+  group.appendChild(presetRow);
+  group.appendChild(presetDesc);
+
+  // Dithering checkbox
+  const ditherRow = createElement('div', { className: 'checkbox-row' });
+  const ditherCheckbox = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'checkbox',
+      id: 'dither-check',
+    })
+  );
+  ditherCheckbox.checked = state.settings.dithering;
+
+  cleanups.push(
+    on(ditherCheckbox, 'change', () => {
+      handlers.onSettingsChange({ dithering: ditherCheckbox.checked });
+    })
+  );
+
+  ditherRow.appendChild(ditherCheckbox);
+  ditherRow.appendChild(
+    createElement('label', { for: 'dither-check' }, ['Enable dithering'])
+  );
+
+  const ditherHint = createElement('div', { className: 'setting-hint' }, [
+    'Smoother gradients, slightly larger files',
+  ]);
+
+  group.appendChild(ditherRow);
+  group.appendChild(ditherHint);
+
+  return group;
+}
+
+/**
+ * Render gifsicle-specific settings (info message)
+ * @returns {HTMLElement}
+ */
+function renderGifsicleSettings() {
+  const group = createElement('div', { className: 'settings-group encoder-settings-section' }, [
+    createElement('div', { className: 'settings-group-title' }, ['Quality Settings']),
+  ]);
+
+  const infoBox = createElement('div', { className: 'encoder-info-box' }, [
+    createElement('div', { className: 'encoder-info-icon' }, ['\u2139\uFE0F']),
+    createElement('div', { className: 'encoder-info-content' }, [
+      createElement('p', { className: 'encoder-info-title' }, [
+        'Automatic optimization',
+      ]),
+      createElement('p', { className: 'encoder-info-description' }, [
+        'Gifsicle uses libimagequant to automatically optimize colors for the best possible quality. No manual adjustment needed.',
+      ]),
+    ]),
+  ]);
+
+  group.appendChild(infoBox);
+  return group;
+}
+
+/**
+ * Render common playback settings
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {{ frameCount: number }} clipInfo
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
+  const group = createElement('div', { className: 'settings-group' }, [
+    createElement('div', { className: 'settings-group-title' }, ['Playback']),
+  ]);
+
+  // Frame skip
+  const skipRow = createElement('div', { className: 'setting-row' }, [
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Frame Skip']),
+    ]),
+  ]);
+
+  const skipSelect = /** @type {HTMLSelectElement} */ (
+    createElement(
+      'select',
+      {},
+      FRAME_SKIP_OPTIONS.map((skip) => {
+        const effectiveFrames = Math.ceil(clipInfo.frameCount / skip);
+        return createElement('option', { value: String(skip) }, [
+          `Every ${skip === 1 ? 'frame' : `${skip} frames`} (${effectiveFrames})`,
+        ]);
+      })
+    )
+  );
+  skipSelect.value = String(state.settings.frameSkip);
+
+  cleanups.push(
+    on(skipSelect, 'change', () => {
+      handlers.onSettingsChange({
+        frameSkip: /** @type {1|2|3|4|5} */ (Number(skipSelect.value)),
+      });
+    })
+  );
+
+  skipRow.appendChild(skipSelect);
+  group.appendChild(skipRow);
+
+  // Speed
+  const speedRow = createElement('div', { className: 'setting-row' }, [
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Speed']),
+    ]),
+  ]);
+
+  const speedSelect = /** @type {HTMLSelectElement} */ (
+    createElement(
+      'select',
+      {},
+      SPEED_OPTIONS.map((speed) =>
+        createElement('option', { value: String(speed) }, [`${speed}x`])
+      )
+    )
+  );
+  speedSelect.value = String(state.settings.playbackSpeed);
+
+  cleanups.push(
+    on(speedSelect, 'change', () => {
+      handlers.onSettingsChange({ playbackSpeed: Number(speedSelect.value) });
+    })
+  );
+
+  speedRow.appendChild(speedSelect);
+  group.appendChild(speedRow);
+
+  return group;
+}
+
+/**
  * Render settings panel
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
@@ -225,127 +520,18 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   // Settings content
   const content = createElement('div', { className: 'settings-content' });
 
-  // Quality group
-  const qualityGroup = createElement('div', { className: 'settings-group' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Quality']),
-  ]);
+  // 1. Encoder selection (always visible)
+  content.appendChild(renderEncoderSelection(state, handlers, cleanups));
 
-  const qualityRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Quality']),
-      createElement('span', { className: 'setting-value' }, [
-        `${Math.round(state.settings.quality * 100)}%`,
-      ]),
-    ]),
-  ]);
-  const qualityInput = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'range',
-      min: '0.1',
-      max: '1.0',
-      step: '0.1',
-    })
-  );
-  qualityInput.value = String(state.settings.quality);
-  cleanups.push(
-    on(qualityInput, 'input', () => {
-      const valueEl = qualityRow.querySelector('.setting-value');
-      if (valueEl) {
-        valueEl.textContent = `${Math.round(Number(qualityInput.value) * 100)}%`;
-      }
-    })
-  );
-  cleanups.push(
-    on(qualityInput, 'change', () => {
-      handlers.onSettingsChange({ quality: Number(qualityInput.value) });
-    })
-  );
-  qualityRow.appendChild(qualityInput);
-  qualityGroup.appendChild(qualityRow);
-  content.appendChild(qualityGroup);
+  // 2. Encoder-specific settings (dynamic based on selected encoder)
+  if (state.settings.encoderId === 'gifenc-js') {
+    content.appendChild(renderGifencSettings(state, handlers, cleanups));
+  } else {
+    content.appendChild(renderGifsicleSettings());
+  }
 
-  // Playback group
-  const playbackGroup = createElement('div', { className: 'settings-group' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Playback']),
-  ]);
-
-  // Frame skip
-  const skipRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Frame Skip']),
-    ]),
-  ]);
-  const skipSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      FRAME_SKIP_OPTIONS.map((skip) => {
-        const effectiveFrames = Math.ceil(clipInfo.frameCount / skip);
-        return createElement('option', { value: String(skip) }, [
-          `Every ${skip === 1 ? 'frame' : `${skip} frames`} (${effectiveFrames})`,
-        ]);
-      })
-    )
-  );
-  skipSelect.value = String(state.settings.frameSkip);
-  cleanups.push(
-    on(skipSelect, 'change', () => {
-      handlers.onSettingsChange({
-        frameSkip: /** @type {1|2|3|4|5} */ (Number(skipSelect.value)),
-      });
-    })
-  );
-  skipRow.appendChild(skipSelect);
-  playbackGroup.appendChild(skipRow);
-
-  // Speed
-  const speedRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Speed']),
-    ]),
-  ]);
-  const speedSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      SPEED_OPTIONS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`])
-      )
-    )
-  );
-  speedSelect.value = String(state.settings.playbackSpeed);
-  cleanups.push(
-    on(speedSelect, 'change', () => {
-      handlers.onSettingsChange({ playbackSpeed: Number(speedSelect.value) });
-    })
-  );
-  speedRow.appendChild(speedSelect);
-  playbackGroup.appendChild(speedRow);
-  content.appendChild(playbackGroup);
-
-  // Options group
-  const optionsGroup = createElement('div', { className: 'settings-group' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Options']),
-  ]);
-
-  // Dithering
-  const ditherRow = createElement('div', { className: 'checkbox-row' });
-  const ditherCheckbox = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'checkbox',
-      id: 'dither-check',
-    })
-  );
-  ditherCheckbox.checked = state.settings.dithering;
-  cleanups.push(
-    on(ditherCheckbox, 'change', () => {
-      handlers.onSettingsChange({ dithering: ditherCheckbox.checked });
-    })
-  );
-  ditherRow.appendChild(ditherCheckbox);
-  ditherRow.appendChild(createElement('label', { for: 'dither-check' }, ['Enable dithering']));
-  optionsGroup.appendChild(ditherRow);
-  content.appendChild(optionsGroup);
+  // 3. Common playback settings (always visible)
+  content.appendChild(renderPlaybackSettings(state, handlers, clipInfo, cleanups));
 
   panel.appendChild(content);
 
