@@ -51,7 +51,3 @@ npm run dev
 # Run tests
 npm test
 ```
-
-## License
-
-[ISC License](LICENSE)
