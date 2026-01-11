@@ -12,8 +12,24 @@ const VALID_PRESETS = /** @type {const} */ (['quality', 'balanced', 'fast']);
 /** Minimum GIF frame delay in centiseconds */
 const MIN_DELAY_CS = 2;
 
-/** Bytes per pixel estimate for GIF compression */
-const BYTES_PER_PIXEL_BASE = 0.3;
+/** GIF color palette constraints */
+const COLOR_PALETTE = { min: 16, max: 256 };
+
+/** Size estimation configuration */
+const SIZE_ESTIMATION = {
+  bytesPerPixelBase: 0.3,
+  qualityAdjustment: { base: 0.5, scale: 0.5 },
+  compression: { base: 0.4, scale: 0.3 },
+  headerOverhead: { base: 1024, perFrame: 20 },
+  ditheringMultiplier: 1.2,
+};
+
+/** Preset size factors for file size estimation */
+const PRESET_SIZE_FACTORS = {
+  fast: 0.7,
+  balanced: 0.85,
+  quality: 1.0,
+};
 
 /**
  * Encoder preset configurations
@@ -64,8 +80,8 @@ export function getEncoderPreset(presetId) {
  */
 export function calculateMaxColors(quality, presetId) {
   const preset = getEncoderPreset(presetId);
-  const baseColors = Math.max(16, Math.min(256, Math.round(quality * 256)));
-  return Math.max(16, Math.round(baseColors * preset.maxColorsMultiplier));
+  const baseColors = Math.max(COLOR_PALETTE.min, Math.min(COLOR_PALETTE.max, Math.round(quality * COLOR_PALETTE.max)));
+  return Math.max(COLOR_PALETTE.min, Math.round(baseColors * preset.maxColorsMultiplier));
 }
 
 /**
@@ -152,23 +168,24 @@ export function estimateSize(params) {
 
   // Base bytes per pixel, adjusted by quality
   // Higher quality = more color precision = larger file
-  const bytesPerPixel = BYTES_PER_PIXEL_BASE * (0.5 + quality * 0.5);
+  const { qualityAdjustment, compression, headerOverhead, ditheringMultiplier: ditherMult } = SIZE_ESTIMATION;
+  const bytesPerPixel = SIZE_ESTIMATION.bytesPerPixelBase * (qualityAdjustment.base + quality * qualityAdjustment.scale);
 
   // Dithering adds some overhead (patterns need more entropy)
-  const ditheringMultiplier = dithering ? 1.2 : 1.0;
+  const ditheringMultiplier = dithering ? ditherMult : 1;
 
   // GIF uses LZW compression, estimate compression ratio
-  const compressionRatio = 0.4 + quality * 0.3;
+  const compressionRatio = compression.base + quality * compression.scale;
 
   // Preset-based size factor (fast preset produces smaller files)
-  const presetFactor = encoderPreset === 'fast' ? 0.7 : encoderPreset === 'balanced' ? 0.85 : 1.0;
+  const presetFactor = PRESET_SIZE_FACTORS[encoderPreset] ?? PRESET_SIZE_FACTORS.quality;
 
   // Calculate estimated size
   const rawSize = effectiveFrames * pixelsPerFrame * bytesPerPixel;
   const estimatedSize = rawSize * ditheringMultiplier * compressionRatio * presetFactor;
 
   // Add header overhead (color table, metadata)
-  const overhead = 1024 + effectiveFrames * 20;
+  const overhead = headerOverhead.base + effectiveFrames * headerOverhead.perFrame;
 
   return Math.round(estimatedSize + overhead);
 }

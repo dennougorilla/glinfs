@@ -231,7 +231,7 @@ async function handleExport() {
 
   // Create encoding job
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
-  const job = createEncodingJob(effectiveFrames.length, state.encoderStatus === 'wasm' ? 'wasm' : 'js');
+  const job = createEncodingJob(effectiveFrames.length, state.encoderStatus === 'gifsicle-wasm' ? 'gifsicle-wasm' : 'gifenc-js');
 
   // Create AbortController for cancellation support
   encodingController = new AbortController();

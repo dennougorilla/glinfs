@@ -189,12 +189,12 @@ function handleCancel() {
  * Message handler
  * @param {MessageEvent<import('./worker-protocol.js').WorkerMessage>} event
  */
-self.onmessage = (event) => {
+self.onmessage = async (event) => {
   const message = event.data;
 
   switch (message.command) {
     case Commands.INIT:
-      handleInit(message);
+      await handleInit(message);
       break;
 
     case Commands.ADD_FRAME:
