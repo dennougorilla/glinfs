@@ -17,8 +17,14 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 const METADATA = {
   id: 'gifenc-js',
   name: 'gifenc (JavaScript)',
+  description: 'Fast JavaScript encoder with quality controls',
   isWasm: false,
   version: '1.0.3',
+  capabilities: {
+    supportsMaxColors: true,
+    supportsQuantizeFormat: true,
+    supportsDithering: true,
+  },
 };
 
 /**
@@ -55,12 +61,13 @@ export function createGifencEncoder() {
       }
 
       const { rgba, width, height } = frameData;
+      const format = config.quantizeFormat || 'rgb565';
 
-      // Color quantization (palette generation)
-      const palette = quantize(rgba, config.maxColors);
+      // Color quantization (palette generation) with format option
+      const palette = quantize(rgba, config.maxColors, { format });
 
-      // Map pixels to palette indices
-      const index = applyPalette(rgba, palette);
+      // Map pixels to palette indices with same format
+      const index = applyPalette(rgba, palette, format);
 
       // Write frame
       encoder.writeFrame(index, width, height, {

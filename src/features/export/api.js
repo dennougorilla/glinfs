@@ -3,7 +3,7 @@
  * @module features/export/api
  */
 
-import { applyFrameSkip, calculateFrameDelay, calculateProgress } from './core.js';
+import { applyFrameSkip, calculateFrameDelay, calculateProgress, getEncoderPreset, calculateMaxColors } from './core.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 
 /**
@@ -64,16 +64,23 @@ export async function getFrameRGBA(frame, crop) {
 }
 
 /**
- * @typedef {'wasm'|'js'|'unavailable'} EncoderStatus
- */
-
-/**
- * Check encoder availability
- * @returns {Promise<EncoderStatus>}
+ * Check encoder availability and return best available encoder ID
+ * @returns {Promise<import('./encoders/types.js').EncoderId | 'unavailable'>}
  */
 export async function checkEncoderStatus() {
-  // gifenc is a pure JS encoder
-  return 'js';
+  // Try to check if WASM encoder is available
+  try {
+    const { isGifsicleAvailable } = await import('./encoders/gifsicle-encoder.js');
+    const wasmAvailable = await isGifsicleAvailable();
+    if (wasmAvailable) {
+      return 'gifsicle-wasm';
+    }
+  } catch {
+    // WASM encoder not available
+  }
+
+  // Fallback to JS encoder (always available)
+  return 'gifenc-js';
 }
 
 /**
@@ -114,8 +121,11 @@ export async function encodeGif(params, signal) {
   const width = crop ? crop.width : firstFrame.width;
   const height = crop ? crop.height : firstFrame.height;
 
-  // Calculate max colors based on quality
-  const maxColors = Math.max(16, Math.min(256, Math.round(settings.quality * 256)));
+  // Get encoder preset configuration
+  const preset = getEncoderPreset(settings.encoderPreset);
+
+  // Calculate max colors based on quality and preset
+  const maxColors = calculateMaxColors(settings.quality, settings.encoderPreset);
 
   // Create worker manager
   const manager = createEncoderManager();
@@ -128,15 +138,16 @@ export async function encodeGif(params, signal) {
   signal?.addEventListener('abort', abortHandler);
 
   try {
-    // Initialize worker
+    // Initialize worker with selected encoder
     await manager.init({
-      encoderId: 'gifenc-js',
+      encoderId: settings.encoderId,
       width,
       height,
       totalFrames: skippedFrames.length,
       maxColors,
       frameDelayMs,
       loopCount: settings.loopCount,
+      quantizeFormat: preset.format,
     });
 
     // Setup progress callback

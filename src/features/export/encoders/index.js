@@ -20,10 +20,16 @@ export {
 
 // Encoder implementations
 export { createGifencEncoder, getGifencMetadata } from './gifenc-encoder.js';
+export {
+  createGifsicleEncoder,
+  getGifsicleMetadata,
+  isGifsicleAvailable,
+} from './gifsicle-encoder.js';
 
 // Initialize default encoder
 import { registerEncoder } from './encoder-registry.js';
 import { createGifencEncoder } from './gifenc-encoder.js';
+import { createGifsicleEncoder } from './gifsicle-encoder.js';
 
 /**
  * Register default encoders
@@ -32,6 +38,9 @@ import { createGifencEncoder } from './gifenc-encoder.js';
 function initializeDefaultEncoders() {
   // Register gifenc (JS) as default encoder
   registerEncoder('gifenc-js', createGifencEncoder, true);
+
+  // Register gifsicle (WASM) encoder
+  registerEncoder('gifsicle-wasm', createGifsicleEncoder, false);
 }
 
 // Execute initialization

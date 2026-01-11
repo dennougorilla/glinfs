@@ -4,6 +4,11 @@
  */
 
 /**
+ * Encoder preset identifier
+ * @typedef {'quality'|'balanced'|'fast'} EncoderPreset
+ */
+
+/**
  * Export settings
  * @typedef {Object} ExportSettings
  * @property {number} quality - 0.1 to 1.0 (affects color quantization)
@@ -12,6 +17,8 @@
  * @property {boolean} dithering - Enable dithering for smoother gradients
  * @property {number} loopCount - 0 for infinite, 1+ for specific count
  * @property {boolean} openInNewTab - Open result in new tab vs download
+ * @property {EncoderPreset} encoderPreset - Selected encoder preset
+ * @property {import('./encoders/types.js').EncoderId} encoderId - Selected encoder
  */
 
 /**
@@ -29,7 +36,7 @@
  * @property {number} totalFrames - Total frames to process
  * @property {number} startTime - Encoding start timestamp
  * @property {number|null} estimatedRemaining - Estimated ms remaining
- * @property {'wasm'|'js'} encoder - Active encoder type
+ * @property {import('./encoders/types.js').EncoderId} encoder - Active encoder ID
  * @property {Blob|null} result - Output GIF blob when complete
  * @property {string|null} error - Error message if failed
  */
@@ -58,7 +65,7 @@
  * @property {ExportSettings} settings - Current export settings
  * @property {EncodingJob|null} job - Active encoding job
  * @property {number} estimatedSizeMB - Estimated output size
- * @property {'wasm'|'js'|'unavailable'} encoderStatus - Encoder availability
+ * @property {import('./encoders/types.js').EncoderId|'unavailable'} encoderStatus - Active encoder ID or unavailable
  * @property {PreviewState} preview - Preview state
  */
 

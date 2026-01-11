@@ -6,11 +6,83 @@
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const VALID_FRAME_SKIPS = /** @type {const} */ ([1, 2, 3, 4, 5]);
 
+/** Valid encoder presets */
+const VALID_PRESETS = /** @type {const} */ (['quality', 'balanced', 'fast']);
+
 /** Minimum GIF frame delay in centiseconds */
 const MIN_DELAY_CS = 2;
 
-/** Bytes per pixel estimate for GIF compression */
-const BYTES_PER_PIXEL_BASE = 0.3;
+/** GIF color palette constraints */
+const COLOR_PALETTE = { min: 16, max: 256 };
+
+/** Size estimation configuration */
+const SIZE_ESTIMATION = {
+  bytesPerPixelBase: 0.3,
+  qualityAdjustment: { base: 0.5, scale: 0.5 },
+  compression: { base: 0.4, scale: 0.3 },
+  headerOverhead: { base: 1024, perFrame: 20 },
+  ditheringMultiplier: 1.2,
+};
+
+/** Preset size factors for file size estimation */
+const PRESET_SIZE_FACTORS = {
+  fast: 0.7,
+  balanced: 0.85,
+  quality: 1.0,
+};
+
+/**
+ * Encoder preset configurations
+ * @type {readonly import('./encoders/types.js').EncoderPresetConfig[]}
+ */
+export const ENCODER_PRESETS = /** @type {const} */ ([
+  {
+    id: 'quality',
+    name: 'High Quality',
+    description: 'Best visual quality, larger file size',
+    format: 'rgb565',
+    maxColorsMultiplier: 1.0,
+  },
+  {
+    id: 'balanced',
+    name: 'Balanced',
+    description: 'Good balance of quality and file size',
+    format: 'rgb565',
+    maxColorsMultiplier: 0.5,
+  },
+  {
+    id: 'fast',
+    name: 'Fast / Small',
+    description: 'Fastest encoding, smallest files',
+    format: 'rgb444',
+    maxColorsMultiplier: 0.25,
+  },
+]);
+
+/**
+ * Get encoder preset by ID
+ * @param {import('./types.js').EncoderPreset} presetId
+ * @returns {import('./encoders/types.js').EncoderPresetConfig}
+ */
+export function getEncoderPreset(presetId) {
+  const preset = ENCODER_PRESETS.find((p) => p.id === presetId);
+  if (!preset) {
+    throw new Error(`Unknown encoder preset: ${presetId}`);
+  }
+  return preset;
+}
+
+/**
+ * Calculate maxColors from quality and preset
+ * @param {number} quality - 0.1 to 1.0
+ * @param {import('./types.js').EncoderPreset} presetId
+ * @returns {number}
+ */
+export function calculateMaxColors(quality, presetId) {
+  const preset = getEncoderPreset(presetId);
+  const baseColors = Math.max(COLOR_PALETTE.min, Math.min(COLOR_PALETTE.max, Math.round(quality * COLOR_PALETTE.max)));
+  return Math.max(COLOR_PALETTE.min, Math.round(baseColors * preset.maxColorsMultiplier));
+}
 
 /**
  * Create default export settings
@@ -24,6 +96,8 @@ export function createDefaultSettings() {
     dithering: true,
     loopCount: 0,
     openInNewTab: false,
+    encoderPreset: 'balanced',
+    encoderId: 'gifenc-js',
   };
 }
 
@@ -56,6 +130,11 @@ export function validateSettings(settings) {
     errors.push('Loop count cannot be negative');
   }
 
+  // Validate encoderPreset
+  if (!VALID_PRESETS.includes(/** @type {any} */ (settings.encoderPreset))) {
+    errors.push('Invalid encoder preset');
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -70,6 +149,7 @@ export function validateSettings(settings) {
  * @property {number} quality - Quality setting
  * @property {boolean} dithering - Dithering enabled
  * @property {number} frameSkip - Frame skip factor
+ * @property {import('./types.js').EncoderPreset} [encoderPreset='balanced'] - Encoder preset
  */
 
 /**
@@ -78,7 +158,7 @@ export function validateSettings(settings) {
  * @returns {number} - Estimated bytes
  */
 export function estimateSize(params) {
-  const { frameCount, width, height, quality, dithering, frameSkip } = params;
+  const { frameCount, width, height, quality, dithering, frameSkip, encoderPreset = 'balanced' } = params;
 
   // Effective frame count after skip
   const effectiveFrames = Math.ceil(frameCount / frameSkip);
@@ -88,20 +168,24 @@ export function estimateSize(params) {
 
   // Base bytes per pixel, adjusted by quality
   // Higher quality = more color precision = larger file
-  const bytesPerPixel = BYTES_PER_PIXEL_BASE * (0.5 + quality * 0.5);
+  const { qualityAdjustment, compression, headerOverhead, ditheringMultiplier: ditherMult } = SIZE_ESTIMATION;
+  const bytesPerPixel = SIZE_ESTIMATION.bytesPerPixelBase * (qualityAdjustment.base + quality * qualityAdjustment.scale);
 
   // Dithering adds some overhead (patterns need more entropy)
-  const ditheringMultiplier = dithering ? 1.2 : 1.0;
+  const ditheringMultiplier = dithering ? ditherMult : 1;
 
   // GIF uses LZW compression, estimate compression ratio
-  const compressionRatio = 0.4 + quality * 0.3;
+  const compressionRatio = compression.base + quality * compression.scale;
+
+  // Preset-based size factor (fast preset produces smaller files)
+  const presetFactor = PRESET_SIZE_FACTORS[encoderPreset] ?? PRESET_SIZE_FACTORS.quality;
 
   // Calculate estimated size
   const rawSize = effectiveFrames * pixelsPerFrame * bytesPerPixel;
-  const estimatedSize = rawSize * ditheringMultiplier * compressionRatio;
+  const estimatedSize = rawSize * ditheringMultiplier * compressionRatio * presetFactor;
 
   // Add header overhead (color table, metadata)
-  const overhead = 1024 + effectiveFrames * 20;
+  const overhead = headerOverhead.base + effectiveFrames * headerOverhead.perFrame;
 
   return Math.round(estimatedSize + overhead);
 }

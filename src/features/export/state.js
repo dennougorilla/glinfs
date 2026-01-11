@@ -26,7 +26,7 @@ export function initExportState() {
     settings: createDefaultSettings(),
     job: null,
     estimatedSizeMB: 0,
-    encoderStatus: 'js',
+    encoderStatus: 'gifenc-js',
     preview: initPreviewState(),
   };
 }
@@ -50,6 +50,7 @@ export function openDialog(state, clip, crop) {
     quality: state.settings.quality,
     dithering: state.settings.dithering,
     frameSkip: state.settings.frameSkip,
+    encoderPreset: state.settings.encoderPreset,
   });
 
   return {
@@ -89,6 +90,7 @@ export function updateSettings(state, settings, dimensions) {
     quality: newSettings.quality,
     dithering: newSettings.dithering,
     frameSkip: newSettings.frameSkip,
+    encoderPreset: newSettings.encoderPreset,
   });
 
   return {
@@ -101,7 +103,7 @@ export function updateSettings(state, settings, dimensions) {
 /**
  * Create a new encoding job
  * @param {number} totalFrames
- * @param {'wasm'|'js'} encoder
+ * @param {import('./encoders/types.js').EncoderId} encoder
  * @returns {import('./types.js').EncodingJob}
  */
 export function createEncodingJob(totalFrames, encoder) {
@@ -227,7 +229,7 @@ export function resetExport(state) {
 /**
  * Set encoder status
  * @param {import('./types.js').ExportState} state
- * @param {'wasm'|'js'|'unavailable'} status
+ * @param {import('./encoders/types.js').EncoderId | 'unavailable'} status
  * @returns {import('./types.js').ExportState}
  */
 export function setEncoderStatus(state, status) {

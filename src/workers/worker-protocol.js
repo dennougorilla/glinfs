@@ -49,6 +49,7 @@ export const Events = {
  * @property {number} maxColors - Maximum colors
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count
+ * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
  */
 
 /**

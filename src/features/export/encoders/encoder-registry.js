@@ -82,8 +82,9 @@ export function getAvailableEncoders() {
       const encoder = factory();
       encoders.push(encoder.metadata);
       encoder.dispose();
-    } catch {
-      // Skip broken encoders
+    } catch (error) {
+      // Log error for debugging but continue
+      console.warn('Failed to get encoder metadata:', error);
     }
   }
 

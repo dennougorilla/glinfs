@@ -135,12 +135,12 @@ describe('getFrameRGBA', () => {
 });
 
 describe('checkEncoderStatus', () => {
-  it('should return js status for gifenc', async () => {
+  it('should return gifenc-js as default encoder', async () => {
     // Act
     const result = await checkEncoderStatus();
 
-    // Assert
-    expect(result).toBe('js');
+    // Assert - returns encoder ID, not generic 'js'
+    expect(result).toBe('gifenc-js');
   });
 });
 
