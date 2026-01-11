@@ -3,7 +3,7 @@
  * @module features/export/ui
  */
 
-import { createElement, on } from '../../shared/utils/dom.js';
+import { createElement, on, createErrorScreen } from '../../shared/utils/dom.js';
 import { formatBytes, formatRemaining, formatPercent, formatDuration } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
@@ -781,33 +781,22 @@ function createSettingsSVG() {
  * @returns {HTMLElement}
  */
 function renderError(job, handlers, cleanups) {
-  const error = createElement('div', { className: 'export-error' }, [
-    createElement('div', { className: 'error-icon' }, ['\u26A0\uFE0F']),
-    createElement('h2', { className: 'error-title' }, ['Export Failed']),
-    createElement('div', { className: 'error-message' }, [job.error || 'Unknown error occurred']),
-  ]);
-
-  const actions = createElement('div', { className: 'error-actions' });
-
-  const retryBtn = createElement(
-    'button',
-    { className: 'btn btn-retry', type: 'button' },
-    ['\u21BB Try Again']
-  );
-  cleanups.push(on(retryBtn, 'click', handlers.onExport));
-  actions.appendChild(retryBtn);
-
-  const backBtn = createElement(
-    'button',
-    { className: 'btn btn-secondary', type: 'button' },
-    ['\u2190 Back']
-  );
-  cleanups.push(on(backBtn, 'click', handlers.onBackToEditor));
-  actions.appendChild(backBtn);
-
-  error.appendChild(actions);
-
-  return error;
+  return createErrorScreen({
+    title: 'Export Failed',
+    message: job.error || 'Unknown error occurred',
+    actions: [
+      {
+        label: '\u21BB Try Again',
+        onClick: handlers.onExport,
+        primary: true,
+      },
+      {
+        label: '\u2190 Back',
+        onClick: handlers.onBackToEditor,
+        primary: false,
+      },
+    ],
+  }, cleanups);
 }
 
 /**

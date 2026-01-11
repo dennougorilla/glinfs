@@ -11,7 +11,7 @@ import {
   clearEditorPayload,
   validateClipPayload,
 } from '../../shared/app-store.js';
-import { qsRequired, createElement, on } from '../../shared/utils/dom.js';
+import { qsRequired, createElement, on, createErrorScreen } from '../../shared/utils/dom.js';
 import { navigate } from '../../shared/router.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -76,10 +76,20 @@ export function initEditor() {
   if (!hasValidEditorPayload) {
     const validation = validateClipPayload(clipPayload);
     if (!validation.valid) {
-      const backBtn = createElement('button', {
-        className: 'btn btn-primary',
-        type: 'button',
-      }, ['\u2190 Back to Capture']);
+      /** @type {(() => void)[]} */
+      const cleanups = [];
+
+      const errorScreen = createErrorScreen({
+        title: 'Invalid Clip Data',
+        message: validation.errors.join(', '),
+        actions: [
+          {
+            label: '\u2190 Back to Capture',
+            onClick: () => navigate('/capture'),
+            primary: true,
+          },
+        ],
+      }, cleanups);
 
       const errorState = createElement('section', {
         className: 'screen editor-screen',
@@ -88,20 +98,16 @@ export function initEditor() {
         createElement('header', { className: 'screen-header' }, [
           createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
         ]),
-        createElement('div', { className: 'editor-empty editor-error' }, [
-          createElement('p', {}, ['Invalid clip data: ' + validation.errors.join(', ')]),
-          backBtn,
-        ]),
+        errorScreen,
       ]);
 
       container.innerHTML = '';
       container.appendChild(errorState);
 
-      const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
       emit('editor:validation-error', { errors: validation.errors });
 
       return () => {
-        cleanupBackBtn();
+        cleanups.forEach(fn => fn());
         cleanup();
       };
     }
@@ -116,11 +122,20 @@ export function initEditor() {
     : (clipPayload?.fps || DEFAULT_FPS);
 
   if (frames.length === 0) {
-    // Build empty state with proper event handlers
-    const backBtn = createElement('button', {
-      className: 'btn btn-primary',
-      type: 'button',
-    }, ['\u2190 Back to Capture']);
+    /** @type {(() => void)[]} */
+    const cleanups = [];
+
+    const errorScreen = createErrorScreen({
+      title: 'No Frames Available',
+      message: 'No frames to edit. Please capture some content first.',
+      actions: [
+        {
+          label: '\u2190 Back to Capture',
+          onClick: () => navigate('/capture'),
+          primary: true,
+        },
+      ],
+    }, cleanups);
 
     const emptyState = createElement('section', {
       className: 'screen editor-screen',
@@ -129,20 +144,14 @@ export function initEditor() {
       createElement('header', { className: 'screen-header' }, [
         createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
       ]),
-      createElement('div', { className: 'editor-empty' }, [
-        createElement('p', {}, ['No frames to edit. Please capture some content first.']),
-        backBtn,
-      ]),
+      errorScreen,
     ]);
 
     container.innerHTML = '';
     container.appendChild(emptyState);
 
-    // Attach event handler with proper cleanup
-    const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
-
     return () => {
-      cleanupBackBtn();
+      cleanups.forEach(fn => fn());
       cleanup();
     };
   }

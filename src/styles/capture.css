@@ -397,3 +397,27 @@
   border-radius: var(--radius-full);
   animation: pulse-dot 1s infinite;
 }
+
+/* Capture Error (inline) */
+.capture-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-4);
+}
+
+.capture-error__icon {
+  flex-shrink: 0;
+  font-size: 20px;
+}
+
+.capture-error__text {
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
