@@ -33,6 +33,7 @@ coverage/
 
 # WASM build artifacts
 *.wasm.d.ts
+wasm-build/
 
 # Vite
 *.local
