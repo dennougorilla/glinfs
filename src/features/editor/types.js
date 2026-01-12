@@ -81,6 +81,25 @@
  */
 
 /**
+ * Scene detection status
+ * @typedef {'idle'|'detecting'|'done'|'error'} SceneDetectionStatus
+ */
+
+/**
+ * Detected scene in a clip
+ * @typedef {Object} DetectedScene
+ * @property {number} startFrame - Start frame index (inclusive)
+ * @property {number} endFrame - End frame index (inclusive)
+ * @property {number} frameCount - Number of frames in the scene
+ * @property {number} thumbnailIndex - Representative frame index for thumbnail
+ */
+
+/**
+ * Sidebar active tab
+ * @typedef {'settings'|'scenes'} SidebarTab
+ */
+
+/**
  * Editor feature state
  * @typedef {Object} EditorState
  * @property {Clip|null} clip - Active clip being edited
@@ -92,6 +111,10 @@
  * @property {number} playbackSpeed - Current playback speed
  * @property {EditorMode} mode - Current interaction mode
  * @property {boolean} showGrid - Grid overlay enabled
+ * @property {DetectedScene[]} detectedScenes - Cached scene detection results
+ * @property {SceneDetectionStatus} sceneDetectionStatus - Current scene detection status
+ * @property {number} sceneDetectionProgress - Scene detection progress (0-1)
+ * @property {SidebarTab} activeSidebarTab - Currently active sidebar tab
  */
 
 /**

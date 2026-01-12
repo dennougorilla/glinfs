@@ -23,6 +23,10 @@ export function initEditorState(clip) {
     playbackSpeed: 1,
     mode: 'select',
     showGrid: false,
+    detectedScenes: [],
+    sceneDetectionStatus: 'idle',
+    sceneDetectionProgress: 0,
+    activeSidebarTab: 'settings',
   };
 }
 
@@ -229,4 +233,77 @@ export function createEditorStore(frames, fps) {
  */
 export function createEditorStoreFromClip(clip) {
   return createStore(initEditorState(clip));
+}
+
+// ============================================================================
+// Scene Detection State Management
+// ============================================================================
+
+/**
+ * Start scene detection
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function startSceneDetection(state) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'detecting',
+    sceneDetectionProgress: 0,
+    detectedScenes: [],
+  };
+}
+
+/**
+ * Update scene detection progress
+ * @param {import('./types.js').EditorState} state
+ * @param {number} progress - Progress value (0-1)
+ * @returns {import('./types.js').EditorState}
+ */
+export function updateSceneDetectionProgress(state, progress) {
+  return {
+    ...state,
+    sceneDetectionProgress: progress,
+  };
+}
+
+/**
+ * Complete scene detection with results
+ * @param {import('./types.js').EditorState} state
+ * @param {import('./types.js').DetectedScene[]} scenes
+ * @returns {import('./types.js').EditorState}
+ */
+export function completeSceneDetection(state, scenes) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'done',
+    sceneDetectionProgress: 1,
+    detectedScenes: scenes,
+  };
+}
+
+/**
+ * Set scene detection error
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function setSceneDetectionError(state) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'error',
+    sceneDetectionProgress: 0,
+    detectedScenes: [],
+  };
+}
+
+/**
+ * Set active sidebar tab
+ * @param {import('./types.js').EditorState} state
+ * @param {import('./types.js').SidebarTab} tab
+ * @returns {import('./types.js').EditorState}
+ */
+export function setActiveSidebarTab(state, tab) {
+  return {
+    ...state,
+    activeSidebarTab: tab,
+  };
 }

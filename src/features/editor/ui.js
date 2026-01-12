@@ -4,13 +4,12 @@
  */
 
 import { createElement, on } from '../../shared/utils/dom.js';
-import { frameToTimecode, formatDurationPrecise } from '../../shared/utils/format.js';
+import { frameToTimecode, formatDurationPrecise, formatCompactDuration } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { calculateSelection, calculateSelectionInfo, getOutputDimensions, calculateCropFromDrag, clampCropArea, resizeCropByHandle, moveCrop, detectBoundaryHit } from './core.js';
-import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle } from './api.js';
+import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle, createThumbnailCanvas } from './api.js';
 import { renderFrameGridModal } from './frame-grid.js';
-import { renderSceneGridModal } from './scene-grid.js';
 
 /**
  * Create SVG scissors icon for editor empty state
@@ -44,6 +43,8 @@ function createScissorsIcon() {
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
  * @property {() => void} onExport - Export clicked
+ * @property {(tab: import('./types.js').SidebarTab) => void} [onSidebarTabChange] - Sidebar tab changed
+ * @property {(scene: import('./types.js').DetectedScene) => void} [onSceneSelect] - Scene selected
  * @property {() => import('./types.js').EditorState} [getState] - Get current state
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
  */
@@ -230,30 +231,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
     }
   });
 
-  // Scene Grid button and modal state
-  /** @type {(() => void) | null} */
-  let sceneGridCleanup = null;
-
-  /**
-   * Open scene grid modal
-   */
-  function handleOpenSceneGrid() {
-    const currentState = handlers.getState?.() ?? state;
-    if (currentState.clip && currentState.clip.frames.length > 0 && !sceneGridCleanup) {
-      sceneGridCleanup = openSceneGridModal(container, currentState, handlers, fps, () => {
-        sceneGridCleanup = null;
-      });
-    }
-  }
-
-  // Track cleanup for scene grid modal when editor closes
-  cleanups.push(() => {
-    if (sceneGridCleanup) {
-      sceneGridCleanup();
-      sceneGridCleanup = null;
-    }
-  });
-
   // Time display - show current position within selection range
   const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
   const currentInSelection = Math.max(
@@ -344,11 +321,30 @@ export function renderEditorScreen(container, state, handlers, fps) {
   previewPanel.appendChild(previewWrapper);
   content.appendChild(previewPanel);
 
-  // Sidebar
+  // Sidebar with tabs
   const sidebar = createElement('div', { className: 'editor-sidebar' });
 
-  // Panel content (tabs removed - all controls shown together for simplicity)
-  const panelContent = createElement('div', { className: 'panel-content' });
+  // Tab bar
+  const tabBar = createElement('div', { className: 'sidebar-tabs' });
+  const settingsTab = createElement('button', {
+    className: `sidebar-tab ${state.activeSidebarTab === 'settings' ? 'active' : ''}`,
+    type: 'button',
+    'data-tab': 'settings',
+  }, ['Settings']);
+  const scenesTab = createElement('button', {
+    className: `sidebar-tab ${state.activeSidebarTab === 'scenes' ? 'active' : ''}`,
+    type: 'button',
+    'data-tab': 'scenes',
+  }, ['Scenes']);
+  tabBar.appendChild(settingsTab);
+  tabBar.appendChild(scenesTab);
+  sidebar.appendChild(tabBar);
+
+  // Settings panel content
+  const settingsPanel = createElement('div', {
+    className: `panel-content sidebar-panel ${state.activeSidebarTab === 'settings' ? 'active' : ''}`,
+    'data-panel': 'settings',
+  });
 
   // Speed control
   const speedGroup = createElement('div', { className: 'property-group' }, [
@@ -371,7 +367,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
     on(speedSelect, 'change', () => handlers.onSpeedChange(Number(speedSelect.value)))
   );
   speedGroup.querySelector('.property-row').appendChild(speedSelect);
-  panelContent.appendChild(speedGroup);
+  settingsPanel.appendChild(speedGroup);
 
   // Crop/Aspect ratio controls
   const cropGroup = createElement('div', { className: 'property-group' }, [
@@ -391,7 +387,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
     ratioButtons.appendChild(btn);
   });
   cropGroup.appendChild(ratioButtons);
-  panelContent.appendChild(cropGroup);
+  settingsPanel.appendChild(cropGroup);
 
   // Grid toggle
   const gridGroup = createElement('div', { className: 'property-group' }, [
@@ -411,7 +407,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   );
   cleanups.push(on(gridBtn, 'click', () => handlers.onToggleGrid()));
   gridGroup.querySelector('.property-row').appendChild(gridBtn);
-  panelContent.appendChild(gridGroup);
+  settingsPanel.appendChild(gridGroup);
 
   // Clear crop button
   if (state.cropArea) {
@@ -425,10 +421,39 @@ export function renderEditorScreen(container, state, handlers, fps) {
       ['Clear Crop']
     );
     cleanups.push(on(clearBtn, 'click', () => handlers.onCropChange(null)));
-    panelContent.appendChild(clearBtn);
+    settingsPanel.appendChild(clearBtn);
   }
 
-  sidebar.appendChild(panelContent);
+  sidebar.appendChild(settingsPanel);
+
+  // Scenes panel content
+  const scenesPanel = createElement('div', {
+    className: `panel-content sidebar-panel ${state.activeSidebarTab === 'scenes' ? 'active' : ''}`,
+    'data-panel': 'scenes',
+  });
+
+  // Render scene list based on detection status
+  renderSceneList(scenesPanel, state, handlers, fps, cleanups);
+
+  sidebar.appendChild(scenesPanel);
+
+  // Tab switching handler
+  function handleTabClick(tab) {
+    // Update tab buttons
+    settingsTab.classList.toggle('active', tab === 'settings');
+    scenesTab.classList.toggle('active', tab === 'scenes');
+
+    // Update panels
+    settingsPanel.classList.toggle('active', tab === 'settings');
+    scenesPanel.classList.toggle('active', tab === 'scenes');
+
+    // Notify handler
+    handlers.onSidebarTabChange?.(tab);
+  }
+
+  cleanups.push(on(settingsTab, 'click', () => handleTabClick('settings')));
+  cleanups.push(on(scenesTab, 'click', () => handleTabClick('scenes')));
+
   content.appendChild(sidebar);
   screen.appendChild(content);
 
@@ -449,21 +474,11 @@ export function renderEditorScreen(container, state, handlers, fps) {
   }, ['Open Grid']);
   cleanups.push(on(frameGridBtn, 'click', handleOpenFrameGrid));
 
-  // Scene Grid button for timeline header
-  const sceneGridBtn = createElement('button', {
-    className: 'btn-scene-grid-compact',
-    type: 'button',
-    'aria-label': 'Auto-select scene',
-    title: 'Scene Selection (S)',
-  }, ['Scenes']);
-  cleanups.push(on(sceneGridBtn, 'click', handleOpenSceneGrid));
-
   timelineSection.appendChild(
     createElement('div', { className: 'timeline-header' }, [
       createElement('div', { className: 'timeline-header-left' }, [
         createElement('span', { className: 'timeline-title' }, ['Clip Range']),
         frameGridBtn,
-        sceneGridBtn,
       ]),
       createElement('div', { className: 'timeline-info' }, [
         createElement('span', { className: 'timeline-point' }, [
@@ -507,10 +522,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
             ' Frame Grid',
           ]),
           createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['S']),
-            ' Scenes',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
             createElement('span', { className: 'kbd' }, ['G']),
             ' Grid',
           ]),
@@ -533,7 +544,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Setup keyboard shortcuts
   cleanups.push(setupKeyboardShortcuts(handlers, state, {
     onOpenFrameGrid: handleOpenFrameGrid,
-    onOpenSceneGrid: handleOpenSceneGrid,
   }));
 
   return {
@@ -548,7 +558,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
  * Setup keyboard shortcuts
  * @param {EditorUIHandlers} handlers
  * @param {import('./types.js').EditorState} state
- * @param {{ onOpenFrameGrid?: () => void, onOpenSceneGrid?: () => void }} [options]
+ * @param {{ onOpenFrameGrid?: () => void }} [options]
  * @returns {() => void} Cleanup function
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
@@ -596,11 +606,6 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       case 'F':
         e.preventDefault();
         options.onOpenFrameGrid?.();
-        break;
-      case 's':
-      case 'S':
-        e.preventDefault();
-        options.onOpenSceneGrid?.();
         break;
       case 'e':
         if (e.ctrlKey || e.metaKey) {
@@ -870,6 +875,125 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
 }
 
 /**
+ * Render scene list in the scenes panel
+ * @param {HTMLElement} container - Container element
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @param {number} fps - Frames per second
+ * @param {Array<() => void>} cleanups - Cleanup functions array
+ */
+function renderSceneList(container, state, handlers, fps, cleanups) {
+  // Clear container safely
+  while (container.firstChild) {
+    container.removeChild(container.firstChild);
+  }
+
+  // Show loading state
+  if (state.sceneDetectionStatus === 'idle' || state.sceneDetectionStatus === 'detecting') {
+    const loadingEl = createElement('div', { className: 'scene-list-loading' }, [
+      createElement('div', { className: 'scene-list-spinner' }),
+      createElement('div', { className: 'scene-list-loading-text' }, [
+        state.sceneDetectionStatus === 'idle' ? 'Preparing...' : 'Detecting scenes...',
+      ]),
+    ]);
+
+    // Progress bar
+    if (state.sceneDetectionStatus === 'detecting') {
+      const progressBar = createElement('div', { className: 'scene-list-progress' }, [
+        createElement('div', {
+          className: 'scene-list-progress-bar',
+          style: `width: ${Math.round(state.sceneDetectionProgress * 100)}%`,
+        }),
+      ]);
+      loadingEl.appendChild(progressBar);
+    }
+
+    container.appendChild(loadingEl);
+    return;
+  }
+
+  // Show error state
+  if (state.sceneDetectionStatus === 'error') {
+    const errorEl = createElement('div', { className: 'scene-list-empty' }, [
+      createElement('div', { className: 'scene-list-empty-icon' }, ['\u26A0']),
+      createElement('div', {}, ['Scene detection failed']),
+    ]);
+    container.appendChild(errorEl);
+    return;
+  }
+
+  // Show empty state
+  if (state.detectedScenes.length === 0) {
+    const emptyEl = createElement('div', { className: 'scene-list-empty' }, [
+      createElement('div', { className: 'scene-list-empty-icon' }, ['\uD83C\uDFAC']),
+      createElement('div', {}, ['Single continuous scene']),
+      createElement('div', { style: 'font-size: 11px; opacity: 0.6;' }, [
+        'No distinct scene changes detected',
+      ]),
+    ]);
+    container.appendChild(emptyEl);
+    return;
+  }
+
+  // Render scene list
+  const sceneList = createElement('div', { className: 'scene-list' });
+
+  state.detectedScenes.forEach((scene, index) => {
+    const isSelected =
+      state.selectedRange.start === scene.startFrame &&
+      state.selectedRange.end === scene.endFrame;
+
+    const sceneItem = createElement('div', {
+      className: `scene-list-item ${isSelected ? 'selected' : ''}`,
+      tabIndex: '0',
+    });
+
+    // Thumbnail
+    const thumbnailFrame = state.clip?.frames[scene.thumbnailIndex];
+    if (thumbnailFrame) {
+      try {
+        const canvas = createThumbnailCanvas(thumbnailFrame, 100);
+        canvas.className = 'scene-list-thumb';
+        sceneItem.appendChild(canvas);
+      } catch {
+        const placeholder = createElement('div', { className: 'scene-list-thumb-placeholder' }, ['\u26A0']);
+        sceneItem.appendChild(placeholder);
+      }
+    }
+
+    // Info
+    const duration = scene.frameCount / fps;
+    const info = createElement('div', { className: 'scene-list-info' }, [
+      createElement('div', { className: 'scene-list-title' }, [`Scene ${index + 1}`]),
+      createElement('div', { className: 'scene-list-meta' }, [
+        `${formatCompactDuration(duration)} \u2022 ${scene.frameCount}f`,
+      ]),
+      createElement('div', { className: 'scene-list-range' }, [
+        `#${scene.startFrame + 1}-${scene.endFrame + 1}`,
+      ]),
+    ]);
+    sceneItem.appendChild(info);
+
+    // Click handler
+    cleanups.push(on(sceneItem, 'click', () => {
+      handlers.onSceneSelect?.(scene);
+    }));
+
+    // Keyboard handler
+    cleanups.push(on(sceneItem, 'keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handlers.onSceneSelect?.(scene);
+      }
+    }));
+
+    sceneList.appendChild(sceneItem);
+  });
+
+  container.appendChild(sceneList);
+}
+
+/**
  * Open Frame Grid Modal
  * @param {HTMLElement} container - Container to render modal into
  * @param {import('./types.js').EditorState} state - Current editor state
@@ -887,40 +1011,6 @@ function openFrameGridModal(container, state, handlers, onClose) {
     callbacks: {
       onApply: (range) => {
         handlers.onRangeChange(range);
-        cleanup();
-        onClose?.();
-      },
-      onCancel: () => {
-        cleanup();
-        onClose?.();
-      },
-    },
-  });
-
-  return cleanup;
-}
-
-/**
- * Open Scene Grid Modal
- * @param {HTMLElement} container - Container to render modal into
- * @param {import('./types.js').EditorState} state - Current editor state
- * @param {EditorUIHandlers} handlers - UI handlers
- * @param {number} fps - Frames per second
- * @param {() => void} [onClose] - Callback when modal closes
- * @returns {() => void} Cleanup function
- */
-function openSceneGridModal(container, state, handlers, fps, onClose) {
-  if (!state.clip) return () => {};
-
-  const { cleanup } = renderSceneGridModal({
-    container: document.body,
-    frames: state.clip.frames,
-    fps,
-    callbacks: {
-      onApply: (range) => {
-        handlers.onRangeChange(range);
-        // Also jump playhead to start of selected scene
-        handlers.onFrameChange(range.start);
         cleanup();
         onClose?.();
       },

@@ -28,7 +28,13 @@ import {
   clearCrop,
   toggleGrid,
   setSelectedAspectRatio,
+  startSceneDetection,
+  updateSceneDetectionProgress,
+  completeSceneDetection,
+  setSceneDetectionError,
+  setActiveSidebarTab,
 } from './state.js';
+import { detectScenesAsync } from './scene-detection.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
 import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
@@ -161,6 +167,12 @@ export function initEditor() {
 
   // Initial render
   render(container);
+
+  // Start scene detection in background (only if not already done)
+  const initialState = store.getState();
+  if (initialState.sceneDetectionStatus === 'idle' && initialState.clip?.frames.length > 0) {
+    runSceneDetection(fps);
+  }
 
   // Start auto-playback if initial state is playing
   if (store.getState().isPlaying) {
@@ -297,6 +309,8 @@ function render(container) {
     onAspectRatioChange: handleAspectRatioChange,
     onSpeedChange: handleSpeedChange,
     onExport: handleExport,
+    onSidebarTabChange: handleSidebarTabChange,
+    onSceneSelect: handleSceneSelect,
     getState: () => store?.getState() ?? null,
     getFrame: () => {
       const s = store?.getState();
@@ -472,6 +486,70 @@ function handleSpeedChange(speed) {
   if (wasPlaying) {
     stopPlayback();
     startPlayback();
+  }
+}
+
+/**
+ * Handle sidebar tab change
+ * @param {import('./types.js').SidebarTab} tab
+ */
+function handleSidebarTabChange(tab) {
+  if (!store) return;
+  store.setState((state) => setActiveSidebarTab(state, tab));
+}
+
+/**
+ * Handle scene selection (from sidebar scene list)
+ * @param {import('./types.js').DetectedScene} scene
+ */
+function handleSceneSelect(scene) {
+  if (!store) return;
+
+  // Set range to scene boundaries
+  handleRangeChange({
+    start: scene.startFrame,
+    end: scene.endFrame,
+  });
+
+  // Jump playhead to start of scene
+  handleFrameChange(scene.startFrame);
+
+  emit('editor:scene-selected', { scene });
+}
+
+/**
+ * Run scene detection in background
+ * @param {number} fps
+ */
+async function runSceneDetection(fps) {
+  if (!store) return;
+
+  const state = store.getState();
+  if (!state.clip?.frames.length) return;
+
+  // Mark as detecting
+  store.setState(startSceneDetection);
+
+  try {
+    const result = await detectScenesAsync(state.clip.frames, {
+      threshold: 0.12,
+      minSceneFrames: Math.max(3, Math.floor(fps / 5)), // At least 0.2s per scene
+      onProgress: (progress) => {
+        if (store) {
+          store.setState((s) => updateSceneDetectionProgress(s, progress));
+        }
+      },
+    });
+
+    if (store) {
+      store.setState((s) => completeSceneDetection(s, result.scenes));
+      emit('editor:scenes-detected', { scenes: result.scenes });
+    }
+  } catch (error) {
+    if (store) {
+      store.setState(setSceneDetectionError);
+    }
+    emit('editor:scene-detection-error', { error });
   }
 }
 
