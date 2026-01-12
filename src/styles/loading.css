@@ -1,0 +1,90 @@
+/**
+ * Loading Screen Styles
+ */
+
+/* Layout */
+.loading-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: var(--color-bg);
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 400px;
+  padding: var(--space-8);
+}
+
+/* Spinner */
+.loading-spinner {
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--space-6);
+  color: var(--color-primary);
+}
+
+.loading-spinner svg {
+  width: 100%;
+  height: 100%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Title */
+.loading-title {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Subtitle */
+.loading-subtitle {
+  margin: 0 0 var(--space-8) 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+}
+
+/* Progress Container */
+.loading-progress-container {
+  width: 100%;
+  max-width: 300px;
+}
+
+/* Progress Bar */
+.loading-progress-bar {
+  height: 8px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+}
+
+.loading-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--gradient-glinfs);
+  border-radius: var(--radius-full);
+  transition: width 0.2s ease-out;
+}
+
+/* Progress Text */
+.loading-progress-text {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}

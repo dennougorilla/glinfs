@@ -28,9 +28,14 @@ import {
   clearCrop,
   toggleGrid,
   setSelectedAspectRatio,
+  startSceneDetection,
+  updateSceneDetectionProgress,
+  completeSceneDetection,
+  setSceneDetectionError,
 } from './state.js';
+import { createSceneDetectionManager } from '../scene-detection/index.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
-import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
+import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
@@ -50,6 +55,12 @@ let baseCanvas = null;
 
 /** @type {HTMLCanvasElement | null} */
 let overlayCanvas = null;
+
+/** @type {import('../scene-detection/manager.js').SceneDetectionManager | null} */
+let sceneDetectionManager = null;
+
+/** @type {(() => void)[]} */
+let scenePanelCleanups = [];
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -179,7 +190,7 @@ export function initEditor() {
   // Emit loaded event (thumbnails are now rendered directly from frames)
   emit('editor:loaded', { clip: store?.getState().clip });
 
-  // Subscribe to state changes
+  // Subscribe to state changes (must be set up before setting pre-computed scenes)
   store.subscribe(
     throttle((state, prevState) => {
       if (!store || !baseCanvas || !overlayCanvas) return;
@@ -276,8 +287,41 @@ export function initEditor() {
           gridBtn.setAttribute('aria-pressed', String(state.showGrid));
         }
       }
+
+      // Update scenes panel when scene detection state changes
+      if (state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
+          state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
+          state.scenes !== prevState.scenes) {
+        // Clean up previous scene panel event listeners
+        scenePanelCleanups.forEach((fn) => fn());
+        // Update panel and collect new cleanups
+        scenePanelCleanups = updateScenesPanel(container, state, {
+          onTogglePlay: handleTogglePlay,
+          onFrameChange: handleFrameChange,
+          onRangeChange: handleRangeChange,
+          onCropChange: handleCropChange,
+          onToggleGrid: handleToggleGrid,
+          onAspectRatioChange: handleAspectRatioChange,
+          onSpeedChange: handleSpeedChange,
+          onExport: handleExport,
+        });
+      }
     }, 16) // ~60fps updates
   );
+
+  // Use pre-computed scenes from Capture or fallback to async detection
+  // (must be after subscription is set up so scenes panel gets updated)
+  if (!hasValidEditorPayload && clipPayload?.sceneDetectionEnabled) {
+    if (clipPayload.scenes && clipPayload.scenes.length > 0) {
+      // Use pre-computed scenes from Capture (no need to run detection again)
+      store.setState((state) => completeSceneDetection(state, clipPayload.scenes));
+      emit('editor:scenes-detected', { sceneCount: clipPayload.scenes.length });
+      console.log('[Editor] Using pre-computed scenes:', clipPayload.scenes.length, 'scenes');
+    } else if (frames.length > 0) {
+      // Fallback: run detection if scenes not provided (backward compatibility)
+      startSceneDetectionAsync(frames);
+    }
+  }
 
   return cleanup;
 }
@@ -515,6 +559,68 @@ function handleExport() {
   });
 }
 
+// ============================================================
+// Scene Detection
+// ============================================================
+
+/**
+ * Start scene detection asynchronously
+ * Does not block the main UI - runs in background
+ * @param {import('../capture/types.js').Frame[]} frames
+ */
+async function startSceneDetectionAsync(frames) {
+  if (!store) return;
+
+  // Update state to show detection in progress
+  store.setState(startSceneDetection);
+
+  try {
+    // Create and initialize manager
+    sceneDetectionManager = createSceneDetectionManager();
+    await sceneDetectionManager.init();
+
+    // Run detection with progress updates
+    const result = await sceneDetectionManager.detect(frames, {
+      threshold: 0.3,
+      minSceneDuration: 5,
+      sampleInterval: 1,
+      onProgress: (progress) => {
+        if (store) {
+          store.setState((state) => updateSceneDetectionProgress(state, progress.percent));
+        }
+      },
+    });
+
+    // Update state with results
+    if (store) {
+      store.setState((state) => completeSceneDetection(state, result.scenes));
+      emit('editor:scenes-detected', {
+        sceneCount: result.scenes.length,
+        processingTimeMs: result.processingTimeMs,
+      });
+    }
+
+    console.log('[Editor] Scene detection completed:', result.scenes.length, 'scenes found in', result.processingTimeMs, 'ms');
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      // Detection was cancelled, not an error
+      console.log('[Editor] Scene detection cancelled');
+    } else {
+      const message = error instanceof Error ? error.message : 'Scene detection failed';
+      console.error('[Editor] Scene detection error:', message);
+      if (store) {
+        store.setState((state) => setSceneDetectionError(state, message));
+      }
+    }
+  } finally {
+    // Clean up manager after detection
+    if (sceneDetectionManager) {
+      sceneDetectionManager.dispose();
+      sceneDetectionManager = null;
+    }
+  }
+}
+
 /**
  * Cleanup editor feature
  *
@@ -525,6 +631,12 @@ function handleExport() {
 function cleanup() {
   stopPlayback();
 
+  // Cancel and dispose scene detection
+  if (sceneDetectionManager) {
+    sceneDetectionManager.dispose();
+    sceneDetectionManager = null;
+  }
+
   if (uiCleanup) {
     uiCleanup();
     uiCleanup = null;
@@ -534,6 +646,10 @@ function cleanup() {
     timelineCleanup();
     timelineCleanup = null;
   }
+
+  // Clean up scene panel event listeners
+  scenePanelCleanups.forEach((fn) => fn());
+  scenePanelCleanups = [];
 
   baseCanvas = null;
   overlayCanvas = null;

@@ -167,6 +167,7 @@ export function createDefaultSettings() {
     fps: 30,
     bufferDuration: 10,
     thumbnailQuality: 0.5,
+    sceneDetection: false,
   };
 }
 

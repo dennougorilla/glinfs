@@ -4,7 +4,7 @@
  */
 
 /**
- * @typedef {'/capture' | '/editor' | '/export'} Route
+ * @typedef {'/capture' | '/editor' | '/export' | '/loading'} Route
  */
 
 /** @type {Map<string, () => (() => void) | void>} */

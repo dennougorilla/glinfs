@@ -20,7 +20,7 @@ import {
   stopScreenCapture,
   createVideoElement,
 } from './api.js';
-import { renderCaptureScreen, updateBufferStatus } from './ui.js';
+import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } from './ui.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
@@ -96,6 +96,7 @@ function render(container) {
     onStop: handleStop,
     onCreateClip: handleCreateClip,
     onSettingsChange: handleSettingsChange,
+    getSettings: () => store?.getState()?.settings ?? null,
   });
 }
 
@@ -268,6 +269,7 @@ export function clearCaptureBuffer() {
  * - Stores frames in clipPayload (single source of truth)
  * - Old frames are closed automatically by setClipPayload
  * - No ownership tracking needed
+ * - Scene detection runs in Loading screen (if enabled)
  *
  * @returns {Promise<void>}
  */
@@ -323,18 +325,21 @@ async function handleCreateClip() {
     return;
   }
 
-  const fps = store.getState().settings.fps;
+  const settings = store.getState().settings;
 
   // Store clip payload (old frames closed automatically by setClipPayload)
+  // Scene detection will run in Loading screen if sceneDetectionEnabled is true
   setClipPayload({
     frames: videoFrames,
-    fps,
+    fps: settings.fps,
     capturedAt: Date.now(),
+    sceneDetectionEnabled: settings.sceneDetection,
+    // scenes not set here - Loading screen will compute them
   });
 
   emit('capture:clip-created', {
     frameCount: videoFrames.length,
-    fps,
+    fps: settings.fps,
   });
 }
 
@@ -347,6 +352,17 @@ function handleSettingsChange(newSettings) {
 
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
+
+  const container = qsRequired('#main-content');
+
+  // Only sceneDetection changed - do targeted update without re-render
+  if (newSettings.sceneDetection !== undefined && Object.keys(newSettings).length === 1) {
+    updateSceneDetectionToggle(container, store.getState().settings.sceneDetection);
+    return;
+  }
+
+  // For other settings (fps, bufferDuration), full re-render is required
+  render(container);
 }
 
 /**

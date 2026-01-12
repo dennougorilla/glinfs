@@ -388,6 +388,76 @@ export function renderEditorScreen(container, state, handlers, fps) {
   gridGroup.querySelector('.property-row').appendChild(gridBtn);
   panelContent.appendChild(gridGroup);
 
+  // Scenes section (shown when scene detection is active or completed)
+  if (state.sceneDetectionStatus !== 'idle') {
+    const scenesGroup = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
+      createElement('div', { className: 'property-group-title' }, ['Scenes']),
+    ]);
+
+    if (state.sceneDetectionStatus === 'detecting') {
+      // Progress indicator
+      const progressContainer = createElement('div', { className: 'scene-detection-progress' });
+      const progressBar = createElement('div', { className: 'progress-bar' });
+      const progressFill = createElement('div', {
+        className: 'progress-fill',
+        style: `width: ${state.sceneDetectionProgress}%`,
+      });
+      progressBar.appendChild(progressFill);
+      progressContainer.appendChild(
+        createElement('div', { className: 'progress-label' }, [
+          `Detecting scenes... ${state.sceneDetectionProgress}%`,
+        ])
+      );
+      progressContainer.appendChild(progressBar);
+      scenesGroup.appendChild(progressContainer);
+    } else if (state.sceneDetectionStatus === 'error') {
+      // Error state
+      scenesGroup.appendChild(
+        createElement('div', { className: 'scene-detection-error' }, [
+          createElement('span', { className: 'error-icon' }, ['\u26A0']),
+          state.sceneDetectionError || 'Detection failed',
+        ])
+      );
+    } else if (state.sceneDetectionStatus === 'completed') {
+      if (state.scenes.length === 0) {
+        scenesGroup.appendChild(
+          createElement('div', { className: 'scenes-empty' }, ['No scene changes detected'])
+        );
+      } else {
+        // Scene list
+        const sceneList = createElement('div', { className: 'scene-list' });
+        state.scenes.forEach((scene, index) => {
+          const sceneItem = createElement('button', {
+            className: 'scene-item',
+            type: 'button',
+            'data-scene-id': scene.id,
+            title: `Go to scene ${index + 1} (Frame ${scene.startFrame})`,
+          }, [
+            createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
+            createElement('span', { className: 'scene-frames' }, [
+              `${scene.startFrame} - ${scene.endFrame}`,
+            ]),
+          ]);
+          cleanups.push(
+            on(sceneItem, 'click', () => {
+              handlers.onFrameChange(scene.startFrame);
+              handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
+            })
+          );
+          sceneList.appendChild(sceneItem);
+        });
+        scenesGroup.appendChild(sceneList);
+        scenesGroup.appendChild(
+          createElement('div', { className: 'scenes-count' }, [
+            `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
+          ])
+        );
+      }
+    }
+
+    panelContent.appendChild(scenesGroup);
+  }
+
   // Clear crop button
   if (state.cropArea) {
     const clearBtn = createElement(
@@ -820,6 +890,111 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
   // Update SEL frames count
   const selFramesEl = container.querySelector('.timeline-sel-frames');
   if (selFramesEl) selFramesEl.textContent = `(${selectionInfo.formattedFrameCount})`;
+}
+
+/**
+ * Update scenes panel in sidebar without full re-render
+ * @param {HTMLElement} container - The editor screen container
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @returns {(() => void)[]} Cleanup functions for event listeners
+ */
+export function updateScenesPanel(container, state, handlers) {
+  /** @type {(() => void)[]} */
+  const cleanups = [];
+
+  const panelContent = container.querySelector('.panel-content');
+  if (!panelContent) return cleanups;
+
+  let scenesPanel = container.querySelector('[data-panel="scenes"]');
+
+  // If idle, remove panel if it exists
+  if (state.sceneDetectionStatus === 'idle') {
+    if (scenesPanel) {
+      scenesPanel.remove();
+    }
+    return cleanups;
+  }
+
+  // Create panel if it doesn't exist
+  if (!scenesPanel) {
+    scenesPanel = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
+      createElement('div', { className: 'property-group-title' }, ['Scenes']),
+    ]);
+    // Insert before clear crop button if exists (direct child only), otherwise append
+    const clearBtn = panelContent.querySelector(':scope > .btn-secondary');
+    if (clearBtn) {
+      panelContent.insertBefore(scenesPanel, clearBtn);
+    } else {
+      panelContent.appendChild(scenesPanel);
+    }
+  }
+
+  // Clear existing content except title - use replaceChildren for safety
+  const title = scenesPanel.querySelector('.property-group-title');
+  const titleClone = title ? title.cloneNode(true) : createElement('div', { className: 'property-group-title' }, ['Scenes']);
+  scenesPanel.replaceChildren(titleClone);
+
+  // Render content based on status
+  if (state.sceneDetectionStatus === 'detecting') {
+    const progressContainer = createElement('div', { className: 'scene-detection-progress' });
+    const progressBar = createElement('div', { className: 'progress-bar' });
+    const progressFill = createElement('div', {
+      className: 'progress-fill',
+      style: `width: ${state.sceneDetectionProgress}%`,
+    });
+    progressBar.appendChild(progressFill);
+    progressContainer.appendChild(
+      createElement('div', { className: 'progress-label' }, [
+        `Detecting scenes... ${state.sceneDetectionProgress}%`,
+      ])
+    );
+    progressContainer.appendChild(progressBar);
+    scenesPanel.appendChild(progressContainer);
+  } else if (state.sceneDetectionStatus === 'error') {
+    scenesPanel.appendChild(
+      createElement('div', { className: 'scene-detection-error' }, [
+        createElement('span', { className: 'error-icon' }, ['\u26A0']),
+        state.sceneDetectionError || 'Detection failed',
+      ])
+    );
+  } else if (state.sceneDetectionStatus === 'completed') {
+    if (state.scenes.length === 0) {
+      scenesPanel.appendChild(
+        createElement('div', { className: 'scenes-empty' }, ['No scene changes detected'])
+      );
+    } else {
+      const sceneList = createElement('div', { className: 'scene-list' });
+      state.scenes.forEach((scene, index) => {
+        const sceneItem = createElement('button', {
+          className: 'scene-item',
+          type: 'button',
+          'data-scene-id': scene.id,
+          title: `Select scene ${index + 1} (Frames ${scene.startFrame}-${scene.endFrame})`,
+        }, [
+          createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
+          createElement('span', { className: 'scene-frames' }, [
+            `${scene.startFrame} - ${scene.endFrame}`,
+          ]),
+        ]);
+        cleanups.push(
+          on(sceneItem, 'click', () => {
+            handlers.onFrameChange(scene.startFrame);
+            handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
+          })
+        );
+        sceneList.appendChild(sceneItem);
+      });
+      scenesPanel.appendChild(sceneList);
+      scenesPanel.appendChild(
+        createElement('div', { className: 'scenes-count' }, [
+          `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
+        ])
+      );
+    }
+  }
+
+  return cleanups;
 }
 
 /**

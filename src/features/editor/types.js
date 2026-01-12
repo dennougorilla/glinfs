@@ -81,6 +81,11 @@
  */
 
 /**
+ * Scene detection status
+ * @typedef {'idle' | 'detecting' | 'completed' | 'error'} SceneDetectionStatus
+ */
+
+/**
  * Editor feature state
  * @typedef {Object} EditorState
  * @property {Clip|null} clip - Active clip being edited
@@ -92,6 +97,10 @@
  * @property {number} playbackSpeed - Current playback speed
  * @property {EditorMode} mode - Current interaction mode
  * @property {boolean} showGrid - Grid overlay enabled
+ * @property {import('../scene-detection/types.js').Scene[]} scenes - Detected scenes
+ * @property {SceneDetectionStatus} sceneDetectionStatus - Scene detection progress status
+ * @property {number} sceneDetectionProgress - Detection progress percentage (0-100)
+ * @property {string|null} sceneDetectionError - Error message if detection failed
  */
 
 /**

@@ -89,6 +89,7 @@ function createHeartIcon() {
  * @property {() => void} onStop - Stop capture handler
  * @property {() => Promise<void>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
+ * @property {() => import('./types.js').CaptureSettings | null} getSettings - Get current settings
  */
 
 /**
@@ -253,7 +254,10 @@ function renderCaptureActions(state, handlers, cleanups) {
         clipBtn.textContent = 'Creating...';
         try {
           await handlers.onCreateClip();
-          navigate('/editor');
+          // Navigate to loading screen if scene detection is enabled, otherwise to editor
+          const settings = handlers.getSettings();
+          const targetRoute = settings?.sceneDetection ? '/loading' : '/editor';
+          navigate(targetRoute);
         } catch (err) {
           console.error('[Capture UI] Failed to create clip:', err);
           clipBtn.removeAttribute('disabled');
@@ -370,6 +374,31 @@ function renderSettings(settings, handlers, cleanups) {
   durationRow.appendChild(durationInput);
   settingsEl.appendChild(durationRow);
 
+  // Scene Detection toggle
+  const sceneDetectionRow = createElement('div', { className: 'setting-row' });
+  sceneDetectionRow.appendChild(
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Scene Detection']),
+    ])
+  );
+  const sceneDetectionToggle = /** @type {HTMLButtonElement} */ (
+    createElement('button', {
+      className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''}`,
+      type: 'button',
+      'data-setting': 'sceneDetection',
+      'aria-pressed': String(settings.sceneDetection),
+      title: 'Automatically detect scene changes when creating a clip',
+    }, [settings.sceneDetection ? 'On' : 'Off'])
+  );
+  cleanups.push(
+    on(sceneDetectionToggle, 'click', () => {
+      const newValue = !settings.sceneDetection;
+      handlers.onSettingsChange({ sceneDetection: newValue });
+    })
+  );
+  sceneDetectionRow.appendChild(sceneDetectionToggle);
+  settingsEl.appendChild(sceneDetectionRow);
+
   return settingsEl;
 }
 
@@ -427,5 +456,19 @@ export function updateBufferStatus(container, stats) {
     statValues[1].textContent = formatDuration(stats.duration);
     statValues[2].textContent = formatBytes(stats.memoryMB * 1024 * 1024);
     statValues[3].textContent = String(stats.fps);
+  }
+}
+
+/**
+ * Update scene detection toggle button without full re-render
+ * @param {HTMLElement} container
+ * @param {boolean} enabled
+ */
+export function updateSceneDetectionToggle(container, enabled) {
+  const toggle = container.querySelector('[data-setting="sceneDetection"]');
+  if (toggle) {
+    toggle.textContent = enabled ? 'On' : 'Off';
+    toggle.classList.toggle('btn-toggle--active', enabled);
+    toggle.setAttribute('aria-pressed', String(enabled));
   }
 }
