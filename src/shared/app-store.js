@@ -17,9 +17,9 @@
 
 /**
  * @typedef {Object} EditorPayload
- * @property {import('../features/capture/types.js').Frame[]} frames - Selected frames for export
+ * @property {import('../features/editor/types.js').FrameRange} selectedRange - Selected frame range for export
  * @property {import('../features/editor/types.js').CropArea|null} cropArea - Crop region
- * @property {import('../features/editor/types.js').Clip} clip - Full clip data
+ * @property {import('../features/editor/types.js').Clip} clip - Full clip data (for state restoration)
  * @property {number} fps - FPS for export timing
  */
 
@@ -83,9 +83,13 @@ export function setClipPayload(payload) {
 }
 
 /**
- * Clear clip payload (called when editor is done with it)
+ * Clear clip payload
+ * @param {boolean} [closeFrames=false] - If true, close all VideoFrames before clearing
  */
-export function clearClipPayload() {
+export function clearClipPayload(closeFrames = false) {
+  if (closeFrames && state.clipPayload) {
+    closePayloadFrames(state.clipPayload);
+  }
   state.clipPayload = null;
 }
 
@@ -114,6 +118,17 @@ export function setEditorPayload(payload) {
  */
 export function clearEditorPayload() {
   state.editorPayload = null;
+}
+
+/**
+ * Release all VideoFrame resources and clear all payloads
+ * Called when starting a fresh capture session
+ */
+export function releaseAllFramesAndReset() {
+  closePayloadFrames(state.clipPayload);
+  state.clipPayload = null;
+  state.editorPayload = null;
+  exportResult = null;
 }
 
 // ============================================================
@@ -167,10 +182,21 @@ export function validateEditorPayload(payload) {
 
   const p = /** @type {Record<string, unknown>} */ (payload);
 
-  if (!Array.isArray(p.frames)) {
-    errors.push('EditorPayload.frames must be an array');
-  } else if (p.frames.length === 0) {
-    errors.push('EditorPayload.frames cannot be empty');
+  // Validate selectedRange
+  if (!p.selectedRange || typeof p.selectedRange !== 'object') {
+    errors.push('EditorPayload.selectedRange must be an object');
+  } else {
+    const range = /** @type {{ start: unknown, end: unknown }} */ (p.selectedRange);
+    if (typeof range.start !== 'number' || typeof range.end !== 'number') {
+      errors.push('EditorPayload.selectedRange must have start and end numbers');
+    } else if (range.start > range.end) {
+      errors.push('EditorPayload.selectedRange.start must not exceed end');
+    }
+  }
+
+  // Validate clip (required for state restoration)
+  if (!p.clip || typeof p.clip !== 'object') {
+    errors.push('EditorPayload.clip must be an object');
   }
 
   if (typeof p.fps !== 'number' || p.fps <= 0) {

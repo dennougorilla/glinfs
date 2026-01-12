@@ -46,8 +46,8 @@ function handleHashChange() {
     if (currentCleanup) {
       try {
         currentCleanup(route);
-      } catch (err) {
-        console.error('[Router] Cleanup error:', err);
+      } catch {
+        // Cleanup errors are silently ignored
       }
       currentCleanup = null;
     }

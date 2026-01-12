@@ -99,24 +99,21 @@ describe('Router', () => {
       const captureHandler = vi.fn(() => errorCleanup);
       const editorHandler = vi.fn();
 
-      // Mock console.error to verify error is logged
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
       initRouter({
         '/capture': captureHandler,
         '/editor': editorHandler,
         '/export': vi.fn(),
       });
 
-      // Navigate - should not throw
+      // Navigate - should not throw even if cleanup throws
       navigate('/editor');
 
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // Error should be logged but not thrown
-      expect(consoleError).toHaveBeenCalled();
-
-      consoleError.mockRestore();
+      // Cleanup was called (even though it threw)
+      expect(errorCleanup).toHaveBeenCalled();
+      // Next handler should still be called
+      expect(editorHandler).toHaveBeenCalled();
     });
 
     it('handles handlers that return undefined', async () => {

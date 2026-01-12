@@ -107,13 +107,16 @@ describe('Editor → Export Integration', () => {
     it('should validate EditorPayload structure', () => {
       // Arrange
       const validPayload = {
-        frames: [createMockFrame('1')],
+        selectedRange: { start: 0, end: 5 },
         cropArea: null,
+        clip: createMockClip(5),
         fps: 30,
       };
 
       const invalidPayload = {
-        frames: [], // Empty
+        // Missing selectedRange
+        cropArea: null,
+        clip: createMockClip(5),
         fps: 30,
       };
 
@@ -125,7 +128,8 @@ describe('Editor → Export Integration', () => {
     it('should reject invalid FPS', () => {
       // Arrange
       const invalidPayload = {
-        frames: [createMockFrame('1')],
+        selectedRange: { start: 0, end: 5 },
+        clip: createMockClip(5),
         fps: 0, // Invalid
       };
 
