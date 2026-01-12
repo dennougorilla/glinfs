@@ -31,6 +31,7 @@
  * @property {15|30|60} fps - Frames per second
  * @property {number} bufferDuration - Buffer duration in seconds (5-60)
  * @property {number} thumbnailQuality - Thumbnail quality 0.1-1.0
+ * @property {boolean} sceneDetection - Enable scene detection on clip creation
  */
 
 /**

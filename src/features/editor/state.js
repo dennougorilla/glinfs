@@ -23,6 +23,10 @@ export function initEditorState(clip) {
     playbackSpeed: 1,
     mode: 'select',
     showGrid: false,
+    scenes: [],
+    sceneDetectionStatus: 'idle',
+    sceneDetectionProgress: 0,
+    sceneDetectionError: null,
   };
 }
 
@@ -210,6 +214,86 @@ export function setMode(state, mode) {
     mode,
   };
 }
+
+// ============================================================
+// Scene Detection State Management
+// ============================================================
+
+/**
+ * Start scene detection
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function startSceneDetection(state) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'detecting',
+    sceneDetectionProgress: 0,
+    sceneDetectionError: null,
+    scenes: [],
+  };
+}
+
+/**
+ * Update scene detection progress
+ * @param {import('./types.js').EditorState} state
+ * @param {number} progress - Progress percentage (0-100)
+ * @returns {import('./types.js').EditorState}
+ */
+export function updateSceneDetectionProgress(state, progress) {
+  return {
+    ...state,
+    sceneDetectionProgress: progress,
+  };
+}
+
+/**
+ * Complete scene detection with results
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../scene-detection/types.js').Scene[]} scenes
+ * @returns {import('./types.js').EditorState}
+ */
+export function completeSceneDetection(state, scenes) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'completed',
+    sceneDetectionProgress: 100,
+    scenes,
+  };
+}
+
+/**
+ * Set scene detection error
+ * @param {import('./types.js').EditorState} state
+ * @param {string} error
+ * @returns {import('./types.js').EditorState}
+ */
+export function setSceneDetectionError(state, error) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'error',
+    sceneDetectionError: error,
+  };
+}
+
+/**
+ * Reset scene detection state
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function resetSceneDetection(state) {
+  return {
+    ...state,
+    sceneDetectionStatus: 'idle',
+    sceneDetectionProgress: 0,
+    sceneDetectionError: null,
+    scenes: [],
+  };
+}
+
+// ============================================================
+// Store Creation
+// ============================================================
 
 /**
  * Create editor store

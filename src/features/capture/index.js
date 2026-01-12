@@ -323,18 +323,19 @@ async function handleCreateClip() {
     return;
   }
 
-  const fps = store.getState().settings.fps;
+  const settings = store.getState().settings;
 
   // Store clip payload (old frames closed automatically by setClipPayload)
   setClipPayload({
     frames: videoFrames,
-    fps,
+    fps: settings.fps,
     capturedAt: Date.now(),
+    sceneDetectionEnabled: settings.sceneDetection,
   });
 
   emit('capture:clip-created', {
     frameCount: videoFrames.length,
-    fps,
+    fps: settings.fps,
   });
 }
 

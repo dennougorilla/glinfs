@@ -13,6 +13,7 @@
  * @property {import('../features/capture/types.js').Frame[]} frames - Captured frames
  * @property {15|30|60} fps - Capture FPS setting
  * @property {number} capturedAt - Timestamp when clip was created
+ * @property {boolean} [sceneDetectionEnabled] - Whether to run scene detection in editor
  */
 
 /**

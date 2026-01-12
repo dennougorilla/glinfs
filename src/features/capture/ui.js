@@ -370,6 +370,30 @@ function renderSettings(settings, handlers, cleanups) {
   durationRow.appendChild(durationInput);
   settingsEl.appendChild(durationRow);
 
+  // Scene Detection toggle
+  const sceneDetectionRow = createElement('div', { className: 'setting-row' });
+  sceneDetectionRow.appendChild(
+    createElement('div', { className: 'setting-header' }, [
+      createElement('span', { className: 'setting-label' }, ['Scene Detection']),
+    ])
+  );
+  const sceneDetectionToggle = /** @type {HTMLButtonElement} */ (
+    createElement('button', {
+      className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(settings.sceneDetection),
+      title: 'Automatically detect scene changes when creating a clip',
+    }, [settings.sceneDetection ? 'On' : 'Off'])
+  );
+  cleanups.push(
+    on(sceneDetectionToggle, 'click', () => {
+      const newValue = !settings.sceneDetection;
+      handlers.onSettingsChange({ sceneDetection: newValue });
+    })
+  );
+  sceneDetectionRow.appendChild(sceneDetectionToggle);
+  settingsEl.appendChild(sceneDetectionRow);
+
   return settingsEl;
 }
 
