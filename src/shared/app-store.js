@@ -50,6 +50,9 @@ const state = {
 /** @type {Partial<ScreenCaptureState>|null} */
 let screenCaptureState = null;
 
+/** @type {((state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void) | null} */
+let screenCaptureCleanupFn = null;
+
 // ============================================================
 // Internal: Frame Cleanup
 // ============================================================
@@ -294,6 +297,15 @@ export function clearExportResult() {
 // ============================================================
 
 /**
+ * Register a cleanup function for screen capture resources
+ * Called once at app startup from main.js
+ * @param {(state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void} fn
+ */
+export function registerScreenCaptureCleanup(fn) {
+  screenCaptureCleanupFn = fn;
+}
+
+/**
  * Get stored screen capture state
  * @returns {Partial<ScreenCaptureState>|null}
  */
@@ -310,23 +322,27 @@ export function setScreenCaptureState(captureState) {
 }
 
 /**
- * Clear stored screen capture state and stop stream
+ * Clear stored screen capture state
+ * Calls registered cleanup function if available (side effects delegated)
  * @param {boolean} [stopStream=true] - If true, stop the MediaStream
+ * @returns {Partial<ScreenCaptureState>|null} The cleared state
  */
 export function clearScreenCaptureState(stopStream = true) {
-  if (screenCaptureState) {
-    if (stopStream && screenCaptureState.stream) {
-      screenCaptureState.stream.getTracks().forEach((track) => track.stop());
-    }
-    if (screenCaptureState.workerManager) {
-      screenCaptureState.workerManager.terminate();
-    }
-    if (screenCaptureState.videoElement) {
-      screenCaptureState.videoElement.pause();
-      screenCaptureState.videoElement.srcObject = null;
+  const oldState = screenCaptureState;
+  screenCaptureState = null;
+
+  // Delegate side effects to registered cleanup function
+  if (oldState && screenCaptureCleanupFn) {
+    try {
+      // Fire and forget - cleanup is async but we don't await
+      // This maintains backward compatibility with sync callers
+      screenCaptureCleanupFn(oldState, { stopStream });
+    } catch (err) {
+      console.error('[app-store] Screen capture cleanup failed:', err);
     }
   }
-  screenCaptureState = null;
+
+  return oldState;
 }
 
 /**
