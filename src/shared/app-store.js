@@ -14,6 +14,7 @@
  * @property {15|30|60} fps - Capture FPS setting
  * @property {number} capturedAt - Timestamp when clip was created
  * @property {boolean} [sceneDetectionEnabled] - Whether to run scene detection in editor
+ * @property {import('../features/scene-detection/types.js').Scene[]} [scenes] - Pre-computed scenes from capture
  */
 
 /**

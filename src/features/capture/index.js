@@ -20,7 +20,8 @@ import {
   stopScreenCapture,
   createVideoElement,
 } from './api.js';
-import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } from './ui.js';
+import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle, updateDetectionProgress } from './ui.js';
+import { createSceneDetectionManager } from '../scene-detection/manager.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
@@ -261,10 +262,42 @@ export function clearCaptureBuffer() {
 }
 
 /**
+ * Run scene detection on frames
+ * @param {import('../capture/types.js').Frame[]} frames - Frames to analyze
+ * @returns {Promise<import('../scene-detection/types.js').Scene[]>}
+ */
+async function runSceneDetection(frames) {
+  const container = qsRequired('#main-content');
+  const manager = createSceneDetectionManager();
+
+  try {
+    await manager.init();
+
+    const result = await manager.detect(frames, {
+      threshold: 0.3,
+      minSceneDuration: 5,
+      sampleInterval: 1,
+      onProgress: (progress) => {
+        updateDetectionProgress(container, progress.percent);
+      },
+    });
+
+    console.log('[Capture] Scene detection completed:', result.scenes.length, 'scenes');
+    return result.scenes;
+  } catch (error) {
+    console.error('[Capture] Scene detection error:', error);
+    return [];
+  } finally {
+    manager.dispose();
+  }
+}
+
+/**
  * Handle create clip
  *
  * SIMPLIFIED MODEL:
  * - Gets ImageBitmaps from worker and converts to VideoFrames
+ * - Runs scene detection if enabled (before navigation)
  * - Stores frames in clipPayload (single source of truth)
  * - Old frames are closed automatically by setClipPayload
  * - No ownership tracking needed
@@ -325,12 +358,20 @@ async function handleCreateClip() {
 
   const settings = store.getState().settings;
 
+  // Run scene detection if enabled (before navigation)
+  /** @type {import('../scene-detection/types.js').Scene[]} */
+  let scenes = [];
+  if (settings.sceneDetection && videoFrames.length > 0) {
+    scenes = await runSceneDetection(videoFrames);
+  }
+
   // Store clip payload (old frames closed automatically by setClipPayload)
   setClipPayload({
     frames: videoFrames,
     fps: settings.fps,
     capturedAt: Date.now(),
     sceneDetectionEnabled: settings.sceneDetection,
+    scenes, // Include pre-computed scenes
   });
 
   emit('capture:clip-created', {

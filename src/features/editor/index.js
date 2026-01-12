@@ -190,12 +190,7 @@ export function initEditor() {
   // Emit loaded event (thumbnails are now rendered directly from frames)
   emit('editor:loaded', { clip: store?.getState().clip });
 
-  // Start scene detection if enabled in clipPayload (and not returning from Export)
-  if (!hasValidEditorPayload && clipPayload?.sceneDetectionEnabled && frames.length > 0) {
-    startSceneDetectionAsync(frames);
-  }
-
-  // Subscribe to state changes
+  // Subscribe to state changes (must be set up before setting pre-computed scenes)
   store.subscribe(
     throttle((state, prevState) => {
       if (!store || !baseCanvas || !overlayCanvas) return;
@@ -313,6 +308,20 @@ export function initEditor() {
       }
     }, 16) // ~60fps updates
   );
+
+  // Use pre-computed scenes from Capture or fallback to async detection
+  // (must be after subscription is set up so scenes panel gets updated)
+  if (!hasValidEditorPayload && clipPayload?.sceneDetectionEnabled) {
+    if (clipPayload.scenes && clipPayload.scenes.length > 0) {
+      // Use pre-computed scenes from Capture (no need to run detection again)
+      store.setState((state) => completeSceneDetection(state, clipPayload.scenes));
+      emit('editor:scenes-detected', { sceneCount: clipPayload.scenes.length });
+      console.log('[Editor] Using pre-computed scenes:', clipPayload.scenes.length, 'scenes');
+    } else if (frames.length > 0) {
+      // Fallback: run detection if scenes not provided (backward compatibility)
+      startSceneDetectionAsync(frames);
+    }
+  }
 
   return cleanup;
 }

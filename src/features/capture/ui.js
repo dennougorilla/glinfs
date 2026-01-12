@@ -468,3 +468,15 @@ export function updateSceneDetectionToggle(container, enabled) {
     toggle.setAttribute('aria-pressed', String(enabled));
   }
 }
+
+/**
+ * Update detection progress in Create Clip button
+ * @param {HTMLElement} container
+ * @param {number} percent - Progress percentage (0-100)
+ */
+export function updateDetectionProgress(container, percent) {
+  const clipBtn = container.querySelector('.btn-create-clip');
+  if (clipBtn) {
+    clipBtn.textContent = `Detecting... ${percent}%`;
+  }
+}
