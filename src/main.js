@@ -109,6 +109,12 @@ const routes = {
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', () => {
+  // Display app version in header
+  const versionElement = document.getElementById('app-version');
+  if (versionElement) {
+    versionElement.textContent = `v${__APP_VERSION__}`;
+  }
+
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');
   liveRegion.setAttribute('role', 'status');
