@@ -89,6 +89,7 @@ function createHeartIcon() {
  * @property {() => void} onStop - Stop capture handler
  * @property {() => Promise<void>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
+ * @property {() => import('./types.js').CaptureSettings | null} getSettings - Get current settings
  */
 
 /**
@@ -253,7 +254,10 @@ function renderCaptureActions(state, handlers, cleanups) {
         clipBtn.textContent = 'Creating...';
         try {
           await handlers.onCreateClip();
-          navigate('/editor');
+          // Navigate to loading screen if scene detection is enabled, otherwise to editor
+          const settings = handlers.getSettings();
+          const targetRoute = settings?.sceneDetection ? '/loading' : '/editor';
+          navigate(targetRoute);
         } catch (err) {
           console.error('[Capture UI] Failed to create clip:', err);
           clipBtn.removeAttribute('disabled');
@@ -466,17 +470,5 @@ export function updateSceneDetectionToggle(container, enabled) {
     toggle.textContent = enabled ? 'On' : 'Off';
     toggle.classList.toggle('btn-toggle--active', enabled);
     toggle.setAttribute('aria-pressed', String(enabled));
-  }
-}
-
-/**
- * Update detection progress in Create Clip button
- * @param {HTMLElement} container
- * @param {number} percent - Progress percentage (0-100)
- */
-export function updateDetectionProgress(container, percent) {
-  const clipBtn = container.querySelector('.btn-create-clip');
-  if (clipBtn) {
-    clipBtn.textContent = `Detecting... ${percent}%`;
   }
 }

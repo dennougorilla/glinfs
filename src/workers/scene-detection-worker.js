@@ -61,6 +61,13 @@ async function detectScenes(frameData, options) {
     };
   }
 
+  // Build index→FrameData map for O(1) lookups when building scenes
+  /** @type {Map<number, FrameData>} */
+  const frameByIndex = new Map();
+  for (const f of frameData) {
+    frameByIndex.set(f.index, f);
+  }
+
   /** @type {number[]} */
   const sceneBreaks = [0]; // First frame is always a scene start
 
@@ -121,9 +128,9 @@ async function detectScenes(frameData, options) {
     const sceneDuration = endFrame - startFrame + 1;
 
     if (sceneDuration >= opts.minSceneDuration) {
-      // Find timestamps from frameData
-      const startData = frameData.find((f) => f.index === startFrame);
-      const endData = frameData.find((f) => f.index >= endFrame) || frameData[frameData.length - 1];
+      // Get timestamps from frameData using O(1) Map lookup
+      const startData = frameByIndex.get(startFrame);
+      const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
 
       scenes.push({
         id: generateSceneId(),
@@ -140,8 +147,8 @@ async function detectScenes(frameData, options) {
       const lastScene = scenes[scenes.length - 1];
       lastScene.endFrame = endFrame;
 
-      const startData = frameData.find((f) => f.index === lastScene.startFrame);
-      const endData = frameData.find((f) => f.index >= endFrame) || frameData[frameData.length - 1];
+      const startData = frameByIndex.get(lastScene.startFrame);
+      const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
       if (startData && endData) {
         lastScene.duration = (endData.timestamp - startData.timestamp) / 1000;
       }

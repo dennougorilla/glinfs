@@ -77,11 +77,14 @@ export function getClipPayload() {
  * @param {ClipPayload} payload
  */
 export function setClipPayload(payload) {
-  // Close old VideoFrames before replacing with new ones
-  closePayloadFrames(state.clipPayload);
+  // Only close old VideoFrames if frames array is different
+  // (prevents closing frames when just adding metadata like scenes)
+  if (state.clipPayload?.frames !== payload.frames) {
+    closePayloadFrames(state.clipPayload);
+    // Clear old editor state since frames are now different
+    state.editorPayload = null;
+  }
   state.clipPayload = payload;
-  // Clear old editor state since frames are now different
-  state.editorPayload = null;
 }
 
 /**

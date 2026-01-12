@@ -137,16 +137,12 @@ export function createHistogramDetector() {
         });
       }
 
-      // Compute histogram from ImageData or use pre-computed
-      let histogram;
-      if (data.histogram) {
-        histogram = new Float32Array(data.histogram);
-      } else if (data.imageData) {
-        histogram = computeHistogram(data.imageData);
-      } else {
+      // Compute histogram from ImageData
+      if (!data.imageData) {
         // Skip frames without data
         continue;
       }
+      const histogram = computeHistogram(data.imageData);
 
       // Compare with previous frame
       if (prevHistogram !== null) {
