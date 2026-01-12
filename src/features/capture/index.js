@@ -348,6 +348,10 @@ function handleSettingsChange(newSettings) {
 
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
+
+  // Re-render to reflect settings change in UI
+  const container = qsRequired('#main-content');
+  render(container);
 }
 
 /**
