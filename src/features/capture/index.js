@@ -53,6 +53,9 @@ let workerManager = null;
 /** @type {ReturnType<typeof throttle> | null} */
 let throttledUpdate = null;
 
+/** @type {(() => void) | null} */
+let storeUnsubscribe = null;
+
 /**
  * Initialize capture feature
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
@@ -113,7 +116,7 @@ export function initCapture(settings) {
     updateBufferStatus(container, state.stats);
   }, 100);
 
-  store.subscribe(throttledUpdate);
+  storeUnsubscribe = store.subscribe(throttledUpdate);
 
   return cleanup;
 }
@@ -420,6 +423,12 @@ function cleanup() {
   if (throttledUpdate) {
     throttledUpdate.cancel();
     throttledUpdate = null;
+  }
+
+  // Unsubscribe from store to prevent listener leak
+  if (storeUnsubscribe) {
+    storeUnsubscribe();
+    storeUnsubscribe = null;
   }
 
   // Check if we have an active capture to preserve
