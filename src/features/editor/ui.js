@@ -921,8 +921,8 @@ export function updateScenesPanel(container, state, handlers) {
     scenesPanel = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
       createElement('div', { className: 'property-group-title' }, ['Scenes']),
     ]);
-    // Insert before clear crop button if exists, otherwise append
-    const clearBtn = panelContent.querySelector('.btn-secondary');
+    // Insert before clear crop button if exists (direct child only), otherwise append
+    const clearBtn = panelContent.querySelector(':scope > .btn-secondary');
     if (clearBtn) {
       panelContent.insertBefore(scenesPanel, clearBtn);
     } else {
