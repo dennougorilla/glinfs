@@ -36,7 +36,7 @@ import {
 } from './state.js';
 import { detectScenesAsync } from './scene-detection.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
-import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
+import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenePanelUI } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
@@ -278,6 +278,15 @@ export function initEditor() {
           gridBtn.textContent = state.showGrid ? 'On' : 'Off';
           gridBtn.setAttribute('aria-pressed', String(state.showGrid));
         }
+      }
+
+      // Update scene panel when scene detection state changes
+      if (state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
+          state.detectedScenes !== prevState.detectedScenes ||
+          state.sceneDetectionProgress !== prevState.sceneDetectionProgress) {
+        updateScenePanelUI(container, state, {
+          onSceneSelect: handleSceneSelect,
+        }, fps);
       }
     }, 16) // ~60fps updates
   );

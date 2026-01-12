@@ -1051,6 +1051,34 @@
 	border-bottom-color: var(--color-primary);
 }
 
+/* Scene Tab Indicator - Loading/Error status dot */
+.scene-tab-indicator {
+	display: none;
+	width: 6px;
+	height: 6px;
+	margin-left: var(--space-2);
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.scene-tab-indicator.loading {
+	display: inline-block;
+	background: #fbbf24;
+	box-shadow: 0 0 6px rgba(251, 191, 36, 0.5);
+	animation: scene-indicator-pulse 1.5s ease-in-out infinite;
+}
+
+.scene-tab-indicator.error {
+	display: inline-block;
+	background: #ef4444;
+	box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+@keyframes scene-indicator-pulse {
+	0%, 100% { opacity: 1; transform: scale(1); }
+	50% { opacity: 0.6; transform: scale(0.85); }
+}
+
 .sidebar-panel {
 	display: none;
 }

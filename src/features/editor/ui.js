@@ -56,6 +56,24 @@ const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
 const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 
 /**
+ * Get CSS class for scene detection indicator based on status
+ * @param {import('./types.js').SceneDetectionStatus} status
+ * @returns {string}
+ */
+function getSceneIndicatorClass(status) {
+  switch (status) {
+    case 'idle':
+    case 'detecting':
+      return 'scene-tab-indicator loading';
+    case 'error':
+      return 'scene-tab-indicator error';
+    case 'done':
+    default:
+      return 'scene-tab-indicator';
+  }
+}
+
+/**
  * Render the editor screen
  * @param {HTMLElement} container
  * @param {import('./types.js').EditorState} state
@@ -331,11 +349,15 @@ export function renderEditorScreen(container, state, handlers, fps) {
     type: 'button',
     'data-tab': 'settings',
   }, ['Settings']);
+  // Scenes tab with loading indicator
+  const scenesTabIndicator = createElement('span', {
+    className: getSceneIndicatorClass(state.sceneDetectionStatus),
+  });
   const scenesTab = createElement('button', {
     className: `sidebar-tab ${state.activeSidebarTab === 'scenes' ? 'active' : ''}`,
     type: 'button',
     'data-tab': 'scenes',
-  }, ['Scenes']);
+  }, ['Scenes', scenesTabIndicator]);
   tabBar.appendChild(settingsTab);
   tabBar.appendChild(scenesTab);
   sidebar.appendChild(tabBar);
@@ -986,6 +1008,149 @@ function renderSceneList(container, state, handlers, fps, cleanups) {
         handlers.onSceneSelect?.(scene);
       }
     }));
+
+    sceneList.appendChild(sceneItem);
+  });
+
+  container.appendChild(sceneList);
+}
+
+/**
+ * Update scene panel UI (tab indicator and scene list)
+ * Called from index.js when scene detection state changes
+ * @param {HTMLElement} container - Editor container
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @param {number} fps - Frames per second
+ */
+export function updateScenePanelUI(container, state, handlers, fps) {
+  // Update tab indicator
+  const scenesTab = container.querySelector('.sidebar-tab[data-tab="scenes"]');
+  if (scenesTab) {
+    const indicator = scenesTab.querySelector('.scene-tab-indicator');
+    if (indicator) {
+      indicator.className = getSceneIndicatorClass(state.sceneDetectionStatus);
+    }
+  }
+
+  // Update scene list panel
+  const scenesPanel = container.querySelector('.sidebar-panel[data-panel="scenes"]');
+  if (scenesPanel instanceof HTMLElement) {
+    // Clear existing content
+    while (scenesPanel.firstChild) {
+      scenesPanel.removeChild(scenesPanel.firstChild);
+    }
+    // Re-render scene list (without tracking cleanups since this is an update)
+    renderSceneListForUpdate(scenesPanel, state, handlers, fps);
+  }
+}
+
+/**
+ * Render scene list for updates (doesn't track cleanups)
+ * @param {HTMLElement} container - Container element
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @param {number} fps - Frames per second
+ */
+function renderSceneListForUpdate(container, state, handlers, fps) {
+  // Show loading state
+  if (state.sceneDetectionStatus === 'idle' || state.sceneDetectionStatus === 'detecting') {
+    const loadingEl = createElement('div', { className: 'scene-list-loading' }, [
+      createElement('div', { className: 'scene-list-spinner' }),
+      createElement('div', { className: 'scene-list-loading-text' }, [
+        state.sceneDetectionStatus === 'idle' ? 'Preparing...' : 'Detecting scenes...',
+      ]),
+    ]);
+
+    // Progress bar
+    if (state.sceneDetectionStatus === 'detecting') {
+      const progressBar = createElement('div', { className: 'scene-list-progress' }, [
+        createElement('div', {
+          className: 'scene-list-progress-bar',
+          style: `width: ${Math.round(state.sceneDetectionProgress * 100)}%`,
+        }),
+      ]);
+      loadingEl.appendChild(progressBar);
+    }
+
+    container.appendChild(loadingEl);
+    return;
+  }
+
+  // Show error state
+  if (state.sceneDetectionStatus === 'error') {
+    const errorEl = createElement('div', { className: 'scene-list-empty' }, [
+      createElement('div', { className: 'scene-list-empty-icon' }, ['\u26A0']),
+      createElement('div', {}, ['Scene detection failed']),
+    ]);
+    container.appendChild(errorEl);
+    return;
+  }
+
+  // Show empty state
+  if (state.detectedScenes.length === 0) {
+    const emptyEl = createElement('div', { className: 'scene-list-empty' }, [
+      createElement('div', { className: 'scene-list-empty-icon' }, ['\uD83C\uDFAC']),
+      createElement('div', {}, ['Single continuous scene']),
+      createElement('div', { style: 'font-size: 11px; opacity: 0.6;' }, [
+        'No distinct scene changes detected',
+      ]),
+    ]);
+    container.appendChild(emptyEl);
+    return;
+  }
+
+  // Render scene list
+  const sceneList = createElement('div', { className: 'scene-list' });
+
+  state.detectedScenes.forEach((scene, index) => {
+    const isSelected =
+      state.selectedRange.start === scene.startFrame &&
+      state.selectedRange.end === scene.endFrame;
+
+    const sceneItem = createElement('div', {
+      className: `scene-list-item ${isSelected ? 'selected' : ''}`,
+      tabIndex: '0',
+    });
+
+    // Thumbnail
+    const thumbnailFrame = state.clip?.frames[scene.thumbnailIndex];
+    if (thumbnailFrame) {
+      try {
+        const canvas = createThumbnailCanvas(thumbnailFrame, 100);
+        canvas.className = 'scene-list-thumb';
+        sceneItem.appendChild(canvas);
+      } catch {
+        const placeholder = createElement('div', { className: 'scene-list-thumb-placeholder' }, ['\u26A0']);
+        sceneItem.appendChild(placeholder);
+      }
+    }
+
+    // Info
+    const duration = scene.frameCount / fps;
+    const info = createElement('div', { className: 'scene-list-info' }, [
+      createElement('div', { className: 'scene-list-title' }, [`Scene ${index + 1}`]),
+      createElement('div', { className: 'scene-list-meta' }, [
+        `${formatCompactDuration(duration)} \u2022 ${scene.frameCount}f`,
+      ]),
+      createElement('div', { className: 'scene-list-range' }, [
+        `#${scene.startFrame + 1}-${scene.endFrame + 1}`,
+      ]),
+    ]);
+    sceneItem.appendChild(info);
+
+    // Click handler (using addEventListener directly since we can't track cleanups)
+    sceneItem.addEventListener('click', () => {
+      handlers.onSceneSelect?.(scene);
+    });
+
+    // Keyboard handler
+    sceneItem.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handlers.onSceneSelect?.(scene);
+      }
+    });
 
     sceneList.appendChild(sceneItem);
   });
