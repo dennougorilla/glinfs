@@ -48,6 +48,7 @@ export function cancelIdleCallback(handle) {
 
 /**
  * Throttle function calls
+ * Uses latest args when timeout fires (not stale args from when scheduled)
  * @template {(...args: any[]) => any} T
  * @param {T} fn - Function to throttle
  * @param {number} ms - Minimum interval in milliseconds
@@ -56,19 +57,28 @@ export function cancelIdleCallback(handle) {
 export function throttle(fn, ms) {
   let lastCall = 0;
   let timeoutId = null;
+  /** @type {any[] | null} */
+  let latestArgs = null;
 
   const throttled = function (...args) {
     const now = Date.now();
     const timeSinceLastCall = now - lastCall;
 
+    // Always save latest args
+    latestArgs = args;
+
     if (timeSinceLastCall >= ms) {
       lastCall = now;
-      fn.apply(this, args);
+      fn.apply(this, latestArgs);
+      latestArgs = null;
     } else if (!timeoutId) {
       timeoutId = setTimeout(() => {
         lastCall = Date.now();
         timeoutId = null;
-        fn.apply(this, args);
+        if (latestArgs) {
+          fn.apply(this, latestArgs);
+          latestArgs = null;
+        }
       }, ms - timeSinceLastCall);
     }
   };
@@ -79,6 +89,7 @@ export function throttle(fn, ms) {
       clearTimeout(timeoutId);
       timeoutId = null;
     }
+    latestArgs = null;
   };
 
   return /** @type {T & { cancel: () => void }} */ (throttled);
