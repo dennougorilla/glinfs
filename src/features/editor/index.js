@@ -555,6 +555,7 @@ async function runSceneDetection(fps) {
       emit('editor:scenes-detected', { scenes: result.scenes });
     }
   } catch (error) {
+    console.error('[Scene Detection] Failed:', error);
     if (store) {
       store.setState(setSceneDetectionError);
     }

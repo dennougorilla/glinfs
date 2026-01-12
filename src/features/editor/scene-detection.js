@@ -34,6 +34,39 @@ const DEFAULT_OPTIONS = {
   sampleSize: 16,
 };
 
+// ============================================================================
+// Shared Canvas for Performance (avoid GC pressure from repeated allocations)
+// ============================================================================
+
+/** @type {OffscreenCanvas | null} */
+let sharedCanvas1 = null;
+/** @type {OffscreenCanvas | null} */
+let sharedCanvas2 = null;
+/** @type {OffscreenCanvasRenderingContext2D | null} */
+let sharedCtx1 = null;
+/** @type {OffscreenCanvasRenderingContext2D | null} */
+let sharedCtx2 = null;
+/** @type {number} */
+let sharedCanvasSize = 0;
+
+/**
+ * Get or create shared OffscreenCanvas contexts for frame comparison
+ * Reuses existing canvases if size matches, otherwise creates new ones
+ * @param {number} size - Canvas size (width and height)
+ * @returns {{ ctx1: OffscreenCanvasRenderingContext2D, ctx2: OffscreenCanvasRenderingContext2D } | null}
+ */
+function getSharedCanvases(size) {
+  if (!sharedCanvas1 || sharedCanvasSize !== size) {
+    sharedCanvas1 = new OffscreenCanvas(size, size);
+    sharedCanvas2 = new OffscreenCanvas(size, size);
+    sharedCtx1 = sharedCanvas1.getContext('2d', { willReadFrequently: true });
+    sharedCtx2 = sharedCanvas2.getContext('2d', { willReadFrequently: true });
+    sharedCanvasSize = size;
+  }
+  if (!sharedCtx1 || !sharedCtx2) return null;
+  return { ctx1: sharedCtx1, ctx2: sharedCtx2 };
+}
+
 /**
  * Calculate visual difference between two frames using sampled pixels
  * Uses a grid sampling approach for performance
@@ -49,18 +82,17 @@ function calculateFrameDifference(frame1, frame2, sampleSize) {
     return 1; // Treat as scene change if frames are invalid
   }
 
-  // Create temporary canvases at sample size for comparison
-  const canvas1 = document.createElement('canvas');
-  const canvas2 = document.createElement('canvas');
-  canvas1.width = canvas2.width = sampleSize;
-  canvas1.height = canvas2.height = sampleSize;
+  // Get shared canvases (avoids GC pressure from repeated allocations)
+  const canvases = getSharedCanvases(sampleSize);
+  if (!canvases) return 1;
 
-  const ctx1 = canvas1.getContext('2d', { willReadFrequently: true });
-  const ctx2 = canvas2.getContext('2d', { willReadFrequently: true });
-
-  if (!ctx1 || !ctx2) return 1;
+  const { ctx1, ctx2 } = canvases;
 
   try {
+    // Clear previous content
+    ctx1.clearRect(0, 0, sampleSize, sampleSize);
+    ctx2.clearRect(0, 0, sampleSize, sampleSize);
+
     // Draw frames scaled down to sample size
     ctx1.drawImage(frame1.frame, 0, 0, sampleSize, sampleSize);
     ctx2.drawImage(frame2.frame, 0, 0, sampleSize, sampleSize);
@@ -84,7 +116,8 @@ function calculateFrameDifference(frame1, frame2, sampleSize) {
     }
 
     return totalDiff / pixelCount;
-  } catch {
+  } catch (err) {
+    console.warn('[Scene Detection] Frame comparison failed:', err);
     return 1; // Treat errors as scene change
   }
 }
