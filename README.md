@@ -3,7 +3,6 @@
 High-performance screen capture to GIF converter.
 
 [![License: GPL 3.0](https://img.shields.io/badge/License-GPL3.0-blue.svg)](LICENSE)
-
 [![GitHub Pages](https://img.shields.io/badge/demo-GitHub%20Pages-brightgreen)](https://dennougorilla.github.io/glinfs/)
 
 <!-- Demo GIF placeholder - add your own demo.gif here -->
