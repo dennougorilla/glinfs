@@ -57,6 +57,24 @@ function closePayloadFrames(payload) {
   }
 }
 
+/**
+ * Close all VideoFrame resources in an EditorPayload
+ * EditorPayload stores frames at payload.clip.frames
+ * @param {EditorPayload | null} payload
+ */
+function closeEditorPayloadFrames(payload) {
+  if (!payload?.clip?.frames) return;
+  for (const frame of payload.clip.frames) {
+    if (frame?.frame && !frame.frame.closed) {
+      try {
+        frame.frame.close();
+      } catch {
+        // Ignore errors - frame may already be closed
+      }
+    }
+  }
+}
+
 // ============================================================
 // ClipPayload (capture -> editor)
 // ============================================================
@@ -126,6 +144,7 @@ export function clearEditorPayload() {
  */
 export function releaseAllFramesAndReset() {
   closePayloadFrames(state.clipPayload);
+  closeEditorPayloadFrames(state.editorPayload);
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;

@@ -177,8 +177,16 @@ export class CaptureWorkerManager {
    * @param {ErrorEvent} e
    */
   #handleWorkerError(e) {
-    // Worker errors are silently ignored in production
-    // In development, these would be visible in browser console
+    console.error('[CaptureWorkerManager] Worker error:', e.message);
+
+    // Reject any pending frame requests with empty result
+    if (this.#pendingFramesCallback) {
+      this.#pendingFramesCallback([]);
+      this.#pendingFramesCallback = null;
+    }
+
+    // Mark as uninitialized to prevent further operations
+    this.#isInitialized = false;
   }
 
   /**
