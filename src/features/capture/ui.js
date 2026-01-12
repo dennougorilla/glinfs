@@ -263,11 +263,17 @@ function renderCaptureActions(state, handlers, cleanups) {
     );
   }
 
-  // Error display
+  // Error display (inline with retry hint)
   if (state.error) {
-    actions.appendChild(
-      createElement('div', { className: 'error-message', role: 'alert' }, [state.error])
-    );
+    const errorContainer = createElement('div', {
+      className: 'capture-error',
+      role: 'alert',
+      'aria-live': 'assertive',
+    }, [
+      createElement('span', { className: 'capture-error__icon' }, ['\u26A0\uFE0F']),
+      createElement('span', { className: 'capture-error__text' }, [state.error]),
+    ]);
+    actions.appendChild(errorContainer);
   }
 
   return actions;

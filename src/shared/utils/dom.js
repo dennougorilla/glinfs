@@ -73,6 +73,59 @@ export function createElement(tag, attrs = {}, children = []) {
 }
 
 /**
+ * @typedef {Object} ErrorScreenAction
+ * @property {string} label - Button label
+ * @property {() => void} onClick - Click handler
+ * @property {boolean} [primary] - Primary button style
+ */
+
+/**
+ * @typedef {Object} ErrorScreenOptions
+ * @property {string} title - Error title
+ * @property {string} message - Error message
+ * @property {ErrorScreenAction[]} [actions] - Action buttons
+ * @property {string} [icon] - Error icon (default: ⚠️)
+ */
+
+/**
+ * Create a standardized error screen component
+ * @param {ErrorScreenOptions} options - Error screen configuration
+ * @param {(() => void)[]} [cleanups] - Array to collect cleanup functions
+ * @returns {HTMLElement} Error screen element
+ */
+export function createErrorScreen(options, cleanups = []) {
+  const { title, message, actions = [], icon = '\u26A0\uFE0F' } = options;
+
+  const container = createElement('div', {
+    className: 'error-screen',
+    role: 'alert',
+    'aria-live': 'assertive',
+  }, [
+    createElement('div', { className: 'error-screen__icon' }, [icon]),
+    createElement('h2', { className: 'error-screen__title' }, [title]),
+    createElement('p', { className: 'error-screen__message' }, [message]),
+  ]);
+
+  if (actions.length > 0) {
+    const actionsContainer = createElement('div', { className: 'error-screen__actions' });
+
+    for (const action of actions) {
+      const btn = createElement('button', {
+        type: 'button',
+        className: action.primary ? 'btn btn-error' : 'btn btn-secondary',
+      }, [action.label]);
+
+      cleanups.push(on(btn, 'click', action.onClick));
+      actionsContainer.appendChild(btn);
+    }
+
+    container.appendChild(actionsContainer);
+  }
+
+  return container;
+}
+
+/**
  * Add event listener with cleanup
  * @param {Element|Document|Window} element - Target element
  * @param {string} event - Event name
