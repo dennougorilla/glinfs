@@ -10,6 +10,7 @@ import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { calculateSelection, calculateSelectionInfo, getOutputDimensions, calculateCropFromDrag, clampCropArea, resizeCropByHandle, moveCrop, detectBoundaryHit } from './core.js';
 import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle } from './api.js';
 import { renderFrameGridModal } from './frame-grid.js';
+import { renderSceneGridModal } from './scene-grid.js';
 
 /**
  * Create SVG scissors icon for editor empty state
@@ -229,6 +230,30 @@ export function renderEditorScreen(container, state, handlers, fps) {
     }
   });
 
+  // Scene Grid button and modal state
+  /** @type {(() => void) | null} */
+  let sceneGridCleanup = null;
+
+  /**
+   * Open scene grid modal
+   */
+  function handleOpenSceneGrid() {
+    const currentState = handlers.getState?.() ?? state;
+    if (currentState.clip && currentState.clip.frames.length > 0 && !sceneGridCleanup) {
+      sceneGridCleanup = openSceneGridModal(container, currentState, handlers, fps, () => {
+        sceneGridCleanup = null;
+      });
+    }
+  }
+
+  // Track cleanup for scene grid modal when editor closes
+  cleanups.push(() => {
+    if (sceneGridCleanup) {
+      sceneGridCleanup();
+      sceneGridCleanup = null;
+    }
+  });
+
   // Time display - show current position within selection range
   const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
   const currentInSelection = Math.max(
@@ -424,11 +449,21 @@ export function renderEditorScreen(container, state, handlers, fps) {
   }, ['Open Grid']);
   cleanups.push(on(frameGridBtn, 'click', handleOpenFrameGrid));
 
+  // Scene Grid button for timeline header
+  const sceneGridBtn = createElement('button', {
+    className: 'btn-scene-grid-compact',
+    type: 'button',
+    'aria-label': 'Auto-select scene',
+    title: 'Scene Selection (S)',
+  }, ['Scenes']);
+  cleanups.push(on(sceneGridBtn, 'click', handleOpenSceneGrid));
+
   timelineSection.appendChild(
     createElement('div', { className: 'timeline-header' }, [
       createElement('div', { className: 'timeline-header-left' }, [
         createElement('span', { className: 'timeline-title' }, ['Clip Range']),
         frameGridBtn,
+        sceneGridBtn,
       ]),
       createElement('div', { className: 'timeline-info' }, [
         createElement('span', { className: 'timeline-point' }, [
@@ -472,6 +507,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
             ' Frame Grid',
           ]),
           createElement('span', { className: 'shortcut' }, [
+            createElement('span', { className: 'kbd' }, ['S']),
+            ' Scenes',
+          ]),
+          createElement('span', { className: 'shortcut' }, [
             createElement('span', { className: 'kbd' }, ['G']),
             ' Grid',
           ]),
@@ -492,7 +531,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
   container.appendChild(screen);
 
   // Setup keyboard shortcuts
-  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
+  cleanups.push(setupKeyboardShortcuts(handlers, state, {
+    onOpenFrameGrid: handleOpenFrameGrid,
+    onOpenSceneGrid: handleOpenSceneGrid,
+  }));
 
   return {
     cleanup: () => cleanups.forEach((fn) => fn()),
@@ -506,7 +548,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
  * Setup keyboard shortcuts
  * @param {EditorUIHandlers} handlers
  * @param {import('./types.js').EditorState} state
- * @param {{ onOpenFrameGrid?: () => void }} [options]
+ * @param {{ onOpenFrameGrid?: () => void, onOpenSceneGrid?: () => void }} [options]
  * @returns {() => void} Cleanup function
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
@@ -554,6 +596,11 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       case 'F':
         e.preventDefault();
         options.onOpenFrameGrid?.();
+        break;
+      case 's':
+      case 'S':
+        e.preventDefault();
+        options.onOpenSceneGrid?.();
         break;
       case 'e':
         if (e.ctrlKey || e.metaKey) {
@@ -840,6 +887,40 @@ function openFrameGridModal(container, state, handlers, onClose) {
     callbacks: {
       onApply: (range) => {
         handlers.onRangeChange(range);
+        cleanup();
+        onClose?.();
+      },
+      onCancel: () => {
+        cleanup();
+        onClose?.();
+      },
+    },
+  });
+
+  return cleanup;
+}
+
+/**
+ * Open Scene Grid Modal
+ * @param {HTMLElement} container - Container to render modal into
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @param {number} fps - Frames per second
+ * @param {() => void} [onClose] - Callback when modal closes
+ * @returns {() => void} Cleanup function
+ */
+function openSceneGridModal(container, state, handlers, fps, onClose) {
+  if (!state.clip) return () => {};
+
+  const { cleanup } = renderSceneGridModal({
+    container: document.body,
+    frames: state.clip.frames,
+    fps,
+    callbacks: {
+      onApply: (range) => {
+        handlers.onRangeChange(range);
+        // Also jump playhead to start of selected scene
+        handlers.onFrameChange(range.start);
         cleanup();
         onClose?.();
       },
