@@ -381,6 +381,7 @@ function renderSettings(settings, handlers, cleanups) {
     createElement('button', {
       className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''}`,
       type: 'button',
+      'data-setting': 'sceneDetection',
       'aria-pressed': String(settings.sceneDetection),
       title: 'Automatically detect scene changes when creating a clip',
     }, [settings.sceneDetection ? 'On' : 'Off'])
@@ -451,5 +452,19 @@ export function updateBufferStatus(container, stats) {
     statValues[1].textContent = formatDuration(stats.duration);
     statValues[2].textContent = formatBytes(stats.memoryMB * 1024 * 1024);
     statValues[3].textContent = String(stats.fps);
+  }
+}
+
+/**
+ * Update scene detection toggle button without full re-render
+ * @param {HTMLElement} container
+ * @param {boolean} enabled
+ */
+export function updateSceneDetectionToggle(container, enabled) {
+  const toggle = container.querySelector('[data-setting="sceneDetection"]');
+  if (toggle) {
+    toggle.textContent = enabled ? 'On' : 'Off';
+    toggle.classList.toggle('btn-toggle--active', enabled);
+    toggle.setAttribute('aria-pressed', String(enabled));
   }
 }

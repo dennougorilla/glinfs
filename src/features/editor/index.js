@@ -35,7 +35,7 @@ import {
 } from './state.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
-import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader } from './ui.js';
+import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
@@ -58,6 +58,9 @@ let overlayCanvas = null;
 
 /** @type {import('../scene-detection/manager.js').SceneDetectionManager | null} */
 let sceneDetectionManager = null;
+
+/** @type {(() => void)[]} */
+let scenePanelCleanups = [];
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -288,6 +291,25 @@ export function initEditor() {
           gridBtn.textContent = state.showGrid ? 'On' : 'Off';
           gridBtn.setAttribute('aria-pressed', String(state.showGrid));
         }
+      }
+
+      // Update scenes panel when scene detection state changes
+      if (state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
+          state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
+          state.scenes !== prevState.scenes) {
+        // Clean up previous scene panel event listeners
+        scenePanelCleanups.forEach((fn) => fn());
+        // Update panel and collect new cleanups
+        scenePanelCleanups = updateScenesPanel(container, state, {
+          onTogglePlay: handleTogglePlay,
+          onFrameChange: handleFrameChange,
+          onRangeChange: handleRangeChange,
+          onCropChange: handleCropChange,
+          onToggleGrid: handleToggleGrid,
+          onAspectRatioChange: handleAspectRatioChange,
+          onSpeedChange: handleSpeedChange,
+          onExport: handleExport,
+        });
       }
     }, 16) // ~60fps updates
   );
@@ -615,6 +637,10 @@ function cleanup() {
     timelineCleanup();
     timelineCleanup = null;
   }
+
+  // Clean up scene panel event listeners
+  scenePanelCleanups.forEach((fn) => fn());
+  scenePanelCleanups = [];
 
   baseCanvas = null;
   overlayCanvas = null;

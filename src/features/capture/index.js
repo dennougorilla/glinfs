@@ -20,7 +20,7 @@ import {
   stopScreenCapture,
   createVideoElement,
 } from './api.js';
-import { renderCaptureScreen, updateBufferStatus } from './ui.js';
+import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } from './ui.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
@@ -349,8 +349,15 @@ function handleSettingsChange(newSettings) {
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
 
-  // Re-render to reflect settings change in UI
   const container = qsRequired('#main-content');
+
+  // Only sceneDetection changed - do targeted update without re-render
+  if (newSettings.sceneDetection !== undefined && Object.keys(newSettings).length === 1) {
+    updateSceneDetectionToggle(container, store.getState().settings.sceneDetection);
+    return;
+  }
+
+  // For other settings (fps, bufferDuration), full re-render is required
   render(container);
 }
 
