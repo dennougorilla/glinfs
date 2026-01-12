@@ -325,17 +325,10 @@ describe('createVideoFrameFromElement', () => {
       throw new Error('GPU resource exhausted');
     });
 
-    // Spy on console.error
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
     // Act
     const result = createVideoFrameFromElement(mockVideo);
 
-    // Assert
+    // Assert - should return null without crashing
     expect(result).toBeNull();
-    expect(consoleSpy).toHaveBeenCalled();
-
-    // Cleanup
-    consoleSpy.mockRestore();
   });
 });

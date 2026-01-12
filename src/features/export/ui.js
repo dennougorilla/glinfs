@@ -59,6 +59,7 @@ function createExportIcon() {
  * @property {() => void} onBackToEditor
  * @property {() => void} onTogglePlay - Toggle preview playback
  * @property {() => void} onAdjustSettings - Return to settings after export complete
+ * @property {() => void} onCreateNew - Start new capture, releasing current frames
  */
 
 /** @type {readonly [1, 2, 3, 4, 5]} */
@@ -690,6 +691,17 @@ function renderComplete(job, handlers, cleanups) {
   cleanups.push(on(adjustBtn, 'click', handlers.onAdjustSettings));
   secondaryActions.appendChild(adjustBtn);
 
+  const createNewBtn = createElement(
+    'button',
+    { className: 'btn-action-secondary btn-create-new', type: 'button' },
+    [
+      createPlusSVG(),
+      createElement('span', {}, ['Create New GIF']),
+    ]
+  );
+  cleanups.push(on(createNewBtn, 'click', handlers.onCreateNew));
+  secondaryActions.appendChild(createNewBtn);
+
   infoSection.appendChild(secondaryActions);
 
   // Back to editor link
@@ -770,6 +782,22 @@ function createSettingsSVG() {
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
   svg.innerHTML = '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>';
+  return svg;
+}
+
+/**
+ * Create plus SVG icon
+ * @returns {SVGSVGElement}
+ */
+function createPlusSVG() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.innerHTML = '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>';
   return svg;
 }
 

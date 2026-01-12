@@ -33,6 +33,9 @@ let fps = 30;
 /** @type {boolean} */
 let isCapturing = false;
 
+/** @type {boolean} */
+let pendingRequest = false;
+
 /**
  * Handle messages from main thread
  * @param {MessageEvent} e
@@ -76,19 +79,26 @@ self.onmessage = (e) => {
 function startCapture() {
   if (isCapturing) return;
   isCapturing = true;
+  pendingRequest = false;
 
   const interval = 1000 / fps;
 
   // Request first frame immediately
+  pendingRequest = true;
   self.postMessage({ type: 'FRAME_REQUEST', payload: { timestamp: Date.now() } });
 
   // Start interval for subsequent frames
   captureIntervalId = setInterval(() => {
     if (!isCapturing) return;
+
+    // Backpressure: skip if previous request is still pending
+    if (pendingRequest) {
+      return;
+    }
+
+    pendingRequest = true;
     self.postMessage({ type: 'FRAME_REQUEST', payload: { timestamp: Date.now() } });
   }, interval);
-
-  console.log('[CaptureWorker] Started capture loop at', fps, 'fps');
 }
 
 /**
@@ -96,13 +106,12 @@ function startCapture() {
  */
 function stopCapture() {
   isCapturing = false;
+  pendingRequest = false;
 
   if (captureIntervalId !== null) {
     clearInterval(captureIntervalId);
     captureIntervalId = null;
   }
-
-  console.log('[CaptureWorker] Stopped capture loop');
 }
 
 /**
@@ -111,6 +120,9 @@ function stopCapture() {
  * @param {number} timestamp
  */
 function handleFrameResponse(bitmap, timestamp) {
+  // Clear pending flag to allow next request
+  pendingRequest = false;
+
   if (!bitmap || !isCapturing) {
     return;
   }
@@ -173,6 +185,6 @@ function clearBuffer() {
     frame.bitmap?.close();
   }
   frameBuffer = [];
+  pendingRequest = false;
   sendStats();
-  console.log('[CaptureWorker] Buffer cleared');
 }

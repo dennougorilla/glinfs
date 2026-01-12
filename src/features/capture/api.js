@@ -128,8 +128,7 @@ export function createVideoFrameFromElement(video) {
     return new VideoFrame(video, {
       timestamp: performance.now() * 1000, // microseconds
     });
-  } catch (err) {
-    console.error('[Capture] Failed to create VideoFrame from video element:', err);
+  } catch {
     return null;
   }
 }

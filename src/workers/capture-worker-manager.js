@@ -66,7 +66,6 @@ export class CaptureWorkerManager {
     }
 
     this.#isInitialized = true;
-    console.log('[CaptureWorkerManager] Initialized');
   }
 
   /**
@@ -84,7 +83,6 @@ export class CaptureWorkerManager {
    */
   start(fps, maxFrames) {
     if (!this.#isInitialized) {
-      console.error('[CaptureWorkerManager] Not initialized');
       return;
     }
 
@@ -109,7 +107,6 @@ export class CaptureWorkerManager {
   requestFrames() {
     return new Promise((resolve) => {
       if (!this.#isInitialized) {
-        console.error('[CaptureWorkerManager] Not initialized');
         resolve([]);
         return;
       }
@@ -139,7 +136,6 @@ export class CaptureWorkerManager {
     this.#onStatsUpdate = null;
     this.#pendingFramesCallback = null;
     this.#isInitialized = false;
-    console.log('[CaptureWorkerManager] Terminated');
   }
 
   /**
@@ -182,6 +178,15 @@ export class CaptureWorkerManager {
    */
   #handleWorkerError(e) {
     console.error('[CaptureWorkerManager] Worker error:', e.message);
+
+    // Reject any pending frame requests with empty result
+    if (this.#pendingFramesCallback) {
+      this.#pendingFramesCallback([]);
+      this.#pendingFramesCallback = null;
+    }
+
+    // Mark as uninitialized to prevent further operations
+    this.#isInitialized = false;
   }
 
   /**
@@ -215,8 +220,7 @@ export class CaptureWorkerManager {
       // This is the key difference from MediaStreamTrackProcessor.read()
       const bitmap = await createImageBitmap(this.#video);
       this.#sendFrameResponse(bitmap, timestamp);
-    } catch (err) {
-      console.error('[CaptureWorkerManager] Frame capture error:', err);
+    } catch {
       this.#sendFrameResponse(null, timestamp);
     }
   }

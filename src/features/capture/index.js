@@ -156,7 +156,6 @@ async function handleStart() {
     const maxFrames = calculateMaxFrames(store.getState().settings);
     workerManager.start(fps, maxFrames);
 
-    console.log('[Capture] Started hybrid worker capture at', fps, 'fps, maxFrames:', maxFrames);
 
     // Re-render with video preview
     const container = qsRequired('#main-content');
@@ -233,7 +232,6 @@ function handleStop(preserveBuffer = true) {
   store.setState((currentState) => stopCapture(currentState));
   emit('capture:stopped', {});
 
-  console.log('[Capture] Stopped capture, preserveBuffer:', preserveBuffer);
 
   // Re-render
   const container = qsRequired('#main-content');
@@ -280,7 +278,6 @@ async function handleCreateClip() {
   const imageBitmapFrames = await workerManager.requestFrames();
 
   if (imageBitmapFrames.length === 0) {
-    console.warn('[Capture] No frames to create clip');
     return;
   }
 
@@ -321,7 +318,6 @@ async function handleCreateClip() {
   }
 
   if (videoFrames.length === 0) {
-    console.error('[Capture] No valid frames could be created');
     return;
   }
 

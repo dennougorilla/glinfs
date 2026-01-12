@@ -214,9 +214,9 @@ describe('validateClipPayload', () => {
 describe('validateEditorPayload', () => {
   it('returns valid for correct payload', () => {
     const payload = {
-      frames: [createMockFrame()],
+      selectedRange: { start: 0, end: 10 },
       cropArea: null,
-      clip: {},
+      clip: { frames: [createMockFrame()] },
       fps: 30,
     };
 
@@ -224,24 +224,36 @@ describe('validateEditorPayload', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('returns invalid for empty frames', () => {
+  it('returns invalid for missing selectedRange', () => {
     const payload = {
-      frames: [],
       cropArea: null,
-      clip: {},
+      clip: { frames: [createMockFrame()] },
       fps: 30,
     };
 
     const result = validateEditorPayload(payload);
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('EditorPayload.frames cannot be empty');
+    expect(result.errors).toContain('EditorPayload.selectedRange must be an object');
+  });
+
+  it('returns invalid for invalid selectedRange', () => {
+    const payload = {
+      selectedRange: { start: 10, end: 5 }, // start > end
+      cropArea: null,
+      clip: { frames: [createMockFrame()] },
+      fps: 30,
+    };
+
+    const result = validateEditorPayload(payload);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('EditorPayload.selectedRange.start must not exceed end');
   });
 
   it('accepts null crop area', () => {
     const payload = {
-      frames: [createMockFrame()],
+      selectedRange: { start: 0, end: 10 },
       cropArea: null,
-      clip: {},
+      clip: { frames: [createMockFrame()] },
       fps: 30,
     };
 
@@ -251,9 +263,9 @@ describe('validateEditorPayload', () => {
 
   it('accepts valid crop area', () => {
     const payload = {
-      frames: [createMockFrame()],
+      selectedRange: { start: 0, end: 10 },
       cropArea: { x: 0, y: 0, width: 100, height: 100 },
-      clip: {},
+      clip: { frames: [createMockFrame()] },
       fps: 30,
     };
 
@@ -271,9 +283,9 @@ describe('resetAppStore', () => {
     });
 
     setEditorPayload({
-      frames: [createMockFrame()],
+      selectedRange: { start: 0, end: 10 },
       cropArea: null,
-      clip: {},
+      clip: { frames: [createMockFrame()] },
       fps: 30,
     });
 

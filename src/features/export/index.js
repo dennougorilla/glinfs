@@ -4,7 +4,7 @@
  */
 
 import { emit } from '../../shared/bus.js';
-import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult } from '../../shared/app-store.js';
+import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult, releaseAllFramesAndReset } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder } from '../../shared/utils/canvas.js';
 import { navigate } from '../../shared/router.js';
@@ -179,6 +179,7 @@ function render(container) {
     onBackToEditor: handleBackToEditor,
     onTogglePlay: handleTogglePlay,
     onAdjustSettings: handleAdjustSettings,
+    onCreateNew: handleCreateNew,
   }, clipInfo);
 
   uiCleanup = cleanup;
@@ -363,6 +364,25 @@ function handleAdjustSettings() {
 
   // Start playback loop for preview
   startPlaybackLoop();
+}
+
+/**
+ * Handle "Create New GIF" button click
+ * Releases all VideoFrame resources and navigates to Capture
+ */
+function handleCreateNew() {
+  if (!store) return;
+
+  // Reset export state
+  store.setState(resetExport);
+
+  // Release all VideoFrame resources and clear all payloads
+  releaseAllFramesAndReset();
+
+  emit('export:new-session', {});
+
+  // Navigate to capture for fresh start
+  navigate('/capture');
 }
 
 // ============================================================
