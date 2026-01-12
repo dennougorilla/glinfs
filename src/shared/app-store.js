@@ -26,6 +26,16 @@
  */
 
 /**
+ * @typedef {Object} ScreenCaptureState
+ * @property {MediaStream} stream - Active screen capture stream
+ * @property {HTMLVideoElement} videoElement - Video element for capture
+ * @property {MediaStreamTrack} captureTrack - Video track for event handling
+ * @property {import('./store.js').Store<import('../features/capture/types.js').CaptureState>} store - Capture store
+ * @property {import('../workers/capture-worker-manager.js').CaptureWorkerManager} workerManager - Worker manager
+ * @property {import('../features/capture/types.js').CaptureSettings} settings - Capture settings
+ */
+
+/**
  * @typedef {Object} AppState
  * @property {ClipPayload|null} clipPayload - Data from capture for editor
  * @property {EditorPayload|null} editorPayload - Data from editor for export
@@ -36,6 +46,9 @@ const state = {
   clipPayload: null,
   editorPayload: null,
 };
+
+/** @type {Partial<ScreenCaptureState>|null} */
+let screenCaptureState = null;
 
 // ============================================================
 // Internal: Frame Cleanup
@@ -153,6 +166,8 @@ export function releaseAllFramesAndReset() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
+  // Also clear screen capture state for fresh start
+  clearScreenCaptureState();
 }
 
 // ============================================================
@@ -275,6 +290,56 @@ export function clearExportResult() {
 }
 
 // ============================================================
+// ScreenCaptureState (persist screen selection across navigation)
+// ============================================================
+
+/**
+ * Get stored screen capture state
+ * @returns {Partial<ScreenCaptureState>|null}
+ */
+export function getScreenCaptureState() {
+  return screenCaptureState;
+}
+
+/**
+ * Store screen capture state for persistence across navigation
+ * @param {Partial<ScreenCaptureState>} captureState
+ */
+export function setScreenCaptureState(captureState) {
+  screenCaptureState = captureState;
+}
+
+/**
+ * Clear stored screen capture state and stop stream
+ * @param {boolean} [stopStream=true] - If true, stop the MediaStream
+ */
+export function clearScreenCaptureState(stopStream = true) {
+  if (screenCaptureState) {
+    if (stopStream && screenCaptureState.stream) {
+      screenCaptureState.stream.getTracks().forEach((track) => track.stop());
+    }
+    if (screenCaptureState.workerManager) {
+      screenCaptureState.workerManager.terminate();
+    }
+    if (screenCaptureState.videoElement) {
+      screenCaptureState.videoElement.pause();
+      screenCaptureState.videoElement.srcObject = null;
+    }
+  }
+  screenCaptureState = null;
+}
+
+/**
+ * Check if there's an active screen capture that can be restored
+ * @returns {boolean}
+ */
+export function hasActiveScreenCapture() {
+  if (!screenCaptureState?.stream) return false;
+  const tracks = screenCaptureState.stream.getVideoTracks();
+  return tracks.length > 0 && tracks[0].readyState === 'live';
+}
+
+// ============================================================
 // Debug / Testing
 // ============================================================
 
@@ -285,4 +350,5 @@ export function resetAppStore() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
+  clearScreenCaptureState();
 }
