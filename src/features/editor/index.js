@@ -34,7 +34,7 @@ import {
   setSceneDetectionError,
 } from './state.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
+import { constrainAspectRatio, centerCropAfterConstraint, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
 import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
@@ -504,18 +504,8 @@ function handleAspectRatioChange(ratio) {
 
     // If cropArea exists, apply constraint and maintain center position
     if (state.cropArea) {
-      const originalCrop = state.cropArea;
-      const constrained = constrainAspectRatio(originalCrop, ratio);
-
-      // Adjust position to maintain center
-      const dx = (originalCrop.width - constrained.width) / 2;
-      const dy = (originalCrop.height - constrained.height) / 2;
-      const centered = {
-        ...constrained,
-        x: originalCrop.x + dx,
-        y: originalCrop.y + dy,
-      };
-
+      const constrained = constrainAspectRatio(state.cropArea, ratio);
+      const centered = centerCropAfterConstraint(state.cropArea, constrained);
       newState = updateCrop(newState, centered);
     }
 
