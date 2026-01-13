@@ -8,7 +8,7 @@ import { frameToTimecode, formatDurationPrecise } from '../../shared/utils/forma
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { calculateSelection, calculateSelectionInfo, getOutputDimensions, calculateCropFromDrag, clampCropArea, resizeCropByHandle, moveCrop, detectBoundaryHit } from './core.js';
-import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle } from './api.js';
+import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle, createThumbnailCanvas } from './api.js';
 import { renderFrameGridModal } from './frame-grid.js';
 
 /**
@@ -268,8 +268,25 @@ export function renderEditorScreen(container, state, handlers, fps) {
   toolbar.appendChild(toolbarRight);
   screen.appendChild(toolbar);
 
-  // Content area (preview + sidebar)
+  // Content area (left sidebar + preview + right sidebar)
   const content = createElement('div', { className: 'editor-content' });
+
+  // Left Sidebar - Scenes with Thumbnails
+  const leftSidebar = createElement('div', { className: 'editor-sidebar-left' });
+  const leftPanelContent = createElement('div', { className: 'panel-content' });
+
+  // Scenes sidebar header
+  const scenesHeader = createElement('div', { className: 'scenes-sidebar-header' }, [
+    createElement('div', { className: 'property-group-title' }, ['Scenes']),
+  ]);
+  leftPanelContent.appendChild(scenesHeader);
+
+  // Scenes container - will be populated by updateScenesSidebar
+  const scenesContainer = createElement('div', { className: 'scenes-sidebar-content', 'data-scenes-container': 'true' });
+  leftPanelContent.appendChild(scenesContainer);
+
+  leftSidebar.appendChild(leftPanelContent);
+  content.appendChild(leftSidebar);
 
   // Preview Panel
   const previewPanel = createElement('div', { className: 'editor-preview-panel' });
@@ -388,76 +405,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
   gridGroup.querySelector('.property-row').appendChild(gridBtn);
   panelContent.appendChild(gridGroup);
 
-  // Scenes section (shown when scene detection is active or completed)
-  if (state.sceneDetectionStatus !== 'idle') {
-    const scenesGroup = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
-      createElement('div', { className: 'property-group-title' }, ['Scenes']),
-    ]);
-
-    if (state.sceneDetectionStatus === 'detecting') {
-      // Progress indicator
-      const progressContainer = createElement('div', { className: 'scene-detection-progress' });
-      const progressBar = createElement('div', { className: 'progress-bar' });
-      const progressFill = createElement('div', {
-        className: 'progress-fill',
-        style: `width: ${state.sceneDetectionProgress}%`,
-      });
-      progressBar.appendChild(progressFill);
-      progressContainer.appendChild(
-        createElement('div', { className: 'progress-label' }, [
-          `Detecting scenes... ${state.sceneDetectionProgress}%`,
-        ])
-      );
-      progressContainer.appendChild(progressBar);
-      scenesGroup.appendChild(progressContainer);
-    } else if (state.sceneDetectionStatus === 'error') {
-      // Error state
-      scenesGroup.appendChild(
-        createElement('div', { className: 'scene-detection-error' }, [
-          createElement('span', { className: 'error-icon' }, ['\u26A0']),
-          state.sceneDetectionError || 'Detection failed',
-        ])
-      );
-    } else if (state.sceneDetectionStatus === 'completed') {
-      if (state.scenes.length === 0) {
-        scenesGroup.appendChild(
-          createElement('div', { className: 'scenes-empty' }, ['No scene changes detected'])
-        );
-      } else {
-        // Scene list
-        const sceneList = createElement('div', { className: 'scene-list' });
-        state.scenes.forEach((scene, index) => {
-          const sceneItem = createElement('button', {
-            className: 'scene-item',
-            type: 'button',
-            'data-scene-id': scene.id,
-            title: `Go to scene ${index + 1} (Frame ${scene.startFrame})`,
-          }, [
-            createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
-            createElement('span', { className: 'scene-frames' }, [
-              `${scene.startFrame} - ${scene.endFrame}`,
-            ]),
-          ]);
-          cleanups.push(
-            on(sceneItem, 'click', () => {
-              handlers.onFrameChange(scene.startFrame);
-              handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
-            })
-          );
-          sceneList.appendChild(sceneItem);
-        });
-        scenesGroup.appendChild(sceneList);
-        scenesGroup.appendChild(
-          createElement('div', { className: 'scenes-count' }, [
-            `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-          ])
-        );
-      }
-    }
-
-    panelContent.appendChild(scenesGroup);
-  }
-
   // Clear crop button
   if (state.cropArea) {
     const clearBtn = createElement(
@@ -560,6 +507,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
 
   container.innerHTML = '';
   container.appendChild(screen);
+
+  // Populate scenes sidebar with thumbnails
+  cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
 
   // Setup keyboard shortcuts
   cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
@@ -893,49 +843,30 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
 }
 
 /**
- * Update scenes panel in sidebar without full re-render
- * @param {HTMLElement} container - The editor screen container
+ * Render scenes sidebar with thumbnails (left sidebar)
+ * @param {HTMLElement} container - The scenes container element
  * @param {import('./types.js').EditorState} state - Current editor state
  * @param {EditorUIHandlers} handlers - UI handlers
  * @returns {(() => void)[]} Cleanup functions for event listeners
  */
-export function updateScenesPanel(container, state, handlers) {
+function renderScenesSidebar(container, state, handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
-  const panelContent = container.querySelector('.panel-content');
-  if (!panelContent) return cleanups;
+  // Clear container
+  container.innerHTML = '';
 
-  let scenesPanel = container.querySelector('[data-panel="scenes"]');
-
-  // If idle, remove panel if it exists
+  // Show different content based on scene detection status
   if (state.sceneDetectionStatus === 'idle') {
-    if (scenesPanel) {
-      scenesPanel.remove();
-    }
+    container.appendChild(
+      createElement('div', { className: 'scenes-sidebar-empty' }, [
+        createElement('div', { className: 'scenes-sidebar-icon' }, ['\uD83C\uDFAC']),
+        createElement('div', { className: 'scenes-sidebar-text' }, ['Scene detection runs automatically']),
+      ])
+    );
     return cleanups;
   }
 
-  // Create panel if it doesn't exist
-  if (!scenesPanel) {
-    scenesPanel = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
-      createElement('div', { className: 'property-group-title' }, ['Scenes']),
-    ]);
-    // Insert before clear crop button if exists (direct child only), otherwise append
-    const clearBtn = panelContent.querySelector(':scope > .btn-secondary');
-    if (clearBtn) {
-      panelContent.insertBefore(scenesPanel, clearBtn);
-    } else {
-      panelContent.appendChild(scenesPanel);
-    }
-  }
-
-  // Clear existing content except title - use replaceChildren for safety
-  const title = scenesPanel.querySelector('.property-group-title');
-  const titleClone = title ? title.cloneNode(true) : createElement('div', { className: 'property-group-title' }, ['Scenes']);
-  scenesPanel.replaceChildren(titleClone);
-
-  // Render content based on status
   if (state.sceneDetectionStatus === 'detecting') {
     const progressContainer = createElement('div', { className: 'scene-detection-progress' });
     const progressBar = createElement('div', { className: 'progress-bar' });
@@ -946,53 +877,118 @@ export function updateScenesPanel(container, state, handlers) {
     progressBar.appendChild(progressFill);
     progressContainer.appendChild(
       createElement('div', { className: 'progress-label' }, [
-        `Detecting scenes... ${state.sceneDetectionProgress}%`,
+        `Detecting... ${state.sceneDetectionProgress}%`,
       ])
     );
     progressContainer.appendChild(progressBar);
-    scenesPanel.appendChild(progressContainer);
-  } else if (state.sceneDetectionStatus === 'error') {
-    scenesPanel.appendChild(
+    container.appendChild(progressContainer);
+    return cleanups;
+  }
+
+  if (state.sceneDetectionStatus === 'error') {
+    container.appendChild(
       createElement('div', { className: 'scene-detection-error' }, [
         createElement('span', { className: 'error-icon' }, ['\u26A0']),
         state.sceneDetectionError || 'Detection failed',
       ])
     );
-  } else if (state.sceneDetectionStatus === 'completed') {
-    if (state.scenes.length === 0) {
-      scenesPanel.appendChild(
-        createElement('div', { className: 'scenes-empty' }, ['No scene changes detected'])
-      );
-    } else {
-      const sceneList = createElement('div', { className: 'scene-list' });
-      state.scenes.forEach((scene, index) => {
-        const sceneItem = createElement('button', {
-          className: 'scene-item',
-          type: 'button',
-          'data-scene-id': scene.id,
-          title: `Select scene ${index + 1} (Frames ${scene.startFrame}-${scene.endFrame})`,
-        }, [
-          createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
-          createElement('span', { className: 'scene-frames' }, [
-            `${scene.startFrame} - ${scene.endFrame}`,
-          ]),
-        ]);
-        cleanups.push(
-          on(sceneItem, 'click', () => {
-            handlers.onFrameChange(scene.startFrame);
-            handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
-          })
-        );
-        sceneList.appendChild(sceneItem);
-      });
-      scenesPanel.appendChild(sceneList);
-      scenesPanel.appendChild(
-        createElement('div', { className: 'scenes-count' }, [
-          `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-        ])
-      );
-    }
+    return cleanups;
   }
+
+  // Completed - render scenes with thumbnails
+  if (state.scenes.length === 0) {
+    container.appendChild(
+      createElement('div', { className: 'scenes-sidebar-empty' }, [
+        createElement('div', { className: 'scenes-sidebar-icon' }, ['\u2713']),
+        createElement('div', { className: 'scenes-sidebar-text' }, ['No scene changes detected']),
+        createElement('div', { className: 'scenes-sidebar-subtext' }, ['Clip plays as single scene']),
+      ])
+    );
+    return cleanups;
+  }
+
+  // Create scenes list with thumbnails
+  const scenesList = createElement('div', { className: 'scenes-thumbnail-list' });
+
+  state.scenes.forEach((scene, index) => {
+    const isSelected = state.selectedRange.start === scene.startFrame &&
+                       state.selectedRange.end === scene.endFrame;
+
+    const sceneCard = createElement('button', {
+      className: `scene-thumbnail-card ${isSelected ? 'is-selected' : ''}`,
+      type: 'button',
+      'data-scene-id': scene.id,
+      title: `Scene ${index + 1}: Frames ${scene.startFrame}-${scene.endFrame}`,
+    });
+
+    // Create thumbnail from first frame of scene
+    const thumbnailContainer = createElement('div', { className: 'scene-thumbnail' });
+    if (state.clip && state.clip.frames[scene.startFrame]) {
+      try {
+        const canvas = createThumbnailCanvas(state.clip.frames[scene.startFrame], 160);
+        canvas.className = 'scene-thumbnail-canvas';
+        thumbnailContainer.appendChild(canvas);
+      } catch (e) {
+        thumbnailContainer.appendChild(
+          createElement('div', { className: 'scene-thumbnail-placeholder' }, ['\uD83C\uDFA5'])
+        );
+      }
+    }
+    sceneCard.appendChild(thumbnailContainer);
+
+    // Scene info
+    const sceneInfo = createElement('div', { className: 'scene-thumbnail-info' }, [
+      createElement('div', { className: 'scene-thumbnail-header' }, [
+        createElement('span', { className: 'scene-thumbnail-number' }, [`Scene ${index + 1}`]),
+        createElement('span', { className: 'scene-thumbnail-duration' }, [
+          `${scene.endFrame - scene.startFrame + 1}f`,
+        ]),
+      ]),
+      createElement('div', { className: 'scene-thumbnail-range' }, [
+        `${scene.startFrame} \u2192 ${scene.endFrame}`,
+      ]),
+    ]);
+    sceneCard.appendChild(sceneInfo);
+
+    cleanups.push(
+      on(sceneCard, 'click', () => {
+        handlers.onFrameChange(scene.startFrame);
+        handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
+      })
+    );
+
+    scenesList.appendChild(sceneCard);
+  });
+
+  container.appendChild(scenesList);
+
+  // Scene count footer
+  container.appendChild(
+    createElement('div', { className: 'scenes-sidebar-footer' }, [
+      `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
+    ])
+  );
+
+  return cleanups;
+}
+
+/**
+ * Update scenes sidebar in left panel without full re-render
+ * @param {HTMLElement} container - The editor screen container
+ * @param {import('./types.js').EditorState} state - Current editor state
+ * @param {EditorUIHandlers} handlers - UI handlers
+ * @returns {(() => void)[]} Cleanup functions for event listeners
+ */
+export function updateScenesPanel(container, state, handlers) {
+  /** @type {(() => void)[]} */
+  const cleanups = [];
+
+  // Find the scenes container in the left sidebar
+  const scenesContainer = container.querySelector('[data-scenes-container]');
+  if (!scenesContainer) return cleanups;
+
+  // Re-render the scenes sidebar
+  cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
 
   return cleanups;
 }
@@ -1012,6 +1008,7 @@ function openFrameGridModal(container, state, handlers, onClose) {
     container: document.body,
     frames: state.clip.frames,
     initialRange: state.selectedRange,
+    scenes: state.scenes,
     callbacks: {
       onApply: (range) => {
         handlers.onRangeChange(range);
