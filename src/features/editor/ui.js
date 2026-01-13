@@ -458,8 +458,32 @@ export function renderEditorScreen(container, state, handlers, fps) {
     panelContent.appendChild(scenesGroup);
   }
 
-  // Clear crop button
+  // Crop info panel and clear button
   if (state.cropArea) {
+    const { x, y, width, height } = state.cropArea;
+    const cropInfoGroup = createElement('div', { className: 'property-group crop-info-group' }, [
+      createElement('div', { className: 'property-group-title' }, ['Crop Range']),
+      createElement('div', { className: 'crop-info-grid' }, [
+        createElement('div', { className: 'crop-info-item' }, [
+          createElement('span', { className: 'crop-info-label' }, ['X']),
+          createElement('span', { className: 'crop-info-value' }, [String(Math.round(x))]),
+        ]),
+        createElement('div', { className: 'crop-info-item' }, [
+          createElement('span', { className: 'crop-info-label' }, ['Y']),
+          createElement('span', { className: 'crop-info-value' }, [String(Math.round(y))]),
+        ]),
+        createElement('div', { className: 'crop-info-item' }, [
+          createElement('span', { className: 'crop-info-label' }, ['W']),
+          createElement('span', { className: 'crop-info-value' }, [String(Math.round(width))]),
+        ]),
+        createElement('div', { className: 'crop-info-item' }, [
+          createElement('span', { className: 'crop-info-label' }, ['H']),
+          createElement('span', { className: 'crop-info-value' }, [String(Math.round(height))]),
+        ]),
+      ]),
+    ]);
+    panelContent.appendChild(cropInfoGroup);
+
     const clearBtn = createElement(
       'button',
       {
