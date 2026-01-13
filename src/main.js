@@ -12,7 +12,9 @@ import {
   setClipPayload,
   setEditorPayload,
   resetAppStore,
+  registerScreenCaptureCleanup,
 } from './shared/app-store.js';
+import { cleanupScreenCaptureResources } from './features/capture/api.js';
 
 // Test environment detection
 // Enable test hooks in development mode or when Playwright is detected
@@ -114,6 +116,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (versionElement) {
     versionElement.textContent = `v${__APP_VERSION__}`;
   }
+  // Register screen capture cleanup function (dependency injection)
+  // This ensures side effects are handled in capture/api.js, not app-store.js
+  registerScreenCaptureCleanup(cleanupScreenCaptureResources);
 
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');

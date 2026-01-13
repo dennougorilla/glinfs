@@ -139,6 +139,37 @@ export class CaptureWorkerManager {
   }
 
   /**
+   * Terminate worker with proper cleanup of ImageBitmap resources
+   * Sends CLEAR message and waits for completion before terminating
+   * @returns {Promise<void>}
+   */
+  async terminateWithCleanup() {
+    if (!this.#worker || !this.#isInitialized) {
+      this.terminate();
+      return;
+    }
+
+    // Send CLEAR and wait for STATS_UPDATE with frameCount=0
+    await new Promise((resolve) => {
+      const CLEANUP_TIMEOUT_MS = 100;
+      const timeout = setTimeout(resolve, CLEANUP_TIMEOUT_MS);
+
+      const handler = (e) => {
+        if (e.data.type === 'STATS_UPDATE' && e.data.payload.frameCount === 0) {
+          clearTimeout(timeout);
+          this.#worker?.removeEventListener('message', handler);
+          resolve();
+        }
+      };
+
+      this.#worker.addEventListener('message', handler);
+      this.#worker.postMessage({ type: 'CLEAR' });
+    });
+
+    this.terminate();
+  }
+
+  /**
    * Check if manager is initialized
    * @returns {boolean}
    */

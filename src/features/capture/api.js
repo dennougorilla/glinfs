@@ -132,3 +132,33 @@ export function createVideoFrameFromElement(video) {
     return null;
   }
 }
+
+/**
+ * Cleanup screen capture resources
+ * This function handles all side effects for screen capture cleanup
+ * @param {Partial<import('../../shared/app-store.js').ScreenCaptureState>|null} captureState
+ * @param {Object} [options]
+ * @param {boolean} [options.stopStream=true] - If true, stop the MediaStream
+ * @returns {Promise<void>}
+ */
+export async function cleanupScreenCaptureResources(captureState, options = {}) {
+  if (!captureState) return;
+
+  const { stopStream = true } = options;
+
+  // Stop MediaStream tracks
+  if (stopStream && captureState.stream) {
+    captureState.stream.getTracks().forEach((track) => track.stop());
+  }
+
+  // Cleanup worker with proper resource release (fixes memory leak)
+  if (captureState.workerManager) {
+    await captureState.workerManager.terminateWithCleanup();
+  }
+
+  // Cleanup video element
+  if (captureState.videoElement) {
+    captureState.videoElement.pause();
+    captureState.videoElement.srcObject = null;
+  }
+}

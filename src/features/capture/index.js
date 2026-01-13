@@ -4,7 +4,13 @@
  */
 
 import { emit } from '../../shared/bus.js';
-import { setClipPayload } from '../../shared/app-store.js';
+import {
+  setClipPayload,
+  getScreenCaptureState,
+  setScreenCaptureState,
+  clearScreenCaptureState,
+  hasActiveScreenCapture,
+} from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import {
@@ -47,6 +53,9 @@ let workerManager = null;
 /** @type {ReturnType<typeof throttle> | null} */
 let throttledUpdate = null;
 
+/** @type {(() => void) | null} */
+let storeUnsubscribe = null;
+
 /**
  * Initialize capture feature
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
@@ -57,8 +66,44 @@ export function initCapture(settings) {
   // Register test hooks
   registerTestHooks();
 
-  // Create store
-  store = createCaptureStore(settings);
+  // Check if we have a preserved screen capture to restore
+  const savedCapture = getScreenCaptureState();
+  const canRestore = savedCapture && hasActiveScreenCapture();
+
+  if (canRestore) {
+    // Restore from saved capture state
+    store = savedCapture.store;
+    videoElement = savedCapture.videoElement;
+    captureTrack = savedCapture.captureTrack;
+    workerManager = savedCapture.workerManager;
+
+    // Re-attach stream ended listener
+    if (captureTrack) {
+      const handleStreamEnded = () => {
+        handleStop();
+        clearScreenCaptureState(false); // Stream already ended
+        emit('capture:stopped', {});
+      };
+      captureTrack.addEventListener('ended', handleStreamEnded);
+      streamEndedCleanup = () => captureTrack.removeEventListener('ended', handleStreamEnded);
+    }
+
+    // Restart worker capture if we have a worker manager
+    if (workerManager && store) {
+      const state = store.getState();
+      const maxFrames = calculateMaxFrames(state.settings);
+      workerManager.start(state.settings.fps, maxFrames);
+    }
+
+    emit('capture:restored', { fromNavigation: true });
+  } else {
+    // Create fresh store (no saved capture or stream ended)
+    if (savedCapture) {
+      // Clean up invalid saved state
+      clearScreenCaptureState();
+    }
+    store = createCaptureStore(settings);
+  }
 
   // Initial render
   render(container);
@@ -71,7 +116,7 @@ export function initCapture(settings) {
     updateBufferStatus(container, state.stats);
   }, 100);
 
-  store.subscribe(throttledUpdate);
+  storeUnsubscribe = store.subscribe(throttledUpdate);
 
   return cleanup;
 }
@@ -109,6 +154,9 @@ function render(container) {
 async function handleStart() {
   if (!store) return;
 
+  // Clear any existing saved capture state when starting fresh
+  clearScreenCaptureState();
+
   try {
     const stream = await startScreenCapture();
 
@@ -122,6 +170,7 @@ async function handleStart() {
     // Listen for stream end
     const handleStreamEnded = () => {
       handleStop();
+      clearScreenCaptureState(false); // Stream already ended
       emit('capture:stopped', {});
     };
     videoTrack.addEventListener('ended', handleStreamEnded);
@@ -367,6 +416,7 @@ function handleSettingsChange(newSettings) {
  * SIMPLIFIED MODEL:
  * - Does NOT close frames (they live in clipPayload)
  * - Frames are only closed when a new clip is created
+ * - Preserves screen capture state for restoration on return
  */
 function cleanup() {
   // Cancel pending throttled updates before store = null
@@ -375,13 +425,52 @@ function cleanup() {
     throttledUpdate = null;
   }
 
-  // Stop capture and clear worker buffer
-  handleStop(false);
+  // Unsubscribe from store to prevent listener leak
+  if (storeUnsubscribe) {
+    storeUnsubscribe();
+    storeUnsubscribe = null;
+  }
 
-  // Terminate worker
-  if (workerManager) {
-    workerManager.terminate();
+  // Check if we have an active capture to preserve
+  const state = store?.getState();
+  const hasActiveCapture = state?.isSharing && state?.stream && captureTrack?.readyState === 'live';
+
+  if (hasActiveCapture) {
+    // Preserve screen capture state for restoration
+    // Stop the worker capture loop but keep the stream alive
+    if (workerManager) {
+      workerManager.stop();
+    }
+
+    // Remove stream ended listener (will be re-attached on restore)
+    if (streamEndedCleanup) {
+      streamEndedCleanup();
+      streamEndedCleanup = null;
+    }
+
+    // Store capture state for later restoration
+    setScreenCaptureState({
+      stream: state.stream,
+      videoElement: videoElement,
+      captureTrack: captureTrack,
+      store: store,
+      workerManager: workerManager,
+      settings: state.settings,
+    });
+
+    // Don't null out these references - they're now owned by app-store
+    videoElement = null;
+    captureTrack = null;
     workerManager = null;
+  } else {
+    // No active capture - do full cleanup
+    handleStop(false);
+
+    // Terminate worker
+    if (workerManager) {
+      workerManager.terminate();
+      workerManager = null;
+    }
   }
 
   if (uiCleanup) {
