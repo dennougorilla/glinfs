@@ -16,6 +16,12 @@ import {
 } from './shared/app-store.js';
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
 
+/**
+ * Application version string injected at build time by Vite
+ * @type {string}
+ */
+/* global __APP_VERSION__ */
+
 // Test environment detection
 // Enable test hooks in development mode or when Playwright is detected
 const IS_PLAYWRIGHT_TEST =
@@ -111,6 +117,11 @@ const routes = {
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', () => {
+  // Display app version in header
+  const versionElement = document.getElementById('app-version');
+  if (versionElement) {
+    versionElement.textContent = `v${__APP_VERSION__}`;
+  }
   // Register screen capture cleanup function (dependency injection)
   // This ensures side effects are handled in capture/api.js, not app-store.js
   registerScreenCaptureCleanup(cleanupScreenCaptureResources);

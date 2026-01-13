@@ -43,5 +43,12 @@
  * @typedef {import('./app-store.js').EditorPayload} EditorPayload
  */
 
+/**
+ * Application version string injected at build time by Vite.
+ * Defined in vite.config.js via `define: { __APP_VERSION__: ... }`
+ * Usage: Use `/* global __APP_VERSION__ *\/` in files that reference it.
+ * @global __APP_VERSION__
+ */
+
 // Export empty object for module resolution
 export {};

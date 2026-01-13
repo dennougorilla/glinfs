@@ -107,6 +107,16 @@ button:focus-visible,
   color: white;
 }
 
+.app-version {
+  padding: 2px 6px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-1);
+}
+
 /* Step Indicator */
 .step-indicator {
   display: flex;
