@@ -549,6 +549,15 @@ describe('constrainAspectRatio', () => {
     expect(result.width).toBe(100);
     expect(result.height).toBe(100);
   });
+
+  it('should preserve x and y position', () => {
+    const crop = { x: 150, y: 200, width: 300, height: 100, aspectRatio: 'free' };
+    const result = constrainAspectRatio(crop, '1:1');
+
+    // Position should remain unchanged
+    expect(result.x).toBe(150);
+    expect(result.y).toBe(200);
+  });
 });
 
 describe('HANDLE constants', () => {

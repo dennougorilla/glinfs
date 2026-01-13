@@ -498,16 +498,34 @@ function handleToggleGrid() {
 function handleAspectRatioChange(ratio) {
   if (!store) return;
 
-  const state = store.getState();
+  // Update selectedAspectRatio and cropArea atomically in single setState
+  store.setState((state) => {
+    let newState = setSelectedAspectRatio(state, ratio);
 
-  // Always update selectedAspectRatio (independent of cropArea)
-  store.setState((s) => setSelectedAspectRatio(s, ratio));
+    // If cropArea exists, apply constraint and maintain center position
+    if (state.cropArea) {
+      const originalCrop = state.cropArea;
+      const constrained = constrainAspectRatio(originalCrop, ratio);
 
-  // If cropArea exists, apply constraint to it
-  if (state.cropArea) {
-    const constrained = constrainAspectRatio(state.cropArea, ratio);
-    store.setState((s) => updateCrop(s, constrained));
-    emit('editor:crop', { crop: constrained });
+      // Adjust position to maintain center
+      const dx = (originalCrop.width - constrained.width) / 2;
+      const dy = (originalCrop.height - constrained.height) / 2;
+      const centered = {
+        ...constrained,
+        x: originalCrop.x + dx,
+        y: originalCrop.y + dy,
+      };
+
+      newState = updateCrop(newState, centered);
+    }
+
+    return newState;
+  });
+
+  // Emit event after state update completes
+  const updatedState = store.getState();
+  if (updatedState.cropArea) {
+    emit('editor:crop', { crop: updatedState.cropArea });
   }
 }
 
