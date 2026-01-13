@@ -11,6 +11,7 @@ import {
   moveCrop,
   clampCropArea,
   constrainAspectRatio,
+  centerCropAfterConstraint,
   detectBoundaryHit,
   normalizeSelectionRange,
   isFrameInRange,
@@ -548,6 +549,99 @@ describe('constrainAspectRatio', () => {
     // Width was 100, height was 300, for 1:1 should reduce height to 100
     expect(result.width).toBe(100);
     expect(result.height).toBe(100);
+  });
+
+  it('should preserve x and y position (does not center automatically)', () => {
+    const crop = { x: 150, y: 200, width: 300, height: 100, aspectRatio: 'free' };
+    const result = constrainAspectRatio(crop, '1:1');
+
+    // constrainAspectRatio copies x/y unchanged from input
+    // Callers must apply centerCropAfterConstraint separately if centering is needed
+    expect(result.x).toBe(150);
+    expect(result.y).toBe(200);
+  });
+});
+
+describe('centerCropAfterConstraint', () => {
+  it('should center crop when width is reduced (wide to square)', () => {
+    // Arrange
+    const original = { x: 100, y: 100, width: 300, height: 100, aspectRatio: 'free' };
+    const constrained = { x: 100, y: 100, width: 100, height: 100, aspectRatio: '1:1' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert - should shift right by (300-100)/2 = 100
+    expect(result.x).toBe(200);
+    expect(result.y).toBe(100);
+    expect(result.width).toBe(100);
+    expect(result.height).toBe(100);
+  });
+
+  it('should center crop when height is reduced (tall to square)', () => {
+    // Arrange
+    const original = { x: 100, y: 100, width: 100, height: 300, aspectRatio: 'free' };
+    const constrained = { x: 100, y: 100, width: 100, height: 100, aspectRatio: '1:1' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert - should shift down by (300-100)/2 = 100
+    expect(result.x).toBe(100);
+    expect(result.y).toBe(200);
+    expect(result.width).toBe(100);
+    expect(result.height).toBe(100);
+  });
+
+  it('should not change position when dimensions unchanged', () => {
+    // Arrange
+    const original = { x: 50, y: 75, width: 160, height: 90, aspectRatio: 'free' };
+    const constrained = { x: 50, y: 75, width: 160, height: 90, aspectRatio: '16:9' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert - no change since dimensions are the same
+    expect(result.x).toBe(50);
+    expect(result.y).toBe(75);
+  });
+
+  it('should handle both width and height reduction', () => {
+    // Arrange - crop that needs both dimensions adjusted
+    const original = { x: 0, y: 0, width: 400, height: 300, aspectRatio: 'free' };
+    const constrained = { x: 0, y: 0, width: 300, height: 200, aspectRatio: '3:2' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert - shift by (400-300)/2=50 and (300-200)/2=50
+    expect(result.x).toBe(50);
+    expect(result.y).toBe(50);
+  });
+
+  it('should preserve aspectRatio from constrained crop', () => {
+    // Arrange
+    const original = { x: 0, y: 0, width: 200, height: 100, aspectRatio: 'free' };
+    const constrained = { x: 0, y: 0, width: 100, height: 100, aspectRatio: '1:1' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert
+    expect(result.aspectRatio).toBe('1:1');
+  });
+
+  it('should return new object (immutability)', () => {
+    // Arrange
+    const original = { x: 100, y: 100, width: 200, height: 100, aspectRatio: 'free' };
+    const constrained = { x: 100, y: 100, width: 100, height: 100, aspectRatio: '1:1' };
+
+    // Act
+    const result = centerCropAfterConstraint(original, constrained);
+
+    // Assert
+    expect(result).not.toBe(original);
+    expect(result).not.toBe(constrained);
   });
 });
 

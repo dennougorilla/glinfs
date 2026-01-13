@@ -34,7 +34,7 @@ import {
   setSceneDetectionError,
 } from './state.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { constrainAspectRatio, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
+import { constrainAspectRatio, centerCropAfterConstraint, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
 import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
@@ -498,16 +498,24 @@ function handleToggleGrid() {
 function handleAspectRatioChange(ratio) {
   if (!store) return;
 
-  const state = store.getState();
+  // Update selectedAspectRatio and cropArea atomically in single setState
+  store.setState((state) => {
+    let newState = setSelectedAspectRatio(state, ratio);
 
-  // Always update selectedAspectRatio (independent of cropArea)
-  store.setState((s) => setSelectedAspectRatio(s, ratio));
+    // If cropArea exists, apply constraint and maintain center position
+    if (state.cropArea) {
+      const constrained = constrainAspectRatio(state.cropArea, ratio);
+      const centered = centerCropAfterConstraint(state.cropArea, constrained);
+      newState = updateCrop(newState, centered);
+    }
 
-  // If cropArea exists, apply constraint to it
-  if (state.cropArea) {
-    const constrained = constrainAspectRatio(state.cropArea, ratio);
-    store.setState((s) => updateCrop(s, constrained));
-    emit('editor:crop', { crop: constrained });
+    return newState;
+  });
+
+  // Emit event after state update completes
+  const updatedState = store.getState();
+  if (updatedState.cropArea) {
+    emit('editor:crop', { crop: updatedState.cropArea });
   }
 }
 

@@ -201,6 +201,7 @@ export function constrainAspectRatio(crop, ratio) {
 
   const targetRatio = ASPECT_RATIOS[ratio];
   if (!targetRatio) {
+    console.warn(`[Editor] constrainAspectRatio: Unknown ratio "${ratio}", falling back to free`);
     return { ...crop, aspectRatio: 'free' };
   }
 
@@ -221,6 +222,25 @@ export function constrainAspectRatio(crop, ratio) {
     width: newWidth,
     height: newHeight,
     aspectRatio: /** @type {import('./types.js').CropArea['aspectRatio']} */ (ratio),
+  };
+}
+
+/**
+ * Center a constrained crop relative to the original crop position.
+ * Use this after constrainAspectRatio to maintain visual center.
+ * @param {import('./types.js').CropArea} originalCrop - Original crop before constraint
+ * @param {import('./types.js').CropArea} constrainedCrop - Crop after constrainAspectRatio
+ * @returns {import('./types.js').CropArea}
+ */
+export function centerCropAfterConstraint(originalCrop, constrainedCrop) {
+  // Offset by half the size difference to keep visual center stationary
+  const dx = (originalCrop.width - constrainedCrop.width) / 2;
+  const dy = (originalCrop.height - constrainedCrop.height) / 2;
+
+  return {
+    ...constrainedCrop,
+    x: originalCrop.x + dx,
+    y: originalCrop.y + dy,
   };
 }
 
