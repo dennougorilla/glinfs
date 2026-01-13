@@ -11,26 +11,10 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           release-type: node
-          # Configuration for conventional commits
-          # feat: -> minor version bump
-          # fix: -> patch version bump
-          # feat!: or BREAKING CHANGE: -> major version bump
-
-  # Trigger deployment after a release is created
-  trigger-deploy:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger deployment
-        run: |
-          echo "Release ${{ needs.release-please.outputs.tag_name }} created!"
-          echo "Deployment will be triggered by the deploy.yml workflow."
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
