@@ -1066,10 +1066,14 @@ function openFrameGridModal(container, state, handlers, onClose) {
  * @param {HTMLElement} container - Editor container
  * @param {import('./types.js').CropArea | null} cropArea - Current crop area
  * @param {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop change handler
+ * @returns {(() => void)[]} Cleanup functions for event listeners
  */
 export function updateCropInfoPanel(container, cropArea, onCropChange) {
+  /** @type {(() => void)[]} */
+  const cleanups = [];
+
   const panel = container.querySelector('.crop-info-group');
-  if (!panel) return;
+  if (!panel) return cleanups;
 
   const values = cropArea
     ? [
@@ -1087,21 +1091,27 @@ export function updateCropInfoPanel(container, cropArea, onCropChange) {
 
   // Handle Clear Crop button visibility
   const sidebar = container.querySelector('.editor-sidebar .panel-content');
-  if (!sidebar) return;
+  if (!sidebar) return cleanups;
 
   const existingClearBtn = sidebar.querySelector('.btn-clear-crop');
 
   if (cropArea && !existingClearBtn) {
     // Add Clear Crop button
-    const clearBtn = document.createElement('button');
-    clearBtn.className = 'btn btn-secondary btn-clear-crop';
-    clearBtn.type = 'button';
-    clearBtn.style.cssText = 'width: 100%; margin-top: var(--space-4);';
-    clearBtn.textContent = 'Clear Crop';
-    clearBtn.addEventListener('click', () => onCropChange(null));
+    const clearBtn = createElement(
+      'button',
+      {
+        className: 'btn btn-secondary btn-clear-crop',
+        type: 'button',
+        style: 'width: 100%; margin-top: var(--space-4);',
+      },
+      ['Clear Crop']
+    );
+    cleanups.push(on(clearBtn, 'click', () => onCropChange(null)));
     sidebar.appendChild(clearBtn);
   } else if (!cropArea && existingClearBtn) {
     // Remove Clear Crop button
     existingClearBtn.remove();
   }
+
+  return cleanups;
 }

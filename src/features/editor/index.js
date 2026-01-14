@@ -62,6 +62,9 @@ let sceneDetectionManager = null;
 /** @type {(() => void)[]} */
 let scenePanelCleanups = [];
 
+/** @type {(() => void)[]} */
+let cropInfoPanelCleanups = [];
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
 
@@ -253,7 +256,10 @@ export function initEditor() {
 
       // Update crop info panel when crop changes
       if (state.cropArea !== prevState.cropArea) {
-        updateCropInfoPanel(container, state.cropArea, handleCropChange);
+        // Clean up previous crop info panel event listeners
+        cropInfoPanelCleanups.forEach((fn) => fn());
+        // Update panel and collect new cleanups
+        cropInfoPanelCleanups = updateCropInfoPanel(container, state.cropArea, handleCropChange);
       }
 
       // Update timeline selection
