@@ -299,10 +299,12 @@ export function initEditor() {
         }
       }
 
-      // Update scenes panel when scene detection state changes
+      // Update scenes panel when scene detection state or selected range changes
       if (state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
           state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
-          state.scenes !== prevState.scenes) {
+          state.scenes !== prevState.scenes ||
+          state.selectedRange.start !== prevState.selectedRange.start ||
+          state.selectedRange.end !== prevState.selectedRange.end) {
         // Clean up previous scene panel event listeners
         scenePanelCleanups.forEach((fn) => fn());
         // Update panel and collect new cleanups
