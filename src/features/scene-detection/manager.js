@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_DETECTOR_OPTIONS } from './types.js';
+import { getDrawableSource } from '../../shared/utils/canvas.js';
 
 /**
  * @typedef {import('./types.js').SceneDetectionResult} SceneDetectionResult
@@ -294,9 +295,12 @@ export class SceneDetectionManager {
             drawWidth = Math.round(thumbnailSize * aspectRatio);
           }
 
-          // Clear and draw scaled frame
+          // Clear and draw scaled frame (supports mock frames)
           ctx.clearRect(0, 0, thumbnailSize, thumbnailSize);
-          ctx.drawImage(frame.frame, 0, 0, drawWidth, drawHeight);
+          const source = getDrawableSource(frame);
+          if (source) {
+            ctx.drawImage(source, 0, 0, drawWidth, drawHeight);
+          }
 
           // Extract ImageData
           data.imageData = ctx.getImageData(0, 0, drawWidth, drawHeight);
