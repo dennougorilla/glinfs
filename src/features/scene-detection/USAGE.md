@@ -438,6 +438,287 @@ parameters.forEach(param => {
 
 ---
 
+## コンテンツタイプ別の推奨設定
+
+### 🎨 アニメ・アニメーション (最推奨: Histogram)
+
+**特徴**:
+- 色分布が明確で均一
+- ハードカットが多い
+- エッジ（輪郭線）がはっきり
+- カメラワークが控えめ
+- ノイズが少ない
+
+**推奨アルゴリズム 1位: Histogram** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('histogram');
+const scenes = detector.detect(frames, {
+  threshold: 0.25,         // やや低め（色変化が明確なので敏感に）
+  minSceneDuration: 3,     // アニメはカットが短いことが多い
+  sampleInterval: 1        // 全フレーム処理
+});
+```
+
+**理由**:
+- ✅ アニメの色分布変化を正確に捉える
+- ✅ シーン変化時の色の変化が顕著
+- ✅ カメラワークが少ないため誤検出が少ない
+- ✅ 非常に高速
+- ✅ 背景色の変化も確実に検出
+
+**推奨アルゴリズム 2位: Pixel Difference** (高速処理が必要な場合)
+
+```javascript
+const detector = createDetector('pixel-diff');
+const scenes = detector.detect(frames, {
+  threshold: 0.18,         // やや低め
+  minSceneDuration: 3,
+  sampleInterval: 1
+});
+```
+
+**理由**:
+- ✅ ハードカットが多いアニメに最適
+- ✅ 最速の処理速度
+- ⚠️ アクションシーン（動きが激しい）で誤検出の可能性
+
+**推奨アルゴリズム 3位: Edge Change** (アクションアニメ向け)
+
+```javascript
+const detector = createDetector('edge-change');
+const scenes = detector.detect(frames, {
+  threshold: 0.45,         // やや低め
+  edgeThreshold: 25,       // 輪郭線が明確なので低めでOK
+  minSceneDuration: 3,
+  sampleInterval: 1
+});
+```
+
+**理由**:
+- ✅ キャラクターの動きが激しいアクションシーンに強い
+- ✅ パンやズームが多いシーンでも安定
+- ❌ やや計算コストが高い
+
+**アニメ向け設定例**:
+
+```javascript
+// 一般的なアニメ（日常系、コメディなど）
+{
+  algorithmId: 'histogram',
+  threshold: 0.25,
+  minSceneDuration: 3,
+  sampleInterval: 1
+}
+
+// アクションアニメ（バトル、スポーツなど）
+{
+  algorithmId: 'edge-change',
+  threshold: 0.45,
+  edgeThreshold: 25,
+  minSceneDuration: 3,
+  sampleInterval: 1
+}
+
+// 長時間アニメ（高速処理優先）
+{
+  algorithmId: 'pixel-diff',
+  threshold: 0.18,
+  minSceneDuration: 3,
+  sampleInterval: 2  // 2フレームごとに処理して高速化
+}
+```
+
+---
+
+### 🎬 実写映画・ドラマ (最推奨: Edge Change)
+
+**特徴**:
+- カメラワーク（パン、ズーム）が多い
+- 照明変化がある
+- ディゾルブやフェード等のトランジション
+- 色分布が複雑
+
+**推奨アルゴリズム: Edge Change** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('edge-change');
+const scenes = detector.detect(frames, {
+  threshold: 0.5,          // デフォルト
+  edgeThreshold: 30,       // デフォルト
+  minSceneDuration: 10,    // 長めに設定（カット編集が少ない）
+  sampleInterval: 1
+});
+```
+
+**理由**:
+- ✅ カメラワークによる誤検出が少ない
+- ✅ 照明変化に比較的ロバスト
+- ✅ 高精度
+
+**代替: Histogram** (バランス型)
+
+```javascript
+const detector = createDetector('histogram');
+const scenes = detector.detect(frames, {
+  threshold: 0.35,         // やや高め（誤検出を減らす）
+  minSceneDuration: 10,
+  sampleInterval: 1
+});
+```
+
+---
+
+### ⚽ スポーツ映像 (最推奨: Edge Change)
+
+**特徴**:
+- カメラの動きが非常に激しい（追従、ズーム）
+- 類似した色の連続（グラウンド、ユニフォーム）
+- 急激な動き
+
+**推奨アルゴリズム: Edge Change** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('edge-change');
+const scenes = detector.detect(frames, {
+  threshold: 0.6,          // 高め（誤検出を防ぐ）
+  edgeThreshold: 35,       // やや高め
+  minSceneDuration: 15,    // 長め（カメラワークでの誤検出を防ぐ）
+  sampleInterval: 1
+});
+```
+
+**理由**:
+- ✅ カメラワークに最も強い
+- ✅ 構造的な変化（フィールド→観客席など）を検出
+- ❌ HistogramやPixel Diffは誤検出が多すぎる
+
+---
+
+### 📹 ゲーム実況・配信 (最推奨: Histogram or Pixel Diff)
+
+**特徴**:
+- ゲーム内シーンは色分布が明確（3DCG）
+- ハードカットが多い（メニュー切替、マップ切替）
+- カメラワークは中程度
+
+**推奨アルゴリズム: Histogram** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('histogram');
+const scenes = detector.detect(frames, {
+  threshold: 0.3,          // デフォルト
+  minSceneDuration: 5,
+  sampleInterval: 1
+});
+```
+
+**代替: Pixel Difference** (高速処理向け)
+
+```javascript
+const detector = createDetector('pixel-diff');
+const scenes = detector.detect(frames, {
+  threshold: 0.20,
+  minSceneDuration: 5,
+  sampleInterval: 2  // 高速化
+});
+```
+
+---
+
+### 🎤 プレゼンテーション・講義 (最推奨: Histogram)
+
+**特徴**:
+- スライド切替が明確
+- 色の変化が大きい
+- カメラの動きが少ない
+
+**推奨アルゴリズム: Histogram** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('histogram');
+const scenes = detector.detect(frames, {
+  threshold: 0.25,         // 低め（スライド変化を確実に捉える）
+  minSceneDuration: 10,    // スライドは数秒表示されるので長め
+  sampleInterval: 2        // 高速化（変化が少ないので）
+});
+```
+
+---
+
+### 🎥 ドキュメンタリー (最推奨: Edge Change)
+
+**特徴**:
+- カメラワークが多い（手持ちカメラ）
+- 照明変化が激しい（屋外・屋内）
+- ゆっくりとしたシーン展開
+
+**推奨アルゴリズム: Edge Change** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('edge-change');
+const scenes = detector.detect(frames, {
+  threshold: 0.55,         // やや高め
+  edgeThreshold: 30,
+  minSceneDuration: 15,    // 長め（ゆっくりとした展開）
+  sampleInterval: 1
+});
+```
+
+---
+
+### 📺 ニュース番組 (最推奨: Histogram)
+
+**特徴**:
+- スタジオとVTRの切替が明確
+- カメラワークが少ない
+- 色分布の変化が明確
+
+**推奨アルゴリズム: Histogram** ⭐⭐⭐⭐⭐
+
+```javascript
+const detector = createDetector('histogram');
+const scenes = detector.detect(frames, {
+  threshold: 0.28,
+  minSceneDuration: 8,
+  sampleInterval: 1
+});
+```
+
+---
+
+## 簡易選択ガイド
+
+```
+動画タイプを選んでください:
+
+1. アニメ・3DCGアニメ
+   → Histogram (threshold: 0.25, minSceneDuration: 3)
+
+2. 実写映画・ドラマ
+   → Edge Change (threshold: 0.5, minSceneDuration: 10)
+
+3. スポーツ映像
+   → Edge Change (threshold: 0.6, minSceneDuration: 15)
+
+4. ゲーム実況・配信
+   → Histogram (threshold: 0.3, minSceneDuration: 5)
+
+5. プレゼン・講義
+   → Histogram (threshold: 0.25, minSceneDuration: 10, sampleInterval: 2)
+
+6. ドキュメンタリー
+   → Edge Change (threshold: 0.55, minSceneDuration: 15)
+
+7. ニュース番組
+   → Histogram (threshold: 0.28, minSceneDuration: 8)
+
+8. わからない・混合
+   → Histogram (threshold: 0.3, minSceneDuration: 5) [デフォルト]
+```
+
+---
+
 ## 参考情報
 
 - アルゴリズム詳細: `src/features/scene-detection/ALGORITHMS.md`
