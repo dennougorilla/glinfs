@@ -910,6 +910,19 @@ function renderScenesSidebar(container, state, handlers) {
   // Create scenes list with thumbnails
   const scenesList = createElement('div', { className: 'scenes-thumbnail-list' });
 
+  /** @type {HTMLElement[]} */
+  const sceneCards = [];
+
+  /**
+   * Update selection state for all scene cards
+   * @param {number} selectedSceneIndex
+   */
+  function updateCardSelection(selectedSceneIndex) {
+    sceneCards.forEach((card, idx) => {
+      card.classList.toggle('is-selected', idx === selectedSceneIndex);
+    });
+  }
+
   state.scenes.forEach((scene, index) => {
     const isSelected = state.selectedRange.start === scene.startFrame &&
                        state.selectedRange.end === scene.endFrame;
@@ -950,10 +963,13 @@ function renderScenesSidebar(container, state, handlers) {
     ]);
     sceneCard.appendChild(sceneInfo);
 
+    sceneCards.push(sceneCard);
+
     cleanups.push(
       on(sceneCard, 'click', () => {
         handlers.onFrameChange(scene.startFrame);
         handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
+        updateCardSelection(index);
       })
     );
 
