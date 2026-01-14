@@ -7,9 +7,9 @@ import { applyFrameSkip, calculateFrameDelay, calculateProgress, getEncoderPrese
 import { createEncoderManager } from '../../workers/worker-manager.js';
 
 /**
- * Extract RGBA pixel data from a VideoFrame or Mock Frame
+ * Extract RGBA pixel data from a VideoFrame
  * Handles both full-frame (copyTo) and cropped (OffscreenCanvas) cases
- * Also supports Mock Frames for E2E testing
+ *
  * @param {import('../capture/types.js').Frame} frame - Frame containing VideoFrame
  * @param {import('../editor/types.js').CropArea | null} crop - Optional crop region
  * @returns {Promise<{ data: Uint8ClampedArray, width: number, height: number }>}
@@ -21,22 +21,13 @@ export async function getFrameRGBA(frame, crop) {
   }
 
   const videoFrame = frame.frame;
-
-  // Check if this is a Mock Frame (has _bitmap property)
-  const isMockFrame = '_bitmap' in videoFrame && videoFrame._bitmap;
-
-  // Get drawable source for canvas operations
-  const drawableSource = isMockFrame ? videoFrame._bitmap : videoFrame;
-
-  // Determine dimensions
-  const sourceWidth = isMockFrame ? videoFrame.codedWidth : videoFrame.codedWidth;
-  const sourceHeight = isMockFrame ? videoFrame.codedHeight : videoFrame.codedHeight;
+  const sourceWidth = videoFrame.codedWidth;
+  const sourceHeight = videoFrame.codedHeight;
 
   // Full-frame extraction
   if (!crop) {
-    // For real VideoFrames, use copyTo() for best performance
-    // For Mock Frames, use OffscreenCanvas
-    if (!isMockFrame && typeof videoFrame.copyTo === 'function') {
+    // Use copyTo() for GPU-accelerated extraction when available
+    if (typeof videoFrame.copyTo === 'function') {
       const byteLength = sourceWidth * sourceHeight * 4;
       const buffer = new Uint8ClampedArray(byteLength);
 
@@ -48,14 +39,14 @@ export async function getFrameRGBA(frame, crop) {
       return { data: buffer, width: sourceWidth, height: sourceHeight };
     }
 
-    // Fallback for Mock Frames: use OffscreenCanvas
+    // Fallback: use OffscreenCanvas (for environments without copyTo)
     const offscreen = new OffscreenCanvas(sourceWidth, sourceHeight);
     const ctx = offscreen.getContext('2d');
     if (!ctx) {
       throw new Error('Failed to get OffscreenCanvas 2d context');
     }
 
-    ctx.drawImage(drawableSource, 0, 0);
+    ctx.drawImage(videoFrame, 0, 0);
     const imageData = ctx.getImageData(0, 0, sourceWidth, sourceHeight);
     return { data: imageData.data, width: sourceWidth, height: sourceHeight };
   }
@@ -70,9 +61,9 @@ export async function getFrameRGBA(frame, crop) {
     throw new Error('Failed to get OffscreenCanvas 2d context');
   }
 
-  // Draw cropped region from VideoFrame or Mock Frame
+  // Draw cropped region from VideoFrame
   ctx.drawImage(
-    drawableSource,
+    videoFrame,
     crop.x,
     crop.y,
     crop.width,

@@ -2,8 +2,15 @@
  * Mock Frame Utilities for E2E Testing
  * @module shared/utils/mock-frame
  *
- * Creates VideoFrame-compatible objects using OffscreenCanvas for testing.
- * Allows testing Editor and Export features without Screen Capture API.
+ * Creates VideoFrame objects for testing Editor and Export features
+ * without requiring Screen Capture API.
+ *
+ * In browser environments (E2E tests): Creates REAL VideoFrame objects
+ * that are indistinguishable from captured frames. This ensures E2E tests
+ * exercise the exact same code paths as production.
+ *
+ * In jsdom environments (unit tests): Creates VideoFrame-compatible mock
+ * objects since jsdom doesn't support the VideoFrame API.
  *
  * Usage in Playwright:
  * ```javascript
@@ -15,7 +22,8 @@
  */
 
 /**
- * @typedef {Object} MockVideoFrame
+ * Legacy mock VideoFrame for unit test environments (jsdom)
+ * @typedef {Object} LegacyMockVideoFrame
  * @property {number} codedWidth - Width matching VideoFrame API
  * @property {number} codedHeight - Height matching VideoFrame API
  * @property {number} displayWidth - Display width
@@ -23,8 +31,8 @@
  * @property {number} timestamp - Timestamp in microseconds
  * @property {boolean} closed - Whether frame has been closed
  * @property {() => void} close - Close the frame
- * @property {() => MockVideoFrame} clone - Clone the frame
- * @property {ImageBitmap} _bitmap - Internal bitmap for rendering
+ * @property {() => LegacyMockVideoFrame} clone - Clone the frame
+ * @property {ImageBitmap} _bitmap - Internal bitmap for rendering (legacy only)
  */
 
 /**
@@ -216,29 +224,30 @@ function shiftHue(hex, degrees) {
 }
 
 /**
- * Create a single mock VideoFrame-compatible object
- * Uses ImageBitmap internally for canvas compatibility
- *
- * @param {MockFrameOptions & { timestamp?: number }} options - Frame options
- * @returns {Promise<MockVideoFrame>} Mock VideoFrame object
- *
- * @example
- * const mockFrame = await createMockVideoFrame({ width: 1920, height: 1080 });
- * ctx.drawImage(mockFrame._bitmap, 0, 0); // Works like a real VideoFrame
+ * Check if real VideoFrame API is available (browser environment)
+ * @returns {boolean} True if VideoFrame constructor is available
  */
-export async function createMockVideoFrame(options = {}) {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
-  const bitmap = await createPatternBitmap(opts);
+export function isRealVideoFrameSupported() {
+  return typeof VideoFrame !== 'undefined';
+}
 
+/**
+ * Create a legacy mock VideoFrame for unit test environments (jsdom)
+ * This is only used when real VideoFrame API is not available.
+ *
+ * @param {ImageBitmap} bitmap - The pattern bitmap
+ * @param {MockFrameOptions & { timestamp?: number }} opts - Frame options
+ * @returns {LegacyMockVideoFrame} Legacy mock VideoFrame object
+ */
+function createLegacyMockVideoFrame(bitmap, opts) {
   let closed = false;
 
-  /** @type {MockVideoFrame} */
-  const mockVideoFrame = {
+  return {
     codedWidth: opts.width,
     codedHeight: opts.height,
     displayWidth: opts.width,
     displayHeight: opts.height,
-    timestamp: options.timestamp ?? opts.frameIndex * 33333, // ~30fps in microseconds
+    timestamp: opts.timestamp ?? opts.frameIndex * 33333,
 
     get closed() {
       return closed;
@@ -252,16 +261,53 @@ export async function createMockVideoFrame(options = {}) {
     },
 
     clone() {
-      // Note: This returns a new promise-based object
-      // For sync clone, caller should create multiple frames upfront
       console.warn('[MockFrame] clone() called - mock frames should be pre-created');
-      return this; // Return self for simplicity in tests
+      return this;
     },
 
     _bitmap: bitmap,
   };
+}
 
-  return mockVideoFrame;
+/**
+ * Create a single VideoFrame for testing
+ *
+ * In browser environments: Creates a REAL VideoFrame that supports copyTo(),
+ * ensuring E2E tests exercise the same code paths as production.
+ *
+ * In jsdom environments: Creates a VideoFrame-compatible mock object with
+ * _bitmap property for canvas.drawImage() compatibility.
+ *
+ * @param {MockFrameOptions & { timestamp?: number }} options - Frame options
+ * @returns {Promise<VideoFrame | LegacyMockVideoFrame>} VideoFrame or mock
+ *
+ * @example
+ * // In browser (E2E): returns real VideoFrame
+ * const frame = await createMockVideoFrame({ width: 1920, height: 1080 });
+ * ctx.drawImage(frame, 0, 0);          // Works
+ * await frame.copyTo(buffer);           // Works (real VideoFrame)
+ *
+ * // In jsdom (unit test): returns legacy mock
+ * const frame = await createMockVideoFrame({ width: 1920, height: 1080 });
+ * ctx.drawImage(frame._bitmap, 0, 0);   // Works via _bitmap
+ */
+export async function createMockVideoFrame(options = {}) {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const bitmap = await createPatternBitmap(opts);
+  const timestamp = options.timestamp ?? opts.frameIndex * 33333;
+
+  // Browser environment: create real VideoFrame
+  if (isRealVideoFrameSupported()) {
+    const videoFrame = new VideoFrame(bitmap, {
+      timestamp,
+    });
+    // Release intermediate bitmap (VideoFrame now owns the data)
+    bitmap.close();
+    return videoFrame;
+  }
+
+  // jsdom environment: create legacy mock
+  return createLegacyMockVideoFrame(bitmap, opts);
 }
 
 /**
@@ -397,7 +443,16 @@ export function isMockFrameSupported() {
 
 /**
  * Get a drawable source from a Frame object
- * Works with both real VideoFrames and mock frames
+ *
+ * In browser environments with real VideoFrames, this simply returns
+ * the VideoFrame (which is directly drawable via canvas.drawImage).
+ *
+ * In jsdom environments with legacy mocks, this returns the _bitmap
+ * property for canvas compatibility.
+ *
+ * Note: This function is primarily for backward compatibility with
+ * unit tests. Production code should use frame.frame directly since
+ * real VideoFrames are natively drawable.
  *
  * @param {import('../../features/capture/types.js').Frame} frame - Frame to get drawable from
  * @returns {CanvasImageSource | null} Drawable source for canvas
@@ -405,16 +460,16 @@ export function isMockFrameSupported() {
 export function getDrawableSource(frame) {
   if (!frame?.frame) return null;
 
-  // Check for mock frame (has _bitmap property)
-  const maybeMock = /** @type {MockVideoFrame} */ (/** @type {unknown} */ (frame.frame));
-  if (maybeMock?._bitmap) {
-    return maybeMock._bitmap;
+  const videoFrame = frame.frame;
+
+  // Check if closed
+  if (videoFrame.closed) return null;
+
+  // Legacy mock (jsdom): use _bitmap property
+  if ('_bitmap' in videoFrame && videoFrame._bitmap) {
+    return videoFrame._bitmap;
   }
 
-  // Real VideoFrame - use directly
-  if (!frame.frame.closed) {
-    return frame.frame;
-  }
-
-  return null;
+  // Real VideoFrame: directly drawable
+  return videoFrame;
 }

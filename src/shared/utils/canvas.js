@@ -79,7 +79,6 @@ export function syncCanvasSize(canvas, width, height) {
 
 /**
  * Check if a VideoFrame is valid (exists and not closed)
- * Also supports Mock VideoFrames for testing
  *
  * @param {VideoFrame | null | undefined} videoFrame - VideoFrame to validate
  * @returns {boolean} True if VideoFrame is usable
@@ -91,19 +90,14 @@ export function syncCanvasSize(canvas, width, height) {
  */
 export function isVideoFrameValid(videoFrame) {
   if (videoFrame == null) return false;
-
-  // Check for Mock VideoFrame (has _bitmap property)
-  if ('_bitmap' in videoFrame) {
-    return !videoFrame.closed;
-  }
-
-  // Real VideoFrame
   return !videoFrame.closed;
 }
 
 /**
  * Get a drawable source from a Frame object
- * Works with both real VideoFrames and mock frames (for testing)
+ *
+ * VideoFrames (both real and mock) are directly drawable via canvas.drawImage().
+ * This function simply validates and returns the VideoFrame.
  *
  * @param {import('../../features/capture/types.js').Frame} frame - Frame to get drawable from
  * @returns {CanvasImageSource | null} Drawable source for canvas.drawImage()
@@ -114,20 +108,8 @@ export function isVideoFrameValid(videoFrame) {
  */
 export function getDrawableSource(frame) {
   if (!frame?.frame) return null;
-
-  const videoFrame = frame.frame;
-
-  // Check for Mock VideoFrame (has _bitmap property)
-  if ('_bitmap' in videoFrame && videoFrame._bitmap) {
-    return videoFrame._bitmap;
-  }
-
-  // Real VideoFrame - return directly if not closed
-  if (!videoFrame.closed) {
-    return videoFrame;
-  }
-
-  return null;
+  if (frame.frame.closed) return null;
+  return frame.frame;
 }
 
 /**

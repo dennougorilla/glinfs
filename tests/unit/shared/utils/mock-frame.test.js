@@ -2,9 +2,13 @@
  * Mock Frame Utilities Tests
  * @module tests/unit/shared/utils/mock-frame
  *
- * Note: These tests run in jsdom environment where OffscreenCanvas
- * may not be fully supported. We test the structure and logic,
- * but actual ImageBitmap creation is tested in E2E tests.
+ * Note: These tests run in jsdom environment where VideoFrame API
+ * is not available. In this environment, createMockVideoFrame returns
+ * legacy mock objects with _bitmap property for canvas compatibility.
+ *
+ * In browser environments (E2E tests), createMockVideoFrame returns
+ * REAL VideoFrame objects that are indistinguishable from captured frames.
+ * E2E tests verify the real VideoFrame behavior.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -82,9 +86,20 @@ describe('mock-frame utilities', () => {
     });
   });
 
+  describe('isRealVideoFrameSupported', () => {
+    it('should return false in jsdom environment', async () => {
+      const { isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+      // jsdom doesn't have VideoFrame API
+      expect(isRealVideoFrameSupported()).toBe(false);
+    });
+  });
+
   describe('createMockVideoFrame', () => {
-    it('should create a mock VideoFrame with correct dimensions', async () => {
-      const { createMockVideoFrame } = await import('../../../../src/shared/utils/mock-frame.js');
+    it('should create a legacy mock VideoFrame with correct dimensions in jsdom', async () => {
+      const { createMockVideoFrame, isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+
+      // Verify we're testing the legacy mock path
+      expect(isRealVideoFrameSupported()).toBe(false);
 
       const frame = await createMockVideoFrame({ width: 800, height: 600 });
 
@@ -93,6 +108,7 @@ describe('mock-frame utilities', () => {
       expect(frame.displayWidth).toBe(800);
       expect(frame.displayHeight).toBe(600);
       expect(frame.closed).toBe(false);
+      // Legacy mock has _bitmap for canvas compatibility
       expect(frame._bitmap).toBeDefined();
     });
 
@@ -229,13 +245,17 @@ describe('mock-frame utilities', () => {
   });
 
   describe('getDrawableSource', () => {
-    it('should return bitmap for mock frames', async () => {
-      const { createMockFrame, getDrawableSource } = await import('../../../../src/shared/utils/mock-frame.js');
+    it('should return bitmap for legacy mock frames in jsdom', async () => {
+      const { createMockFrame, getDrawableSource, isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+
+      // Verify we're testing the legacy mock path
+      expect(isRealVideoFrameSupported()).toBe(false);
 
       const frame = await createMockFrame(0);
       const source = getDrawableSource(frame);
 
       expect(source).toBeDefined();
+      // In jsdom, legacy mock uses _bitmap
       expect(source).toBe(frame.frame._bitmap);
     });
 
@@ -250,6 +270,16 @@ describe('mock-frame utilities', () => {
       const { getDrawableSource } = await import('../../../../src/shared/utils/mock-frame.js');
 
       expect(getDrawableSource({ id: 'test' })).toBeNull();
+    });
+
+    it('should return null for closed frame', async () => {
+      const { createMockFrame, getDrawableSource } = await import('../../../../src/shared/utils/mock-frame.js');
+
+      const frame = await createMockFrame(0);
+      frame.frame.close();
+      const source = getDrawableSource(frame);
+
+      expect(source).toBeNull();
     });
   });
 });
