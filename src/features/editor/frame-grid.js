@@ -388,6 +388,202 @@ const FRAME_GRID_STYLES = `
     opacity: 0.5;
     cursor: not-allowed;
   }
+
+  /* Scene Navigation Panel - Enhanced */
+  .frame-grid-scenes-panel {
+    display: flex;
+    flex-direction: column;
+    width: 220px;
+    background: linear-gradient(180deg, var(--color-panel, #1a1a1a) 0%, rgba(24, 24, 27, 0.95) 100%);
+    border-right: 1px solid var(--color-border, #333);
+    overflow: hidden;
+  }
+
+  .frame-grid-scenes-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border, #333);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-secondary, #888);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  .frame-grid-scenes-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Scene Button with Thumbnail */
+  .frame-grid-scene-btn {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 8px;
+    background: var(--color-bg-tertiary, #1f1f23);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease-out;
+    text-align: left;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .frame-grid-scene-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.05));
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .frame-grid-scene-btn:hover {
+    background: var(--color-surface, #333);
+    border-color: var(--color-primary, #3b82f6);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  .frame-grid-scene-btn:hover::before {
+    opacity: 1;
+  }
+
+  .frame-grid-scene-btn:active {
+    transform: scale(0.98);
+  }
+
+  .frame-grid-scene-btn.is-active {
+    background: var(--color-primary-muted, rgba(59, 130, 246, 0.15));
+    border-color: var(--color-primary, #3b82f6);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 12px rgba(59, 130, 246, 0.15);
+  }
+
+  /* Scene Thumbnail */
+  .frame-grid-scene-thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: var(--color-surface, #222);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .frame-grid-scene-thumb::after {
+    content: '\u25B6';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.8);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    opacity: 0;
+    transition: all 0.2s;
+    backdrop-filter: blur(4px);
+  }
+
+  .frame-grid-scene-btn:hover .frame-grid-scene-thumb::after {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .frame-grid-scene-thumb-canvas {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .frame-grid-scene-thumb-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--color-text-muted, #666);
+    background: linear-gradient(135deg, rgba(39, 39, 42, 0.8), rgba(24, 24, 27, 0.8));
+  }
+
+  /* Scene Content */
+  .frame-grid-scene-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    position: relative;
+    z-index: 1;
+  }
+
+  .frame-grid-scene-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .frame-grid-scene-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 8px;
+    background: var(--color-surface, #333);
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text, #fff);
+  }
+
+  .frame-grid-scene-btn.is-active .frame-grid-scene-num {
+    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+  }
+
+  .frame-grid-scene-frames {
+    font-size: 10px;
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text-muted, #666);
+    padding: 3px 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+  }
+
+  .frame-grid-scene-range {
+    font-size: 11px;
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text-secondary, #888);
+  }
+
+  /* Layout with scenes panel */
+  .frame-grid-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .frame-grid-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
 `;
 
 /**
@@ -452,10 +648,11 @@ function calculateOptimalThumbnailSize(frameCount, containerWidth, containerHeig
  * @param {HTMLElement} params.container - Container to render into
  * @param {import('../capture/types.js').Frame[]} params.frames - All clip frames
  * @param {import('./types.js').FrameRange} params.initialRange - Current selection from editor
+ * @param {import('../scene-detection/types.js').Scene[]} [params.scenes] - Detected scenes
  * @param {FrameGridCallbacks} params.callbacks - Event callbacks
  * @returns {{ cleanup: () => void }} - Cleanup function
  */
-export function renderFrameGridModal({ container, frames, initialRange, callbacks }) {
+export function renderFrameGridModal({ container, frames, initialRange, scenes = [], callbacks }) {
   injectStyles();
 
   const cleanups = [];
@@ -465,6 +662,7 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
   let endFrame = initialRange.end;
   let focusedFrame = startFrame;
   let thumbnailSize = DEFAULT_THUMBNAIL_SIZE;
+  const hasScenes = scenes.length > 0;
 
   // Touch device support
   /** @type {number | null} */
@@ -533,6 +731,99 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
 
   cleanups.push(on(closeBtn, 'click', () => callbacks.onCancel()));
 
+  // Layout container (scenes panel + main content)
+  const layout = createElement('div', { className: 'frame-grid-layout' });
+
+  // Scenes panel (left sidebar) - only show if scenes exist
+  /** @type {HTMLElement[]} */
+  const sceneButtons = [];
+
+  if (hasScenes) {
+    const scenesPanel = createElement('div', { className: 'frame-grid-scenes-panel' });
+    scenesPanel.appendChild(
+      createElement('div', { className: 'frame-grid-scenes-header' }, ['Scenes'])
+    );
+
+    const scenesList = createElement('div', { className: 'frame-grid-scenes-list' });
+
+    scenes.forEach((scene, index) => {
+      const sceneBtn = createElement('button', {
+        className: 'frame-grid-scene-btn',
+        type: 'button',
+        'data-scene-index': String(index),
+        'aria-label': `Scene ${index + 1}, frames ${scene.startFrame} to ${scene.endFrame}, ${scene.endFrame - scene.startFrame + 1} frames`,
+      });
+
+      // Add thumbnail from first frame of scene
+      const thumbContainer = createElement('div', { className: 'frame-grid-scene-thumb' });
+      const frame = frames[scene.startFrame];
+      if (frame) {
+        try {
+          const canvas = createThumbnailCanvas(frame, 120);
+          canvas.className = 'frame-grid-scene-thumb-canvas';
+          thumbContainer.appendChild(canvas);
+        } catch {
+          thumbContainer.appendChild(
+            createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+          );
+        }
+      } else {
+        thumbContainer.appendChild(
+          createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+        );
+      }
+      sceneBtn.appendChild(thumbContainer);
+
+      // Scene content (header + range)
+      const sceneContent = createElement('div', { className: 'frame-grid-scene-content' }, [
+        createElement('div', { className: 'frame-grid-scene-header' }, [
+          createElement('span', { className: 'frame-grid-scene-num' }, [String(index + 1)]),
+          createElement('span', { className: 'frame-grid-scene-frames' }, [
+            `${scene.endFrame - scene.startFrame + 1}f`,
+          ]),
+        ]),
+        createElement('div', { className: 'frame-grid-scene-range' }, [
+          `${scene.startFrame} \u2192 ${scene.endFrame}`,
+        ]),
+      ]);
+      sceneBtn.appendChild(sceneContent);
+
+      sceneButtons.push(sceneBtn);
+
+      // Click to select entire scene
+      cleanups.push(on(sceneBtn, 'click', () => {
+        setStartFrame(scene.startFrame);
+        setEndFrame(scene.endFrame);
+        // Update scene button states
+        updateSceneButtonStates();
+        // Scroll to scene start
+        const firstItem = gridItems[scene.startFrame];
+        if (firstItem) {
+          firstItem.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }));
+
+      scenesList.appendChild(sceneBtn);
+    });
+
+    scenesPanel.appendChild(scenesList);
+    layout.appendChild(scenesPanel);
+  }
+
+  /**
+   * Update scene button active states
+   */
+  function updateSceneButtonStates() {
+    sceneButtons.forEach((btn, index) => {
+      const scene = scenes[index];
+      const isActive = startFrame === scene.startFrame && endFrame === scene.endFrame;
+      btn.classList.toggle('is-active', isActive);
+    });
+  }
+
+  // Main content area
+  const mainContent = createElement('div', { className: 'frame-grid-main' });
+
   // Body with grid
   const body = createElement('div', { className: 'frame-grid-body' });
   const gridContainer = createElement('div', { className: 'frame-grid-container' });
@@ -586,23 +877,27 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
     cleanups.push(on(hoverActions.querySelector('.action-start'), 'click', (e) => {
       e.stopPropagation();
       setStartFrame(index);
+      updateSceneButtonStates();
     }));
 
     // [E] button click
     cleanups.push(on(hoverActions.querySelector('.action-end'), 'click', (e) => {
       e.stopPropagation();
       setEndFrame(index);
+      updateSceneButtonStates();
     }));
 
     // Click handler (legacy: shift+click support)
     cleanups.push(on(item, 'click', (e) => {
       const shiftKey = /** @type {MouseEvent} */ (e).shiftKey;
       handleFrameClick(index, shiftKey);
+      updateSceneButtonStates();
     }));
 
     // Double-click handler
     cleanups.push(on(item, 'dblclick', () => {
       handleFrameDoubleClick(index);
+      updateSceneButtonStates();
     }));
 
     // Touch device support: long-press (400ms) to show S/E buttons
@@ -630,9 +925,9 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
   });
 
   body.appendChild(gridContainer);
-  modal.appendChild(body);
+  mainContent.appendChild(body);
 
-  // Footer
+  // Footer (inside mainContent)
   const footer = createElement('div', { className: 'frame-grid-footer' });
 
   const selectionInfo = createElement('div', { className: 'frame-grid-selection-info' });
@@ -657,7 +952,13 @@ export function renderFrameGridModal({ container, frames, initialRange, callback
   actions.appendChild(applyBtn);
   footer.appendChild(selectionInfo);
   footer.appendChild(actions);
-  modal.appendChild(footer);
+  mainContent.appendChild(footer);
+
+  layout.appendChild(mainContent);
+  modal.appendChild(layout);
+
+  // Initial scene button states
+  updateSceneButtonStates();
 
   backdrop.appendChild(modal);
 
