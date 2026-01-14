@@ -1197,36 +1197,50 @@
 	gap: var(--space-2);
 }
 
-/* Scene thumbnail card - Clean minimal design */
+/* Scene thumbnail card - Natural minimal */
 .scene-thumbnail-card {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	padding: var(--space-2);
-	background: var(--color-bg-tertiary);
-	border: 1px solid var(--color-border);
+	padding: 0;
+	padding-bottom: var(--space-2);
+	background: transparent;
+	border: none;
 	border-radius: var(--radius-md);
 	cursor: pointer;
-	transition: all 0.15s ease;
+	transition: opacity 0.15s ease;
 	text-align: left;
 	width: 100%;
+	position: relative;
 }
 
 .scene-thumbnail-card:hover {
-	background: var(--color-surface);
-	border-color: var(--color-text-muted);
+	opacity: 0.8;
 }
 
 .scene-thumbnail-card:active {
-	transform: scale(0.98);
+	opacity: 0.7;
 }
 
 .scene-thumbnail-card.is-selected {
-	background: rgba(59, 130, 246, 0.08);
-	border-color: var(--color-primary);
+	background: rgba(59, 130, 246, 0.06);
+	border-radius: var(--radius-md);
+	padding-left: var(--space-2);
+	margin-left: calc(-1 * var(--space-2));
 }
 
-/* Scene thumbnail image - Clean */
+.scene-thumbnail-card.is-selected::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 4px;
+	bottom: 4px;
+	width: 3px;
+	background: var(--color-primary);
+	border-radius: 2px;
+}
+
+/* Scene thumbnail image */
 .scene-thumbnail {
 	width: 100%;
 	aspect-ratio: 16 / 9;
@@ -1252,7 +1266,7 @@
 	color: var(--color-text-muted);
 }
 
-/* Scene thumbnail info - Clean */
+/* Scene thumbnail info - Subtle */
 .scene-thumbnail-info {
 	display: flex;
 	flex-direction: column;
@@ -1266,23 +1280,23 @@
 }
 
 .scene-thumbnail-number {
-	font-size: var(--font-size-sm);
-	font-weight: 600;
-	color: var(--color-text);
+	font-size: var(--font-size-xs);
+	font-weight: 500;
+	color: var(--color-text-secondary);
 }
 
 .scene-thumbnail-card.is-selected .scene-thumbnail-number {
-	color: var(--color-primary);
+	color: var(--color-text);
 }
 
 .scene-thumbnail-duration {
-	font-size: var(--font-size-xs);
+	font-size: 10px;
 	font-family: var(--font-mono);
 	color: var(--color-text-muted);
 }
 
 .scene-thumbnail-range {
-	font-size: var(--font-size-xs);
+	font-size: 10px;
 	font-family: var(--font-mono);
 	color: var(--color-text-muted);
 }
