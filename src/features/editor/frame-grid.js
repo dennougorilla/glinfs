@@ -569,68 +569,6 @@ const FRAME_GRID_STYLES = `
     color: var(--color-text-secondary, #888);
   }
 
-  /* Scene divider in grid */
-  .frame-grid-scene-divider {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 12px 0;
-    margin: 4px 0;
-  }
-
-  .frame-grid-scene-divider-line {
-    flex: 1;
-    height: 2px;
-    background: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.4) 15%, var(--color-primary, #3b82f6) 50%, rgba(59, 130, 246, 0.4) 85%, transparent 100%);
-    border-radius: 1px;
-  }
-
-  .frame-grid-scene-divider-label {
-    font-size: 11px;
-    font-weight: 700;
-    color: white;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-    padding: 6px 14px;
-    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-  }
-
-  /* Scene indicator on frame - Enhanced */
-  .frame-grid-item.is-scene-start {
-    border-left: 4px solid var(--color-primary, #3b82f6);
-  }
-
-  .frame-grid-item.is-scene-start::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, var(--color-primary, #3b82f6), transparent);
-    z-index: 6;
-  }
-
-  /* Scene Badge - Enhanced */
-  .frame-grid-scene-badge {
-    position: absolute;
-    top: 6px;
-    left: 6px;
-    padding: 3px 8px;
-    font-size: 9px;
-    font-weight: 700;
-    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
-    color: white;
-    border-radius: 8px;
-    z-index: 5;
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.4);
-    letter-spacing: 0.03em;
-  }
-
   /* Layout with scenes panel */
   .frame-grid-layout {
     display: flex;
@@ -653,31 +591,6 @@ const FRAME_GRID_STYLES = `
  * @property {(range: import('./types.js').FrameRange) => void} onApply - Called when user clicks Apply
  * @property {() => void} onCancel - Called when user cancels (Escape, click outside, Cancel button)
  */
-
-/**
- * Get scene index for a frame
- * @param {number} frameIndex
- * @param {import('../scene-detection/types.js').Scene[]} scenes
- * @returns {number} Scene index or -1 if not in any scene
- */
-function getSceneIndexForFrame(frameIndex, scenes) {
-  for (let i = 0; i < scenes.length; i++) {
-    if (frameIndex >= scenes[i].startFrame && frameIndex <= scenes[i].endFrame) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * Check if frame is first frame of a scene
- * @param {number} frameIndex
- * @param {import('../scene-detection/types.js').Scene[]} scenes
- * @returns {boolean}
- */
-function isSceneStart(frameIndex, scenes) {
-  return scenes.some(scene => scene.startFrame === frameIndex);
-}
 
 /**
  * Inject styles into document (only once)
@@ -919,36 +832,12 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   /** @type {HTMLElement[]} */
   const gridItems = [];
 
-  // Track current scene for divider insertion
-  let lastSceneIdx = -1;
-
   frames.forEach((frame, index) => {
-    // Check if this frame starts a scene
-    const sceneIdx = getSceneIndexForFrame(index, scenes);
-    const isStart = isSceneStart(index, scenes);
-
-    // Insert scene divider when entering a new scene (except for first scene)
-    if (hasScenes && sceneIdx !== lastSceneIdx && sceneIdx >= 0 && lastSceneIdx >= 0) {
-      const divider = createElement('div', {
-        className: 'frame-grid-scene-divider',
-        'aria-hidden': 'true',
-      }, [
-        createElement('div', { className: 'frame-grid-scene-divider-line' }),
-        createElement('div', { className: 'frame-grid-scene-divider-label' }, [
-          `Scene ${sceneIdx + 1}`,
-        ]),
-        createElement('div', { className: 'frame-grid-scene-divider-line' }),
-      ]);
-      gridContainer.appendChild(divider);
-    }
-    lastSceneIdx = sceneIdx;
-
     const item = createElement('div', {
-      className: `frame-grid-item ${isStart ? 'is-scene-start' : ''}`,
+      className: 'frame-grid-item',
       tabIndex: 0,
       'data-index': String(index),
-      'data-scene-index': sceneIdx >= 0 ? String(sceneIdx) : '',
-      'aria-label': `Frame ${index + 1}${isStart ? ` (Scene ${sceneIdx + 1} start)` : ''}`,
+      'aria-label': `Frame ${index + 1}`,
     });
 
     // Generate thumbnail
@@ -960,14 +849,6 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
         style: 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
       }, ['\u26A0']);
       item.appendChild(placeholder);
-    }
-
-    // Scene badge for scene start frames
-    if (isStart && sceneIdx >= 0) {
-      const sceneBadge = createElement('span', { className: 'frame-grid-scene-badge' }, [
-        `S${sceneIdx + 1}`,
-      ]);
-      item.appendChild(sceneBadge);
     }
 
     // Hover actions: [S] [E] buttons
