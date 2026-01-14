@@ -83,11 +83,15 @@ async function detectScenes(frameData, options) {
   const cancellationCallback = () => isCancelled;
 
   // Run detection with callbacks
-  const detectedScenes = detector.detect(frames, {
+  const detectionResult = await detector.detect(frames, {
     ...opts,
     onProgress: progressCallback,
     checkCancellation: cancellationCallback
   });
+
+  const detectedScenes = Array.isArray(detectionResult)
+    ? detectionResult
+    : detectionResult?.scenes ?? [];
 
   // Build index→FrameData map for O(1) lookups when enriching scenes
   /** @type {Map<number, FrameData>} */
@@ -127,9 +131,10 @@ async function detectScenes(frameData, options) {
 
   return {
     scenes,
-    totalFrames: lastFrameIndex + 1,
-    processingTimeMs: performance.now() - startTime,
-    algorithmId,
+    totalFrames: detectionResult?.totalFrames ?? lastFrameIndex + 1,
+    processingTimeMs:
+      detectionResult?.processingTimeMs ?? performance.now() - startTime,
+    algorithmId: detectionResult?.algorithmId ?? algorithmId,
   };
 }
 
