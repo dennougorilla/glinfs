@@ -458,36 +458,45 @@ export function renderEditorScreen(container, state, handlers, fps) {
     panelContent.appendChild(scenesGroup);
   }
 
-  // Crop info panel and clear button
-  if (state.cropArea) {
-    const { x, y, width, height } = state.cropArea;
-    const cropInfoGroup = createElement('div', { className: 'property-group crop-info-group' }, [
-      createElement('div', { className: 'property-group-title' }, ['Crop Range']),
-      createElement('div', { className: 'crop-info-grid' }, [
-        createElement('div', { className: 'crop-info-item' }, [
-          createElement('span', { className: 'crop-info-label' }, ['X']),
-          createElement('span', { className: 'crop-info-value' }, [String(Math.round(x))]),
-        ]),
-        createElement('div', { className: 'crop-info-item' }, [
-          createElement('span', { className: 'crop-info-label' }, ['Y']),
-          createElement('span', { className: 'crop-info-value' }, [String(Math.round(y))]),
-        ]),
-        createElement('div', { className: 'crop-info-item' }, [
-          createElement('span', { className: 'crop-info-label' }, ['W']),
-          createElement('span', { className: 'crop-info-value' }, [String(Math.round(width))]),
-        ]),
-        createElement('div', { className: 'crop-info-item' }, [
-          createElement('span', { className: 'crop-info-label' }, ['H']),
-          createElement('span', { className: 'crop-info-value' }, [String(Math.round(height))]),
-        ]),
-      ]),
-    ]);
-    panelContent.appendChild(cropInfoGroup);
+  // Crop info panel (always visible)
+  const cropValues = state.cropArea
+    ? {
+        x: String(Math.round(state.cropArea.x)),
+        y: String(Math.round(state.cropArea.y)),
+        w: String(Math.round(state.cropArea.width)),
+        h: String(Math.round(state.cropArea.height)),
+      }
+    : { x: '-', y: '-', w: '-', h: '-' };
 
+  const cropInfoGroup = createElement('div', { className: 'property-group crop-info-group' }, [
+    createElement('div', { className: 'property-group-title' }, ['Crop Range']),
+    createElement('div', { className: 'crop-info-grid' }, [
+      createElement('div', { className: 'crop-info-item' }, [
+        createElement('span', { className: 'crop-info-label' }, ['X']),
+        createElement('span', { className: 'crop-info-value' }, [cropValues.x]),
+      ]),
+      createElement('div', { className: 'crop-info-item' }, [
+        createElement('span', { className: 'crop-info-label' }, ['Y']),
+        createElement('span', { className: 'crop-info-value' }, [cropValues.y]),
+      ]),
+      createElement('div', { className: 'crop-info-item' }, [
+        createElement('span', { className: 'crop-info-label' }, ['W']),
+        createElement('span', { className: 'crop-info-value' }, [cropValues.w]),
+      ]),
+      createElement('div', { className: 'crop-info-item' }, [
+        createElement('span', { className: 'crop-info-label' }, ['H']),
+        createElement('span', { className: 'crop-info-value' }, [cropValues.h]),
+      ]),
+    ]),
+  ]);
+  panelContent.appendChild(cropInfoGroup);
+
+  // Clear crop button (only when cropArea exists)
+  if (state.cropArea) {
     const clearBtn = createElement(
       'button',
       {
-        className: 'btn btn-secondary',
+        className: 'btn btn-secondary btn-clear-crop',
         type: 'button',
         style: 'width: 100%; margin-top: var(--space-4);',
       },
@@ -1050,4 +1059,49 @@ function openFrameGridModal(container, state, handlers, onClose) {
   });
 
   return cleanup;
+}
+
+/**
+ * Update crop info panel values
+ * @param {HTMLElement} container - Editor container
+ * @param {import('./types.js').CropArea | null} cropArea - Current crop area
+ * @param {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop change handler
+ */
+export function updateCropInfoPanel(container, cropArea, onCropChange) {
+  const panel = container.querySelector('.crop-info-group');
+  if (!panel) return;
+
+  const values = cropArea
+    ? [
+        String(Math.round(cropArea.x)),
+        String(Math.round(cropArea.y)),
+        String(Math.round(cropArea.width)),
+        String(Math.round(cropArea.height)),
+      ]
+    : ['-', '-', '-', '-'];
+
+  const valueEls = panel.querySelectorAll('.crop-info-value');
+  valueEls.forEach((el, i) => {
+    el.textContent = values[i];
+  });
+
+  // Handle Clear Crop button visibility
+  const sidebar = container.querySelector('.editor-sidebar .panel-content');
+  if (!sidebar) return;
+
+  const existingClearBtn = sidebar.querySelector('.btn-clear-crop');
+
+  if (cropArea && !existingClearBtn) {
+    // Add Clear Crop button
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn btn-secondary btn-clear-crop';
+    clearBtn.type = 'button';
+    clearBtn.style.cssText = 'width: 100%; margin-top: var(--space-4);';
+    clearBtn.textContent = 'Clear Crop';
+    clearBtn.addEventListener('click', () => onCropChange(null));
+    sidebar.appendChild(clearBtn);
+  } else if (!cropArea && existingClearBtn) {
+    // Remove Clear Crop button
+    existingClearBtn.remove();
+  }
 }

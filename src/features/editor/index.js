@@ -35,7 +35,7 @@ import {
 } from './state.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import { constrainAspectRatio, centerCropAfterConstraint, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
-import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel } from './ui.js';
+import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel, updateCropInfoPanel } from './ui.js';
 import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
@@ -249,6 +249,11 @@ export function initEditor() {
             state.showGrid
           );
         }
+      }
+
+      // Update crop info panel when crop changes
+      if (state.cropArea !== prevState.cropArea) {
+        updateCropInfoPanel(container, state.cropArea, handleCropChange);
       }
 
       // Update timeline selection
