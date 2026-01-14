@@ -389,90 +389,184 @@ const FRAME_GRID_STYLES = `
     cursor: not-allowed;
   }
 
-  /* Scene Navigation Panel */
+  /* Scene Navigation Panel - Enhanced */
   .frame-grid-scenes-panel {
     display: flex;
     flex-direction: column;
-    width: 200px;
-    background: var(--color-panel, #1a1a1a);
+    width: 220px;
+    background: linear-gradient(180deg, var(--color-panel, #1a1a1a) 0%, rgba(24, 24, 27, 0.95) 100%);
     border-right: 1px solid var(--color-border, #333);
     overflow: hidden;
   }
 
   .frame-grid-scenes-header {
-    padding: 12px 16px;
+    padding: 14px 16px;
     border-bottom: 1px solid var(--color-border, #333);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--color-text-secondary, #888);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    background: rgba(0, 0, 0, 0.2);
   }
 
   .frame-grid-scenes-list {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
+  /* Scene Button with Thumbnail */
   .frame-grid-scene-btn {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
     width: 100%;
-    padding: 8px 12px;
-    background: transparent;
+    padding: 8px;
+    background: var(--color-bg-tertiary, #1f1f23);
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: 10px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s ease-out;
     text-align: left;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .frame-grid-scene-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.05));
+    opacity: 0;
+    transition: opacity 0.2s;
   }
 
   .frame-grid-scene-btn:hover {
     background: var(--color-surface, #333);
-    border-color: var(--color-border, #444);
+    border-color: var(--color-primary, #3b82f6);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  .frame-grid-scene-btn:hover::before {
+    opacity: 1;
+  }
+
+  .frame-grid-scene-btn:active {
+    transform: scale(0.98);
   }
 
   .frame-grid-scene-btn.is-active {
     background: var(--color-primary-muted, rgba(59, 130, 246, 0.15));
     border-color: var(--color-primary, #3b82f6);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 12px rgba(59, 130, 246, 0.15);
   }
 
-  .frame-grid-scene-num {
+  /* Scene Thumbnail */
+  .frame-grid-scene-thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: var(--color-surface, #222);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .frame-grid-scene-thumb::after {
+    content: '\u25B6';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.8);
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    opacity: 0;
+    transition: all 0.2s;
+    backdrop-filter: blur(4px);
+  }
+
+  .frame-grid-scene-btn:hover .frame-grid-scene-thumb::after {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .frame-grid-scene-thumb-canvas {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .frame-grid-scene-thumb-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--color-text-muted, #666);
+    background: linear-gradient(135deg, rgba(39, 39, 42, 0.8), rgba(24, 24, 27, 0.8));
+  }
+
+  /* Scene Content */
+  .frame-grid-scene-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    position: relative;
+    z-index: 1;
+  }
+
+  .frame-grid-scene-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .frame-grid-scene-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 8px;
     background: var(--color-surface, #333);
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 600;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--color-text, #fff);
   }
 
   .frame-grid-scene-btn.is-active .frame-grid-scene-num {
-    background: var(--color-primary, #3b82f6);
+    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
   }
 
-  .frame-grid-scene-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .frame-grid-scene-label {
-    font-size: 13px;
-    color: var(--color-text, #fff);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .frame-grid-scene-frames {
+    font-size: 10px;
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text-muted, #666);
+    padding: 3px 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
   }
 
   .frame-grid-scene-range {
     font-size: 11px;
     font-family: var(--font-mono, monospace);
-    color: var(--color-text-muted, #666);
+    color: var(--color-text-secondary, #888);
   }
 
   /* Scene divider in grid */
@@ -480,45 +574,61 @@ const FRAME_GRID_STYLES = `
     grid-column: 1 / -1;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    margin: 8px 0;
+    gap: 16px;
+    padding: 12px 0;
+    margin: 4px 0;
   }
 
   .frame-grid-scene-divider-line {
     flex: 1;
-    height: 1px;
-    background: linear-gradient(90deg, transparent 0%, var(--color-primary, #3b82f6) 20%, var(--color-primary, #3b82f6) 80%, transparent 100%);
+    height: 2px;
+    background: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.4) 15%, var(--color-primary, #3b82f6) 50%, rgba(59, 130, 246, 0.4) 85%, transparent 100%);
+    border-radius: 1px;
   }
 
   .frame-grid-scene-divider-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--color-primary, #3b82f6);
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     white-space: nowrap;
-    padding: 4px 12px;
-    background: var(--color-primary-muted, rgba(59, 130, 246, 0.15));
-    border-radius: 4px;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
   }
 
-  /* Scene indicator on frame */
+  /* Scene indicator on frame - Enhanced */
   .frame-grid-item.is-scene-start {
-    border-left: 3px solid var(--color-primary, #3b82f6);
+    border-left: 4px solid var(--color-primary, #3b82f6);
   }
 
+  .frame-grid-item.is-scene-start::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--color-primary, #3b82f6), transparent);
+    z-index: 6;
+  }
+
+  /* Scene Badge - Enhanced */
   .frame-grid-scene-badge {
     position: absolute;
-    top: 4px;
-    left: 4px;
-    padding: 2px 6px;
-    font-size: 10px;
-    font-weight: 600;
-    background: var(--color-primary, #3b82f6);
+    top: 6px;
+    left: 6px;
+    padding: 3px 8px;
+    font-size: 9px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--color-primary, #3b82f6), #2563eb);
     color: white;
-    border-radius: 3px;
+    border-radius: 8px;
     z-index: 5;
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.4);
+    letter-spacing: 0.03em;
   }
 
   /* Layout with scenes panel */
@@ -728,15 +838,42 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
         className: 'frame-grid-scene-btn',
         type: 'button',
         'data-scene-index': String(index),
-      }, [
-        createElement('span', { className: 'frame-grid-scene-num' }, [String(index + 1)]),
-        createElement('div', { className: 'frame-grid-scene-info' }, [
-          createElement('div', { className: 'frame-grid-scene-label' }, [`Scene ${index + 1}`]),
-          createElement('div', { className: 'frame-grid-scene-range' }, [
-            `${scene.startFrame} - ${scene.endFrame}`,
+        'aria-label': `Scene ${index + 1}, frames ${scene.startFrame} to ${scene.endFrame}, ${scene.endFrame - scene.startFrame + 1} frames`,
+      });
+
+      // Add thumbnail from first frame of scene
+      const thumbContainer = createElement('div', { className: 'frame-grid-scene-thumb' });
+      const frame = frames[scene.startFrame];
+      if (frame) {
+        try {
+          const canvas = createThumbnailCanvas(frame, 120);
+          canvas.className = 'frame-grid-scene-thumb-canvas';
+          thumbContainer.appendChild(canvas);
+        } catch {
+          thumbContainer.appendChild(
+            createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+          );
+        }
+      } else {
+        thumbContainer.appendChild(
+          createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+        );
+      }
+      sceneBtn.appendChild(thumbContainer);
+
+      // Scene content (header + range)
+      const sceneContent = createElement('div', { className: 'frame-grid-scene-content' }, [
+        createElement('div', { className: 'frame-grid-scene-header' }, [
+          createElement('span', { className: 'frame-grid-scene-num' }, [String(index + 1)]),
+          createElement('span', { className: 'frame-grid-scene-frames' }, [
+            `${scene.endFrame - scene.startFrame + 1}f`,
           ]),
         ]),
+        createElement('div', { className: 'frame-grid-scene-range' }, [
+          `${scene.startFrame} \u2192 ${scene.endFrame}`,
+        ]),
       ]);
+      sceneBtn.appendChild(sceneContent);
 
       sceneButtons.push(sceneBtn);
 
@@ -782,10 +919,29 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   /** @type {HTMLElement[]} */
   const gridItems = [];
 
+  // Track current scene for divider insertion
+  let lastSceneIdx = -1;
+
   frames.forEach((frame, index) => {
     // Check if this frame starts a scene
     const sceneIdx = getSceneIndexForFrame(index, scenes);
     const isStart = isSceneStart(index, scenes);
+
+    // Insert scene divider when entering a new scene (except for first scene)
+    if (hasScenes && sceneIdx !== lastSceneIdx && sceneIdx >= 0 && lastSceneIdx >= 0) {
+      const divider = createElement('div', {
+        className: 'frame-grid-scene-divider',
+        'aria-hidden': 'true',
+      }, [
+        createElement('div', { className: 'frame-grid-scene-divider-line' }),
+        createElement('div', { className: 'frame-grid-scene-divider-label' }, [
+          `Scene ${sceneIdx + 1}`,
+        ]),
+        createElement('div', { className: 'frame-grid-scene-divider-line' }),
+      ]);
+      gridContainer.appendChild(divider);
+    }
+    lastSceneIdx = sceneIdx;
 
     const item = createElement('div', {
       className: `frame-grid-item ${isStart ? 'is-scene-start' : ''}`,
