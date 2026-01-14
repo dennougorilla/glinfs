@@ -11,10 +11,19 @@ import { initLoading } from './features/loading/index.js';
 import {
   setClipPayload,
   setEditorPayload,
+  getClipPayload,
+  getEditorPayload,
   resetAppStore,
   registerScreenCaptureCleanup,
 } from './shared/app-store.js';
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
+import { initTestMode, isTestMode, getTestConfig, updateTestConfig, getDefaultMockOptions } from './shared/test-mode.js';
+import {
+  createMockClipPayload,
+  createMockEditorPayload,
+  createMockFrames,
+  isMockFrameSupported,
+} from './shared/utils/mock-frame.js';
 
 /**
  * Application version string injected at build time by Vite
@@ -22,86 +31,189 @@ import { cleanupScreenCaptureResources } from './features/capture/api.js';
  */
 /* global __APP_VERSION__ */
 
-// Test environment detection
-// Enable test hooks in development mode or when Playwright is detected
-const IS_PLAYWRIGHT_TEST =
-  typeof window !== 'undefined' &&
-  (import.meta.env?.DEV || window.navigator?.webdriver || window.__PLAYWRIGHT_TEST__);
+// Initialize test mode detection
+initTestMode();
 
-if (IS_PLAYWRIGHT_TEST) {
+// Test environment detection - use centralized test mode
+const IS_TEST_MODE = isTestMode();
+
+if (IS_TEST_MODE) {
   window.__PLAYWRIGHT_TEST__ = true;
 
   /**
    * Test hooks for E2E testing - allows state injection
-   * Only available in Playwright test environment
+   * Only available in test environment (Playwright, dev mode, testMode=true)
+   *
+   * @example
+   * // In Playwright test
+   * await page.evaluate(async () => {
+   *   await window.__TEST_HOOKS__.injectMockClipPayload({ frameCount: 30 });
+   * });
+   * await page.goto('#/editor');
+   *
+   * @example
+   * // Direct URL with test mode
+   * await page.goto('http://localhost:5173/?testMode=true&mockFrames=30#/editor');
    */
   window.__TEST_HOOKS__ = {
-    // App store management
+    // ============================================================
+    // App Store Management
+    // ============================================================
+
+    /** Set clip payload directly */
     setClipPayload,
+    /** Set editor payload directly */
     setEditorPayload,
+    /** Get current clip payload */
+    getClipPayload,
+    /** Get current editor payload */
+    getEditorPayload,
+    /** Reset all app state */
     resetAppStore,
 
-    // Feature state setters (populated by each feature)
+    // ============================================================
+    // Feature State Setters (populated by each feature on init)
+    // ============================================================
+
+    /** Set capture state (available after capture init) */
     setCaptureState: null,
+    /** Set editor state (available after editor init) */
     setEditorState: null,
+    /** Set export state (available after export init) */
     setExportState: null,
 
-    // Helper to create mock frames for injection
-    createMockFrames: (count = 30, fps = 30) => {
-      const width = 640;
-      const height = 480;
-      return Array.from({ length: count }, (_, i) => ({
-        id: `mock-frame-${i}`,
-        data: createMockImageDataForTest(width, height),
-        timestamp: (i / fps) * 1000,
-        width,
-        height,
-      }));
+    // ============================================================
+    // Test Mode Configuration
+    // ============================================================
+
+    /** Check if test mode is enabled */
+    isTestMode: () => isTestMode(),
+    /** Get current test configuration */
+    getTestConfig: () => getTestConfig(),
+    /** Update test configuration */
+    updateTestConfig: (updates) => updateTestConfig(updates),
+    /** Check if mock frames are supported */
+    isMockFrameSupported: () => isMockFrameSupported(),
+
+    // ============================================================
+    // Mock Frame Creation (VideoFrame-compatible)
+    // ============================================================
+
+    /**
+     * Create mock frames for testing (async)
+     * These frames work with canvas.drawImage() like real VideoFrames
+     *
+     * @param {number} count - Number of frames
+     * @param {Object} options - Options (width, height, pattern, fps)
+     * @returns {Promise<Frame[]>} Array of mock frames
+     *
+     * @example
+     * const frames = await __TEST_HOOKS__.createMockFrames(30, {
+     *   width: 1280, height: 720, pattern: 'numbered'
+     * });
+     */
+    createMockFrames: async (count = 30, options = {}) => {
+      const defaults = getDefaultMockOptions();
+      return createMockFrames(count, { ...defaults, ...options });
     },
 
-    // Helper to inject clip payload with mock frames
-    injectClipPayload: (frameCount = 30, fps = 30) => {
-      const frames = window.__TEST_HOOKS__.createMockFrames(frameCount, fps);
-      setClipPayload({ frames, fps, capturedAt: Date.now() });
+    /**
+     * Create and inject a mock ClipPayload (Capture → Editor)
+     * This is the primary method for testing Editor without Screen Capture
+     *
+     * @param {Object} options - Options
+     * @param {number} [options.frameCount=30] - Number of frames
+     * @param {15|30|60} [options.fps=30] - FPS
+     * @param {number} [options.width=640] - Frame width
+     * @param {number} [options.height=480] - Frame height
+     * @param {'gradient'|'checkerboard'|'numbered'} [options.pattern='numbered'] - Visual pattern
+     * @returns {Promise<void>}
+     *
+     * @example
+     * await __TEST_HOOKS__.injectMockClipPayload({ frameCount: 60, fps: 30 });
+     * location.hash = '#/editor';
+     */
+    injectMockClipPayload: async (options = {}) => {
+      const defaults = getDefaultMockOptions();
+      const payload = await createMockClipPayload({ ...defaults, ...options });
+      setClipPayload(payload);
+      console.log('[TestHooks] Injected mock ClipPayload:', payload.frames.length, 'frames');
     },
 
-    // Helper to inject editor payload with mock frames
-    injectEditorPayload: (frameCount = 30, fps = 30, cropArea = null) => {
-      const frames = window.__TEST_HOOKS__.createMockFrames(frameCount, fps);
-      setEditorPayload({
-        frames,
-        cropArea,
-        clip: { frames, fps, duration: frameCount / fps, createdAt: Date.now() },
-        fps,
-      });
+    /**
+     * Create and inject a mock EditorPayload (Editor → Export)
+     * Use this to test Export without going through Editor
+     *
+     * @param {Object} options - Options
+     * @param {number} [options.frameCount=30] - Number of frames
+     * @param {15|30|60} [options.fps=30] - FPS
+     * @param {{ start: number, end: number }} [options.selectedRange] - Selected range
+     * @param {Object} [options.cropArea=null] - Crop area
+     * @returns {Promise<void>}
+     *
+     * @example
+     * await __TEST_HOOKS__.injectMockEditorPayload({
+     *   frameCount: 30,
+     *   selectedRange: { start: 5, end: 20 },
+     *   cropArea: { x: 100, y: 100, width: 400, height: 300, aspectRatio: 'free' }
+     * });
+     * location.hash = '#/export';
+     */
+    injectMockEditorPayload: async (options = {}) => {
+      const defaults = getDefaultMockOptions();
+      const editorPayload = await createMockEditorPayload({ ...defaults, ...options });
+
+      // Also inject clip payload since export reads from both
+      const clipPayload = await createMockClipPayload({ ...defaults, ...options });
+      setClipPayload(clipPayload);
+      setEditorPayload(editorPayload);
+
+      console.log('[TestHooks] Injected mock EditorPayload:', editorPayload.clip.frames.length, 'frames');
+    },
+
+    /**
+     * Navigate to a route with mock data pre-injected
+     * This is the easiest way to test Editor or Export
+     *
+     * @param {'editor' | 'export'} route - Target route
+     * @param {Object} options - Mock frame options
+     * @returns {Promise<void>}
+     *
+     * @example
+     * await __TEST_HOOKS__.navigateWithMockData('editor', { frameCount: 30 });
+     */
+    navigateWithMockData: async (route, options = {}) => {
+      if (route === 'editor') {
+        await window.__TEST_HOOKS__.injectMockClipPayload(options);
+        location.hash = '#/editor';
+      } else if (route === 'export') {
+        await window.__TEST_HOOKS__.injectMockEditorPayload(options);
+        location.hash = '#/export';
+      }
+    },
+
+    // ============================================================
+    // Legacy API (backward compatibility)
+    // ============================================================
+
+    /**
+     * @deprecated Use injectMockClipPayload instead
+     */
+    injectClipPayload: async (frameCount = 30, fps = 30) => {
+      console.warn('[TestHooks] injectClipPayload is deprecated, use injectMockClipPayload');
+      await window.__TEST_HOOKS__.injectMockClipPayload({ frameCount, fps });
+    },
+
+    /**
+     * @deprecated Use injectMockEditorPayload instead
+     */
+    injectEditorPayload: async (frameCount = 30, fps = 30, cropArea = null) => {
+      console.warn('[TestHooks] injectEditorPayload is deprecated, use injectMockEditorPayload');
+      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount, fps, cropArea });
     },
   };
 
-  /**
-   * Create mock ImageData for test injection
-   * Uses real ImageData constructor for canvas compatibility
-   * @param {number} width
-   * @param {number} height
-   * @returns {ImageData}
-   */
-  function createMockImageDataForTest(width, height) {
-    // Create real ImageData object for canvas compatibility
-    const imageData = new ImageData(width, height);
-    const data = imageData.data;
-
-    // Fill with gradient pattern
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const i = (y * width + x) * 4;
-        data[i] = Math.floor((x / width) * 255);     // R: horizontal gradient
-        data[i + 1] = Math.floor((y / height) * 255); // G: vertical gradient
-        data[i + 2] = 128;                            // B: constant
-        data[i + 3] = 255;                            // A: opaque
-      }
-    }
-
-    return imageData;
-  }
+  console.log('[App] Test mode enabled. Use __TEST_HOOKS__ for E2E testing.');
 }
 
 /**

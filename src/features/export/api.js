@@ -9,6 +9,7 @@ import { createEncoderManager } from '../../workers/worker-manager.js';
 /**
  * Extract RGBA pixel data from a VideoFrame
  * Handles both full-frame (copyTo) and cropped (OffscreenCanvas) cases
+ *
  * @param {import('../capture/types.js').Frame} frame - Frame containing VideoFrame
  * @param {import('../editor/types.js').CropArea | null} crop - Optional crop region
  * @returns {Promise<{ data: Uint8ClampedArray, width: number, height: number }>}
@@ -20,20 +21,34 @@ export async function getFrameRGBA(frame, crop) {
   }
 
   const videoFrame = frame.frame;
+  const sourceWidth = videoFrame.codedWidth;
+  const sourceHeight = videoFrame.codedHeight;
 
-  // Full-frame extraction: use VideoFrame.copyTo() for best performance
+  // Full-frame extraction
   if (!crop) {
-    const width = videoFrame.codedWidth;
-    const height = videoFrame.codedHeight;
-    const byteLength = width * height * 4;
-    const buffer = new Uint8ClampedArray(byteLength);
+    // Use copyTo() for GPU-accelerated extraction when available
+    if (typeof videoFrame.copyTo === 'function') {
+      const byteLength = sourceWidth * sourceHeight * 4;
+      const buffer = new Uint8ClampedArray(byteLength);
 
-    await videoFrame.copyTo(buffer, {
-      rect: { x: 0, y: 0, width, height },
-      format: 'RGBA',
-    });
+      await videoFrame.copyTo(buffer, {
+        rect: { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
+        format: 'RGBA',
+      });
 
-    return { data: buffer, width, height };
+      return { data: buffer, width: sourceWidth, height: sourceHeight };
+    }
+
+    // Fallback: use OffscreenCanvas (for environments without copyTo)
+    const offscreen = new OffscreenCanvas(sourceWidth, sourceHeight);
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to get OffscreenCanvas 2d context');
+    }
+
+    ctx.drawImage(videoFrame, 0, 0);
+    const imageData = ctx.getImageData(0, 0, sourceWidth, sourceHeight);
+    return { data: imageData.data, width: sourceWidth, height: sourceHeight };
   }
 
   // Cropped extraction: use OffscreenCanvas for GPU-accelerated crop

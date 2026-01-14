@@ -5,6 +5,7 @@
  */
 
 import { getThumbnailSizes } from './quality-settings.js';
+import { getDrawableSource } from './canvas.js';
 
 /** @type {number} Default cache size */
 const DEFAULT_CACHE_SIZE = 300;
@@ -77,12 +78,14 @@ export class ThumbnailCache {
       throw new Error('Failed to get OffscreenCanvas context');
     }
 
-    if (!frame?.frame) {
+    // Get drawable source (supports both real VideoFrames and mock frames)
+    const source = getDrawableSource(frame);
+    if (source) {
+      ctx.drawImage(source, 0, 0, thumbWidth, thumbHeight);
+    } else {
       // Invalid frame gets placeholder
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, thumbWidth, thumbHeight);
-    } else {
-      ctx.drawImage(frame.frame, 0, 0, thumbWidth, thumbHeight);
     }
 
     // Convert to regular Canvas (for DOM display)

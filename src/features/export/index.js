@@ -6,7 +6,7 @@
 import { emit } from '../../shared/bus.js';
 import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult, releaseAllFramesAndReset } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
-import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder } from '../../shared/utils/canvas.js';
+import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder, getDrawableSource } from '../../shared/utils/canvas.js';
 import { navigate } from '../../shared/router.js';
 import {
   createExportStore,
@@ -404,20 +404,28 @@ function renderCroppedFrame(ctx, frame, crop) {
     return;
   }
 
+  // Get drawable source (supports both real VideoFrames and mock frames)
+  const source = getDrawableSource(frame);
+  if (!source) {
+    const canvas = ctx.canvas;
+    renderFramePlaceholder(ctx, canvas.width, canvas.height);
+    return;
+  }
+
   if (crop) {
     // Set canvas size to crop dimensions
     syncCanvasSize(ctx.canvas, crop.width, crop.height);
 
-    // Draw cropped region directly from VideoFrame (no intermediate canvas needed)
+    // Draw cropped region
     ctx.drawImage(
-      frame.frame,
+      source,
       crop.x, crop.y, crop.width, crop.height,
       0, 0, crop.width, crop.height
     );
   } else {
-    // No crop - draw full frame directly from VideoFrame
+    // No crop - draw full frame
     syncCanvasSize(ctx.canvas, frame.width, frame.height);
-    ctx.drawImage(frame.frame, 0, 0);
+    ctx.drawImage(source, 0, 0);
   }
 }
 
