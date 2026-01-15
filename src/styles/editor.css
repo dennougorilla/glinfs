@@ -1169,25 +1169,37 @@
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	padding: var(--space-6) var(--space-4);
+	padding: var(--space-8) var(--space-4);
 	text-align: center;
+	min-height: 160px;
 }
 
 .scenes-sidebar-icon {
-	font-size: 32px;
-	margin-bottom: var(--space-3);
-	opacity: 0.5;
+	width: 48px;
+	height: 48px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 24px;
+	margin-bottom: var(--space-4);
+	background: var(--color-bg-tertiary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-lg);
+	opacity: 0.7;
 }
 
 .scenes-sidebar-text {
 	font-size: var(--font-size-sm);
+	font-weight: 500;
 	color: var(--color-text-secondary);
+	line-height: var(--line-height-normal);
 }
 
 .scenes-sidebar-subtext {
 	font-size: var(--font-size-xs);
 	color: var(--color-text-muted);
-	margin-top: var(--space-1);
+	margin-top: var(--space-2);
+	line-height: var(--line-height-relaxed);
 }
 
 /* Scene thumbnail list */

@@ -861,7 +861,8 @@ function renderScenesSidebar(container, state, handlers) {
     container.appendChild(
       createElement('div', { className: 'scenes-sidebar-empty' }, [
         createElement('div', { className: 'scenes-sidebar-icon' }, ['\uD83C\uDFAC']),
-        createElement('div', { className: 'scenes-sidebar-text' }, ['Scene detection runs automatically']),
+        createElement('div', { className: 'scenes-sidebar-text' }, ['No scenes to show']),
+        createElement('div', { className: 'scenes-sidebar-subtext' }, ['Enable scene detection in Capture settings to see scenes here']),
       ])
     );
     return cleanups;
@@ -900,8 +901,8 @@ function renderScenesSidebar(container, state, handlers) {
     container.appendChild(
       createElement('div', { className: 'scenes-sidebar-empty' }, [
         createElement('div', { className: 'scenes-sidebar-icon' }, ['\u2713']),
-        createElement('div', { className: 'scenes-sidebar-text' }, ['No scene changes detected']),
-        createElement('div', { className: 'scenes-sidebar-subtext' }, ['Clip plays as single scene']),
+        createElement('div', { className: 'scenes-sidebar-text' }, ['Single scene clip']),
+        createElement('div', { className: 'scenes-sidebar-subtext' }, ['No scene cuts were detected in your recording']),
       ])
     );
     return cleanups;

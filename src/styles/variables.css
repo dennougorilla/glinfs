@@ -143,4 +143,14 @@
   --control-height-sm: 28px;
   --control-height-md: 36px;
   --control-height-lg: 44px;
+
+  /* Interactive states - consistent hover/active feedback */
+  --hover-overlay: rgba(255, 255, 255, 0.05);
+  --active-overlay: rgba(255, 255, 255, 0.1);
+  --pressed-overlay: rgba(0, 0, 0, 0.1);
+
+  /* Content max-widths */
+  --content-max-width-sm: 400px;
+  --content-max-width-md: 640px;
+  --content-max-width-lg: 960px;
 }

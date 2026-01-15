@@ -863,16 +863,23 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--color-bg-tertiary);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  transition: all var(--transition-normal);
+}
+
+.empty-state-step:hover {
+  background: var(--color-surface);
+  border-color: var(--color-border);
 }
 
 .empty-state-step-number {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -881,6 +888,7 @@ input[type="checkbox"] {
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--color-primary);
+  flex-shrink: 0;
 }
 
 /* ========================================
