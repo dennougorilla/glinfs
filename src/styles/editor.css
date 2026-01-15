@@ -282,6 +282,7 @@
 /* Panel Content */
 .panel-content {
 	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: var(--space-5);
 }
@@ -1163,6 +1164,7 @@
 
 .scenes-sidebar-content {
 	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: var(--space-3);
 }
