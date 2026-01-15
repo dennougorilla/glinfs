@@ -691,22 +691,26 @@
 	background: linear-gradient(
 		to right,
 		transparent 0%,
-		rgba(245, 158, 11, 0.1) 100%
+		rgba(245, 158, 11, 0.15) 100%
 	);
 	opacity: 0;
-	transition: opacity var(--transition-fast);
+	transition: opacity var(--transition-normal);
 }
 
 .tl-handle--out .tl-handle-wing {
 	background: linear-gradient(
 		to left,
 		transparent 0%,
-		rgba(245, 158, 11, 0.1) 100%
+		rgba(245, 158, 11, 0.15) 100%
 	);
 }
 
 .tl-handle:hover .tl-handle-wing {
 	opacity: 1;
+}
+
+.tl-handle:active .tl-handle-wing {
+	opacity: 0.8;
 }
 
 /* Handle Grip - Visual grab target */
@@ -1214,39 +1218,38 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	padding: 0;
-	padding-bottom: var(--space-2);
+	padding: var(--space-2);
+	padding-bottom: var(--space-3);
 	background: transparent;
-	border: none;
+	border: 1px solid transparent;
 	border-radius: var(--radius-md);
 	cursor: pointer;
-	transition: opacity 0.15s ease;
+	transition: all var(--transition-normal);
 	text-align: left;
 	width: 100%;
 	position: relative;
 }
 
 .scene-thumbnail-card:hover {
-	opacity: 0.8;
+	background: var(--color-bg-tertiary);
+	border-color: var(--color-border);
 }
 
 .scene-thumbnail-card:active {
-	opacity: 0.7;
+	background: var(--color-surface);
 }
 
 .scene-thumbnail-card.is-selected {
-	background: rgba(59, 130, 246, 0.06);
-	border-radius: var(--radius-md);
-	padding-left: var(--space-2);
-	margin-left: calc(-1 * var(--space-2));
+	background: rgba(59, 130, 246, 0.08);
+	border-color: rgba(59, 130, 246, 0.3);
 }
 
 .scene-thumbnail-card.is-selected::before {
 	content: '';
 	position: absolute;
-	left: 0;
-	top: 4px;
-	bottom: 4px;
+	left: -1px;
+	top: 8px;
+	bottom: 8px;
 	width: 3px;
 	background: var(--color-primary);
 	border-radius: 2px;
