@@ -369,7 +369,8 @@
   height: 100%;
   background: var(--color-primary);
   border-radius: var(--radius-full);
-  transition: width 0.2s ease;
+  transition: width var(--transition-normal);
+  will-change: width;
 }
 
 .progress-info {

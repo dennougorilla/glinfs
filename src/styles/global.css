@@ -757,8 +757,21 @@ input[type="checkbox"] {
     border: 2px solid white;
   }
 
+  .btn-secondary,
+  .btn-ghost,
+  .aspect-btn,
+  .encoder-card,
+  .scene-thumbnail-card {
+    border-width: 2px;
+  }
+
   .empty-state-icon {
     border-width: 3px;
+  }
+
+  /* Enhanced focus indicators for high contrast */
+  :focus-visible {
+    outline-width: 3px;
   }
 }
 
@@ -822,6 +835,7 @@ input[type="checkbox"] {
   border-radius: var(--radius-xl);
   position: relative;
   overflow: hidden;
+  transition: transform var(--transition-normal);
 }
 
 .empty-state-icon::before {
@@ -833,8 +847,12 @@ input[type="checkbox"] {
   transition: opacity 0.3s var(--easing-standard);
 }
 
+.empty-state:hover .empty-state-icon {
+  transform: translateY(-2px);
+}
+
 .empty-state:hover .empty-state-icon::before {
-  opacity: 0.1;
+  opacity: 0.15;
 }
 
 .empty-state-icon svg {

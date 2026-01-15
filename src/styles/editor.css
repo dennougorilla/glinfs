@@ -131,7 +131,7 @@
 	font-size: var(--font-size-xs);
 	font-weight: 600;
 	cursor: pointer;
-	transition: all 0.15s;
+	transition: all var(--transition-normal);
 }
 
 .btn-frame-grid-compact:hover {
@@ -1062,7 +1062,8 @@
 	height: 100%;
 	background: var(--gradient-glinfs);
 	border-radius: var(--radius-full);
-	transition: width 0.3s ease-out;
+	transition: width var(--transition-slow);
+	will-change: width;
 }
 
 /* Error state */
