@@ -39,7 +39,8 @@ body {
 
 .skip-link:focus {
   top: var(--space-4);
-  outline: none;
+  outline: 3px solid white;
+  outline-offset: 2px;
 }
 
 /* Focus indicators - Enhanced visibility */
@@ -711,6 +712,34 @@ input[type="checkbox"] {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Responsive header for small screens */
+@media (max-width: 600px) {
+  .app-header {
+    padding: 0 var(--space-4);
+  }
+
+  .step-indicator {
+    gap: var(--space-1);
+  }
+
+  .step-label {
+    display: none;
+  }
+
+  .step-number {
+    width: 24px;
+    height: 24px;
+  }
+
+  .step-connector {
+    width: 20px;
+  }
+
+  .app-logo span:not(.app-logo-icon) {
+    display: none;
   }
 }
 

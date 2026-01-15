@@ -50,7 +50,7 @@
   /* Text hierarchy */
   --color-text: #fafafa;
   --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
+  --color-text-muted: #8b8b94;         /* Lightened for WCAG AA contrast (4.5:1+) */
   --color-text-disabled: #52525b;
 
   /* Borders */
@@ -109,6 +109,9 @@
   --radius-xl: 16px;
   --radius-full: 9999px;
 
+  /* Canvas backgrounds */
+  --color-canvas-bg: #000000;
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -130,6 +133,12 @@
   --z-overlay: 300;
   --z-modal: 400;
   --z-tooltip: 500;
+
+  /* Timeline-specific z-index layers */
+  --z-timeline-handle: 10;
+  --z-timeline-selection: 20;
+  --z-timeline-hover: 25;
+  --z-timeline-playhead: 30;
 
   /* Layout dimensions - Comfortable proportions */
   --header-height: 52px;
