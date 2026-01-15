@@ -24,6 +24,8 @@ export { SceneDetectionManager, createSceneDetectionManager } from './manager.js
 // Import for initialization
 import { registerDetector } from './registry.js';
 import { createHistogramDetector } from './algorithms/histogram-detector.js';
+import { createPixelDiffDetector } from './algorithms/pixel-diff-detector.js';
+import { createEdgeChangeDetector } from './algorithms/edge-change-detector.js';
 
 /**
  * Initialize scene detection module
@@ -33,8 +35,13 @@ export function initSceneDetection() {
   // Register histogram detector as default
   registerDetector('histogram', createHistogramDetector, true);
 
+  // Register pixel difference detector
+  registerDetector('pixel-diff', createPixelDiffDetector);
+
+  // Register edge change ratio detector
+  registerDetector('edge-change', createEdgeChangeDetector);
+
   // Future algorithms can be registered here:
-  // registerDetector('pixel-diff', createPixelDiffDetector);
   // registerDetector('ml-based', createMLDetector);
 }
 
