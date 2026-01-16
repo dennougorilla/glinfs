@@ -78,7 +78,8 @@
   width: 0%;
   background: var(--gradient-glinfs);
   border-radius: var(--radius-full);
-  transition: width 0.2s ease-out;
+  transition: width var(--transition-normal);
+  will-change: width;
 }
 
 /* Progress Text */
