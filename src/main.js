@@ -8,6 +8,7 @@ import { initCapture } from './features/capture/index.js';
 import { initEditor } from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
+import { initSettings } from './features/settings/index.js';
 import {
   setClipPayload,
   setEditorPayload,
@@ -225,6 +226,7 @@ const routes = {
   '/editor': initEditor,
   '/export': initExport,
   '/loading': initLoading,
+  '/settings': initSettings,
 };
 
 // Initialize application

@@ -7,6 +7,8 @@
 import { safeClose, safeCloseFrame, closeAllFrames } from '../../shared/utils/videoframe.js';
 export { safeClose, safeCloseFrame, closeAllFrames };
 
+import { loadSettings } from '../../shared/user-settings.js';
+
 /**
  * Valid FPS values
  * @type {readonly [15, 30, 60]}
@@ -160,15 +162,28 @@ export function validateSettings(settings) {
 
 /**
  * Create default capture settings
+ * Loads from user settings if available
  * @returns {import('./types.js').CaptureSettings} Default settings
  */
 export function createDefaultSettings() {
-  return {
-    fps: 30,
-    bufferDuration: 10,
-    thumbnailQuality: 0.5,
-    sceneDetection: false,
-  };
+  // Try to load from user settings
+  try {
+    const userSettings = loadSettings();
+    return {
+      fps: userSettings.capture.fps,
+      bufferDuration: userSettings.capture.bufferDuration,
+      thumbnailQuality: 0.5, // This is managed separately in quality-settings.js
+      sceneDetection: userSettings.capture.sceneDetection,
+    };
+  } catch (error) {
+    // Fallback to hardcoded defaults if import fails
+    return {
+      fps: 30,
+      bufferDuration: 15,
+      thumbnailQuality: 0.5,
+      sceneDetection: true,
+    };
+  }
 }
 
 /**
