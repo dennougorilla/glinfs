@@ -122,7 +122,8 @@ export function renderCaptureScreen(container, state, handlers) {
   const sidebar = createElement('div', { className: 'capture-sidebar' });
   sidebar.appendChild(createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)));
   sidebar.appendChild(createControlSection('Buffer', renderStats(state.stats)));
-  sidebar.appendChild(createControlSection('Settings', renderSettings(state.settings, handlers, cleanups)));
+  // Disable settings when capture is active (sharing screen)
+  sidebar.appendChild(createControlSection('Settings', renderSettings(state.settings, handlers, cleanups, state.isSharing)));
 
   content.appendChild(sidebar);
   screen.appendChild(content);
@@ -315,9 +316,10 @@ function renderStats(stats) {
  * @param {import('./types.js').CaptureSettings} settings
  * @param {CaptureUIHandlers} handlers
  * @param {(() => void)[]} cleanups
+ * @param {boolean} disabled - Whether settings should be disabled (during capture)
  * @returns {HTMLElement}
  */
-function renderSettings(settings, handlers, cleanups) {
+function renderSettings(settings, handlers, cleanups, disabled = false) {
   const settingsEl = createElement('div', { className: 'capture-settings' });
 
   // FPS
@@ -328,18 +330,20 @@ function renderSettings(settings, handlers, cleanups) {
     ])
   );
   const fpsSelect = /** @type {HTMLSelectElement} */ (
-    createElement('select', {}, [
+    createElement('select', { disabled: disabled ? 'true' : undefined }, [
       createElement('option', { value: '15' }, ['15 FPS']),
       createElement('option', { value: '30' }, ['30 FPS']),
       createElement('option', { value: '60' }, ['60 FPS']),
     ])
   );
   fpsSelect.value = String(settings.fps);
-  cleanups.push(
-    on(fpsSelect, 'change', () => {
-      handlers.onSettingsChange({ fps: /** @type {15|30|60} */ (Number(fpsSelect.value)) });
-    })
-  );
+  if (!disabled) {
+    cleanups.push(
+      on(fpsSelect, 'change', () => {
+        handlers.onSettingsChange({ fps: /** @type {15|30|60} */ (Number(fpsSelect.value)) });
+      })
+    );
+  }
   fpsRow.appendChild(fpsSelect);
   settingsEl.appendChild(fpsRow);
 
@@ -357,20 +361,23 @@ function renderSettings(settings, handlers, cleanups) {
       min: '5',
       max: '60',
       step: '5',
+      disabled: disabled ? 'true' : undefined,
     })
   );
   durationInput.value = String(settings.bufferDuration);
-  cleanups.push(
-    on(durationInput, 'input', () => {
-      const valueEl = durationRow.querySelector('.setting-value');
-      if (valueEl) valueEl.textContent = `${durationInput.value}s`;
-    })
-  );
-  cleanups.push(
-    on(durationInput, 'change', () => {
-      handlers.onSettingsChange({ bufferDuration: Number(durationInput.value) });
-    })
-  );
+  if (!disabled) {
+    cleanups.push(
+      on(durationInput, 'input', () => {
+        const valueEl = durationRow.querySelector('.setting-value');
+        if (valueEl) valueEl.textContent = `${durationInput.value}s`;
+      })
+    );
+    cleanups.push(
+      on(durationInput, 'change', () => {
+        handlers.onSettingsChange({ bufferDuration: Number(durationInput.value) });
+      })
+    );
+  }
   durationRow.appendChild(durationInput);
   settingsEl.appendChild(durationRow);
 
@@ -383,19 +390,25 @@ function renderSettings(settings, handlers, cleanups) {
   );
   const sceneDetectionToggle = /** @type {HTMLButtonElement} */ (
     createElement('button', {
-      className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''}`,
+      className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''} ${disabled ? 'btn-toggle--disabled' : ''}`,
       type: 'button',
       'data-setting': 'sceneDetection',
       'aria-pressed': String(settings.sceneDetection),
+      'aria-disabled': disabled ? 'true' : undefined,
+      disabled: disabled ? 'true' : undefined,
       title: 'Automatically detect scene changes when creating a clip',
     }, [settings.sceneDetection ? 'On' : 'Off'])
   );
-  cleanups.push(
-    on(sceneDetectionToggle, 'click', () => {
-      const newValue = !settings.sceneDetection;
-      handlers.onSettingsChange({ sceneDetection: newValue });
-    })
-  );
+  if (!disabled) {
+    cleanups.push(
+      on(sceneDetectionToggle, 'click', () => {
+        // Get current settings to avoid stale closure reference
+        const currentSettings = handlers.getSettings();
+        const newValue = currentSettings ? !currentSettings.sceneDetection : true;
+        handlers.onSettingsChange({ sceneDetection: newValue });
+      })
+    );
+  }
   sceneDetectionRow.appendChild(sceneDetectionToggle);
   settingsEl.appendChild(sceneDetectionRow);
 
