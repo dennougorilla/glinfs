@@ -4,7 +4,7 @@
  */
 
 import { createElement, on } from '../../shared/utils/dom.js';
-import { formatDuration, formatBytes } from '../../shared/utils/format.js';
+import { formatDuration } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
@@ -305,7 +305,6 @@ function renderStats(stats) {
   return createElement('div', { className: 'capture-stats' }, [
     createStatItem('Frames', String(stats.frameCount)),
     createStatItem('Duration', formatDuration(stats.duration)),
-    createStatItem('Memory', formatBytes(stats.memoryMB * 1024 * 1024)),
     createStatItem('FPS', String(stats.fps)),
   ]);
 }
@@ -451,11 +450,10 @@ function renderFooter() {
  */
 export function updateBufferStatus(container, stats) {
   const statValues = container.querySelectorAll('.stat-value');
-  if (statValues.length >= 4) {
+  if (statValues.length >= 3) {
     statValues[0].textContent = String(stats.frameCount);
     statValues[1].textContent = formatDuration(stats.duration);
-    statValues[2].textContent = formatBytes(stats.memoryMB * 1024 * 1024);
-    statValues[3].textContent = String(stats.fps);
+    statValues[2].textContent = String(stats.fps);
   }
 }
 
