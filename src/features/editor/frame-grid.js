@@ -169,17 +169,54 @@ const FRAME_GRID_STYLES = `
     outline-offset: 2px;
   }
 
+  /* Start frame - green outline + overlay */
   .frame-grid-item.is-start {
-    box-shadow: inset 0 0 0 3px var(--color-success, #22c55e);
+    outline: 3px solid var(--color-success, #22c55e);
+    outline-offset: 1px;
+    z-index: 2;
   }
 
+  .frame-grid-item.is-start::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(34, 197, 94, 0.20);
+    pointer-events: none;
+    border-radius: inherit;
+    z-index: 1;
+  }
+
+  /* End frame - red outline + overlay */
   .frame-grid-item.is-end {
-    box-shadow: inset 0 0 0 3px var(--color-error, #ef4444);
+    outline: 3px solid var(--color-error, #ef4444);
+    outline-offset: 1px;
+    z-index: 2;
   }
 
+  .frame-grid-item.is-end::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(239, 68, 68, 0.20);
+    pointer-events: none;
+    border-radius: inherit;
+    z-index: 1;
+  }
+
+  /* Single selection (start = end) - orange outline */
+  .frame-grid-item.is-start.is-end {
+    outline: 3px solid var(--color-selection, #f59e0b);
+  }
+
+  .frame-grid-item.is-start.is-end::before {
+    background: rgba(245, 158, 11, 0.25);
+  }
+
+  /* Range frames - blue outline */
   .frame-grid-item.is-in-range {
-    box-shadow: inset 0 0 0 2px var(--color-primary, #3b82f6);
-    background: var(--color-primary-muted, rgba(59, 130, 246, 0.15));
+    outline: 2px solid var(--color-primary, #3b82f6);
+    outline-offset: 0px;
+    z-index: 1;
   }
 
   .frame-grid-item.is-in-range::after {
@@ -193,8 +230,10 @@ const FRAME_GRID_STYLES = `
     border-radius: inherit;
   }
 
-  .frame-grid-item.is-start.is-end {
-    box-shadow: inset 0 0 0 3px var(--color-selection, #f59e0b);
+  /* Start/End frames take priority over range styling */
+  .frame-grid-item.is-start.is-in-range,
+  .frame-grid-item.is-end.is-in-range {
+    z-index: 2;
   }
 
   .frame-grid-item canvas {
@@ -202,6 +241,13 @@ const FRAME_GRID_STYLES = `
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+
+  /* Lazy loading placeholder */
+  .frame-grid-placeholder {
+    width: 100%;
+    height: 100%;
+    background: var(--color-surface, #222);
   }
 
   /* Hover Actions (S/E buttons) */
@@ -274,38 +320,36 @@ const FRAME_GRID_STYLES = `
     background: var(--color-error-hover, #dc2626);
   }
 
-  /* Selection badges */
+  /* Selection badges - opaque background for readability on any thumbnail */
   .frame-grid-badge {
     position: absolute;
     bottom: 4px;
     left: 4px;
-    padding: var(--space-1, 4px) var(--space-2, 8px);
-    font-size: var(--font-size-2xs, 10px);
-    font-weight: 700;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     border-radius: var(--radius-sm, 4px);
-    color: var(--color-text, #fff);
+    background: rgba(0, 0, 0, 0.85);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    z-index: 5;
   }
 
-  /* Badges use outline style to differentiate from filled S/E buttons */
   .frame-grid-badge.start-badge {
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid var(--color-success, #22c55e);
+    border: 2px solid var(--color-success, #22c55e);
     color: var(--color-success, #22c55e);
   }
 
   .frame-grid-badge.end-badge {
     left: auto;
     right: 4px;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid var(--color-error, #ef4444);
+    border: 2px solid var(--color-error, #ef4444);
     color: var(--color-error, #ef4444);
   }
 
   .frame-grid-badge.single-badge {
-    background: rgba(245, 158, 11, 0.15);
-    border: 1px solid var(--color-selection, #f59e0b);
+    border: 2px solid var(--color-selection, #f59e0b);
     color: var(--color-selection, #f59e0b);
   }
 
@@ -664,6 +708,12 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   let thumbnailSize = DEFAULT_THUMBNAIL_SIZE;
   const hasScenes = scenes.length > 0;
 
+  // Track previous selection for optimized updates (null initially to trigger full update)
+  /** @type {number | null} */
+  let prevStartFrame = null;
+  /** @type {number | null} */
+  let prevEndFrame = null;
+
   // Touch device support
   /** @type {number | null} */
   let touchTimer = null;
@@ -832,6 +882,53 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   /** @type {HTMLElement[]} */
   const gridItems = [];
 
+  /**
+   * Render thumbnail for a grid item
+   * @param {HTMLElement} item
+   * @param {import('../capture/types.js').Frame} frame
+   */
+  function renderThumbnail(item, frame) {
+    // Remove placeholder if exists
+    const placeholder = item.querySelector('.frame-grid-placeholder');
+    if (placeholder) placeholder.remove();
+
+    try {
+      const canvas = createThumbnailCanvas(frame, MAX_THUMBNAIL_SIZE);
+      item.insertBefore(canvas, item.firstChild);
+    } catch {
+      const errorPlaceholder = createElement('div', {
+        style: 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
+      }, ['\u26A0']);
+      item.insertBefore(errorPlaceholder, item.firstChild);
+    }
+  }
+
+  // Lazy loading with IntersectionObserver
+  const thumbnailObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const item = /** @type {HTMLElement} */ (entry.target);
+          const index = parseInt(item.dataset.index, 10);
+
+          // Render thumbnail if not already rendered
+          if (!item.querySelector('canvas')) {
+            renderThumbnail(item, frames[index]);
+          }
+
+          thumbnailObserver.unobserve(item);
+        }
+      });
+    },
+    {
+      root: body, // Scroll container
+      rootMargin: '200px', // Pre-load 200px before visible
+    }
+  );
+
+  // Cleanup observer on unmount
+  cleanups.push(() => thumbnailObserver.disconnect());
+
   frames.forEach((frame, index) => {
     const item = createElement('div', {
       className: 'frame-grid-item',
@@ -840,15 +937,19 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       'aria-label': `Frame ${index + 1}`,
     });
 
-    // Generate thumbnail
-    try {
-      const canvas = createThumbnailCanvas(frame, MAX_THUMBNAIL_SIZE);
-      item.appendChild(canvas);
-    } catch (e) {
+    // Immediately render selected frames, lazy-load others
+    const isInitiallySelected = index === initialRange.start || index === initialRange.end;
+
+    if (isInitiallySelected) {
+      // Selected frames: render immediately
+      renderThumbnail(item, frame);
+    } else {
+      // Other frames: add placeholder and observe
       const placeholder = createElement('div', {
-        style: 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
-      }, ['\u26A0']);
+        className: 'frame-grid-placeholder',
+      });
       item.appendChild(placeholder);
+      thumbnailObserver.observe(item);
     }
 
     // Hover actions: [S] [E] buttons
@@ -873,34 +974,8 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     gridItems.push(item);
     gridContainer.appendChild(item);
 
-    // [S] button click
-    cleanups.push(on(hoverActions.querySelector('.action-start'), 'click', (e) => {
-      e.stopPropagation();
-      setStartFrame(index);
-      updateSceneButtonStates();
-    }));
-
-    // [E] button click
-    cleanups.push(on(hoverActions.querySelector('.action-end'), 'click', (e) => {
-      e.stopPropagation();
-      setEndFrame(index);
-      updateSceneButtonStates();
-    }));
-
-    // Click handler (legacy: shift+click support)
-    cleanups.push(on(item, 'click', (e) => {
-      const shiftKey = /** @type {MouseEvent} */ (e).shiftKey;
-      handleFrameClick(index, shiftKey);
-      updateSceneButtonStates();
-    }));
-
-    // Double-click handler
-    cleanups.push(on(item, 'dblclick', () => {
-      handleFrameDoubleClick(index);
-      updateSceneButtonStates();
-    }));
-
     // Touch device support: long-press (400ms) to show S/E buttons
+    // (kept on individual items due to timer complexity)
     cleanups.push(on(item, 'touchstart', () => {
       clearTouchActive();
       touchTimer = window.setTimeout(() => {
@@ -923,6 +998,47 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       }
     }));
   });
+
+  // Event delegation for mouse events on grid container
+  // (reduces ~1200 listeners to 2 listeners)
+  cleanups.push(on(gridContainer, 'click', (e) => {
+    const target = /** @type {HTMLElement} */ (e.target);
+    const item = target.closest('.frame-grid-item');
+    if (!item) return;
+
+    const index = parseInt(item.dataset.index, 10);
+
+    // [S] button click
+    if (target.closest('.action-start')) {
+      e.stopPropagation();
+      setStartFrame(index);
+      updateSceneButtonStates();
+      return;
+    }
+
+    // [E] button click
+    if (target.closest('.action-end')) {
+      e.stopPropagation();
+      setEndFrame(index);
+      updateSceneButtonStates();
+      return;
+    }
+
+    // Frame item click (shift+click support)
+    const shiftKey = /** @type {MouseEvent} */ (e).shiftKey;
+    handleFrameClick(index, shiftKey);
+    updateSceneButtonStates();
+  }));
+
+  cleanups.push(on(gridContainer, 'dblclick', (e) => {
+    const target = /** @type {HTMLElement} */ (e.target);
+    const item = target.closest('.frame-grid-item');
+    if (!item) return;
+
+    const index = parseInt(item.dataset.index, 10);
+    handleFrameDoubleClick(index);
+    updateSceneButtonStates();
+  }));
 
   body.appendChild(gridContainer);
   mainContent.appendChild(body);
@@ -1158,39 +1274,95 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   }
 
   /**
-   * Update visual state of all grid items
+   * Update visual state of a single grid item
+   * @param {HTMLElement} item
+   * @param {number} index
+   */
+  function updateSingleItemVisualState(item, index) {
+    const isStart = index === startFrame;
+    const isEnd = index === endFrame;
+    const effectiveEnd = endFrame ?? startFrame;
+    const inRange = startFrame !== null && isFrameInRange(index, startFrame, effectiveEnd);
+
+    item.classList.toggle('is-start', isStart);
+    item.classList.toggle('is-end', isEnd && endFrame !== null);
+    item.classList.toggle('is-in-range', inRange);
+
+    // Remove existing badges
+    item.querySelectorAll('.frame-grid-badge').forEach((b) => b.remove());
+
+    // Add badges
+    if (isStart && isEnd && startFrame === endFrame) {
+      const badge = createElement('span', { className: 'frame-grid-badge single-badge' }, ['IN=OUT']);
+      item.appendChild(badge);
+    } else {
+      if (isStart) {
+        const badge = createElement('span', { className: 'frame-grid-badge start-badge' }, ['IN']);
+        item.appendChild(badge);
+      }
+      if (isEnd && endFrame !== null) {
+        const badge = createElement('span', { className: 'frame-grid-badge end-badge' }, ['OUT']);
+        item.appendChild(badge);
+      }
+    }
+  }
+
+  /**
+   * Get all indices affected by range change
+   * @param {number | null} oldStart
+   * @param {number | null} oldEnd
+   * @param {number | null} newStart
+   * @param {number | null} newEnd
+   * @returns {Set<number>}
+   */
+  function getAffectedRangeIndices(oldStart, oldEnd, newStart, newEnd) {
+    const affected = new Set();
+
+    // Add old range
+    if (oldStart !== null) {
+      const oldEffectiveEnd = oldEnd ?? oldStart;
+      const min = Math.min(oldStart, oldEffectiveEnd);
+      const max = Math.max(oldStart, oldEffectiveEnd);
+      for (let i = min; i <= max; i++) {
+        affected.add(i);
+      }
+    }
+
+    // Add new range
+    if (newStart !== null) {
+      const newEffectiveEnd = newEnd ?? newStart;
+      const min = Math.min(newStart, newEffectiveEnd);
+      const max = Math.max(newStart, newEffectiveEnd);
+      for (let i = min; i <= max; i++) {
+        affected.add(i);
+      }
+    }
+
+    return affected;
+  }
+
+  /**
+   * Update visual state of grid items (optimized: only changed items)
    */
   function updateVisualState() {
-    gridItems.forEach((item, index) => {
-      const isStart = index === startFrame;
-      const isEnd = index === endFrame;
-      const effectiveEnd = endFrame ?? startFrame;
-      const inRange = startFrame !== null && isFrameInRange(index, startFrame, effectiveEnd);
+    // Collect all affected indices
+    const changedIndices = getAffectedRangeIndices(
+      prevStartFrame,
+      prevEndFrame,
+      startFrame,
+      endFrame
+    );
 
-      item.classList.toggle('is-start', isStart);
-      item.classList.toggle('is-end', isEnd && endFrame !== null);
-      // Include IN/OUT frames in range highlight (they get both the range style and their border)
-      item.classList.toggle('is-in-range', inRange);
-
-      // Remove existing badges
-      item.querySelectorAll('.frame-grid-badge').forEach((b) => b.remove());
-
-      // Add badges
-      if (isStart && isEnd && startFrame === endFrame) {
-        // Single frame selection
-        const badge = createElement('span', { className: 'frame-grid-badge single-badge' }, ['IN=OUT']);
-        item.appendChild(badge);
-      } else {
-        if (isStart) {
-          const badge = createElement('span', { className: 'frame-grid-badge start-badge' }, ['IN']);
-          item.appendChild(badge);
-        }
-        if (isEnd && endFrame !== null) {
-          const badge = createElement('span', { className: 'frame-grid-badge end-badge' }, ['OUT']);
-          item.appendChild(badge);
-        }
+    // Update only changed items
+    changedIndices.forEach((index) => {
+      if (gridItems[index]) {
+        updateSingleItemVisualState(gridItems[index], index);
       }
     });
+
+    // Update tracking state
+    prevStartFrame = startFrame;
+    prevEndFrame = endFrame;
 
     // Update apply button state
     applyBtn.disabled = startFrame === null;
