@@ -13,6 +13,7 @@ import {
 } from '../../shared/app-store.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { updateSetting } from '../../shared/user-settings.js';
 import {
   createCaptureStore,
   startCapture,
@@ -397,6 +398,13 @@ function handleSettingsChange(newSettings) {
 
   store.setState((state) => updateSettings(state, newSettings));
   emit('capture:settings', { settings: store.getState().settings });
+
+  // Save settings to localStorage
+  Object.entries(newSettings).forEach(([key, value]) => {
+    if (key !== 'thumbnailQuality') { // thumbnailQuality managed separately
+      updateSetting('capture', key, value);
+    }
+  });
 
   const container = qsRequired('#main-content');
 

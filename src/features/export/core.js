@@ -3,6 +3,8 @@
  * @module features/export/core
  */
 
+import { loadSettings } from '../../shared/user-settings.js';
+
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const VALID_FRAME_SKIPS = /** @type {const} */ ([1, 2, 3, 4, 5]);
 
@@ -86,19 +88,36 @@ export function calculateMaxColors(quality, presetId) {
 
 /**
  * Create default export settings
+ * Loads from user settings if available
  * @returns {import('./types.js').ExportSettings}
  */
 export function createDefaultSettings() {
-  return {
-    quality: 0.8,
-    frameSkip: 1,
-    playbackSpeed: 1,
-    dithering: true,
-    loopCount: 0,
-    openInNewTab: false,
-    encoderPreset: 'balanced',
-    encoderId: 'gifenc-js',
-  };
+  // Try to load from user settings
+  try {
+    const userSettings = loadSettings();
+    return {
+      quality: userSettings.export.quality,
+      frameSkip: userSettings.export.frameSkip,
+      playbackSpeed: userSettings.export.playbackSpeed,
+      dithering: userSettings.export.dithering,
+      loopCount: userSettings.export.loopCount,
+      openInNewTab: userSettings.export.openInNewTab,
+      encoderPreset: userSettings.export.encoderPreset,
+      encoderId: userSettings.export.encoderId,
+    };
+  } catch (error) {
+    // Fallback to hardcoded defaults if import fails
+    return {
+      quality: 0.8,
+      frameSkip: 1,
+      playbackSpeed: 1,
+      dithering: true,
+      loopCount: 0,
+      openInNewTab: false,
+      encoderPreset: 'balanced',
+      encoderId: 'gifenc-js',
+    };
+  }
 }
 
 /**
