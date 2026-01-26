@@ -903,31 +903,39 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     }
   }
 
-  // Lazy loading with IntersectionObserver
-  const thumbnailObserver = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const item = /** @type {HTMLElement} */ (entry.target);
-          const index = parseInt(item.dataset.index, 10);
+  // Lazy loading with IntersectionObserver (with fallback for unsupported environments)
+  const supportsIntersectionObserver =
+    typeof window !== 'undefined' && 'IntersectionObserver' in window;
 
-          // Render thumbnail if not already rendered
-          if (!item.querySelector('canvas')) {
-            renderThumbnail(item, frames[index]);
-          }
+  /** @type {IntersectionObserver | null} */
+  const thumbnailObserver = supportsIntersectionObserver
+    ? new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const item = /** @type {HTMLElement} */ (entry.target);
+              const index = parseInt(item.dataset.index, 10);
 
-          thumbnailObserver.unobserve(item);
+              // Render thumbnail if not already rendered
+              if (!item.querySelector('canvas')) {
+                renderThumbnail(item, frames[index]);
+              }
+
+              thumbnailObserver.unobserve(item);
+            }
+          });
+        },
+        {
+          root: body, // Scroll container
+          rootMargin: '200px', // Pre-load 200px before visible
         }
-      });
-    },
-    {
-      root: body, // Scroll container
-      rootMargin: '200px', // Pre-load 200px before visible
-    }
-  );
+      )
+    : null;
 
-  // Cleanup observer on unmount
-  cleanups.push(() => thumbnailObserver.disconnect());
+  // Cleanup observer on unmount (only if observer exists)
+  if (thumbnailObserver) {
+    cleanups.push(() => thumbnailObserver.disconnect());
+  }
 
   frames.forEach((frame, index) => {
     const item = createElement('div', {
@@ -940,11 +948,11 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     // Immediately render selected frames, lazy-load others
     const isInitiallySelected = index === initialRange.start || index === initialRange.end;
 
-    if (isInitiallySelected) {
-      // Selected frames: render immediately
+    if (isInitiallySelected || !thumbnailObserver) {
+      // Selected frames OR no observer support: render immediately
       renderThumbnail(item, frame);
     } else {
-      // Other frames: add placeholder and observe
+      // Other frames with observer support: add placeholder and observe
       const placeholder = createElement('div', {
         className: 'frame-grid-placeholder',
       });
