@@ -29,7 +29,7 @@
   "homepage": "https://github.com/dennougorilla/glinfs#readme",
   "devDependencies": {
     "@playwright/test": "^1.57.0",
-    "jsdom": "^27.3.0",
+    "jsdom": "^27.4.0",
     "playwright": "^1.57.0",
     "vite": "^7.3.0",
     "vitest": "^4.0.16"
