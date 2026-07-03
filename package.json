@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest",
-    "test:coverage": "vitest --coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
   "repository": {
@@ -21,14 +22,18 @@
     "wasm",
     "web"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "dennougorilla",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
   "bugs": {
     "url": "https://github.com/dennougorilla/glinfs/issues"
   },
   "homepage": "https://github.com/dennougorilla/glinfs#readme",
   "devDependencies": {
     "@playwright/test": "^1.57.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "jsdom": "^27.3.0",
     "playwright": "^1.57.0",
     "vite": "^7.3.0",

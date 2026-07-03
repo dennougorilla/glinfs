@@ -32,18 +32,12 @@ export default defineConfig({
     actionTimeout: 10000,
   },
 
+  // The app requires the Screen Capture API and officially supports
+  // Chromium-based browsers only (see README), so E2E runs on Chromium alone.
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-    },
-    {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
-    },
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
     },
   ],
 
