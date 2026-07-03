@@ -41,6 +41,8 @@ All processing happens entirely in your browser. Your screen recordings never le
 
 ## Development
 
+Requirements: Node.js 20+
+
 ```bash
 # Install dependencies
 npm install
@@ -48,6 +50,23 @@ npm install
 # Start development server
 npm run dev
 
-# Run tests
+# Run unit & integration tests (watch mode: npm run test:watch)
 npm test
+
+# Run tests with coverage report
+npm run test:coverage
+
+# Run E2E tests (Chromium)
+npm run test:e2e
+
+# Production build
+npm run build
 ```
+
+### Architecture
+
+Vanilla JavaScript (ES modules) with no UI framework, built with Vite.
+Capture, encoding, and scene detection run in Web Workers; all processing
+stays client-side. Source is organized as `src/features/*` (capture, editor,
+export, scene-detection) over a `src/shared/` core, with workers in
+`src/workers/`.
