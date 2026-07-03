@@ -53,6 +53,9 @@ screenshots/
 # Project metadata for AI agents
 CLAUDE.md
 
+# Planning / codebase-analysis artifacts (development only)
+.planning/
+
 # Specification & planning artifacts (development only)
 specs/
 
