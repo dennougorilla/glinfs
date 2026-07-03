@@ -41,7 +41,7 @@ All processing happens entirely in your browser. Your screen recordings never le
 
 ## Development
 
-Requirements: Node.js 20+
+Requirements: Node.js 20.19+ or 22.12+ (required by Vite 7)
 
 ```bash
 # Install dependencies
