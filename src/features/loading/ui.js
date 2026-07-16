@@ -55,15 +55,13 @@ export function renderLoadingScreen(container) {
   content.appendChild(spinnerWrapper);
 
   // Title
-  content.appendChild(
-    createElement('h2', { className: 'loading-title' }, ['Detecting Scenes...'])
-  );
+  content.appendChild(createElement('h2', { className: 'loading-title' }, ['Detecting Scenes...']));
 
   // Subtitle
   content.appendChild(
     createElement('p', { className: 'loading-subtitle' }, [
       'Analyzing your clip for scene changes',
-    ])
+    ]),
   );
 
   // Progress container
@@ -80,10 +78,14 @@ export function renderLoadingScreen(container) {
 
   // Progress text
   progressContainer.appendChild(
-    createElement('div', {
-      className: 'loading-progress-text',
-      'data-progress': 'text',
-    }, ['0%'])
+    createElement(
+      'div',
+      {
+        className: 'loading-progress-text',
+        'data-progress': 'text',
+      },
+      ['0%'],
+    ),
   );
 
   content.appendChild(progressContainer);

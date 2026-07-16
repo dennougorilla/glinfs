@@ -1,10 +1,13 @@
 /* Global Styles - Professional Video Editor UI */
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -195,7 +198,7 @@ button:focus-visible,
 }
 
 .step-connector::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -430,7 +433,9 @@ button {
   color: var(--color-text-secondary);
 }
 
-select, input[type="text"], input[type="number"] {
+select,
+input[type="text"],
+input[type="number"] {
   height: var(--control-height-md);
   padding: 0 var(--space-3);
   background: var(--color-bg-tertiary);
@@ -442,11 +447,13 @@ select, input[type="text"], input[type="number"] {
   transition: all var(--transition-fast);
 }
 
-select:hover, input:hover {
+select:hover,
+input:hover {
   border-color: var(--color-text-muted);
 }
 
-select:focus, input:focus {
+select:focus,
+input:focus {
   outline: none;
   border-color: var(--color-primary);
   background: var(--color-bg-secondary);
@@ -530,8 +537,13 @@ input[type="checkbox"] {
 }
 
 @keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 /* Live dot */
@@ -544,8 +556,15 @@ input[type="checkbox"] {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.2); opacity: 0.7; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.7;
+  }
 }
 
 /* Status bar */
@@ -708,7 +727,9 @@ input[type="checkbox"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -839,7 +860,7 @@ input[type="checkbox"] {
 }
 
 .empty-state-icon::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: var(--gradient-glinfs);

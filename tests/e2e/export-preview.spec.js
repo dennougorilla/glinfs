@@ -9,7 +9,7 @@
  * - Performance: Preview completes within 3 seconds
  */
 
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const ANIMATION_SETTLE_MS = 500;
 const PREVIEW_TIMEOUT_MS = 10000; // Allow extra time for preview generation in CI
@@ -34,11 +34,14 @@ async function navigateToExportWithData(page, frameCount = 30, fps = 30) {
   await page.waitForSelector('.capture-screen', { state: 'visible' });
 
   // Inject editor payload for export
-  await page.evaluate(({ frames, rate }) => {
-    if (window.__TEST_HOOKS__?.injectEditorPayload) {
-      window.__TEST_HOOKS__.injectEditorPayload(frames, rate);
-    }
-  }, { frames: frameCount, rate: fps });
+  await page.evaluate(
+    ({ frames, rate }) => {
+      if (window.__TEST_HOOKS__?.injectEditorPayload) {
+        window.__TEST_HOOKS__.injectEditorPayload(frames, rate);
+      }
+    },
+    { frames: frameCount, rate: fps },
+  );
 
   await page.goto('/#/export');
   await page.waitForSelector('.export-screen', { state: 'visible' });

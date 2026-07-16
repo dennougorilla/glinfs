@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { clamp, lerp, mapRange, round } from '../../../src/shared/utils/math.js';
 
 describe('clamp', () => {

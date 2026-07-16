@@ -1,9 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import {
-  createBuffer,
-  addFrame,
-  getFrames,
-} from '../../../src/features/capture/core.js';
+import { describe, expect, it } from 'vitest';
+import { addFrame, createBuffer, getFrames } from '../../../src/features/capture/core.js';
 
 /**
  * Create mock ImageData for testing

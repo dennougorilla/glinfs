@@ -51,7 +51,7 @@ const STORAGE_KEY = 'thumbnailQuality';
  * @returns {number} Device memory in GB (defaults to 4 if unavailable)
  */
 function getDeviceMemory() {
-  // @ts-ignore - navigator.deviceMemory is Chrome-only
+  // @ts-expect-error - navigator.deviceMemory is Chrome-only
   return navigator.deviceMemory || 4;
 }
 

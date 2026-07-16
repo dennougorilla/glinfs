@@ -3,26 +3,38 @@
  * @module features/export
  */
 
+import {
+  clearExportResult,
+  getClipPayload,
+  getEditorPayload,
+  getExportResult,
+  releaseAllFramesAndReset,
+  setExportResult,
+} from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
-import { getEditorPayload, getClipPayload, getExportResult, setExportResult, clearExportResult, releaseAllFramesAndReset } from '../../shared/app-store.js';
-import { qsRequired } from '../../shared/utils/dom.js';
-import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder, getDrawableSource } from '../../shared/utils/canvas.js';
 import { navigate } from '../../shared/router.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import {
-  createExportStore,
-  updateSettings,
-  startEncoding,
-  updateProgress,
-  completeEncoding,
-  failEncoding,
-  cancelEncodingState,
-  resetExport,
-  createEncodingJob,
-  togglePreviewPlaying,
-} from './state.js';
+  getDrawableSource,
+  isVideoFrameValid,
+  renderFramePlaceholder,
+  syncCanvasSize,
+} from '../../shared/utils/canvas.js';
+import { qsRequired } from '../../shared/utils/dom.js';
+import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
 import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
-import { checkEncoderStatus, encodeGif, downloadBlob, openInNewTab } from './api.js';
+import {
+  cancelEncodingState,
+  completeEncoding,
+  createEncodingJob,
+  createExportStore,
+  failEncoding,
+  resetExport,
+  startEncoding,
+  togglePreviewPlaying,
+  updateProgress,
+  updateSettings,
+} from './state.js';
 import { renderExportScreen, updateProgressUI } from './ui.js';
 
 /** @type {ReturnType<typeof createExportStore> | null} */
@@ -79,7 +91,8 @@ export function initExport() {
   // Validate we have the required data
   if (!editorPayload?.selectedRange || !clipPayload?.frames?.length) {
     // Static error message - safe HTML
-    container.innerHTML = '<section class="screen export-screen" aria-labelledby="export-title"><header class="screen-header"><h1 id="export-title" class="screen-title">Export GIF</h1></header><div class="export-empty export-error"><p>No clip data available. Please capture and edit a clip first.</p><button class="btn btn-primary" onclick="location.hash = \'#/editor\'">Back to Editor</button></div></section>';
+    container.innerHTML =
+      '<section class="screen export-screen" aria-labelledby="export-title"><header class="screen-header"><h1 id="export-title" class="screen-title">Export GIF</h1></header><div class="export-empty export-error"><p>No clip data available. Please capture and edit a clip first.</p><button class="btn btn-primary" onclick="location.hash = \'#/editor\'">Back to Editor</button></div></section>';
     emit('export:validation-error', { errors: ['No clip data available'] });
     return cleanup;
   }
@@ -171,17 +184,22 @@ function render(container) {
 
   const state = store.getState();
 
-  const { cleanup, canvas } = renderExportScreen(container, state, {
-    onSettingsChange: handleSettingsChange,
-    onExport: handleExport,
-    onCancel: handleCancel,
-    onDownload: handleDownload,
-    onOpenInTab: handleOpenInTab,
-    onBackToEditor: handleBackToEditor,
-    onTogglePlay: handleTogglePlay,
-    onAdjustSettings: handleAdjustSettings,
-    onCreateNew: handleCreateNew,
-  }, clipInfo);
+  const { cleanup, canvas } = renderExportScreen(
+    container,
+    state,
+    {
+      onSettingsChange: handleSettingsChange,
+      onExport: handleExport,
+      onCancel: handleCancel,
+      onDownload: handleDownload,
+      onOpenInTab: handleOpenInTab,
+      onBackToEditor: handleBackToEditor,
+      onTogglePlay: handleTogglePlay,
+      onAdjustSettings: handleAdjustSettings,
+      onCreateNew: handleCreateNew,
+    },
+    clipInfo,
+  );
 
   uiCleanup = cleanup;
   previewCanvas = canvas;
@@ -200,15 +218,15 @@ function handleSettingsChange(settings) {
   if (!store) return;
 
   // Check if encoder is changing (requires full re-render)
-  const encoderChanging = settings.encoderId !== undefined &&
-    settings.encoderId !== store.getState().settings.encoderId;
+  const encoderChanging =
+    settings.encoderId !== undefined && settings.encoderId !== store.getState().settings.encoderId;
 
   store.setState((state) =>
     updateSettings(state, settings, {
       frameCount: clipInfo.frameCount,
       width: clipInfo.width,
       height: clipInfo.height,
-    })
+    }),
   );
 
   emit('export:settings', { settings: store.getState().settings });
@@ -238,7 +256,10 @@ async function handleExport() {
 
   // Create encoding job
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
-  const job = createEncodingJob(effectiveFrames.length, state.encoderStatus === 'gifsicle-wasm' ? 'gifsicle-wasm' : 'gifenc-js');
+  const job = createEncodingJob(
+    effectiveFrames.length,
+    state.encoderStatus === 'gifsicle-wasm' ? 'gifsicle-wasm' : 'gifenc-js',
+  );
 
   // Create AbortController for cancellation support
   encodingController = new AbortController();
@@ -262,7 +283,7 @@ async function handleExport() {
           emit('export:progress', { percent: progress.percent, frame: progress.current });
         },
       },
-      encodingController.signal
+      encodingController.signal,
     );
 
     if (!store) return;
@@ -423,11 +444,7 @@ function renderCroppedFrame(ctx, frame, crop) {
     syncCanvasSize(ctx.canvas, crop.width, crop.height);
 
     // Draw cropped region
-    ctx.drawImage(
-      source,
-      crop.x, crop.y, crop.width, crop.height,
-      0, 0, crop.width, crop.height
-    );
+    ctx.drawImage(source, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
   } else {
     // No crop - draw full frame
     syncCanvasSize(ctx.canvas, frame.width, frame.height);

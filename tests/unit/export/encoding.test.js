@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   applyFrameSkip,
   calculateFrameDelay,
   calculateProgress,
-  getCroppedDimensions,
   generateFilename,
+  getCroppedDimensions,
 } from '../../../src/features/export/core.js';
 
 /**

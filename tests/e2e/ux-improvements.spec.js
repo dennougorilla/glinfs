@@ -10,7 +10,7 @@
  * - US5: Export Preview functionality
  */
 
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const ANIMATION_SETTLE_MS = 500;
 
@@ -227,7 +227,10 @@ test.describe('US3: Playback Controls Layout', () => {
     await expect(playbackControls).toBeVisible();
 
     // Play button
-    const playButton = page.locator('.btn-playback').filter({ hasText: /▶|Play/i }).first();
+    const playButton = page
+      .locator('.btn-playback')
+      .filter({ hasText: /▶|Play/i })
+      .first();
     await expect(playButton).toBeVisible();
 
     // Check no overflow (controls should be within viewport)

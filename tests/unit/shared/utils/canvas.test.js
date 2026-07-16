@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   getContext2D,
-  syncCanvasSize,
-  isVideoFrameValid,
   isFrameValid,
+  isVideoFrameValid,
   renderFramePlaceholder,
+  syncCanvasSize,
 } from '../../../../src/shared/utils/canvas.js';
 
 describe('getContext2D', () => {

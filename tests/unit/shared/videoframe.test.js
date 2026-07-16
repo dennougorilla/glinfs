@@ -1,9 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import {
-  safeClose,
-  safeCloseFrame,
-  closeAllFrames,
-} from '../../../src/shared/utils/videoframe.js';
+import { describe, expect, it, vi } from 'vitest';
+import { closeAllFrames, safeClose, safeCloseFrame } from '../../../src/shared/utils/videoframe.js';
 
 // Helper to create mock VideoFrame
 function createMockVideoFrame(shouldThrow = false) {
@@ -143,11 +139,7 @@ describe('safeCloseFrame', () => {
 describe('closeAllFrames', () => {
   it('should close all frames and return count', () => {
     // Arrange
-    const frames = [
-      createMockFrame('1'),
-      createMockFrame('2'),
-      createMockFrame('3'),
-    ];
+    const frames = [createMockFrame('1'), createMockFrame('2'), createMockFrame('3')];
 
     // Act
     const closedCount = closeAllFrames(frames);
@@ -204,10 +196,7 @@ describe('closeAllFrames', () => {
 
   it('should not throw even when all frames throw', () => {
     // Arrange
-    const frames = [
-      createMockFrame('1', true),
-      createMockFrame('2', true),
-    ];
+    const frames = [createMockFrame('1', true), createMockFrame('2', true)];
 
     // Act & Assert
     expect(() => closeAllFrames(frames)).not.toThrow();

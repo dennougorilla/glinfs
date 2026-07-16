@@ -3,15 +3,14 @@
  * Provides inline editing interface for all user settings
  */
 
-import { createElement } from '../../shared/utils/dom.js';
 import {
   loadSettings,
-  updateSetting,
-  resetSettings,
   resetCategory,
+  resetSettings,
   SETTINGS_METADATA,
-  getDefaultSettings,
+  updateSetting,
 } from '../../shared/user-settings.js';
+import { createElement } from '../../shared/utils/dom.js';
 
 /**
  * Render settings screen
@@ -67,7 +66,7 @@ export function renderSettings(container, handlers = {}) {
     SETTINGS_METADATA.capture.label,
     settings.capture,
     SETTINGS_METADATA.capture.settings,
-    cleanups
+    cleanups,
   );
   content.appendChild(captureSection);
 
@@ -77,21 +76,18 @@ export function renderSettings(container, handlers = {}) {
     SETTINGS_METADATA.export.label,
     settings.export,
     SETTINGS_METADATA.export.settings,
-    cleanups
+    cleanups,
   );
   content.appendChild(exportSection);
 
   // Render thumbnail quality setting
-  const thumbnailSection = renderThumbnailQualitySetting(
-    settings.thumbnailQuality,
-    cleanups
-  );
+  const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
   content.appendChild(thumbnailSection);
 
   container.append(header, content);
 
   return () => {
-    cleanups.forEach(cleanup => cleanup());
+    cleanups.forEach((cleanup) => cleanup());
   };
 }
 
@@ -165,7 +161,7 @@ function renderThumbnailQualitySetting(value, cleanups) {
     null,
     value,
     SETTINGS_METADATA.thumbnailQuality,
-    cleanups
+    cleanups,
   );
   list.appendChild(item);
 
@@ -190,13 +186,7 @@ function renderSettingItem(category, key, value, metadata, cleanups) {
     textContent: metadata.label,
   });
 
-  const control = renderSettingControl(
-    category,
-    key,
-    value,
-    metadata,
-    cleanups
-  );
+  const control = renderSettingControl(category, key, value, metadata, cleanups);
 
   item.append(labelEl, control);
   return item;
@@ -227,12 +217,7 @@ function renderSettingControl(category, key, value, metadata, cleanups) {
       return renderBooleanControl(value, handleChange, cleanups);
 
     case 'select':
-      return renderSelectControl(
-        value,
-        metadata.options,
-        handleChange,
-        cleanups
-      );
+      return renderSelectControl(value, metadata.options, handleChange, cleanups);
 
     case 'range':
       return renderRangeControl(value, metadata, handleChange, cleanups);
@@ -287,7 +272,7 @@ function renderSelectControl(value, options, onChange, cleanups) {
 
   const select = createElement('select', { className: 'settings-select' });
 
-  options.forEach(option => {
+  options.forEach((option) => {
     const optionEl = createElement('option', {
       value: option.value,
       textContent: option.label,
@@ -297,7 +282,7 @@ function renderSelectControl(value, options, onChange, cleanups) {
   });
 
   const handleChange = (e) => {
-    const option = options.find(o => String(o.value) === e.target.value);
+    const option = options.find((o) => String(o.value) === e.target.value);
     if (option) {
       onChange(option.value);
     }

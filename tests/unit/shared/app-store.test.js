@@ -1,14 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  getClipPayload,
-  setClipPayload,
   clearClipPayload,
-  getEditorPayload,
-  setEditorPayload,
   clearEditorPayload,
+  getClipPayload,
+  getEditorPayload,
+  resetAppStore,
+  setClipPayload,
+  setEditorPayload,
   validateClipPayload,
   validateEditorPayload,
-  resetAppStore,
 } from '../../../src/shared/app-store.js';
 
 // Mock frame for testing (use plain object instead of ImageData for Node.js compatibility)

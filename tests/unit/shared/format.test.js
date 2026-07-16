@@ -1,11 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   formatBytes,
-  formatDuration,
-  formatRemaining,
-  formatPercent,
-  formatTimestamp,
   formatCompactDuration,
+  formatDuration,
+  formatPercent,
+  formatRemaining,
+  formatTimestamp,
 } from '../../../src/shared/utils/format.js';
 
 describe('formatBytes', () => {

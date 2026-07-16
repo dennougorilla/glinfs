@@ -59,7 +59,9 @@ input[type="range"]:focus-visible {
 }
 
 input[type="range"]:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px var(--color-primary-muted), 0 2px 6px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 0 0 3px var(--color-primary-muted),
+    0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
 /* Firefox range input styles */
@@ -94,7 +96,9 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 input[type="range"]:focus-visible::-moz-range-thumb {
-  box-shadow: 0 0 0 3px var(--color-primary-muted), 0 2px 6px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 0 0 3px var(--color-primary-muted),
+    0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
 /* Firefox focus ring */
@@ -126,7 +130,10 @@ select {
   font-family: var(--font-family);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 select:hover {
@@ -181,7 +188,9 @@ select:disabled {
   font-family: var(--font-family);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .custom-select__trigger:hover {
@@ -235,7 +244,9 @@ select:disabled {
   margin: 0;
   padding: 0;
   opacity: 0;
-  transition: max-height var(--transition-normal), opacity var(--transition-fast);
+  transition:
+    max-height var(--transition-normal),
+    opacity var(--transition-fast);
 }
 
 .custom-select__dropdown--open {
@@ -317,7 +328,9 @@ select:disabled {
   border: 2px solid var(--color-primary);
   border-radius: var(--radius-full);
   cursor: grab;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .custom-slider__thumb:hover {

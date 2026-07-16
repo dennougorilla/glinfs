@@ -3,18 +3,18 @@
  * @module tests/unit/export/encoders
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  registerEncoder,
-  unregisterEncoder,
+  clearRegistry,
   createEncoder,
+  createGifencEncoder,
   getAvailableEncoders,
   getDefaultEncoderId,
-  setDefaultEncoder,
-  isEncoderAvailable,
-  clearRegistry,
-  createGifencEncoder,
   getGifencMetadata,
+  isEncoderAvailable,
+  registerEncoder,
+  setDefaultEncoder,
+  unregisterEncoder,
 } from '../../../src/features/export/encoders/index.js';
 
 describe('Encoder Registry', () => {

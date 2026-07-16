@@ -5,11 +5,11 @@
  */
 
 import { createElement, on } from '../../shared/utils/dom.js';
-import { clamp } from '../../shared/utils/math.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
-import { createThumbnailCanvas } from './api.js';
-import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
+import { clamp } from '../../shared/utils/math.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
+import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
+import { createThumbnailCanvas } from './api.js';
 
 /**
  * @typedef {Object} TimelineHandlers
@@ -79,9 +79,11 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
     if (isMajor) {
       const frameAtTick = Math.round(t * DEFAULT_FPS);
-      tick.appendChild(createElement('span', { className: 'tl-tick-label' }, [
-        frameToTimecode(frameAtTick, DEFAULT_FPS)
-      ]));
+      tick.appendChild(
+        createElement('span', { className: 'tl-tick-label' }, [
+          frameToTimecode(frameAtTick, DEFAULT_FPS),
+        ]),
+      );
     }
 
     ruler.appendChild(tick);
@@ -285,7 +287,10 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     // Show hover time during drag
     hoverIndicator.style.display = 'block';
     hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, DEFAULT_FPS);
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
+      frameIndex,
+      DEFAULT_FPS,
+    );
   };
 
   const onHandleMouseUp = () => {
@@ -329,7 +334,10 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     // Show time at cursor
     hoverIndicator.style.display = 'block';
     hoverIndicator.style.left = `${percent}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(state.dragStartFrame, DEFAULT_FPS);
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
+      state.dragStartFrame,
+      DEFAULT_FPS,
+    );
   };
 
   const onDrawMouseMove = (e) => {
@@ -347,7 +355,10 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
     // Update hover time
     hoverIndicator.style.left = `${getPercentFromFrame(currentFrame)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(currentFrame, DEFAULT_FPS);
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
+      currentFrame,
+      DEFAULT_FPS,
+    );
 
     // Live update the actual selection
     if (endFrame - startFrame >= MIN_SELECTION_FRAMES) {
@@ -382,78 +393,87 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   // ═══════════════════════════════════════════════════════════
   // INTERACTIONS: Hover Time Display
   // ═══════════════════════════════════════════════════════════
-  cleanups.push(on(track, 'mousemove', (e) => {
-    if (state.isDraggingHandle || state.isDrawingSelection) return;
+  cleanups.push(
+    on(track, 'mousemove', (e) => {
+      if (state.isDraggingHandle || state.isDrawingSelection) return;
 
-    const frameIndex = getFrameFromEvent(e);
+      const frameIndex = getFrameFromEvent(e);
 
-    hoverIndicator.style.display = 'block';
-    hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, DEFAULT_FPS);
-  }));
+      hoverIndicator.style.display = 'block';
+      hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
+      hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
+        frameIndex,
+        DEFAULT_FPS,
+      );
+    }),
+  );
 
-  cleanups.push(on(track, 'mouseleave', () => {
-    if (!state.isDraggingHandle && !state.isDrawingSelection) {
-      hoverIndicator.style.display = 'none';
-    }
-  }));
+  cleanups.push(
+    on(track, 'mouseleave', () => {
+      if (!state.isDraggingHandle && !state.isDrawingSelection) {
+        hoverIndicator.style.display = 'none';
+      }
+    }),
+  );
 
   // ═══════════════════════════════════════════════════════════
   // INTERACTIONS: Keyboard
   // ═══════════════════════════════════════════════════════════
-  cleanups.push(on(timeline, 'keydown', (e) => {
-    const ke = /** @type {KeyboardEvent} */ (e);
-    const step = ke.shiftKey ? 10 : 1;
+  cleanups.push(
+    on(timeline, 'keydown', (e) => {
+      const ke = /** @type {KeyboardEvent} */ (e);
+      const step = ke.shiftKey ? 10 : 1;
 
-    switch (ke.key) {
-      case 'ArrowLeft':
-        ke.preventDefault();
-        // Move entire selection left
-        if (state.range.start - step >= 0) {
+      switch (ke.key) {
+        case 'ArrowLeft':
+          ke.preventDefault();
+          // Move entire selection left
+          if (state.range.start - step >= 0) {
+            updateRange({
+              start: state.range.start - step,
+              end: state.range.end - step,
+            });
+          }
+          break;
+        case 'ArrowRight':
+          ke.preventDefault();
+          // Move entire selection right
+          if (state.range.end + step <= totalFrames - 1) {
+            updateRange({
+              start: state.range.start + step,
+              end: state.range.end + step,
+            });
+          }
+          break;
+        case '[':
+          ke.preventDefault();
+          // Expand selection left
           updateRange({
-            start: state.range.start - step,
-            end: state.range.end - step,
+            start: Math.max(0, state.range.start - step),
+            end: state.range.end,
           });
-        }
-        break;
-      case 'ArrowRight':
-        ke.preventDefault();
-        // Move entire selection right
-        if (state.range.end + step <= totalFrames - 1) {
+          break;
+        case ']':
+          ke.preventDefault();
+          // Expand selection right
           updateRange({
-            start: state.range.start + step,
-            end: state.range.end + step,
+            start: state.range.start,
+            end: Math.min(totalFrames - 1, state.range.end + step),
           });
-        }
-        break;
-      case '[':
-        ke.preventDefault();
-        // Expand selection left
-        updateRange({
-          start: Math.max(0, state.range.start - step),
-          end: state.range.end,
-        });
-        break;
-      case ']':
-        ke.preventDefault();
-        // Expand selection right
-        updateRange({
-          start: state.range.start,
-          end: Math.min(totalFrames - 1, state.range.end + step),
-        });
-        break;
-      case 'Home':
-        ke.preventDefault();
-        // Select from start
-        updateRange({ start: 0, end: state.range.end });
-        break;
-      case 'End':
-        ke.preventDefault();
-        // Select to end
-        updateRange({ start: state.range.start, end: totalFrames - 1 });
-        break;
-    }
-  }));
+          break;
+        case 'Home':
+          ke.preventDefault();
+          // Select from start
+          updateRange({ start: 0, end: state.range.end });
+          break;
+        case 'End':
+          ke.preventDefault();
+          // Select to end
+          updateRange({ start: state.range.start, end: totalFrames - 1 });
+          break;
+      }
+    }),
+  );
 
   // ═══════════════════════════════════════════════════════════
   // RENDER
@@ -509,7 +529,7 @@ export function updateTimelineRange(container, range, totalFrames) {
       /** @type {HTMLElement} */ (dimRight),
       /** @type {HTMLElement} */ (selectionBox),
       range,
-      totalFrames
+      totalFrames,
     );
   }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createStore } from '../../../src/shared/store.js';
 
 describe('createStore', () => {
@@ -116,8 +116,8 @@ describe('createStore', () => {
 
       // Assert
       expect(listener).toHaveBeenCalledWith(
-        { count: 5 },  // current state
-        { count: 0 }   // previous state
+        { count: 5 }, // current state
+        { count: 0 }, // previous state
       );
     });
 

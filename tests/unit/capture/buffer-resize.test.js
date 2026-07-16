@@ -1,13 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  createBuffer,
-  addFrame,
-  getFrames,
-} from '../../../src/features/capture/core.js';
-import {
+  addFrameToState,
   initCaptureState,
   updateSettings,
-  addFrameToState,
 } from '../../../src/features/capture/state.js';
 
 /**

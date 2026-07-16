@@ -104,12 +104,12 @@ async function loadWasmModule() {
       // new Function() creates isolated scope, so we need to prepend Module definition
       // The Emscripten code checks: var Module=typeof Module!="undefined"?Module:{}
       // By setting it before, the code will use our pre-configured Module
-      // @ts-ignore - self is WorkerGlobalScope
+      // @ts-expect-error - self is WorkerGlobalScope
       self.Module = Module;
 
       // Prepend code to reference the global Module we set
       // This ensures Emscripten picks up our pre-configured Module with wasmBinary
-      const wrappedCode = 'var Module = self.Module;\n' + jsCode;
+      const wrappedCode = `var Module = self.Module;\n${jsCode}`;
 
       // Execute the Emscripten-generated code from same-origin static files
       // eslint-disable-next-line no-new-func
@@ -149,14 +149,18 @@ function quantizeFrame(module, rgba, width, height) {
 
   // Create callback for quantize_image
   const cb = module.addFunction(
-    (/** @type {number} */ palettePtr, /** @type {number} */ paletteLength, /** @type {number} */ imagePtr) => {
+    (
+      /** @type {number} */ palettePtr,
+      /** @type {number} */ paletteLength,
+      /** @type {number} */ imagePtr,
+    ) => {
       const buffer = new ArrayBuffer(paletteLength + imageLength);
       const resultArray = new Uint8Array(buffer);
       resultArray.set(new Uint8Array(module.HEAPU8.buffer, palettePtr, paletteLength));
       resultArray.set(new Uint8Array(module.HEAPU8.buffer, imagePtr, imageLength), paletteLength);
       result = buffer;
     },
-    'viii'
+    'viii',
   );
 
   // Call quantize_image
@@ -258,13 +262,10 @@ export function createGifsicleEncoder() {
       let result = null;
 
       // Create callback for encoder_finish
-      const cb = module.addFunction(
-        (/** @type {number} */ ptr, /** @type {number} */ length) => {
-          result = new Uint8Array(length);
-          result.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
-        },
-        'vii'
-      );
+      const cb = module.addFunction((/** @type {number} */ ptr, /** @type {number} */ length) => {
+        result = new Uint8Array(length);
+        result.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
+      }, 'vii');
 
       // Finish encoding
       module._encoder_finish(encoderPtr, cb);

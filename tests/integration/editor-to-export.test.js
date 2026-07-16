@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setEditorPayload,
   getEditorPayload,
-  validateEditorPayload,
   resetAppStore,
+  setEditorPayload,
+  validateEditorPayload,
 } from '../../src/shared/app-store.js';
 import { closeAllFrames } from '../../src/shared/utils/videoframe.js';
 
@@ -41,9 +41,7 @@ function createMockFrame(id, videoFrame = createMockVideoFrame()) {
 
 // Helper to create mock Clip
 function createMockClip(frameCount = 3) {
-  const frames = Array.from({ length: frameCount }, (_, i) =>
-    createMockFrame(`frame-${i}`)
-  );
+  const frames = Array.from({ length: frameCount }, (_, i) => createMockFrame(`frame-${i}`));
   return {
     frames,
     fps: 30,
@@ -195,10 +193,7 @@ describe('Editor → Export Integration', () => {
   describe('Export Cleanup', () => {
     it('should close Export frames on cleanup', () => {
       // Arrange
-      const exportFrames = [
-        createMockFrame('export-1'),
-        createMockFrame('export-2'),
-      ];
+      const exportFrames = [createMockFrame('export-1'), createMockFrame('export-2')];
 
       // Act - Simulate Export cleanup
       closeAllFrames(exportFrames);

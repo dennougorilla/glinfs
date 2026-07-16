@@ -3,8 +3,8 @@
  * User settings management and editing interface
  */
 
-import { renderSettings } from './ui.js';
 import { navigate } from '../../shared/router.js';
+import { renderSettings } from './ui.js';
 
 /**
  * Initialize settings screen

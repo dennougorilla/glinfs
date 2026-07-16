@@ -57,10 +57,9 @@ export class CaptureWorkerManager {
 
     // Create worker if not already created
     if (!this.#worker) {
-      this.#worker = new Worker(
-        new URL('./capture-worker.js', import.meta.url),
-        { type: 'module' }
-      );
+      this.#worker = new Worker(new URL('./capture-worker.js', import.meta.url), {
+        type: 'module',
+      });
       this.#worker.onmessage = this.#handleWorkerMessage.bind(this);
       this.#worker.onerror = this.#handleWorkerError.bind(this);
     }

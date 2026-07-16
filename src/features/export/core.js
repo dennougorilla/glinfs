@@ -82,7 +82,10 @@ export function getEncoderPreset(presetId) {
  */
 export function calculateMaxColors(quality, presetId) {
   const preset = getEncoderPreset(presetId);
-  const baseColors = Math.max(COLOR_PALETTE.min, Math.min(COLOR_PALETTE.max, Math.round(quality * COLOR_PALETTE.max)));
+  const baseColors = Math.max(
+    COLOR_PALETTE.min,
+    Math.min(COLOR_PALETTE.max, Math.round(quality * COLOR_PALETTE.max)),
+  );
   return Math.max(COLOR_PALETTE.min, Math.round(baseColors * preset.maxColorsMultiplier));
 }
 
@@ -177,7 +180,15 @@ export function validateSettings(settings) {
  * @returns {number} - Estimated bytes
  */
 export function estimateSize(params) {
-  const { frameCount, width, height, quality, dithering, frameSkip, encoderPreset = 'balanced' } = params;
+  const {
+    frameCount,
+    width,
+    height,
+    quality,
+    dithering,
+    frameSkip,
+    encoderPreset = 'balanced',
+  } = params;
 
   // Effective frame count after skip
   const effectiveFrames = Math.ceil(frameCount / frameSkip);
@@ -187,8 +198,15 @@ export function estimateSize(params) {
 
   // Base bytes per pixel, adjusted by quality
   // Higher quality = more color precision = larger file
-  const { qualityAdjustment, compression, headerOverhead, ditheringMultiplier: ditherMult } = SIZE_ESTIMATION;
-  const bytesPerPixel = SIZE_ESTIMATION.bytesPerPixelBase * (qualityAdjustment.base + quality * qualityAdjustment.scale);
+  const {
+    qualityAdjustment,
+    compression,
+    headerOverhead,
+    ditheringMultiplier: ditherMult,
+  } = SIZE_ESTIMATION;
+  const bytesPerPixel =
+    SIZE_ESTIMATION.bytesPerPixelBase *
+    (qualityAdjustment.base + quality * qualityAdjustment.scale);
 
   // Dithering adds some overhead (patterns need more entropy)
   const ditheringMultiplier = dithering ? ditherMult : 1;
@@ -314,4 +332,3 @@ export function generateFilename(prefix = 'glinfs') {
 export function calculateEffectiveFps(sourceFps, frameSkip, playbackSpeed) {
   return (sourceFps / frameSkip) * playbackSpeed;
 }
-

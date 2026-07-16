@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { createClip } from '../../../src/features/editor/core.js';
 import {
-  initEditorState,
-  togglePlayback,
-  setPlaying,
-  setPlaybackSpeed,
   goToFrame,
+  initEditorState,
   nextFrame,
   previousFrame,
+  setPlaybackSpeed,
+  setPlaying,
+  togglePlayback,
 } from '../../../src/features/editor/state.js';
-import { createClip } from '../../../src/features/editor/core.js';
 
 /**
  * Create mock ImageData for testing

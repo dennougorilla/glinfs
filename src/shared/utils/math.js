@@ -45,6 +45,6 @@ export function mapRange(value, inMin, inMax, outMin, outMax) {
  * @returns {number} Rounded value
  */
 export function round(value, decimals) {
-  const factor = Math.pow(10, decimals);
+  const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
 }

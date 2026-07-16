@@ -1,22 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  createClip,
-  setFrameRange,
-  validateFrameRange,
   calculateSelection,
   calculateSelectionInfo,
-  getOutputDimensions,
-  getHandlePositions,
-  resizeCropByHandle,
-  moveCrop,
+  centerCropAfterConstraint,
   clampCropArea,
   constrainAspectRatio,
-  centerCropAfterConstraint,
+  createClip,
   detectBoundaryHit,
-  normalizeSelectionRange,
-  isFrameInRange,
+  getHandlePositions,
+  getOutputDimensions,
   HANDLE_HIT_ZONE,
   HANDLE_SIZE,
+  isFrameInRange,
+  moveCrop,
+  normalizeSelectionRange,
+  resizeCropByHandle,
+  setFrameRange,
+  validateFrameRange,
 } from '../../../src/features/editor/core.js';
 
 /**
@@ -234,12 +234,12 @@ describe('getHandlePositions', () => {
 
     expect(Object.keys(positions)).toHaveLength(8);
     expect(positions['top-left']).toBeDefined();
-    expect(positions['top']).toBeDefined();
+    expect(positions.top).toBeDefined();
     expect(positions['top-right']).toBeDefined();
-    expect(positions['left']).toBeDefined();
-    expect(positions['right']).toBeDefined();
+    expect(positions.left).toBeDefined();
+    expect(positions.right).toBeDefined();
     expect(positions['bottom-left']).toBeDefined();
-    expect(positions['bottom']).toBeDefined();
+    expect(positions.bottom).toBeDefined();
     expect(positions['bottom-right']).toBeDefined();
   });
 
@@ -255,10 +255,10 @@ describe('getHandlePositions', () => {
   it('calculates edge positions correctly', () => {
     const positions = getHandlePositions(crop);
 
-    expect(positions['top']).toEqual({ x: 200, y: 100 });
-    expect(positions['bottom']).toEqual({ x: 200, y: 250 });
-    expect(positions['left']).toEqual({ x: 100, y: 175 });
-    expect(positions['right']).toEqual({ x: 300, y: 175 });
+    expect(positions.top).toEqual({ x: 200, y: 100 });
+    expect(positions.bottom).toEqual({ x: 200, y: 250 });
+    expect(positions.left).toEqual({ x: 100, y: 175 });
+    expect(positions.right).toEqual({ x: 300, y: 175 });
   });
 });
 

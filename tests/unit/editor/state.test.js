@@ -1,15 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { createClip } from '../../../src/features/editor/core.js';
 import {
-  initEditorState,
+  clearCrop,
   goToFrame,
+  initEditorState,
   nextFrame,
   previousFrame,
+  toggleGrid,
   togglePlayback,
   updateCrop,
-  clearCrop,
-  toggleGrid,
 } from '../../../src/features/editor/state.js';
-import { createClip } from '../../../src/features/editor/core.js';
 
 /**
  * Create mock ImageData for testing
@@ -43,11 +43,7 @@ function createMockFrame(id, width = 800, height = 600) {
 }
 
 function createTestState() {
-  const frames = [
-    createMockFrame('1'),
-    createMockFrame('2'),
-    createMockFrame('3'),
-  ];
+  const frames = [createMockFrame('1'), createMockFrame('2'), createMockFrame('3')];
   const clip = createClip(frames, 30);
   return initEditorState(clip);
 }

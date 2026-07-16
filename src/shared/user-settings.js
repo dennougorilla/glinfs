@@ -264,7 +264,7 @@ export function onSettingsChange(callback) {
  */
 function notifyListeners() {
   const settings = loadSettings();
-  listeners.forEach(callback => {
+  listeners.forEach((callback) => {
     try {
       callback(settings);
     } catch (error) {

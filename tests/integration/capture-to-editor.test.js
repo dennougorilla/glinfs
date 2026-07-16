@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setClipPayload,
-  getClipPayload,
   clearClipPayload,
-  validateClipPayload,
+  getClipPayload,
   resetAppStore,
+  setClipPayload,
+  validateClipPayload,
 } from '../../src/shared/app-store.js';
 import { closeAllFrames } from '../../src/shared/utils/videoframe.js';
 
@@ -92,7 +92,7 @@ describe('Capture → Editor Integration', () => {
       expect(validateClipPayload(validPayload).valid).toBe(true);
       expect(validateClipPayload(invalidPayload).valid).toBe(false);
       expect(validateClipPayload(invalidPayload).errors).toContain(
-        'ClipPayload.frames cannot be empty'
+        'ClipPayload.frames cannot be empty',
       );
     });
 
@@ -125,10 +125,7 @@ describe('Capture → Editor Integration', () => {
   describe('VideoFrame Ownership', () => {
     it('should clone frames before transfer (simulating Capture behavior)', () => {
       // Arrange - Original frames in Capture buffer
-      const originalFrames = [
-        createMockFrame('orig-1'),
-        createMockFrame('orig-2'),
-      ];
+      const originalFrames = [createMockFrame('orig-1'), createMockFrame('orig-2')];
 
       // Act - Capture clones frames for Editor
       const clonedFrames = originalFrames.map((frame, i) => ({

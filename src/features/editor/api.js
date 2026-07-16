@@ -4,10 +4,10 @@
  */
 
 import {
-  syncCanvasSize,
+  getDrawableSource,
   isVideoFrameValid,
   renderFramePlaceholder,
-  getDrawableSource,
+  syncCanvasSize,
 } from '../../shared/utils/canvas.js';
 
 /**
@@ -132,9 +132,7 @@ function renderBoundaryFeedback(ctx, crop, boundaryHit, frameWidth, frameHeight)
  */
 export function renderCropOverlay(ctx, crop, options = {}) {
   // Handle backwards compatibility with string color parameter
-  const opts = typeof options === 'string'
-    ? { color: options }
-    : options;
+  const opts = typeof options === 'string' ? { color: options } : options;
 
   const color = opts.color || 'rgba(77, 166, 255, 0.8)';
   const { hoveredHandle, activeHandle, boundaryHit } = opts;
@@ -266,22 +264,13 @@ export function hitTestCropHandle(x, y, crop, handleSize = 10) {
   const halfHandle = handleSize / 2;
 
   // Check corners first
-  if (
-    Math.abs(x - crop.x) <= halfHandle &&
-    Math.abs(y - crop.y) <= halfHandle
-  ) {
+  if (Math.abs(x - crop.x) <= halfHandle && Math.abs(y - crop.y) <= halfHandle) {
     return 'top-left';
   }
-  if (
-    Math.abs(x - (crop.x + crop.width)) <= halfHandle &&
-    Math.abs(y - crop.y) <= halfHandle
-  ) {
+  if (Math.abs(x - (crop.x + crop.width)) <= halfHandle && Math.abs(y - crop.y) <= halfHandle) {
     return 'top-right';
   }
-  if (
-    Math.abs(x - crop.x) <= halfHandle &&
-    Math.abs(y - (crop.y + crop.height)) <= halfHandle
-  ) {
+  if (Math.abs(x - crop.x) <= halfHandle && Math.abs(y - (crop.y + crop.height)) <= halfHandle) {
     return 'bottom-left';
   }
   if (
@@ -292,11 +281,7 @@ export function hitTestCropHandle(x, y, crop, handleSize = 10) {
   }
 
   // Check edges
-  if (
-    x >= crop.x &&
-    x <= crop.x + crop.width &&
-    Math.abs(y - crop.y) <= halfHandle
-  ) {
+  if (x >= crop.x && x <= crop.x + crop.width && Math.abs(y - crop.y) <= halfHandle) {
     return 'top';
   }
   if (
@@ -306,11 +291,7 @@ export function hitTestCropHandle(x, y, crop, handleSize = 10) {
   ) {
     return 'bottom';
   }
-  if (
-    y >= crop.y &&
-    y <= crop.y + crop.height &&
-    Math.abs(x - crop.x) <= halfHandle
-  ) {
+  if (y >= crop.y && y <= crop.y + crop.height && Math.abs(x - crop.x) <= halfHandle) {
     return 'left';
   }
   if (
@@ -322,12 +303,7 @@ export function hitTestCropHandle(x, y, crop, handleSize = 10) {
   }
 
   // Check inside crop area
-  if (
-    x >= crop.x &&
-    x <= crop.x + crop.width &&
-    y >= crop.y &&
-    y <= crop.y + crop.height
-  ) {
+  if (x >= crop.x && x <= crop.x + crop.width && y >= crop.y && y <= crop.y + crop.height) {
     return 'move';
   }
 

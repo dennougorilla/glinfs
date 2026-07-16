@@ -5,11 +5,11 @@
  */
 
 import {
-  Events,
-  createInitMessage,
   createAddFrameMessage,
-  createFinishMessage,
   createCancelMessage,
+  createFinishMessage,
+  createInitMessage,
+  Events,
 } from './worker-protocol.js';
 
 /**
@@ -132,18 +132,20 @@ export class GifEncoderManager {
 
       try {
         // Create Worker (using Vite's special syntax)
-        this.worker = new Worker(
-          new URL('./gif-encoder-worker.js', import.meta.url),
-          { type: 'module' }
-        );
+        this.worker = new Worker(new URL('./gif-encoder-worker.js', import.meta.url), {
+          type: 'module',
+        });
 
         // Set up initialization timeout
         timeoutId = setTimeout(() => {
-          settle('reject', createWorkerError(
-            `Worker initialization timed out after ${timeoutMs}ms`,
-            WorkerErrorCode.INIT_TIMEOUT,
-            { timeoutMs, encoderId: config.encoderId }
-          ));
+          settle(
+            'reject',
+            createWorkerError(
+              `Worker initialization timed out after ${timeoutMs}ms`,
+              WorkerErrorCode.INIT_TIMEOUT,
+              { timeoutMs, encoderId: config.encoderId },
+            ),
+          );
           this.dispose();
         }, timeoutMs);
 
@@ -162,11 +164,14 @@ export class GifEncoderManager {
             settle('resolve');
           } else if (data.event === Events.ERROR) {
             this.worker?.removeEventListener('message', handleReady);
-            settle('reject', createWorkerError(
-              data.message || 'Worker initialization failed',
-              WorkerErrorCode.INIT_FAILED,
-              { encoderId: config.encoderId, originalMessage: data.message }
-            ));
+            settle(
+              'reject',
+              createWorkerError(
+                data.message || 'Worker initialization failed',
+                WorkerErrorCode.INIT_FAILED,
+                { encoderId: config.encoderId, originalMessage: data.message },
+              ),
+            );
           }
         };
 
@@ -208,9 +213,10 @@ export class GifEncoderManager {
     if (!this.worker) return;
 
     this._globalErrorHandler = (event) => {
-      const error = event instanceof ErrorEvent
-        ? new Error(event.message || 'Worker error')
-        : new Error('Unknown worker error');
+      const error =
+        event instanceof ErrorEvent
+          ? new Error(event.message || 'Worker error')
+          : new Error('Unknown worker error');
 
       // Reject any pending finish operation
       if (this._rejectComplete) {
@@ -235,7 +241,7 @@ export class GifEncoderManager {
       throw createWorkerError(
         'Worker not initialized. Call init() first.',
         WorkerErrorCode.NOT_INITIALIZED,
-        { frameIndex }
+        { frameIndex },
       );
     }
 
@@ -250,10 +256,12 @@ export class GifEncoderManager {
   async finish() {
     return new Promise((resolve, reject) => {
       if (!this.worker || !this._isInitialized) {
-        reject(createWorkerError(
-          'Worker not initialized. Call init() first.',
-          WorkerErrorCode.NOT_INITIALIZED
-        ));
+        reject(
+          createWorkerError(
+            'Worker not initialized. Call init() first.',
+            WorkerErrorCode.NOT_INITIALIZED,
+          ),
+        );
         return;
       }
 
@@ -318,11 +326,11 @@ export class GifEncoderManager {
           break;
 
         case Events.ERROR:
-          this._rejectComplete?.(createWorkerError(
-            data.message || 'Encoding failed',
-            WorkerErrorCode.ENCODING_FAILED,
-            { originalMessage: data.message }
-          ));
+          this._rejectComplete?.(
+            createWorkerError(data.message || 'Encoding failed', WorkerErrorCode.ENCODING_FAILED, {
+              originalMessage: data.message,
+            }),
+          );
           this._resolveComplete = null;
           this._rejectComplete = null;
           break;

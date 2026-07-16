@@ -5,12 +5,16 @@
  */
 
 import { createElement, on } from '../../shared/utils/dom.js';
-import { createThumbnailCanvas } from './api.js';
-import { normalizeSelectionRange, isFrameInRange } from './core.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
+import { createThumbnailCanvas } from './api.js';
+import { isFrameInRange, normalizeSelectionRange } from './core.js';
 
 /** Thumbnail sizes from quality settings (device-adaptive) */
-const { gridDefault: DEFAULT_THUMBNAIL_SIZE, gridMin: MIN_THUMBNAIL_SIZE, gridMax: MAX_THUMBNAIL_SIZE } = getThumbnailSizes();
+const {
+  gridDefault: DEFAULT_THUMBNAIL_SIZE,
+  gridMin: MIN_THUMBNAIL_SIZE,
+  gridMax: MAX_THUMBNAIL_SIZE,
+} = getThumbnailSizes();
 
 /** CSS styles for frame grid modal */
 const FRAME_GRID_STYLES = `
@@ -753,24 +757,30 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   // Grid size control
   const sizeControl = createElement('div', { className: 'grid-size-control' });
   const sizeLabel = createElement('span', { className: 'size-label' }, ['Grid:']);
-  const sizeSlider = /** @type {HTMLInputElement} */ (createElement('input', {
-    type: 'range',
-    min: String(MIN_THUMBNAIL_SIZE),
-    max: String(MAX_THUMBNAIL_SIZE),
-    value: String(thumbnailSize),
-    className: 'grid-size-slider',
-  }));
+  const sizeSlider = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'range',
+      min: String(MIN_THUMBNAIL_SIZE),
+      max: String(MAX_THUMBNAIL_SIZE),
+      value: String(thumbnailSize),
+      className: 'grid-size-slider',
+    })
+  );
   const sizeValue = createElement('span', { className: 'size-value' }, [`${thumbnailSize}px`]);
 
   sizeControl.appendChild(sizeLabel);
   sizeControl.appendChild(sizeSlider);
   sizeControl.appendChild(sizeValue);
 
-  const closeBtn = createElement('button', {
-    className: 'frame-grid-close',
-    type: 'button',
-    'aria-label': 'Close',
-  }, ['\u00D7']);
+  const closeBtn = createElement(
+    'button',
+    {
+      className: 'frame-grid-close',
+      type: 'button',
+      'aria-label': 'Close',
+    },
+    ['\u00D7'],
+  );
 
   headerRight.appendChild(sizeControl);
   headerRight.appendChild(closeBtn);
@@ -791,7 +801,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   if (hasScenes) {
     const scenesPanel = createElement('div', { className: 'frame-grid-scenes-panel' });
     scenesPanel.appendChild(
-      createElement('div', { className: 'frame-grid-scenes-header' }, ['Scenes'])
+      createElement('div', { className: 'frame-grid-scenes-header' }, ['Scenes']),
     );
 
     const scenesList = createElement('div', { className: 'frame-grid-scenes-list' });
@@ -814,12 +824,16 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
           thumbContainer.appendChild(canvas);
         } catch {
           thumbContainer.appendChild(
-            createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+            createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, [
+              '\uD83C\uDFA5',
+            ]),
           );
         }
       } else {
         thumbContainer.appendChild(
-          createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, ['\uD83C\uDFA5'])
+          createElement('div', { className: 'frame-grid-scene-thumb-placeholder' }, [
+            '\uD83C\uDFA5',
+          ]),
         );
       }
       sceneBtn.appendChild(thumbContainer);
@@ -841,17 +855,19 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       sceneButtons.push(sceneBtn);
 
       // Click to select entire scene
-      cleanups.push(on(sceneBtn, 'click', () => {
-        setStartFrame(scene.startFrame);
-        setEndFrame(scene.endFrame);
-        // Update scene button states
-        updateSceneButtonStates();
-        // Scroll to scene start
-        const firstItem = gridItems[scene.startFrame];
-        if (firstItem) {
-          firstItem.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        }
-      }));
+      cleanups.push(
+        on(sceneBtn, 'click', () => {
+          setStartFrame(scene.startFrame);
+          setEndFrame(scene.endFrame);
+          // Update scene button states
+          updateSceneButtonStates();
+          // Scroll to scene start
+          const firstItem = gridItems[scene.startFrame];
+          if (firstItem) {
+            firstItem.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          }
+        }),
+      );
 
       scenesList.appendChild(sceneBtn);
     });
@@ -896,9 +912,14 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       const canvas = createThumbnailCanvas(frame, MAX_THUMBNAIL_SIZE);
       item.insertBefore(canvas, item.firstChild);
     } catch {
-      const errorPlaceholder = createElement('div', {
-        style: 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
-      }, ['\u26A0']);
+      const errorPlaceholder = createElement(
+        'div',
+        {
+          style:
+            'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
+        },
+        ['\u26A0'],
+      );
       item.insertBefore(errorPlaceholder, item.firstChild);
     }
   }
@@ -928,7 +949,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
         {
           root: body, // Scroll container
           rootMargin: '200px', // Pre-load 200px before visible
-        }
+        },
       )
     : null;
 
@@ -962,21 +983,31 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     // Hover actions: [S] [E] buttons
     const hoverActions = createElement('div', { className: 'frame-hover-actions' }, [
-      createElement('button', {
-        className: 'frame-action-btn action-start',
-        type: 'button',
-        title: 'Set as Start',
-      }, ['S']),
-      createElement('button', {
-        className: 'frame-action-btn action-end',
-        type: 'button',
-        title: 'Set as End',
-      }, ['E']),
+      createElement(
+        'button',
+        {
+          className: 'frame-action-btn action-start',
+          type: 'button',
+          title: 'Set as Start',
+        },
+        ['S'],
+      ),
+      createElement(
+        'button',
+        {
+          className: 'frame-action-btn action-end',
+          type: 'button',
+          title: 'Set as End',
+        },
+        ['E'],
+      ),
     ]);
     item.appendChild(hoverActions);
 
     // Frame number label
-    const numberLabel = createElement('span', { className: 'frame-grid-number' }, [String(index + 1)]);
+    const numberLabel = createElement('span', { className: 'frame-grid-number' }, [
+      String(index + 1),
+    ]);
     item.appendChild(numberLabel);
 
     gridItems.push(item);
@@ -984,69 +1015,84 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     // Touch device support: long-press (400ms) to show S/E buttons
     // (kept on individual items due to timer complexity)
-    cleanups.push(on(item, 'touchstart', () => {
-      clearTouchActive();
-      touchTimer = window.setTimeout(() => {
-        item.classList.add('touch-active');
-        touchActiveItem = item;
-      }, 400);
-    }, { passive: true }));
+    cleanups.push(
+      on(
+        item,
+        'touchstart',
+        () => {
+          clearTouchActive();
+          touchTimer = window.setTimeout(() => {
+            item.classList.add('touch-active');
+            touchActiveItem = item;
+          }, 400);
+        },
+        { passive: true },
+      ),
+    );
 
-    cleanups.push(on(item, 'touchend', () => {
-      if (touchTimer) {
-        clearTimeout(touchTimer);
-        touchTimer = null;
-      }
-    }));
+    cleanups.push(
+      on(item, 'touchend', () => {
+        if (touchTimer) {
+          clearTimeout(touchTimer);
+          touchTimer = null;
+        }
+      }),
+    );
 
-    cleanups.push(on(item, 'touchmove', () => {
-      if (touchTimer) {
-        clearTimeout(touchTimer);
-        touchTimer = null;
-      }
-    }));
+    cleanups.push(
+      on(item, 'touchmove', () => {
+        if (touchTimer) {
+          clearTimeout(touchTimer);
+          touchTimer = null;
+        }
+      }),
+    );
   });
 
   // Event delegation for mouse events on grid container
   // (reduces ~1200 listeners to 2 listeners)
-  cleanups.push(on(gridContainer, 'click', (e) => {
-    const target = /** @type {HTMLElement} */ (e.target);
-    const item = target.closest('.frame-grid-item');
-    if (!item) return;
+  cleanups.push(
+    on(gridContainer, 'click', (e) => {
+      const target = /** @type {HTMLElement} */ (e.target);
+      const item = target.closest('.frame-grid-item');
+      if (!item) return;
 
-    const index = parseInt(item.dataset.index, 10);
+      const index = parseInt(item.dataset.index, 10);
 
-    // [S] button click
-    if (target.closest('.action-start')) {
-      e.stopPropagation();
-      setStartFrame(index);
+      // [S] button click
+      if (target.closest('.action-start')) {
+        e.stopPropagation();
+        setStartFrame(index);
+        updateSceneButtonStates();
+        return;
+      }
+
+      // [E] button click
+      if (target.closest('.action-end')) {
+        e.stopPropagation();
+        setEndFrame(index);
+        updateSceneButtonStates();
+        return;
+      }
+
+      // Frame item click (shift+click support)
+      const shiftKey = /** @type {MouseEvent} */ (e).shiftKey;
+      handleFrameClick(index, shiftKey);
       updateSceneButtonStates();
-      return;
-    }
+    }),
+  );
 
-    // [E] button click
-    if (target.closest('.action-end')) {
-      e.stopPropagation();
-      setEndFrame(index);
+  cleanups.push(
+    on(gridContainer, 'dblclick', (e) => {
+      const target = /** @type {HTMLElement} */ (e.target);
+      const item = target.closest('.frame-grid-item');
+      if (!item) return;
+
+      const index = parseInt(item.dataset.index, 10);
+      handleFrameDoubleClick(index);
       updateSceneButtonStates();
-      return;
-    }
-
-    // Frame item click (shift+click support)
-    const shiftKey = /** @type {MouseEvent} */ (e).shiftKey;
-    handleFrameClick(index, shiftKey);
-    updateSceneButtonStates();
-  }));
-
-  cleanups.push(on(gridContainer, 'dblclick', (e) => {
-    const target = /** @type {HTMLElement} */ (e.target);
-    const item = target.closest('.frame-grid-item');
-    if (!item) return;
-
-    const index = parseInt(item.dataset.index, 10);
-    handleFrameDoubleClick(index);
-    updateSceneButtonStates();
-  }));
+    }),
+  );
 
   body.appendChild(gridContainer);
   mainContent.appendChild(body);
@@ -1059,17 +1105,25 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
   const actions = createElement('div', { className: 'frame-grid-actions' });
 
-  const cancelBtn = createElement('button', {
-    className: 'frame-grid-btn frame-grid-btn-cancel',
-    type: 'button',
-  }, ['Cancel']);
+  const cancelBtn = createElement(
+    'button',
+    {
+      className: 'frame-grid-btn frame-grid-btn-cancel',
+      type: 'button',
+    },
+    ['Cancel'],
+  );
   cleanups.push(on(cancelBtn, 'click', () => callbacks.onCancel()));
 
-  const applyBtn = createElement('button', {
-    className: 'frame-grid-btn frame-grid-btn-apply',
-    type: 'button',
-    disabled: startFrame === null,
-  }, ['Apply']);
+  const applyBtn = createElement(
+    'button',
+    {
+      className: 'frame-grid-btn frame-grid-btn-apply',
+      type: 'button',
+      disabled: startFrame === null,
+    },
+    ['Apply'],
+  );
   cleanups.push(on(applyBtn, 'click', handleApply));
 
   actions.appendChild(cancelBtn);
@@ -1097,7 +1151,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     const optimalSize = calculateOptimalThumbnailSize(
       frames.length,
       gridContainer.offsetWidth,
-      body.offsetHeight - 32 // padding
+      body.offsetHeight - 32, // padding
     );
     thumbnailSize = optimalSize;
     sizeSlider.value = String(optimalSize);
@@ -1111,11 +1165,13 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   });
 
   // Slider change handler
-  cleanups.push(on(sizeSlider, 'input', () => {
-    thumbnailSize = parseInt(sizeSlider.value, 10);
-    sizeValue.textContent = `${thumbnailSize}px`;
-    updateGridSize();
-  }));
+  cleanups.push(
+    on(sizeSlider, 'input', () => {
+      thumbnailSize = parseInt(sizeSlider.value, 10);
+      sizeValue.textContent = `${thumbnailSize}px`;
+      updateGridSize();
+    }),
+  );
 
   // Escape key handler
   const handleKeyDown = (e) => {
@@ -1143,17 +1199,21 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   cleanups.push(() => document.removeEventListener('keydown', handleKeyDown));
 
   // Click outside to close
-  cleanups.push(on(backdrop, 'click', (e) => {
-    if (e.target === backdrop) {
-      callbacks.onCancel();
-    }
-  }));
+  cleanups.push(
+    on(backdrop, 'click', (e) => {
+      if (e.target === backdrop) {
+        callbacks.onCancel();
+      }
+    }),
+  );
 
   // Trap focus within modal
   const handleTabTrap = (e) => {
     if (e.key !== 'Tab') return;
 
-    const focusableElements = modal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])');
+    const focusableElements = modal.querySelectorAll(
+      'button, input, [tabindex]:not([tabindex="-1"])',
+    );
     const firstFocusable = focusableElements[0];
     const lastFocusable = focusableElements[focusableElements.length - 1];
 
@@ -1235,8 +1295,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * Update grid template columns based on thumbnail size
    */
   function updateGridSize() {
-    gridContainer.style.gridTemplateColumns =
-      `repeat(auto-fill, minmax(${thumbnailSize}px, 1fr))`;
+    gridContainer.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbnailSize}px, 1fr))`;
   }
 
   /**
@@ -1301,7 +1360,9 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     // Add badges
     if (isStart && isEnd && startFrame === endFrame) {
-      const badge = createElement('span', { className: 'frame-grid-badge single-badge' }, ['IN=OUT']);
+      const badge = createElement('span', { className: 'frame-grid-badge single-badge' }, [
+        'IN=OUT',
+      ]);
       item.appendChild(badge);
     } else {
       if (isStart) {
@@ -1358,7 +1419,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       prevStartFrame,
       prevEndFrame,
       startFrame,
-      endFrame
+      endFrame,
     );
 
     // Update only changed items

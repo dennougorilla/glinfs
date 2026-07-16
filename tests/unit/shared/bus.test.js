@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emit, on, once, offAll, bus } from '../../../src/shared/bus.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { bus, emit, offAll, on, once } from '../../../src/shared/bus.js';
 
 describe('Event Bus', () => {
   beforeEach(() => {
@@ -64,7 +64,7 @@ describe('Event Bus', () => {
       expect(normalHandler).toHaveBeenCalled();
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('Error in event handler'),
-        expect.any(Error)
+        expect.any(Error),
       );
 
       consoleSpy.mockRestore();

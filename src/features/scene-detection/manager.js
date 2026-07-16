@@ -4,8 +4,8 @@
  * @module features/scene-detection/manager
  */
 
-import { DEFAULT_DETECTOR_OPTIONS } from './types.js';
 import { getDrawableSource } from '../../shared/utils/canvas.js';
+import { DEFAULT_DETECTOR_OPTIONS } from './types.js';
 
 /**
  * @typedef {import('./types.js').SceneDetectionResult} SceneDetectionResult
@@ -112,7 +112,7 @@ export class SceneDetectionManager {
       try {
         this.#worker = new Worker(
           new URL('../../workers/scene-detection-worker.js', import.meta.url),
-          { type: 'module' }
+          { type: 'module' },
         );
 
         timeoutId = setTimeout(() => {
@@ -232,7 +232,7 @@ export class SceneDetectionManager {
             },
           },
         },
-        transferables
+        transferables,
       );
     });
   }

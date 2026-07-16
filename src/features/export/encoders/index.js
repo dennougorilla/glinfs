@@ -3,21 +3,17 @@
  * @module features/export/encoders
  */
 
-// Type re-exports
-export * from './types.js';
-
 // Registry functions
 export {
-  registerEncoder,
-  unregisterEncoder,
+  clearRegistry,
   createEncoder,
   getAvailableEncoders,
   getDefaultEncoderId,
-  setDefaultEncoder,
   isEncoderAvailable,
-  clearRegistry,
+  registerEncoder,
+  setDefaultEncoder,
+  unregisterEncoder,
 } from './encoder-registry.js';
-
 // Encoder implementations
 export { createGifencEncoder, getGifencMetadata } from './gifenc-encoder.js';
 export {
@@ -25,6 +21,8 @@ export {
   getGifsicleMetadata,
   isGifsicleAvailable,
 } from './gifsicle-encoder.js';
+// Type re-exports
+export * from './types.js';
 
 // Initialize default encoder
 import { registerEncoder } from './encoder-registry.js';

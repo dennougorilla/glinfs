@@ -6,8 +6,8 @@
 
 // Import algorithm directly (Worker has module support)
 import {
-  computeHistogram,
   compareHistograms,
+  computeHistogram,
 } from '../features/scene-detection/algorithms/histogram-detector.js';
 import { DEFAULT_DETECTOR_OPTIONS } from '../features/scene-detection/types.js';
 
@@ -138,9 +138,7 @@ async function detectScenes(frameData, options) {
         endFrame,
         confidence: 1.0,
         timestamp: startData?.timestamp ?? 0,
-        duration: startData && endData
-          ? (endData.timestamp - startData.timestamp) / 1000
-          : 0,
+        duration: startData && endData ? (endData.timestamp - startData.timestamp) / 1000 : 0,
       });
     } else if (scenes.length > 0) {
       // Merge short scene with previous

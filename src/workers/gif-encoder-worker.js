@@ -4,9 +4,9 @@
  * @module workers/gif-encoder-worker
  */
 
-import { Commands, Events } from './worker-protocol.js';
 import { createGifencEncoder } from '../features/export/encoders/gifenc-encoder.js';
 import { createGifsicleEncoder } from '../features/export/encoders/gifsicle-encoder.js';
+import { Commands, Events } from './worker-protocol.js';
 
 /**
  * Encoder factory map
@@ -108,7 +108,7 @@ function handleAddFrame(message) {
         width: message.width,
         height: message.height,
       },
-      message.frameIndex
+      message.frameIndex,
     );
 
     framesProcessed++;
@@ -151,7 +151,7 @@ function handleFinish() {
         gifData: buffer,
         duration,
       },
-      [buffer]
+      [buffer],
     );
 
     // Cleanup

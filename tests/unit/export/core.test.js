@@ -1,11 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  createDefaultSettings,
-  validateSettings,
-  estimateSize,
-  ENCODER_PRESETS,
-  getEncoderPreset,
   calculateMaxColors,
+  createDefaultSettings,
+  ENCODER_PRESETS,
+  estimateSize,
+  getEncoderPreset,
+  validateSettings,
 } from '../../../src/features/export/core.js';
 
 describe('createDefaultSettings', () => {
@@ -332,7 +332,7 @@ describe('getEncoderPreset', () => {
 
   it('should throw for invalid preset id', () => {
     expect(() => getEncoderPreset(/** @type {any} */ ('invalid'))).toThrow(
-      'Unknown encoder preset: invalid'
+      'Unknown encoder preset: invalid',
     );
   });
 });
@@ -364,4 +364,3 @@ describe('calculateMaxColors', () => {
     expect(highQuality).toBeGreaterThan(lowQuality);
   });
 });
-

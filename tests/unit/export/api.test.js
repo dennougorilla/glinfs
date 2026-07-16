@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  getFrameRGBA,
   checkEncoderStatus,
-  downloadBlob,
-  openInNewTab,
   copyToClipboard,
+  downloadBlob,
   getBlobSize,
+  getFrameRGBA,
+  openInNewTab,
   scaleFrame,
 } from '../../../src/features/export/api.js';
 
@@ -34,7 +34,7 @@ describe('getFrameRGBA', () => {
   it('should throw when frame is null', async () => {
     // Act & Assert
     await expect(getFrameRGBA(null, null)).rejects.toThrow(
-      'Invalid frame: VideoFrame is missing or closed'
+      'Invalid frame: VideoFrame is missing or closed',
     );
   });
 
@@ -44,7 +44,7 @@ describe('getFrameRGBA', () => {
 
     // Act & Assert
     await expect(getFrameRGBA(frame, null)).rejects.toThrow(
-      'Invalid frame: VideoFrame is missing or closed'
+      'Invalid frame: VideoFrame is missing or closed',
     );
   });
 
@@ -56,13 +56,10 @@ describe('getFrameRGBA', () => {
     const result = await getFrameRGBA(frame, null);
 
     // Assert
-    expect(frame.frame.copyTo).toHaveBeenCalledWith(
-      expect.any(Uint8ClampedArray),
-      {
-        rect: { x: 0, y: 0, width: 200, height: 150 },
-        format: 'RGBA',
-      }
-    );
+    expect(frame.frame.copyTo).toHaveBeenCalledWith(expect.any(Uint8ClampedArray), {
+      rect: { x: 0, y: 0, width: 200, height: 150 },
+      format: 'RGBA',
+    });
     expect(result.width).toBe(200);
     expect(result.height).toBe(150);
     expect(result.data).toBeInstanceOf(Uint8ClampedArray);
@@ -100,11 +97,7 @@ describe('getFrameRGBA', () => {
     const result = await getFrameRGBA(frame, crop);
 
     // Assert
-    expect(mockCtx.drawImage).toHaveBeenCalledWith(
-      frame.frame,
-      10, 20, 50, 40,
-      0, 0, 50, 40
-    );
+    expect(mockCtx.drawImage).toHaveBeenCalledWith(frame.frame, 10, 20, 50, 40, 0, 0, 50, 40);
     expect(mockCtx.getImageData).toHaveBeenCalledWith(0, 0, 50, 40);
     expect(result.width).toBe(50);
     expect(result.height).toBe(40);
@@ -129,7 +122,7 @@ describe('getFrameRGBA', () => {
 
     // Act & Assert
     await expect(getFrameRGBA(frame, crop)).rejects.toThrow(
-      'Failed to get OffscreenCanvas 2d context'
+      'Failed to get OffscreenCanvas 2d context',
     );
   });
 });
@@ -433,8 +426,6 @@ describe('scaleFrame', () => {
     }));
 
     // Act & Assert
-    expect(() => scaleFrame(sourceImageData, 5, 5)).toThrow(
-      'Failed to get source canvas context'
-    );
+    expect(() => scaleFrame(sourceImageData, 5, 5)).toThrow('Failed to get source canvas context');
   });
 });

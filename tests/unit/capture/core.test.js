@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  createBuffer,
   addFrame,
-  getFrames,
   calculateStats,
-  extractClipFromBuffer,
   clearBuffer,
+  createBuffer,
+  extractClipFromBuffer,
+  getFrames,
   safeClose,
 } from '../../../src/features/capture/core.js';
 

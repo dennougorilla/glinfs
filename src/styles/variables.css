@@ -1,5 +1,5 @@
 /* CSS Custom Properties - Professional Video Editor Theme */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
   /* Colors - Professional dark theme inspired by DaVinci Resolve / Premiere Pro */
@@ -22,15 +22,19 @@
   --color-primary-glow: rgba(59, 130, 246, 0.3);
 
   /* Glinfs Brand Colors */
-  --color-accent: #06b6d4;          /* Cyan - lightness, speed */
+  --color-accent: #06b6d4; /* Cyan - lightness, speed */
   --color-accent-hover: #22d3ee;
   --color-accent-muted: rgba(6, 182, 212, 0.15);
-  --color-highlight: #8b5cf6;       /* Purple - creativity */
+  --color-highlight: #8b5cf6; /* Purple - creativity */
   --color-highlight-muted: rgba(139, 92, 246, 0.15);
 
   /* Glinfs Signature Gradients */
   --gradient-glinfs: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
-  --gradient-glinfs-subtle: linear-gradient(135deg, var(--color-primary-muted) 0%, var(--color-accent-muted) 100%);
+  --gradient-glinfs-subtle: linear-gradient(
+    135deg,
+    var(--color-primary-muted) 0%,
+    var(--color-accent-muted) 100%
+  );
   --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   --gradient-recording: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
 
@@ -50,7 +54,7 @@
   /* Text hierarchy */
   --color-text: #fafafa;
   --color-text-secondary: #a1a1aa;
-  --color-text-muted: #8b8b94;         /* Lightened for WCAG AA contrast (4.5:1+) */
+  --color-text-muted: #8b8b94; /* Lightened for WCAG AA contrast (4.5:1+) */
   --color-text-disabled: #52525b;
 
   /* Borders */
@@ -70,18 +74,18 @@
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-primary);
 
   /* Typography - Inter for UI */
-  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+  --font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
 
   /* Type scale - Balanced for readability */
-  --font-size-2xs: 0.625rem;  /* 10px */
-  --font-size-xs: 0.6875rem;  /* 11px */
-  --font-size-sm: 0.8125rem;  /* 13px */
+  --font-size-2xs: 0.625rem; /* 10px */
+  --font-size-xs: 0.6875rem; /* 11px */
+  --font-size-sm: 0.8125rem; /* 13px */
   --font-size-base: 0.875rem; /* 14px */
-  --font-size-md: 0.9375rem;  /* 15px */
-  --font-size-lg: 1.0625rem;  /* 17px */
-  --font-size-xl: 1.25rem;    /* 20px */
-  --font-size-2xl: 1.5rem;    /* 24px */
+  --font-size-md: 0.9375rem; /* 15px */
+  --font-size-lg: 1.0625rem; /* 17px */
+  --font-size-xl: 1.25rem; /* 20px */
+  --font-size-2xl: 1.5rem; /* 24px */
 
   /* Line heights */
   --line-height-tight: 1.25;

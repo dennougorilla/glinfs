@@ -3,9 +3,13 @@
  * @module features/export/ui
  */
 
-import { createElement, on, createErrorScreen } from '../../shared/utils/dom.js';
-import { formatBytes, formatRemaining, formatPercent, formatDuration } from '../../shared/utils/format.js';
-import { navigate } from '../../shared/router.js';
+import { createElement, createErrorScreen, on } from '../../shared/utils/dom.js';
+import {
+  formatBytes,
+  formatDuration,
+  formatPercent,
+  formatRemaining,
+} from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { ENCODER_PRESETS } from './core.js';
 
@@ -96,7 +100,7 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
       type: 'button',
       'aria-label': 'Back to editor',
     },
-    ['\u2190 Editor']
+    ['\u2190 Editor'],
   );
   cleanups.push(on(backBtn, 'click', handlers.onBackToEditor));
   toolbarLeft.appendChild(backBtn);
@@ -163,7 +167,7 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
           ]),
         ]),
       ]),
-    ])
+    ]),
   );
 
   container.innerHTML = '';
@@ -174,7 +178,6 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
     canvas: previewCanvas,
   };
 }
-
 
 /**
  * Render Canvas-based preview for real-time playback
@@ -212,7 +215,7 @@ function renderCanvasPreview(previewState, handlers, clipInfo, cleanups) {
       'aria-label': previewState.isPlaying ? 'Pause preview' : 'Play preview',
       title: previewState.isPlaying ? 'Pause (Space)' : 'Play (Space)',
     },
-    [previewState.isPlaying ? '\u23F8' : '\u25B6']
+    [previewState.isPlaying ? '\u23F8' : '\u25B6'],
   );
   cleanups.push(on(playPauseBtn, 'click', handlers.onTogglePlay));
   canvasContainer.appendChild(playPauseBtn);
@@ -255,15 +258,17 @@ function renderEncoderSelection(state, handlers, cleanups) {
           ]),
           createElement('div', { className: 'encoder-card-info' }, [
             createElement('div', { className: 'encoder-card-name' }, [encoder.name]),
-            createElement('span', {
-              className: `encoder-card-badge ${encoder.isWasm ? 'wasm' : 'js'}`,
-            }, [encoder.isWasm ? 'WASM' : 'JS']),
+            createElement(
+              'span',
+              {
+                className: `encoder-card-badge ${encoder.isWasm ? 'wasm' : 'js'}`,
+              },
+              [encoder.isWasm ? 'WASM' : 'JS'],
+            ),
           ]),
         ]),
-        createElement('div', { className: 'encoder-card-description' }, [
-          encoder.description,
-        ]),
-      ]
+        createElement('div', { className: 'encoder-card-description' }, [encoder.description]),
+      ],
     );
 
     cleanups.push(
@@ -271,7 +276,7 @@ function renderEncoderSelection(state, handlers, cleanups) {
         handlers.onSettingsChange({
           encoderId: /** @type {import('./encoders/types.js').EncoderId} */ (encoder.id),
         });
-      })
+      }),
     );
 
     cardsContainer.appendChild(card);
@@ -319,12 +324,12 @@ function renderGifencSettings(state, handlers, cleanups) {
       if (valueEl) {
         valueEl.textContent = `${Math.round(Number(qualityInput.value) * 100)}%`;
       }
-    })
+    }),
   );
   cleanups.push(
     on(qualityInput, 'change', () => {
       handlers.onSettingsChange({ quality: Number(qualityInput.value) });
-    })
+    }),
   );
 
   qualityRow.appendChild(qualityInput);
@@ -341,9 +346,7 @@ function renderGifencSettings(state, handlers, cleanups) {
     createElement(
       'select',
       {},
-      ENCODER_PRESETS.map((preset) =>
-        createElement('option', { value: preset.id }, [preset.name])
-      )
+      ENCODER_PRESETS.map((preset) => createElement('option', { value: preset.id }, [preset.name])),
     )
   );
   presetSelect.value = state.settings.encoderPreset;
@@ -362,7 +365,7 @@ function renderGifencSettings(state, handlers, cleanups) {
       handlers.onSettingsChange({
         encoderPreset: /** @type {import('./types.js').EncoderPreset} */ (presetSelect.value),
       });
-    })
+    }),
   );
 
   presetRow.appendChild(presetSelect);
@@ -382,13 +385,11 @@ function renderGifencSettings(state, handlers, cleanups) {
   cleanups.push(
     on(ditherCheckbox, 'change', () => {
       handlers.onSettingsChange({ dithering: ditherCheckbox.checked });
-    })
+    }),
   );
 
   ditherRow.appendChild(ditherCheckbox);
-  ditherRow.appendChild(
-    createElement('label', { for: 'dither-check' }, ['Enable dithering'])
-  );
+  ditherRow.appendChild(createElement('label', { for: 'dither-check' }, ['Enable dithering']));
 
   const ditherHint = createElement('div', { className: 'setting-hint' }, [
     'Smoother gradients, slightly larger files',
@@ -412,9 +413,7 @@ function renderGifsicleSettings() {
   const infoBox = createElement('div', { className: 'encoder-info-box' }, [
     createElement('div', { className: 'encoder-info-icon' }, ['\u2139\uFE0F']),
     createElement('div', { className: 'encoder-info-content' }, [
-      createElement('p', { className: 'encoder-info-title' }, [
-        'Automatic optimization',
-      ]),
+      createElement('p', { className: 'encoder-info-title' }, ['Automatic optimization']),
       createElement('p', { className: 'encoder-info-description' }, [
         'Gifsicle uses libimagequant to automatically optimize colors for the best possible quality. No manual adjustment needed.',
       ]),
@@ -454,7 +453,7 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
         return createElement('option', { value: String(skip) }, [
           `Every ${skip === 1 ? 'frame' : `${skip} frames`} (${effectiveFrames})`,
         ]);
-      })
+      }),
     )
   );
   skipSelect.value = String(state.settings.frameSkip);
@@ -464,7 +463,7 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
       handlers.onSettingsChange({
         frameSkip: /** @type {1|2|3|4|5} */ (Number(skipSelect.value)),
       });
-    })
+    }),
   );
 
   skipRow.appendChild(skipSelect);
@@ -482,8 +481,8 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
       'select',
       {},
       SPEED_OPTIONS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`])
-      )
+        createElement('option', { value: String(speed) }, [`${speed}x`]),
+      ),
     )
   );
   speedSelect.value = String(state.settings.playbackSpeed);
@@ -491,7 +490,7 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
   cleanups.push(
     on(speedSelect, 'change', () => {
       handlers.onSettingsChange({ playbackSpeed: Number(speedSelect.value) });
-    })
+    }),
   );
 
   speedRow.appendChild(speedSelect);
@@ -515,7 +514,7 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   panel.appendChild(
     createElement('div', { className: 'settings-header' }, [
       createElement('span', { className: 'settings-title' }, ['Export Settings']),
-    ])
+    ]),
   );
 
   // Settings content
@@ -538,11 +537,9 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
 
   // Actions
   const actions = createElement('div', { className: 'settings-actions' });
-  const exportBtn = createElement(
-    'button',
-    { className: 'btn btn-export-main', type: 'button' },
-    ['Export GIF']
-  );
+  const exportBtn = createElement('button', { className: 'btn btn-export-main', type: 'button' }, [
+    'Export GIF',
+  ]);
   cleanups.push(on(exportBtn, 'click', handlers.onExport));
   actions.appendChild(exportBtn);
   panel.appendChild(actions);
@@ -577,17 +574,13 @@ function renderEncodingProgress(job, handlers, cleanups) {
 
   if (job.estimatedRemaining && job.estimatedRemaining > 0) {
     progress.appendChild(
-      createElement('p', { className: 'progress-time' }, [
-        formatRemaining(job.estimatedRemaining),
-      ])
+      createElement('p', { className: 'progress-time' }, [formatRemaining(job.estimatedRemaining)]),
     );
   }
 
-  const cancelBtn = createElement(
-    'button',
-    { className: 'btn btn-secondary', type: 'button' },
-    ['Cancel']
-  );
+  const cancelBtn = createElement('button', { className: 'btn btn-secondary', type: 'button' }, [
+    'Cancel',
+  ]);
   cleanups.push(on(cancelBtn, 'click', handlers.onCancel));
   progress.appendChild(cancelBtn);
 
@@ -631,13 +624,13 @@ function renderComplete(job, handlers, cleanups) {
   // Success header with animated checkmark
   const header = createElement('div', { className: 'complete-header' }, [
     createElement('div', { className: 'complete-icon-ring' }, [
-      createElement('div', { className: 'complete-icon-check' }, [
-        createCheckmarkSVG(),
-      ]),
+      createElement('div', { className: 'complete-icon-check' }, [createCheckmarkSVG()]),
     ]),
     createElement('div', { className: 'complete-header-text' }, [
       createElement('h2', { className: 'complete-title' }, ['Ready to share']),
-      createElement('p', { className: 'complete-subtitle' }, ['Your GIF has been created successfully']),
+      createElement('p', { className: 'complete-subtitle' }, [
+        'Your GIF has been created successfully',
+      ]),
     ]),
   ]);
   infoSection.appendChild(header);
@@ -654,14 +647,10 @@ function renderComplete(job, handlers, cleanups) {
   // Primary action: Download
   const primaryActions = createElement('div', { className: 'complete-primary-actions' });
 
-  const downloadBtn = createElement(
-    'button',
-    { className: 'btn-download-large', type: 'button' },
-    [
-      createDownloadSVG(),
-      createElement('span', {}, ['Download GIF']),
-    ]
-  );
+  const downloadBtn = createElement('button', { className: 'btn-download-large', type: 'button' }, [
+    createDownloadSVG(),
+    createElement('span', {}, ['Download GIF']),
+  ]);
   cleanups.push(on(downloadBtn, 'click', handlers.onDownload));
   primaryActions.appendChild(downloadBtn);
   infoSection.appendChild(primaryActions);
@@ -669,35 +658,24 @@ function renderComplete(job, handlers, cleanups) {
   // Secondary actions
   const secondaryActions = createElement('div', { className: 'complete-secondary-actions' });
 
-  const openBtn = createElement(
-    'button',
-    { className: 'btn-action-secondary', type: 'button' },
-    [
-      createExternalLinkSVG(),
-      createElement('span', {}, ['Open in New Tab']),
-    ]
-  );
+  const openBtn = createElement('button', { className: 'btn-action-secondary', type: 'button' }, [
+    createExternalLinkSVG(),
+    createElement('span', {}, ['Open in New Tab']),
+  ]);
   cleanups.push(on(openBtn, 'click', handlers.onOpenInTab));
   secondaryActions.appendChild(openBtn);
 
-  const adjustBtn = createElement(
-    'button',
-    { className: 'btn-action-secondary', type: 'button' },
-    [
-      createSettingsSVG(),
-      createElement('span', {}, ['Adjust & Re-export']),
-    ]
-  );
+  const adjustBtn = createElement('button', { className: 'btn-action-secondary', type: 'button' }, [
+    createSettingsSVG(),
+    createElement('span', {}, ['Adjust & Re-export']),
+  ]);
   cleanups.push(on(adjustBtn, 'click', handlers.onAdjustSettings));
   secondaryActions.appendChild(adjustBtn);
 
   const createNewBtn = createElement(
     'button',
     { className: 'btn-action-secondary btn-create-new', type: 'button' },
-    [
-      createPlusSVG(),
-      createElement('span', {}, ['Create New GIF']),
-    ]
+    [createPlusSVG(), createElement('span', {}, ['Create New GIF'])],
   );
   cleanups.push(on(createNewBtn, 'click', handlers.onCreateNew));
   secondaryActions.appendChild(createNewBtn);
@@ -749,7 +727,8 @@ function createDownloadSVG() {
   svg.setAttribute('stroke-width', '2');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>';
+  svg.innerHTML =
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>';
   return svg;
 }
 
@@ -765,7 +744,8 @@ function createExternalLinkSVG() {
   svg.setAttribute('stroke-width', '2');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>';
+  svg.innerHTML =
+    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>';
   return svg;
 }
 
@@ -781,7 +761,8 @@ function createSettingsSVG() {
   svg.setAttribute('stroke-width', '2');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>';
+  svg.innerHTML =
+    '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>';
   return svg;
 }
 
@@ -797,7 +778,8 @@ function createPlusSVG() {
   svg.setAttribute('stroke-width', '2');
   svg.setAttribute('stroke-linecap', 'round');
   svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>';
+  svg.innerHTML =
+    '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>';
   return svg;
 }
 
@@ -809,22 +791,25 @@ function createPlusSVG() {
  * @returns {HTMLElement}
  */
 function renderError(job, handlers, cleanups) {
-  return createErrorScreen({
-    title: 'Export Failed',
-    message: job.error || 'Unknown error occurred',
-    actions: [
-      {
-        label: '\u21BB Try Again',
-        onClick: handlers.onExport,
-        primary: true,
-      },
-      {
-        label: '\u2190 Back',
-        onClick: handlers.onBackToEditor,
-        primary: false,
-      },
-    ],
-  }, cleanups);
+  return createErrorScreen(
+    {
+      title: 'Export Failed',
+      message: job.error || 'Unknown error occurred',
+      actions: [
+        {
+          label: '\u21BB Try Again',
+          onClick: handlers.onExport,
+          primary: true,
+        },
+        {
+          label: '\u2190 Back',
+          onClick: handlers.onBackToEditor,
+          primary: false,
+        },
+      ],
+    },
+    cleanups,
+  );
 }
 
 /**

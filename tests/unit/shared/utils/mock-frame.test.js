@@ -11,7 +11,7 @@
  * E2E tests verify the real VideoFrame behavior.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock OffscreenCanvas for jsdom
 class MockOffscreenCanvas {
@@ -88,7 +88,9 @@ describe('mock-frame utilities', () => {
 
   describe('isRealVideoFrameSupported', () => {
     it('should return false in jsdom environment', async () => {
-      const { isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { isRealVideoFrameSupported } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
       // jsdom doesn't have VideoFrame API
       expect(isRealVideoFrameSupported()).toBe(false);
     });
@@ -96,7 +98,9 @@ describe('mock-frame utilities', () => {
 
   describe('createMockVideoFrame', () => {
     it('should create a legacy mock VideoFrame with correct dimensions in jsdom', async () => {
-      const { createMockVideoFrame, isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockVideoFrame, isRealVideoFrameSupported } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       // Verify we're testing the legacy mock path
       expect(isRealVideoFrameSupported()).toBe(false);
@@ -207,7 +211,9 @@ describe('mock-frame utilities', () => {
 
   describe('createMockEditorPayload', () => {
     it('should create valid EditorPayload structure', async () => {
-      const { createMockEditorPayload } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockEditorPayload } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       const payload = await createMockEditorPayload({
         frameCount: 30,
@@ -222,7 +228,9 @@ describe('mock-frame utilities', () => {
     });
 
     it('should use custom selectedRange when specified', async () => {
-      const { createMockEditorPayload } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockEditorPayload } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       const payload = await createMockEditorPayload({
         frameCount: 30,
@@ -233,7 +241,9 @@ describe('mock-frame utilities', () => {
     });
 
     it('should include cropArea when specified', async () => {
-      const { createMockEditorPayload } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockEditorPayload } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       const cropArea = { x: 100, y: 100, width: 400, height: 300, aspectRatio: 'free' };
       const payload = await createMockEditorPayload({
@@ -246,7 +256,9 @@ describe('mock-frame utilities', () => {
 
   describe('getDrawableSource', () => {
     it('should return bitmap for legacy mock frames in jsdom', async () => {
-      const { createMockFrame, getDrawableSource, isRealVideoFrameSupported } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockFrame, getDrawableSource, isRealVideoFrameSupported } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       // Verify we're testing the legacy mock path
       expect(isRealVideoFrameSupported()).toBe(false);
@@ -273,7 +285,9 @@ describe('mock-frame utilities', () => {
     });
 
     it('should return null for closed frame', async () => {
-      const { createMockFrame, getDrawableSource } = await import('../../../../src/shared/utils/mock-frame.js');
+      const { createMockFrame, getDrawableSource } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
 
       const frame = await createMockFrame(0);
       frame.frame.close();
@@ -329,7 +343,9 @@ describe('test-mode utilities', () => {
   describe('getDefaultMockOptions', () => {
     it('should return default options', async () => {
       vi.resetModules();
-      const { getDefaultMockOptions, initTestMode } = await import('../../../../src/shared/test-mode.js');
+      const { getDefaultMockOptions, initTestMode } = await import(
+        '../../../../src/shared/test-mode.js'
+      );
       initTestMode();
 
       const options = getDefaultMockOptions();
@@ -347,7 +363,9 @@ describe('test-mode utilities', () => {
       }
 
       vi.resetModules();
-      const { getDefaultMockOptions, initTestMode } = await import('../../../../src/shared/test-mode.js');
+      const { getDefaultMockOptions, initTestMode } = await import(
+        '../../../../src/shared/test-mode.js'
+      );
       initTestMode();
 
       const options = getDefaultMockOptions();

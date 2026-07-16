@@ -115,7 +115,7 @@ export function createHandlers({ createEncoder, postEvent }) {
           width: message.width,
           height: message.height,
         },
-        message.frameIndex
+        message.frameIndex,
       );
 
       framesProcessed++;
@@ -158,7 +158,7 @@ export function createHandlers({ createEncoder, postEvent }) {
           gifData: buffer,
           duration,
         },
-        [buffer]
+        [buffer],
       );
 
       // Cleanup

@@ -1,9 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import {
-  initCaptureState,
-  updateSettings,
-} from '../../../src/features/capture/state.js';
+import { describe, expect, it } from 'vitest';
 import { calculateMaxFrames } from '../../../src/features/capture/core.js';
+import { initCaptureState, updateSettings } from '../../../src/features/capture/state.js';
 
 describe('Buffer Duration Settings Sync (US1)', () => {
   describe('buffer duration calculation', () => {

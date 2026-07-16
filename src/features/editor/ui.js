@@ -3,12 +3,26 @@
  * @module features/editor/ui
  */
 
-import { createElement, on } from '../../shared/utils/dom.js';
-import { frameToTimecode, formatDurationPrecise } from '../../shared/utils/format.js';
 import { navigate } from '../../shared/router.js';
+import { createElement, on } from '../../shared/utils/dom.js';
+import { frameToTimecode } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { calculateSelection, calculateSelectionInfo, getOutputDimensions, calculateCropFromDrag, clampCropArea, resizeCropByHandle, moveCrop, detectBoundaryHit } from './core.js';
-import { renderFrameOnly, renderOverlay, hitTestCropHandle, getCursorForHandle, createThumbnailCanvas } from './api.js';
+import {
+  createThumbnailCanvas,
+  getCursorForHandle,
+  hitTestCropHandle,
+  renderFrameOnly,
+  renderOverlay,
+} from './api.js';
+import {
+  calculateCropFromDrag,
+  calculateSelection,
+  calculateSelectionInfo,
+  detectBoundaryHit,
+  getOutputDimensions,
+  moveCrop,
+  resizeCropByHandle,
+} from './core.js';
 import { renderFrameGridModal } from './frame-grid.js';
 
 /**
@@ -68,10 +82,14 @@ export function renderEditorScreen(container, state, handlers, fps) {
   updateStepIndicator('editor');
 
   if (!state.clip || state.clip.frames.length === 0) {
-    const backBtn = createElement('button', {
-      className: 'btn btn-primary',
-      type: 'button',
-    }, ['\u2190 Back to Capture']);
+    const backBtn = createElement(
+      'button',
+      {
+        className: 'btn btn-primary',
+        type: 'button',
+      },
+      ['\u2190 Back to Capture'],
+    );
 
     const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
 
@@ -82,21 +100,17 @@ export function renderEditorScreen(container, state, handlers, fps) {
           createElement('div', { className: 'editor-preview-panel' }, [
             createElement('div', { className: 'editor-preview-wrapper' }, [
               createElement('div', { className: 'empty-state editor-empty' }, [
-                createElement('div', { className: 'empty-state-icon' }, [
-                  createScissorsIcon(),
-                ]),
+                createElement('div', { className: 'empty-state-icon' }, [createScissorsIcon()]),
                 createElement('h2', { className: 'empty-state-title' }, ['No Clip to Edit']),
                 createElement('p', { className: 'empty-state-description' }, [
                   'Capture some content first, then come back to trim and crop your clip.',
                 ]),
-                createElement('div', { className: 'empty-state-actions' }, [
-                  backBtn,
-                ]),
+                createElement('div', { className: 'empty-state-actions' }, [backBtn]),
               ]),
             ]),
           ]),
         ]),
-      ])
+      ]),
     );
     return { cleanup: () => cleanupBackBtn(), canvas: document.createElement('canvas') };
   }
@@ -121,12 +135,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
         type: 'button',
         'aria-label': 'Back to capture',
       },
-      ['\u2190 Capture']
+      ['\u2190 Capture'],
     ),
   ]);
-  cleanups.push(
-    on(toolbarLeft.querySelector('button'), 'click', () => navigate('/capture'))
-  );
+  cleanups.push(on(toolbarLeft.querySelector('button'), 'click', () => navigate('/capture')));
 
   // Toolbar center - Playback controls
   const playbackControls = createElement('div', { className: 'playback-controls' });
@@ -140,11 +152,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-label': 'Go to first frame',
       title: 'First frame (Home)',
     },
-    ['\u23EE']
+    ['\u23EE'],
   );
-  cleanups.push(
-    on(firstBtn, 'click', () => handlers.onFrameChange(state.selectedRange.start))
-  );
+  cleanups.push(on(firstBtn, 'click', () => handlers.onFrameChange(state.selectedRange.start)));
   playbackControls.appendChild(firstBtn);
 
   // Previous frame
@@ -156,7 +166,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-label': 'Previous frame',
       title: 'Previous frame (\u2190)',
     },
-    ['\u23F4']
+    ['\u23F4'],
   );
   cleanups.push(on(prevBtn, 'click', () => handlers.onFrameChange(state.currentFrame - 1)));
   playbackControls.appendChild(prevBtn);
@@ -170,7 +180,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-label': state.isPlaying ? 'Pause' : 'Play',
       title: 'Play/Pause (Space)',
     },
-    [state.isPlaying ? '\u23F8' : '\u25B6']
+    [state.isPlaying ? '\u23F8' : '\u25B6'],
   );
   cleanups.push(on(playBtn, 'click', () => handlers.onTogglePlay()));
   playbackControls.appendChild(playBtn);
@@ -184,7 +194,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-label': 'Next frame',
       title: 'Next frame (\u2192)',
     },
-    ['\u23F5']
+    ['\u23F5'],
   );
   cleanups.push(on(nextBtn, 'click', () => handlers.onFrameChange(state.currentFrame + 1)));
   playbackControls.appendChild(nextBtn);
@@ -198,11 +208,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-label': 'Go to last frame',
       title: 'Last frame (End)',
     },
-    ['\u23ED']
+    ['\u23ED'],
   );
-  cleanups.push(
-    on(lastBtn, 'click', () => handlers.onFrameChange(state.selectedRange.end))
-  );
+  cleanups.push(on(lastBtn, 'click', () => handlers.onFrameChange(state.selectedRange.end)));
   playbackControls.appendChild(lastBtn);
 
   // Frame Grid button and modal state
@@ -233,12 +241,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
   const currentInSelection = Math.max(
     0,
-    Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1)
+    Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1),
   );
   const timeDisplay = createElement('div', { className: 'time-display' }, [
-    createElement('span', { className: 'current' }, [
-      frameToTimecode(currentInSelection, fps),
-    ]),
+    createElement('span', { className: 'current' }, [frameToTimecode(currentInSelection, fps)]),
     createElement('span', { className: 'separator' }, [' / ']),
     createElement('span', {}, [frameToTimecode(selectionFrameCount, fps)]),
   ]);
@@ -253,13 +259,13 @@ export function renderEditorScreen(container, state, handlers, fps) {
       type: 'button',
       'aria-label': 'Export as GIF',
     },
-    ['Export \u2192']
+    ['Export \u2192'],
   );
   cleanups.push(
     on(exportBtn, 'click', () => {
       handlers.onExport();
       navigate('/export');
-    })
+    }),
   );
   toolbarRight.appendChild(exportBtn);
 
@@ -282,7 +288,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
   leftPanelContent.appendChild(scenesHeader);
 
   // Scenes container - will be populated by updateScenesSidebar
-  const scenesContainer = createElement('div', { className: 'scenes-sidebar-content', 'data-scenes-container': 'true' });
+  const scenesContainer = createElement('div', {
+    className: 'scenes-sidebar-content',
+    'data-scenes-container': 'true',
+  });
   leftPanelContent.appendChild(scenesContainer);
 
   leftSidebar.appendChild(leftPanelContent);
@@ -354,14 +363,12 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'select',
       {},
       PLAYBACK_SPEEDS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`])
-      )
+        createElement('option', { value: String(speed) }, [`${speed}x`]),
+      ),
     )
   );
   speedSelect.value = String(state.playbackSpeed);
-  cleanups.push(
-    on(speedSelect, 'change', () => handlers.onSpeedChange(Number(speedSelect.value)))
-  );
+  cleanups.push(on(speedSelect, 'change', () => handlers.onSpeedChange(Number(speedSelect.value))));
   speedGroup.querySelector('.property-row').appendChild(speedSelect);
   panelContent.appendChild(speedGroup);
 
@@ -377,7 +384,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
         className: `aspect-btn ${(state.selectedAspectRatio || 'free') === ratio ? 'active' : ''}`,
         type: 'button',
       },
-      [ratio === 'free' ? 'Free' : ratio]
+      [ratio === 'free' ? 'Free' : ratio],
     );
     cleanups.push(on(btn, 'click', () => handlers.onAspectRatioChange(ratio)));
     ratioButtons.appendChild(btn);
@@ -399,7 +406,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       type: 'button',
       'aria-pressed': String(state.showGrid),
     },
-    [state.showGrid ? 'On' : 'Off']
+    [state.showGrid ? 'On' : 'Off'],
   );
   cleanups.push(on(gridBtn, 'click', () => handlers.onToggleGrid()));
   gridGroup.querySelector('.property-row').appendChild(gridBtn);
@@ -407,9 +414,11 @@ export function renderEditorScreen(container, state, handlers, fps) {
 
   // Scenes section (shown when scene detection is active or completed)
   if (state.sceneDetectionStatus !== 'idle') {
-    const scenesGroup = createElement('div', { className: 'property-group', 'data-panel': 'scenes' }, [
-      createElement('div', { className: 'property-group-title' }, ['Scenes']),
-    ]);
+    const scenesGroup = createElement(
+      'div',
+      { className: 'property-group', 'data-panel': 'scenes' },
+      [createElement('div', { className: 'property-group-title' }, ['Scenes'])],
+    );
 
     if (state.sceneDetectionStatus === 'detecting') {
       // Progress indicator
@@ -423,7 +432,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       progressContainer.appendChild(
         createElement('div', { className: 'progress-label' }, [
           `Detecting scenes... ${state.sceneDetectionProgress}%`,
-        ])
+        ]),
       );
       progressContainer.appendChild(progressBar);
       scenesGroup.appendChild(progressContainer);
@@ -433,33 +442,37 @@ export function renderEditorScreen(container, state, handlers, fps) {
         createElement('div', { className: 'scene-detection-error' }, [
           createElement('span', { className: 'error-icon' }, ['\u26A0']),
           state.sceneDetectionError || 'Detection failed',
-        ])
+        ]),
       );
     } else if (state.sceneDetectionStatus === 'completed') {
       if (state.scenes.length === 0) {
         scenesGroup.appendChild(
-          createElement('div', { className: 'scenes-empty' }, ['No scene changes detected'])
+          createElement('div', { className: 'scenes-empty' }, ['No scene changes detected']),
         );
       } else {
         // Scene list
         const sceneList = createElement('div', { className: 'scene-list' });
         state.scenes.forEach((scene, index) => {
-          const sceneItem = createElement('button', {
-            className: 'scene-item',
-            type: 'button',
-            'data-scene-id': scene.id,
-            title: `Go to scene ${index + 1} (Frame ${scene.startFrame})`,
-          }, [
-            createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
-            createElement('span', { className: 'scene-frames' }, [
-              `${scene.startFrame} - ${scene.endFrame}`,
-            ]),
-          ]);
+          const sceneItem = createElement(
+            'button',
+            {
+              className: 'scene-item',
+              type: 'button',
+              'data-scene-id': scene.id,
+              title: `Go to scene ${index + 1} (Frame ${scene.startFrame})`,
+            },
+            [
+              createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
+              createElement('span', { className: 'scene-frames' }, [
+                `${scene.startFrame} - ${scene.endFrame}`,
+              ]),
+            ],
+          );
           cleanups.push(
             on(sceneItem, 'click', () => {
               handlers.onFrameChange(scene.startFrame);
               handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
-            })
+            }),
           );
           sceneList.appendChild(sceneItem);
         });
@@ -467,7 +480,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
         scenesGroup.appendChild(
           createElement('div', { className: 'scenes-count' }, [
             `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-          ])
+          ]),
         );
       }
     }
@@ -517,7 +530,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
         type: 'button',
         style: 'width: 100%; margin-top: var(--space-4);',
       },
-      ['Clear Crop']
+      ['Clear Crop'],
     );
     cleanups.push(on(clearBtn, 'click', () => handlers.onCropChange(null)));
     panelContent.appendChild(clearBtn);
@@ -536,12 +549,16 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const outPoint = frameToTimecode(state.selectedRange.end, fps);
 
   // Frame Grid button for timeline header
-  const frameGridBtn = createElement('button', {
-    className: 'btn-frame-grid-compact',
-    type: 'button',
-    'aria-label': 'Open frame grid for selection',
-    title: 'Frame Grid (F)',
-  }, ['Open Grid']);
+  const frameGridBtn = createElement(
+    'button',
+    {
+      className: 'btn-frame-grid-compact',
+      type: 'button',
+      'aria-label': 'Open frame grid for selection',
+      title: 'Frame Grid (F)',
+    },
+    ['Open Grid'],
+  );
   cleanups.push(on(frameGridBtn, 'click', handleOpenFrameGrid));
 
   timelineSection.appendChild(
@@ -562,11 +579,15 @@ export function renderEditorScreen(container, state, handlers, fps) {
         // Selection info using calculateSelectionInfo formatted values
         createElement('span', { className: 'timeline-point timeline-selection-info' }, [
           createElement('span', { className: 'label' }, ['SEL']),
-          createElement('span', { className: 'value timeline-sel-value' }, [selectionInfo.formattedDuration]),
-          createElement('span', { className: 'frames timeline-sel-frames' }, [`(${selectionInfo.formattedFrameCount})`]),
+          createElement('span', { className: 'value timeline-sel-value' }, [
+            selectionInfo.formattedDuration,
+          ]),
+          createElement('span', { className: 'frames timeline-sel-frames' }, [
+            `(${selectionInfo.formattedFrameCount})`,
+          ]),
         ]),
       ]),
-    ])
+    ]),
   );
 
   // Timeline container - rendered by timeline.js with thumbnails
@@ -605,7 +626,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
           ]),
         ]),
       ]),
-    ])
+    ]),
   );
 
   container.innerHTML = '';
@@ -623,7 +644,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
     overlayCanvas,
   };
 }
-
 
 /**
  * Setup keyboard shortcuts
@@ -965,8 +985,10 @@ function renderScenesSidebar(container, state, handlers) {
       createElement('div', { className: 'scenes-sidebar-empty' }, [
         createElement('div', { className: 'scenes-sidebar-icon' }, ['\uD83C\uDFAC']),
         createElement('div', { className: 'scenes-sidebar-text' }, ['No scenes to show']),
-        createElement('div', { className: 'scenes-sidebar-subtext' }, ['Enable scene detection in Capture settings to see scenes here']),
-      ])
+        createElement('div', { className: 'scenes-sidebar-subtext' }, [
+          'Enable scene detection in Capture settings to see scenes here',
+        ]),
+      ]),
     );
     return cleanups;
   }
@@ -982,7 +1004,7 @@ function renderScenesSidebar(container, state, handlers) {
     progressContainer.appendChild(
       createElement('div', { className: 'progress-label' }, [
         `Detecting... ${state.sceneDetectionProgress}%`,
-      ])
+      ]),
     );
     progressContainer.appendChild(progressBar);
     container.appendChild(progressContainer);
@@ -994,7 +1016,7 @@ function renderScenesSidebar(container, state, handlers) {
       createElement('div', { className: 'scene-detection-error' }, [
         createElement('span', { className: 'error-icon' }, ['\u26A0']),
         state.sceneDetectionError || 'Detection failed',
-      ])
+      ]),
     );
     return cleanups;
   }
@@ -1005,8 +1027,10 @@ function renderScenesSidebar(container, state, handlers) {
       createElement('div', { className: 'scenes-sidebar-empty' }, [
         createElement('div', { className: 'scenes-sidebar-icon' }, ['\u2713']),
         createElement('div', { className: 'scenes-sidebar-text' }, ['Single scene clip']),
-        createElement('div', { className: 'scenes-sidebar-subtext' }, ['No scene cuts were detected in your recording']),
-      ])
+        createElement('div', { className: 'scenes-sidebar-subtext' }, [
+          'No scene cuts were detected in your recording',
+        ]),
+      ]),
     );
     return cleanups;
   }
@@ -1028,8 +1052,8 @@ function renderScenesSidebar(container, state, handlers) {
   }
 
   state.scenes.forEach((scene, index) => {
-    const isSelected = state.selectedRange.start === scene.startFrame &&
-                       state.selectedRange.end === scene.endFrame;
+    const isSelected =
+      state.selectedRange.start === scene.startFrame && state.selectedRange.end === scene.endFrame;
 
     const sceneCard = createElement('button', {
       className: `scene-thumbnail-card ${isSelected ? 'is-selected' : ''}`,
@@ -1040,14 +1064,14 @@ function renderScenesSidebar(container, state, handlers) {
 
     // Create thumbnail from first frame of scene
     const thumbnailContainer = createElement('div', { className: 'scene-thumbnail' });
-    if (state.clip && state.clip.frames[scene.startFrame]) {
+    if (state.clip?.frames[scene.startFrame]) {
       try {
         const canvas = createThumbnailCanvas(state.clip.frames[scene.startFrame], 160);
         canvas.className = 'scene-thumbnail-canvas';
         thumbnailContainer.appendChild(canvas);
       } catch (e) {
         thumbnailContainer.appendChild(
-          createElement('div', { className: 'scene-thumbnail-placeholder' }, ['\uD83C\uDFA5'])
+          createElement('div', { className: 'scene-thumbnail-placeholder' }, ['\uD83C\uDFA5']),
         );
       }
     }
@@ -1074,7 +1098,7 @@ function renderScenesSidebar(container, state, handlers) {
         handlers.onFrameChange(scene.startFrame);
         handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
         updateCardSelection(index);
-      })
+      }),
     );
 
     scenesList.appendChild(sceneCard);
@@ -1086,7 +1110,7 @@ function renderScenesSidebar(container, state, handlers) {
   container.appendChild(
     createElement('div', { className: 'scenes-sidebar-footer' }, [
       `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-    ])
+    ]),
   );
 
   return cleanups;
@@ -1188,7 +1212,7 @@ export function updateCropInfoPanel(container, cropArea, onCropChange) {
         type: 'button',
         style: 'width: 100%; margin-top: var(--space-4);',
       },
-      ['Clear Crop']
+      ['Clear Crop'],
     );
     cleanups.push(on(clearBtn, 'click', () => onCropChange(null)));
     sidebar.appendChild(clearBtn);

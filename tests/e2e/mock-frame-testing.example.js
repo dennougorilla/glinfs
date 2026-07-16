@@ -225,9 +225,9 @@ describe('Export Feature', () => {
 
 // Export for module usage (if needed)
 export {
+  testCustomMockFrames,
   testEditorWithMockFrames,
   testExportWithMockFrames,
   testWithNavigationHelper,
   testWithUrlParameters,
-  testCustomMockFrames,
 };
