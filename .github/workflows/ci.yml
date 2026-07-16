@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  # E2E is not wired into CI yet: 17 pre-existing functional failures in the
+  # Playwright suite (present on main before this workflow existed) would turn
+  # every PR red. Once those are fixed, add an e2e job here running:
+  #   npx playwright install --with-deps chromium
+  #   npx playwright test --ignore-snapshots
+  # (--ignore-snapshots because screenshot baselines are gitignored.)
