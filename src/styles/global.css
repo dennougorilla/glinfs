@@ -39,7 +39,8 @@ body {
 
 .skip-link:focus {
   top: var(--space-4);
-  outline: none;
+  outline: 3px solid white;
+  outline-offset: 2px;
 }
 
 /* Focus indicators - Enhanced visibility */
@@ -714,6 +715,34 @@ input[type="checkbox"] {
   }
 }
 
+/* Responsive header for small screens */
+@media (max-width: 600px) {
+  .app-header {
+    padding: 0 var(--space-4);
+  }
+
+  .step-indicator {
+    gap: var(--space-1);
+  }
+
+  .step-label {
+    display: none;
+  }
+
+  .step-number {
+    width: 24px;
+    height: 24px;
+  }
+
+  .step-connector {
+    width: 20px;
+  }
+
+  .app-logo span:not(.app-logo-icon) {
+    display: none;
+  }
+}
+
 /* High contrast mode support */
 @media (prefers-contrast: high) {
   :root {
@@ -728,8 +757,21 @@ input[type="checkbox"] {
     border: 2px solid white;
   }
 
+  .btn-secondary,
+  .btn-ghost,
+  .aspect-btn,
+  .encoder-card,
+  .scene-thumbnail-card {
+    border-width: 2px;
+  }
+
   .empty-state-icon {
     border-width: 3px;
+  }
+
+  /* Enhanced focus indicators for high contrast */
+  :focus-visible {
+    outline-width: 3px;
   }
 }
 
@@ -793,6 +835,7 @@ input[type="checkbox"] {
   border-radius: var(--radius-xl);
   position: relative;
   overflow: hidden;
+  transition: transform var(--transition-normal);
 }
 
 .empty-state-icon::before {
@@ -804,8 +847,12 @@ input[type="checkbox"] {
   transition: opacity 0.3s var(--easing-standard);
 }
 
+.empty-state:hover .empty-state-icon {
+  transform: translateY(-2px);
+}
+
 .empty-state:hover .empty-state-icon::before {
-  opacity: 0.1;
+  opacity: 0.15;
 }
 
 .empty-state-icon svg {
@@ -863,16 +910,23 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--color-bg-tertiary);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  transition: all var(--transition-normal);
+}
+
+.empty-state-step:hover {
+  background: var(--color-surface);
+  border-color: var(--color-border);
 }
 
 .empty-state-step-number {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -881,6 +935,7 @@ input[type="checkbox"] {
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--color-primary);
+  flex-shrink: 0;
 }
 
 /* ========================================

@@ -8,6 +8,7 @@ import { getEditorPayload, getClipPayload, getExportResult, setExportResult, cle
 import { qsRequired } from '../../shared/utils/dom.js';
 import { isVideoFrameValid, syncCanvasSize, renderFramePlaceholder, getDrawableSource } from '../../shared/utils/canvas.js';
 import { navigate } from '../../shared/router.js';
+import { updateSetting } from '../../shared/user-settings.js';
 import {
   createExportStore,
   updateSettings,
@@ -211,6 +212,11 @@ function handleSettingsChange(settings) {
   );
 
   emit('export:settings', { settings: store.getState().settings });
+
+  // Save settings to localStorage
+  Object.entries(settings).forEach(([key, value]) => {
+    updateSetting('export', key, value);
+  });
 
   // Reset frame index when settings change
   currentFrameIndex = 0;
