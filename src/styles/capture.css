@@ -447,3 +447,10 @@
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
+
+.btn-toggle--disabled,
+.btn-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}

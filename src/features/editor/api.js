@@ -7,6 +7,7 @@ import {
   syncCanvasSize,
   isVideoFrameValid,
   renderFramePlaceholder,
+  getDrawableSource,
 } from '../../shared/utils/canvas.js';
 
 /**
@@ -242,8 +243,13 @@ export function createThumbnailCanvas(frame, maxDimension = 80) {
     return thumbCanvas;
   }
 
-  // Draw VideoFrame directly with scaling (no intermediate canvas needed)
-  thumbCtx.drawImage(frame.frame, 0, 0, thumbWidth, thumbHeight);
+  // Get drawable source (supports both real VideoFrames and mock frames)
+  const source = getDrawableSource(frame);
+  if (source) {
+    thumbCtx.drawImage(source, 0, 0, thumbWidth, thumbHeight);
+  } else {
+    renderFramePlaceholder(thumbCtx, thumbWidth, thumbHeight, { showMessage: false });
+  }
 
   return thumbCanvas;
 }
@@ -373,8 +379,13 @@ export function renderFrameOnly(ctx, frame) {
   // Resize canvas if needed
   syncCanvasSize(canvas, frame.width, frame.height);
 
-  // Draw VideoFrame directly to canvas
-  ctx.drawImage(frame.frame, 0, 0);
+  // Get drawable source (supports both real VideoFrames and mock frames)
+  const source = getDrawableSource(frame);
+  if (source) {
+    ctx.drawImage(source, 0, 0);
+  } else {
+    renderFramePlaceholder(ctx, frame.width, frame.height);
+  }
 }
 
 /**

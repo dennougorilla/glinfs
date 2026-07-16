@@ -89,7 +89,27 @@ export function syncCanvasSize(canvas, width, height) {
  * }
  */
 export function isVideoFrameValid(videoFrame) {
-  return videoFrame != null && !videoFrame.closed;
+  if (videoFrame == null) return false;
+  return !videoFrame.closed;
+}
+
+/**
+ * Get a drawable source from a Frame object
+ *
+ * VideoFrames (both real and mock) are directly drawable via canvas.drawImage().
+ * This function simply validates and returns the VideoFrame.
+ *
+ * @param {import('../../features/capture/types.js').Frame} frame - Frame to get drawable from
+ * @returns {CanvasImageSource | null} Drawable source for canvas.drawImage()
+ *
+ * @example
+ * const source = getDrawableSource(frame);
+ * if (source) ctx.drawImage(source, 0, 0);
+ */
+export function getDrawableSource(frame) {
+  if (!frame?.frame) return null;
+  if (frame.frame.closed) return null;
+  return frame.frame;
 }
 
 /**
