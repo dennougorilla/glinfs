@@ -199,6 +199,13 @@ export async function encodeGif(params, signal) {
         height: frameHeight,
       } = await getFrameRGBA(frame, crop);
 
+      // Re-check after the await: an abort during extraction has already
+      // disposed the manager, and addFrame would throw WorkerError instead
+      // of the AbortError the caller distinguishes cancellation by.
+      if (signal?.aborted) {
+        throw new DOMException('Encoding cancelled', 'AbortError');
+      }
+
       // Send frame to worker
       manager.addFrame(rgba, frameWidth, frameHeight, i);
     }
