@@ -1,455 +1,252 @@
+/**
+ * E2E Tests for the Frame Grid Modal
+ * @module tests/e2e/editor-frame-grid.spec
+ *
+ * Rewritten for #48: the previous version guarded every assertion behind
+ * `if (await locator.isVisible())` without injecting a clip, so all tests
+ * passed vacuously. Each test now loads the editor with a mock clip, opens
+ * the modal for real, and asserts against the selectors/texts that actually
+ * exist (.btn-frame-grid-compact, IN/OUT badges, 'IN=OUT' single selection).
+ */
+
 import { expect, test } from '@playwright/test';
+import { gotoEditorWithClip, pauseEditorPlayback } from './helpers/app.js';
+
+const FRAME_COUNT = 12;
+
+/**
+ * Open the frame grid modal from the timeline header
+ * @param {import('@playwright/test').Page} page
+ */
+async function openFrameGrid(page) {
+  await page.locator('.btn-frame-grid-compact').click();
+  await expect(page.locator('.frame-grid-modal')).toBeVisible();
+}
 
 test.describe('Frame Grid Modal', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to the app and capture some frames first
-    await page.goto('/');
+    await gotoEditorWithClip(page, { frameCount: FRAME_COUNT, fps: 30 });
+    // Stop auto-playback so background state churn cannot race UI assertions
+    await pauseEditorPlayback(page);
   });
 
-  test.describe('User Story 1: Open Frame Grid Modal', () => {
-    test('should show Frame Grid button in playback controls', async ({ page }) => {
-      await page.goto('/');
-      // Check if editor screen with clip is available
-      const frameGridBtn = page.locator('.btn-frame-grid');
-      // The button exists if we're in editor with a clip
-      if (await page.locator('.editor-screen').isVisible()) {
-        await expect(frameGridBtn).toBeVisible();
-      }
+  test.describe('Open and Close', () => {
+    test('shows Open Grid button in timeline header', async ({ page }) => {
+      const frameGridBtn = page.locator('.btn-frame-grid-compact');
+      await expect(frameGridBtn).toBeVisible();
+      await expect(frameGridBtn).toHaveText('Open Grid');
     });
 
-    test('should open modal when clicking Frame Grid button', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('opens modal with correct ARIA attributes when clicking the button', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        // Verify modal appears
-        const modal = page.locator('.frame-grid-modal');
-        await expect(modal).toBeVisible();
-
-        // Verify modal has correct ARIA attributes
-        const backdrop = page.locator('.frame-grid-backdrop');
-        await expect(backdrop).toHaveAttribute('role', 'dialog');
-        await expect(backdrop).toHaveAttribute('aria-modal', 'true');
-      }
+      const backdrop = page.locator('.frame-grid-backdrop');
+      await expect(backdrop).toHaveAttribute('role', 'dialog');
+      await expect(backdrop).toHaveAttribute('aria-modal', 'true');
     });
 
-    test('should open modal when pressing F key', async ({ page }) => {
-      await page.goto('/');
-
-      if (await page.locator('.editor-screen').isVisible()) {
-        await page.keyboard.press('f');
-
-        const modal = page.locator('.frame-grid-modal');
-        await expect(modal).toBeVisible();
-      }
+    test('opens modal when pressing F key', async ({ page }) => {
+      await page.keyboard.press('f');
+      await expect(page.locator('.frame-grid-modal')).toBeVisible();
     });
 
-    test('should close modal on Escape key', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('closes modal on Escape key', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-        await expect(page.locator('.frame-grid-modal')).toBeVisible();
-
-        await page.keyboard.press('Escape');
-        await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
-      }
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
     });
 
-    test('should close modal when clicking outside', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('closes modal when clicking the backdrop', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-        await expect(page.locator('.frame-grid-modal')).toBeVisible();
+      const backdropBox = await page.locator('.frame-grid-backdrop').boundingBox();
+      expect(backdropBox).not.toBeNull();
 
-        // Click on backdrop (outside modal)
-        const backdrop = page.locator('.frame-grid-backdrop');
-        const modal = page.locator('.frame-grid-modal');
-        const modalBox = await modal.boundingBox();
-        const backdropBox = await backdrop.boundingBox();
-
-        if (backdropBox && modalBox) {
-          // Click on backdrop above the modal
-          await page.mouse.click(backdropBox.x + 10, backdropBox.y + 10);
-          await expect(modal).not.toBeVisible();
-        }
-      }
-    });
-
-    test('should display grid of frame thumbnails', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const gridItems = page.locator('.frame-grid-item');
-        // Should have at least one frame
-        const count = await gridItems.count();
-        expect(count).toBeGreaterThan(0);
-      }
-    });
-
-    test('should show frame numbers on thumbnails', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const numberLabels = page.locator('.frame-grid-number');
-        const count = await numberLabels.count();
-        expect(count).toBeGreaterThan(0);
-
-        // First frame should be labeled "1"
-        await expect(numberLabels.first()).toHaveText('1');
-      }
+      // Click a corner of the backdrop, outside the centered modal
+      await page.mouse.click(backdropBox.x + 5, backdropBox.y + 5);
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
     });
   });
 
-  test.describe('User Story 2: Select Start Frame', () => {
-    test('should set Start frame when clicking a thumbnail', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+  test.describe('Grid Contents', () => {
+    test('displays one thumbnail per frame with number labels', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.click();
-
-        // Should have Start badge
-        await expect(firstItem).toHaveClass(/is-start/);
-        const badge = firstItem.locator('.frame-grid-badge.start-badge');
-        await expect(badge).toBeVisible();
-      }
+      await expect(page.locator('.frame-grid-item')).toHaveCount(FRAME_COUNT);
+      await expect(page.locator('.frame-grid-number').first()).toHaveText('1');
+      await expect(page.locator('.frame-grid-number').last()).toHaveText(String(FRAME_COUNT));
     });
 
-    test('should update selection info when Start is set', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('initial selection reflects the current clip range', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const items = page.locator('.frame-grid-item');
+      await expect(items.first()).toHaveClass(/is-start/);
+      await expect(items.first().locator('.frame-grid-badge.start-badge')).toHaveText('IN');
+      await expect(items.last()).toHaveClass(/is-end/);
+      await expect(items.last().locator('.frame-grid-badge.end-badge')).toHaveText('OUT');
 
-        const selectionInfo = page.locator('.frame-grid-selection-info');
-        await expect(selectionInfo).toContainText('Click a frame to set Start');
-
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.click();
-
-        await expect(selectionInfo).toContainText('Start: Frame 1');
-      }
-    });
-  });
-
-  test.describe('User Story 3: Select End Frame', () => {
-    test('should set End frame when Shift+clicking', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const items = page.locator('.frame-grid-item');
-        const count = await items.count();
-
-        if (count >= 2) {
-          // Click first to set Start
-          await items.first().click();
-
-          // Shift+click second to set End
-          await items.nth(1).click({ modifiers: ['Shift'] });
-
-          // Second item should have End badge
-          await expect(items.nth(1)).toHaveClass(/is-end/);
-        }
-      }
+      await expect(page.locator('.frame-grid-selection-info')).toContainText(
+        `Selection: Frame 1 → Frame ${FRAME_COUNT} (${FRAME_COUNT} frames)`,
+      );
     });
 
-    test('should swap Start/End when Shift+clicking before Start', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('shows grid size slider with auto-fitted value', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const sizeSlider = page.locator('.grid-size-slider');
+      await expect(sizeSlider).toBeVisible();
 
-        const items = page.locator('.frame-grid-item');
-        const count = await items.count();
+      // Bounds are device-adaptive (quality presets), so read them off the input
+      const min = Number.parseInt(await sizeSlider.getAttribute('min'), 10);
+      const max = Number.parseInt(await sizeSlider.getAttribute('max'), 10);
+      expect(min).toBeGreaterThan(0);
+      expect(max).toBeGreaterThan(min);
 
-        if (count >= 3) {
-          // Click third frame to set Start
-          await items.nth(2).click();
-
-          // Shift+click first frame (before Start)
-          await items.first().click({ modifiers: ['Shift'] });
-
-          // First should now be Start, third should be End
-          await expect(items.first()).toHaveClass(/is-start/);
-          await expect(items.nth(2)).toHaveClass(/is-end/);
-        }
-      }
-    });
-
-    test('should select single frame on double-click', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.dblclick();
-
-        // Should have combined S=E badge for single frame selection
-        const singleBadge = firstItem.locator('.frame-grid-badge.single-badge');
-        await expect(singleBadge).toBeVisible();
-        await expect(singleBadge).toHaveText('S=E');
-      }
+      await expect
+        .poll(async () => Number.parseInt(await sizeSlider.inputValue(), 10))
+        .toBeGreaterThanOrEqual(min);
+      expect(Number.parseInt(await sizeSlider.inputValue(), 10)).toBeLessThanOrEqual(max);
     });
   });
 
-  test.describe('User Story 4: Apply Selection', () => {
-    test('should have disabled Apply button when no selection', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+  test.describe('Selecting Start and End Frames', () => {
+    test('click sets the Start frame', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const items = page.locator('.frame-grid-item');
+      await items.nth(3).click();
 
-        // Initially Apply should be enabled (initialized from current range)
-        // After clearing, it would be disabled
-        const applyBtn = page.locator('.frame-grid-btn-apply');
-        await expect(applyBtn).toBeVisible();
-      }
+      await expect(items.nth(3)).toHaveClass(/is-start/);
+      await expect(items.nth(3).locator('.frame-grid-badge.start-badge')).toHaveText('IN');
+      await expect(items.first()).not.toHaveClass(/is-start/);
+      await expect(page.locator('.frame-grid-selection-info')).toContainText('Frame 4');
     });
 
-    test('should close modal and apply selection on Apply click', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('Shift+click sets the End frame', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const items = page.locator('.frame-grid-item');
+      await items.nth(1).click();
+      await items.nth(5).click({ modifiers: ['Shift'] });
 
-        // Select a range
-        const items = page.locator('.frame-grid-item');
-        await items.first().click();
-
-        // Click Apply
-        const applyBtn = page.locator('.frame-grid-btn-apply');
-        await applyBtn.click();
-
-        // Modal should close
-        await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
-      }
+      await expect(items.nth(1)).toHaveClass(/is-start/);
+      await expect(items.nth(5)).toHaveClass(/is-end/);
+      await expect(page.locator('.frame-grid-selection-info')).toContainText(
+        'Selection: Frame 2 → Frame 6 (5 frames)',
+      );
     });
 
-    test('should close modal without applying on Cancel click', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('double-click selects a single frame (IN=OUT)', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const item = page.locator('.frame-grid-item').nth(2);
+      await item.dblclick();
 
-        const cancelBtn = page.locator('.frame-grid-btn-cancel');
-        await cancelBtn.click();
-
-        await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
-      }
-    });
-  });
-
-  test.describe('Grid Size Control', () => {
-    test('should show grid size slider in header', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const sizeSlider = page.locator('.grid-size-slider');
-        await expect(sizeSlider).toBeVisible();
-      }
+      const singleBadge = item.locator('.frame-grid-badge.single-badge');
+      await expect(singleBadge).toBeVisible();
+      await expect(singleBadge).toHaveText('IN=OUT');
     });
 
-    test('should auto-fit thumbnails on modal open', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('hover S/E buttons set Start and End', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const items = page.locator('.frame-grid-item');
 
-        // Slider value should be set (auto-fit calculated)
-        const sizeSlider = page.locator('.grid-size-slider');
-        const value = await sizeSlider.inputValue();
-        expect(parseInt(value, 10)).toBeGreaterThanOrEqual(60);
-        expect(parseInt(value, 10)).toBeLessThanOrEqual(240);
-      }
+      // Set Start via [S] button on frame 2
+      await items.nth(1).hover();
+      await items.nth(1).locator('.action-start').click();
+      await expect(items.nth(1)).toHaveClass(/is-start/);
+
+      // Set End via [E] button on frame 7
+      await items.nth(6).hover();
+      await items.nth(6).locator('.action-end').click();
+      await expect(items.nth(6)).toHaveClass(/is-end/);
     });
   });
 
-  test.describe('Inline Start/End Buttons', () => {
-    test('should show S/E buttons on thumbnail hover', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+  test.describe('Apply and Cancel', () => {
+    test('Apply closes the modal and applies the selection to the timeline', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const items = page.locator('.frame-grid-item');
+      await items.nth(2).click();
+      await items.nth(7).click({ modifiers: ['Shift'] });
 
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.hover();
+      const applyBtn = page.locator('.frame-grid-btn-apply');
+      await expect(applyBtn).toBeEnabled();
+      await applyBtn.click();
 
-        const hoverActions = firstItem.locator('.frame-hover-actions');
-        await expect(hoverActions).toBeVisible();
-      }
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
+
+      // Timeline header reflects the applied range (frames 3-8 -> 6 frames)
+      await expect(page.locator('.timeline-sel-frames')).toHaveText('(6 frames)');
     });
 
-    test('should set Start when clicking S button', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('Cancel closes the modal without applying', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      await page.locator('.frame-grid-item').nth(2).click();
+      await page.locator('.frame-grid-btn-cancel').click();
 
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.hover();
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
 
-        const startBtn = firstItem.locator('.action-start');
-        await startBtn.click();
-
-        await expect(firstItem).toHaveClass(/is-start/);
-      }
-    });
-
-    test('should set End when clicking E button', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const items = page.locator('.frame-grid-item');
-        const count = await items.count();
-
-        if (count >= 2) {
-          // First set Start
-          const firstItem = items.first();
-          await firstItem.hover();
-          await firstItem.locator('.action-start').click();
-
-          // Then set End on second item
-          const secondItem = items.nth(1);
-          await secondItem.hover();
-          await secondItem.locator('.action-end').click();
-
-          await expect(secondItem).toHaveClass(/is-end/);
-        }
-      }
+      // Timeline selection is unchanged
+      await expect(page.locator('.timeline-sel-frames')).toHaveText(`(${FRAME_COUNT} frames)`);
     });
   });
 
   test.describe('Keyboard Navigation', () => {
-    test('should navigate with arrow keys', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('navigates with arrow keys and selects with Enter', async ({ page }) => {
+      await openFrameGrid(page);
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      // The initially selected (start) frame receives focus after auto-fit
+      const items = page.locator('.frame-grid-item');
+      await expect(items.first()).toBeFocused();
 
-        // First item should be focused initially
-        const firstItem = page.locator('.frame-grid-item').first();
-        await expect(firstItem).toBeFocused();
+      await page.keyboard.press('ArrowRight');
+      await expect(items.nth(1)).toBeFocused();
 
-        // Press right arrow to move to second item
-        await page.keyboard.press('ArrowRight');
-        const secondItem = page.locator('.frame-grid-item').nth(1);
-        await expect(secondItem).toBeFocused();
-      }
+      await page.keyboard.press('Enter');
+      await expect(items.nth(1)).toHaveClass(/is-start/);
     });
 
-    test('should select with Enter key', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('selects End with Shift+Enter', async ({ page }) => {
+      await openFrameGrid(page);
+      await expect(page.locator('.frame-grid-item').first()).toBeFocused();
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      // Select first as Start, move right twice, select as End
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Shift+Enter');
 
-        // Press Enter to select first frame as Start
-        await page.keyboard.press('Enter');
-
-        const firstItem = page.locator('.frame-grid-item').first();
-        await expect(firstItem).toHaveClass(/is-start/);
-      }
-    });
-
-    test('should select End with Shift+Enter', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        // Select first as Start
-        await page.keyboard.press('Enter');
-
-        // Navigate to second
-        await page.keyboard.press('ArrowRight');
-
-        // Select as End with Shift+Enter
-        await page.keyboard.press('Shift+Enter');
-
-        const secondItem = page.locator('.frame-grid-item').nth(1);
-        await expect(secondItem).toHaveClass(/is-end/);
-      }
+      const items = page.locator('.frame-grid-item');
+      await expect(items.first()).toHaveClass(/is-start/);
+      await expect(items.nth(2)).toHaveClass(/is-end/);
     });
   });
 
   test.describe('Accessibility', () => {
-    test('should trap focus within modal', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
+    test('traps focus within the modal', async ({ page }) => {
+      await openFrameGrid(page);
+      await expect(page.locator('.frame-grid-item').first()).toBeFocused();
 
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
+      const focusableCount = await page
+        .locator('.frame-grid-modal')
+        .locator('button, input, [tabindex]:not([tabindex="-1"])')
+        .count();
 
-        // Tab through all focusable elements
-        // Focus should cycle back to first element
-        const modal = page.locator('.frame-grid-modal');
-        const focusableElements = modal.locator('button, [tabindex]:not([tabindex="-1"])');
-        const count = await focusableElements.count();
-
-        // Tab through all elements + 1 more to test wrap
-        for (let i = 0; i < count + 1; i++) {
-          await page.keyboard.press('Tab');
-        }
-
-        // Focus should still be within modal
-        const activeElement = await page.evaluate(() =>
-          document.activeElement?.closest('.frame-grid-modal'),
-        );
-        expect(activeElement).not.toBeNull();
+      // Tab through all elements + 1 more to test wrap-around
+      for (let i = 0; i < focusableCount + 1; i++) {
+        await page.keyboard.press('Tab');
       }
-    });
 
-    test('should have visible focus indicator', async ({ page }) => {
-      await page.goto('/');
-      const frameGridBtn = page.locator('.btn-frame-grid');
-
-      if (await frameGridBtn.isVisible()) {
-        await frameGridBtn.click();
-
-        const firstItem = page.locator('.frame-grid-item').first();
-        await firstItem.focus();
-
-        // Verify focus is visible (has outline)
-        const outline = await firstItem.evaluate((el) => window.getComputedStyle(el).outline);
-        expect(outline).not.toBe('none');
-      }
+      const focusInsideModal = await page.evaluate(
+        () => document.activeElement?.closest('.frame-grid-modal') !== null,
+      );
+      expect(focusInsideModal).toBe(true);
     });
   });
 });

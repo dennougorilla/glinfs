@@ -1,220 +1,186 @@
+/**
+ * E2E Tests for Editor Crop Functionality
+ * @module tests/e2e/editor-crop.spec
+ *
+ * Rewritten for #48: the previous version guarded every assertion behind
+ * `if (await locator.isVisible())` without ever injecting a clip, so all
+ * tests passed while asserting nothing. Each test now loads the editor with
+ * a real mock clip and asserts unconditionally.
+ */
+
 import { expect, test } from '@playwright/test';
+import { gotoEditorWithClip, pauseEditorPlayback } from './helpers/app.js';
+
+/**
+ * Draw a crop area on the overlay canvas by dragging
+ * @param {import('@playwright/test').Page} page
+ * @param {{ from: [number, number], to: [number, number] }} drag - Canvas-relative coordinates
+ */
+async function drawCrop(page, { from, to } = { from: [50, 50], to: [250, 200] }) {
+  const overlay = page.locator('.editor-canvas-overlay');
+  const box = await overlay.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + from[0], box.y + from[1]);
+  await page.mouse.down();
+  await page.mouse.move(box.x + to[0], box.y + to[1], { steps: 5 });
+  await page.mouse.up();
+}
+
+/**
+ * Read the crop info panel values as numbers (or null for '-')
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<Array<number | null>>} [x, y, w, h]
+ */
+async function readCropInfo(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('.crop-info-value'), (el) => {
+      const value = Number.parseInt(el.textContent, 10);
+      return Number.isNaN(value) ? null : value;
+    }),
+  );
+}
 
 test.describe('Editor Crop Functionality', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to editor with mock clip (requires prior capture)
-    await page.goto('/');
-    // For E2E tests, we need to either mock a clip or use recorded capture
-    // This test assumes the dev server is running and we can navigate to editor
+    await gotoEditorWithClip(page, { frameCount: 30, fps: 30 });
+    // Crop assertions depend on state-driven UI updates; stop playback churn
+    await pauseEditorPlayback(page);
   });
 
-  test.describe('User Story 1: Interactive Crop Area Drawing', () => {
-    test('should display crosshair cursor when no crop exists', async ({ page }) => {
-      await page.goto('/');
-      // Navigate to editor if clip exists
-      const editorCanvas = page.locator('.editor-canvas');
-      if (await editorCanvas.isVisible()) {
-        await expect(editorCanvas).toHaveCSS('cursor', 'crosshair');
-      }
+  test.describe('Interactive Crop Area Drawing', () => {
+    test('creates crop area by click and drag', async ({ page }) => {
+      // No crop yet: info panel shows placeholders, no Clear Crop button
+      expect(await readCropInfo(page)).toEqual([null, null, null, null]);
+      await expect(page.locator('.btn-clear-crop')).toHaveCount(0);
+
+      await drawCrop(page);
+
+      // Crop info panel now shows concrete values
+      const clearBtn = page.locator('.btn-clear-crop');
+      await expect(clearBtn).toBeVisible();
+
+      const [, , width, height] = await readCropInfo(page);
+      expect(width).toBeGreaterThan(0);
+      expect(height).toBeGreaterThan(0);
     });
 
-    test('should create crop area by click and drag', async ({ page }) => {
-      await page.goto('/');
-      const editorCanvas = page.locator('.editor-canvas');
+    test('moves crop when dragging inside crop area', async ({ page }) => {
+      await drawCrop(page, { from: [50, 50], to: [250, 200] });
+      const [x1, y1, w1, h1] = await readCropInfo(page);
 
-      if (await editorCanvas.isVisible()) {
-        const box = await editorCanvas.boundingBox();
-        if (box) {
-          // Draw crop from (100, 100) to (300, 250)
-          await page.mouse.move(box.x + 100, box.y + 100);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.up();
+      // Drag from the middle of the crop to move it right and down
+      await drawCrop(page, { from: [150, 125], to: [200, 160] });
 
-          // Verify crop overlay is visible (darkened region outside crop)
-          // The canvas should now show the crop overlay
-        }
-      }
+      const [x2, y2, w2, h2] = await readCropInfo(page);
+      expect(x2).toBeGreaterThan(x1);
+      expect(y2).toBeGreaterThan(y1);
+      // Size is preserved on move
+      expect(w2).toBe(w1);
+      expect(h2).toBe(h1);
     });
 
-    test('should render 50% opacity darkened region outside crop', async ({ page }) => {
-      await page.goto('/');
-      // This test would verify the rendering by checking canvas pixels
-      // For now, just verify the canvas exists
-      const editorCanvas = page.locator('.editor-canvas');
-      await expect(editorCanvas)
-        .toBeVisible()
-        .catch(() => {
-          // Skip if no clip loaded
-        });
-    });
-  });
+    test('resizes crop when dragging bottom-right handle', async ({ page }) => {
+      await drawCrop(page, { from: [50, 50], to: [250, 200] });
+      const [, , w1, h1] = await readCropInfo(page);
 
-  test.describe('User Story 2: Crop Area Resize with Handles', () => {
-    test('should show resize cursor when hovering corner handle', async ({ page }) => {
-      await page.goto('/');
-      // This test requires a crop to already exist
-      // Then hover over corner handles to verify cursor changes
-    });
+      // Drag the bottom-right handle outward
+      await drawCrop(page, { from: [250, 200], to: [330, 260] });
 
-    test('should resize crop when dragging bottom-right handle', async ({ page }) => {
-      await page.goto('/');
-      const editorCanvas = page.locator('.editor-canvas');
-
-      if (await editorCanvas.isVisible()) {
-        const box = await editorCanvas.boundingBox();
-        if (box) {
-          // First create a crop
-          await page.mouse.move(box.x + 100, box.y + 100);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.up();
-
-          // Now drag the bottom-right handle
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 400, box.y + 350);
-          await page.mouse.up();
-        }
-      }
+      const [, , w2, h2] = await readCropInfo(page);
+      expect(w2).toBeGreaterThan(w1);
+      expect(h2).toBeGreaterThan(h1);
     });
   });
 
-  test.describe('User Story 3: Crop Area Movement', () => {
-    test('should show move cursor when hovering inside crop', async ({ page }) => {
-      await page.goto('/');
-      // This test requires a crop to already exist
-    });
-
-    test('should move crop when dragging inside crop area', async ({ page }) => {
-      await page.goto('/');
-      const editorCanvas = page.locator('.editor-canvas');
-
-      if (await editorCanvas.isVisible()) {
-        const box = await editorCanvas.boundingBox();
-        if (box) {
-          // First create a crop
-          await page.mouse.move(box.x + 100, box.y + 100);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.up();
-
-          // Now drag inside the crop to move it
-          await page.mouse.move(box.x + 200, box.y + 175);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 250, box.y + 225);
-          await page.mouse.up();
-        }
-      }
-    });
-  });
-
-  test.describe('User Story 4: Aspect Ratio Constraint', () => {
-    test('should display aspect ratio buttons in sidebar', async ({ page }) => {
-      await page.goto('/');
+  test.describe('Aspect Ratio Constraint', () => {
+    test('displays aspect ratio buttons in sidebar', async ({ page }) => {
+      // Free, 1:1, 16:9, 4:3, 9:16
       const aspectButtons = page.locator('.aspect-ratio-buttons .aspect-btn');
-      // Check that aspect ratio buttons exist (Free, 1:1, 16:9, 4:3, 9:16)
-      await expect(aspectButtons)
-        .toHaveCount(5)
-        .catch(() => {
-          // Skip if editor not visible
-        });
+      await expect(aspectButtons).toHaveCount(5);
+      await expect(aspectButtons.first()).toHaveText('Free');
     });
 
-    test('should highlight active aspect ratio button', async ({ page }) => {
-      await page.goto('/');
-      const freeBtn = page.locator('.aspect-btn').first();
-      if (await freeBtn.isVisible()) {
-        await expect(freeBtn).toHaveClass(/active/);
-      }
-    });
-  });
+    test('highlights active aspect ratio button', async ({ page }) => {
+      const aspectButtons = page.locator('.aspect-ratio-buttons .aspect-btn');
 
-  test.describe('User Story 5: Rule of Thirds Grid Overlay', () => {
-    test('should toggle grid with G key', async ({ page }) => {
-      await page.goto('/');
-      const gridBtn = page.locator('button:has-text("Off"), button:has-text("On")').first();
+      // Default is Free
+      await expect(aspectButtons.first()).toHaveClass(/active/);
 
-      if (await gridBtn.isVisible()) {
-        const initialText = await gridBtn.textContent();
-        await page.keyboard.press('g');
-        // After pressing G, the button text should toggle
-        const newText = await gridBtn.textContent();
-        expect(newText).not.toBe(initialText);
-      }
+      // Selecting another ratio moves the highlight
+      await aspectButtons.nth(2).click();
+      await expect(aspectButtons.nth(2)).toHaveClass(/active/);
+      await expect(aspectButtons.first()).not.toHaveClass(/active/);
     });
 
-    test('should toggle grid with button click', async ({ page }) => {
-      await page.goto('/');
-      const gridBtn = page.locator('.property-group:has-text("Overlay") button').first();
+    test('constrains drawn crop to selected 1:1 ratio', async ({ page }) => {
+      await page.locator('.aspect-btn', { hasText: '1:1' }).click();
 
-      if (await gridBtn.isVisible()) {
-        await gridBtn.click();
-        // Verify the button state changed
-      }
+      await drawCrop(page, { from: [50, 50], to: [250, 150] });
+
+      const [, , width, height] = await readCropInfo(page);
+      // Allow 1px difference from rounding in the constraint math
+      expect(Math.abs(width - height)).toBeLessThanOrEqual(1);
     });
   });
 
-  test.describe('User Story 6: Clear/Reset Crop', () => {
-    test('should clear crop with Escape key', async ({ page }) => {
-      await page.goto('/');
-      const editorCanvas = page.locator('.editor-canvas');
+  test.describe('Rule of Thirds Grid Overlay', () => {
+    test('toggles grid with G key', async ({ page }) => {
+      const gridBtn = page.locator('.editor-sidebar button[aria-pressed]');
+      await expect(gridBtn).toHaveText('Off');
 
-      if (await editorCanvas.isVisible()) {
-        const box = await editorCanvas.boundingBox();
-        if (box) {
-          // First create a crop
-          await page.mouse.move(box.x + 100, box.y + 100);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.up();
+      await page.keyboard.press('g');
+      await expect(gridBtn).toHaveText('On');
+      await expect(gridBtn).toHaveAttribute('aria-pressed', 'true');
 
-          // Clear crop button should be visible
-          const clearBtn = page.locator('button:has-text("Clear Crop")');
-          await expect(clearBtn).toBeVisible();
-
-          // Press Escape to clear
-          await page.keyboard.press('Escape');
-
-          // Clear button should be hidden
-          await expect(clearBtn).toBeHidden();
-        }
-      }
+      await page.keyboard.press('g');
+      await expect(gridBtn).toHaveText('Off');
     });
 
-    test('should clear crop with Clear Crop button', async ({ page }) => {
-      await page.goto('/');
-      const editorCanvas = page.locator('.editor-canvas');
+    test('toggles grid with button click', async ({ page }) => {
+      const gridBtn = page.locator('.editor-sidebar button[aria-pressed]');
+      await expect(gridBtn).toHaveAttribute('aria-pressed', 'false');
 
-      if (await editorCanvas.isVisible()) {
-        const box = await editorCanvas.boundingBox();
-        if (box) {
-          // First create a crop
-          await page.mouse.move(box.x + 100, box.y + 100);
-          await page.mouse.down();
-          await page.mouse.move(box.x + 300, box.y + 250);
-          await page.mouse.up();
+      await gridBtn.click();
+      await expect(gridBtn).toHaveText('On');
+      await expect(gridBtn).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
 
-          // Click Clear Crop button
-          const clearBtn = page.locator('button:has-text("Clear Crop")');
-          if (await clearBtn.isVisible()) {
-            await clearBtn.click();
-            // Button should be hidden after clearing
-            await expect(clearBtn).toBeHidden();
-          }
-        }
-      }
+  test.describe('Clear/Reset Crop', () => {
+    test('clears crop with Escape key', async ({ page }) => {
+      await drawCrop(page);
+
+      const clearBtn = page.locator('.btn-clear-crop');
+      await expect(clearBtn).toBeVisible();
+
+      await page.keyboard.press('Escape');
+
+      await expect(clearBtn).toHaveCount(0);
+      expect(await readCropInfo(page)).toEqual([null, null, null, null]);
     });
 
-    test('should only show Clear Crop button when crop exists', async ({ page }) => {
-      await page.goto('/');
-      // Without a crop, Clear Crop button should not be visible
-      const clearBtn = page.locator('button:has-text("Clear Crop")');
-      await expect(clearBtn)
-        .toBeHidden()
-        .catch(() => {
-          // May not be on editor page
-        });
+    // FIXME(#37): the Clear Crop button dies after the second crop update —
+    // the subscription in editor/index.js removes its click listener via
+    // cropInfoPanelCleanups on every cropArea change, but updateCropInfoPanel
+    // only re-registers the listener when it creates the button. Any drag
+    // (throttled setState fires multiple times) leaves the button unresponsive.
+    test.fixme('clears crop with Clear Crop button (#37)', async ({ page }) => {
+      await drawCrop(page);
+
+      const clearBtn = page.locator('.btn-clear-crop');
+      await expect(clearBtn).toBeVisible();
+      await clearBtn.click();
+
+      await expect(page.locator('.btn-clear-crop')).toHaveCount(0);
+      expect(await readCropInfo(page)).toEqual([null, null, null, null]);
+    });
+
+    test('only shows Clear Crop button when crop exists', async ({ page }) => {
+      await expect(page.locator('.btn-clear-crop')).toHaveCount(0);
+
+      await drawCrop(page);
+      await expect(page.locator('.btn-clear-crop')).toBeVisible();
     });
   });
 });

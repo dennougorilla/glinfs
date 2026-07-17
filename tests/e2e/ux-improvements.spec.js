@@ -2,118 +2,45 @@
  * E2E Tests for Core UX Improvements (003-fix-core-ux)
  * @module tests/e2e/ux-improvements.spec
  *
- * Verifies all 5 user stories:
- * - US1: Instant Clip Creation during recording
- * - US2: Clip Range Display in Editor timeline
- * - US3: Playback Controls Layout (no overflow)
- * - US4: Professional Form Controls styling
- * - US5: Export Preview functionality
+ * Rewritten for #48:
+ * - Capture tests asserting state fields/UI that never existed
+ *   (isRecording, sessionClips, .clip-badge) were replaced with a test of the
+ *   real buffer stats pipeline (setCaptureState -> updateBufferStatus).
+ * - Editor tests now use the awaited injection + hash navigation pattern and
+ *   the selectors that actually exist (.tl-playhead, .btn-play).
+ * - The old US5 preview-UI tests were removed; the Canvas preview is covered
+ *   in export-preview.spec.js.
  */
 
 import { expect, test } from '@playwright/test';
-
-const ANIMATION_SETTLE_MS = 500;
-
-/**
- * Wait for UI to stabilize after navigation or state change
- * @param {import('@playwright/test').Page} page
- */
-async function waitForStableUI(page) {
-  await page.waitForTimeout(ANIMATION_SETTLE_MS);
-  await page.waitForLoadState('networkidle').catch(() => {});
-}
+import {
+  gotoCapture,
+  gotoEditorWithClip,
+  gotoExportWithClip,
+  pauseEditorPlayback,
+} from './helpers/app.js';
 
 // ============================================================
-// US1: Instant Clip Creation
+// US1: Capture buffer feedback
 // ============================================================
 
-test.describe('US1: Instant Clip Creation', () => {
-  test('clip button is enabled during recording', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
+test.describe('US1: Capture buffer stats', () => {
+  test('buffer stats update when capture state changes', async ({ page }) => {
+    await gotoCapture(page);
 
-    // Set recording state via test hooks
+    // Initial buffer is empty
+    await expect(page.locator('.capture-stats .stat-value').first()).toHaveText('0');
+
+    // Simulate captured frames via test hooks (real store -> UI update path)
     await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setCaptureState) {
-        window.__TEST_HOOKS__.setCaptureState({
-          isRecording: true,
-          stats: {
-            frameCount: 30,
-            duration: 1.0,
-            memoryMB: 5,
-            fps: 30,
-          },
-        });
-      }
+      window.__TEST_HOOKS__.setCaptureState({
+        stats: { frameCount: 90, duration: 3.0, memoryMB: 12.5, fps: 30 },
+      });
     });
 
-    await waitForStableUI(page);
-
-    // Clip button should be visible and enabled during recording
-    const clipButton = page.locator('button').filter({ hasText: /Clip|Create Clip/i });
-    await expect(clipButton).toBeVisible();
-    await expect(clipButton).toBeEnabled();
-  });
-
-  test('clip count badge displays and updates', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Set state with session clips
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setCaptureState) {
-        window.__TEST_HOOKS__.setCaptureState({
-          isRecording: true,
-          sessionClips: [
-            { id: 'clip-1', frames: [], createdAt: Date.now() },
-            { id: 'clip-2', frames: [], createdAt: Date.now() },
-          ],
-          stats: {
-            frameCount: 90,
-            duration: 3.0,
-            memoryMB: 15,
-            fps: 30,
-          },
-        });
-      }
-    });
-
-    await waitForStableUI(page);
-
-    // Badge should show clip count
-    const badge = page.locator('.clip-badge, .badge');
-    await expect(badge).toBeVisible();
-    await expect(badge).toContainText('2');
-  });
-
-  test('visual feedback on clip creation', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Set recording state
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setCaptureState) {
-        window.__TEST_HOOKS__.setCaptureState({
-          isRecording: true,
-          stats: {
-            frameCount: 60,
-            duration: 2.0,
-            memoryMB: 10,
-            fps: 30,
-          },
-        });
-      }
-    });
-
-    await waitForStableUI(page);
-
-    // Take screenshot for visual verification
-    await expect(page).toHaveScreenshot('us1-clip-during-recording.png', {
-      fullPage: true,
-    });
+    const statValues = page.locator('.capture-stats .stat-value');
+    await expect(statValues.nth(0)).toHaveText('90');
+    await expect(statValues.nth(2)).toHaveText('30');
   });
 });
 
@@ -123,79 +50,62 @@ test.describe('US1: Instant Clip Creation', () => {
 
 test.describe('US2: Clip Range Display', () => {
   test('selection info displays frame count and duration', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Inject clip payload and navigate to editor
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(90, 30);
-      window.location.hash = '/editor';
-    });
-
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await gotoEditorWithClip(page, { frameCount: 90, fps: 30 });
+    await pauseEditorPlayback(page);
 
     // Set custom selection range
     await page.evaluate(() => {
-      window.__TEST_HOOKS__?.setEditorState({
+      window.__TEST_HOOKS__.setEditorState({
         selectedRange: { start: 10, end: 50 },
         currentFrame: 25,
       });
     });
 
-    await waitForStableUI(page);
-
-    // Selection info should be visible with frame count
-    const selectionInfo = page.locator('.timeline-selection-info, .selection-info');
+    // Selection info shows the frame count (41 frames: 10-50 inclusive)
+    const selectionInfo = page.locator('.timeline-selection-info');
     await expect(selectionInfo).toBeVisible();
-
-    // Should contain frame count (41 frames: 10-50 inclusive)
-    await expect(selectionInfo).toContainText(/41|frames/i);
+    await expect(selectionInfo.locator('.timeline-sel-frames')).toHaveText('(41 frames)');
   });
 
-  test('playhead position displays current/total', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
+  test('playhead is positioned on the timeline', async ({ page }) => {
+    await gotoEditorWithClip(page, { frameCount: 60, fps: 30 });
 
-    // Inject clip payload
+    // .tl-playhead is a zero-width anchor; its line is the visible element
+    await expect(page.locator('.tl-playhead-line')).toBeVisible();
+
+    // Pause auto-playback so the playhead stops advancing
+    await pauseEditorPlayback(page);
+
+    // Move the playhead to the middle of the clip and verify it tracks
+    // (percent = currentFrame / (totalFrames - 1) -> 30/59 = ~50.8%)
     await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(60, 30);
-      window.location.hash = '/editor';
+      window.__TEST_HOOKS__.setEditorState({ currentFrame: 30 });
     });
 
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
-
-    // Set selection and playhead position
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__?.setEditorState({
-        selectedRange: { start: 0, end: 59 },
-        currentFrame: 30,
-      });
-    });
-
-    await waitForStableUI(page);
-
-    // Playhead display should show position
-    const playheadDisplay = page.locator('.timeline-playhead, .playhead-position');
-    await expect(playheadDisplay).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => Number.parseFloat(document.querySelector('.tl-playhead').style.left)),
+      )
+      .toBeCloseTo((30 / 59) * 100, 1);
   });
 
   test('selection info updates in real-time', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
+    await gotoEditorWithClip(page, { frameCount: 120, fps: 30 });
+    await pauseEditorPlayback(page);
+
+    const selFrames = page.locator('.timeline-sel-frames');
+    await expect(selFrames).toHaveText('(120 frames)');
 
     await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(120, 30);
-      window.location.hash = '/editor';
+      window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 59 } });
     });
+    await expect(selFrames).toHaveText('(60 frames)');
 
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await page.evaluate(() => {
+      window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 20, end: 29 } });
+    });
+    await expect(selFrames).toHaveText('(10 frames)');
 
-    // Take screenshot showing selection info
     await expect(page).toHaveScreenshot('us2-selection-info.png', {
       fullPage: true,
     });
@@ -208,37 +118,23 @@ test.describe('US2: Clip Range Display', () => {
 
 test.describe('US3: Playback Controls Layout', () => {
   test('playback controls visible without overflow at 1280px', async ({ page }) => {
-    // Set viewport to 1280px
     await page.setViewportSize({ width: 1280, height: 720 });
+    await gotoEditorWithClip(page, { frameCount: 60, fps: 30 });
 
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(60, 30);
-      window.location.hash = '/editor';
-    });
-
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
-
-    // All playback buttons should be visible
     const playbackControls = page.locator('.playback-controls');
     await expect(playbackControls).toBeVisible();
 
-    // Play button
-    const playButton = page
-      .locator('.btn-playback')
-      .filter({ hasText: /▶|Play/i })
-      .first();
+    // Play button (dedicated .btn-play class, not .btn-playback)
+    const playButton = page.locator('.btn-play');
     await expect(playButton).toBeVisible();
+
+    // Frame stepping buttons
+    await expect(page.locator('.btn-playback')).toHaveCount(4);
 
     // Check no overflow (controls should be within viewport)
     const controlsBox = await playbackControls.boundingBox();
     expect(controlsBox).not.toBeNull();
-    if (controlsBox) {
-      expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(1280);
-    }
+    expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(1280);
   });
 
   test('playback controls work at various viewport sizes', async ({ page }) => {
@@ -250,39 +146,30 @@ test.describe('US3: Playback Controls Layout', () => {
 
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
+      await gotoEditorWithClip(page, { frameCount: 30, fps: 30 });
 
-      await page.goto('/#/capture');
-      await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-      await page.evaluate(() => {
-        window.__TEST_HOOKS__.injectClipPayload(30, 30);
-        window.location.hash = '/editor';
-      });
-
-      await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-      await waitForStableUI(page);
-
-      // Verify playback controls container is visible
       const playbackControls = page.locator('.playback-controls');
       await expect(playbackControls).toBeVisible();
+
+      const controlsBox = await playbackControls.boundingBox();
+      expect(controlsBox).not.toBeNull();
+      expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(viewport.width);
     }
   });
 
-  test('playback buttons have proper focus states', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
+  test('play button toggles playback state on click', async ({ page }) => {
+    await gotoEditorWithClip(page, { frameCount: 30, fps: 30 });
 
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(30, 30);
-      window.location.hash = '/editor';
-    });
+    // Editor auto-plays on entry
+    const playButton = page.locator('.btn-play');
+    await expect(playButton).toHaveAttribute('aria-label', 'Pause');
+    await expect(playButton).toHaveClass(/playing/);
 
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await playButton.click();
+    await expect(playButton).toHaveAttribute('aria-label', 'Play');
 
-    // Tab to focus playback button and check focus style
-    const playButton = page.locator('.btn-playback').first();
-    await playButton.focus();
+    await playButton.click();
+    await expect(playButton).toHaveAttribute('aria-label', 'Pause');
 
     await expect(page).toHaveScreenshot('us3-playback-controls.png', {
       fullPage: true,
@@ -296,18 +183,13 @@ test.describe('US3: Playback Controls Layout', () => {
 
 test.describe('US4: Professional Form Controls', () => {
   test('capture settings have styled range inputs', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
+    await gotoCapture(page);
 
-    // Find range inputs in capture settings
+    // Buffer duration slider
     const rangeInputs = page.locator('input[type="range"]');
     const count = await rangeInputs.count();
-
-    // Should have at least one range input (FPS, buffer size, etc.)
     expect(count).toBeGreaterThan(0);
 
-    // Each range input should be visible
     for (let i = 0; i < count; i++) {
       await expect(rangeInputs.nth(i)).toBeVisible();
     }
@@ -318,26 +200,16 @@ test.describe('US4: Professional Form Controls', () => {
   });
 
   test('export settings have styled select elements', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
+    await gotoExportWithClip(page, { frameCount: 30, fps: 30 });
 
-    // Inject editor payload for export
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Find select elements
+    // Frame skip + speed selects
     const selectElements = page.locator('select');
     const count = await selectElements.count();
-
-    // Should have select elements
     expect(count).toBeGreaterThan(0);
+
+    for (let i = 0; i < count; i++) {
+      await expect(selectElements.nth(i)).toBeVisible();
+    }
 
     await expect(page).toHaveScreenshot('us4-export-selects.png', {
       fullPage: true,
@@ -345,221 +217,28 @@ test.describe('US4: Professional Form Controls', () => {
   });
 
   test('form controls consistent across features', async ({ page }) => {
-    // Check Capture
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
+    // Capture
+    await gotoCapture(page);
+    await expect(page.locator('.capture-settings select').first()).toBeVisible();
     await expect(page).toHaveScreenshot('us4-form-capture.png', { fullPage: true });
 
-    // Check Editor
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(30, 30);
-      window.location.hash = '/editor';
+    // Editor
+    await page.evaluate(async () => {
+      await window.__TEST_HOOKS__.injectMockClipPayload({ frameCount: 30, fps: 30 });
+      location.hash = '#/editor';
     });
-
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    await expect(page.locator('.editor-sidebar select').first()).toBeVisible();
     await expect(page).toHaveScreenshot('us4-form-editor.png', { fullPage: true });
 
-    // Check Export
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      window.location.hash = '/export';
+    // Export
+    await page.evaluate(async () => {
+      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 30, fps: 30 });
+      location.hash = '#/export';
     });
-
-    await page.waitForSelector('.export-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await page.waitForSelector('.export-canvas', { state: 'visible' });
+    await expect(page.locator('.export-settings-panel select').first()).toBeVisible();
     await expect(page).toHaveScreenshot('us4-form-export.png', { fullPage: true });
-  });
-});
-
-// ============================================================
-// US5: Export Preview
-// ============================================================
-
-test.describe('US5: Export Preview', () => {
-  test('preview button is visible in export settings', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Preview button should be visible
-    const previewButton = page.locator('button').filter({ hasText: /Preview|Generate Preview/i });
-    await expect(previewButton).toBeVisible();
-  });
-
-  test('preview section shows idle state', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Set idle preview state
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setExportState) {
-        window.__TEST_HOOKS__.setExportState({
-          preview: {
-            status: 'idle',
-            url: null,
-            error: null,
-            progress: 0,
-          },
-        });
-      }
-    });
-
-    await waitForStableUI(page);
-
-    await expect(page).toHaveScreenshot('us5-preview-idle.png', {
-      fullPage: true,
-    });
-  });
-
-  test('preview section shows generating state', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Set generating state
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setExportState) {
-        window.__TEST_HOOKS__.setExportState({
-          preview: {
-            status: 'generating',
-            url: null,
-            error: null,
-            progress: 45,
-          },
-        });
-      }
-    });
-
-    await waitForStableUI(page);
-
-    // Generating indicator should be visible
-    const generatingIndicator = page.locator('.preview-generating, .preview-progress');
-    await expect(generatingIndicator).toBeVisible();
-
-    await expect(page).toHaveScreenshot('us5-preview-generating.png', {
-      fullPage: true,
-    });
-  });
-
-  test('preview section shows ready state with image', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Create a mock GIF blob URL
-    const mockGifUrl = await page.evaluate(() => {
-      // Create a tiny 1x1 GIF
-      const gif = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-      const binary = atob(gif);
-      const array = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        array[i] = binary.charCodeAt(i);
-      }
-      const blob = new Blob([array], { type: 'image/gif' });
-      return URL.createObjectURL(blob);
-    });
-
-    // Set ready state with preview URL
-    await page.evaluate((url) => {
-      if (window.__TEST_HOOKS__?.setExportState) {
-        window.__TEST_HOOKS__.setExportState({
-          preview: {
-            status: 'ready',
-            url: url,
-            error: null,
-            progress: 100,
-          },
-        });
-      }
-    }, mockGifUrl);
-
-    await waitForStableUI(page);
-
-    await expect(page).toHaveScreenshot('us5-preview-ready.png', {
-      fullPage: true,
-    });
-  });
-
-  test('preview section shows error state with retry button', async ({ page }) => {
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.injectEditorPayload) {
-        window.__TEST_HOOKS__.injectEditorPayload(30, 30);
-      }
-    });
-
-    await page.goto('/#/export');
-    await page.waitForSelector('.export-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
-    // Set error state
-    await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setExportState) {
-        window.__TEST_HOOKS__.setExportState({
-          preview: {
-            status: 'error',
-            url: null,
-            error: 'Failed to generate preview: memory limit exceeded',
-            progress: 0,
-          },
-        });
-      }
-    });
-
-    await waitForStableUI(page);
-
-    // Error message should be visible
-    const errorDisplay = page.locator('.preview-error');
-    await expect(errorDisplay).toBeVisible();
-
-    // Retry button should be visible
-    const retryButton = page.locator('button').filter({ hasText: /Retry/i });
-    await expect(retryButton).toBeVisible();
-
-    await expect(page).toHaveScreenshot('us5-preview-error.png', {
-      fullPage: true,
-    });
   });
 });
 
@@ -568,50 +247,44 @@ test.describe('US5: Export Preview', () => {
 // ============================================================
 
 test.describe('Integration: Full UX Flow', () => {
-  test('complete flow through all improvements', async ({ page }) => {
-    // 1. US1: Capture with clip creation
-    await page.goto('/#/capture');
-    await page.waitForSelector('.capture-screen', { state: 'visible' });
-    await waitForStableUI(page);
-
+  test('complete flow through capture, editor and export', async ({ page }) => {
+    // 1. Capture with buffered frames
+    await gotoCapture(page);
     await page.evaluate(() => {
-      if (window.__TEST_HOOKS__?.setCaptureState) {
-        window.__TEST_HOOKS__.setCaptureState({
-          isRecording: true,
-          sessionClips: [{ id: 'clip-1', frames: [], createdAt: Date.now() }],
-          stats: { frameCount: 60, duration: 2.0, memoryMB: 10, fps: 30 },
-        });
-      }
+      window.__TEST_HOOKS__.setCaptureState({
+        stats: { frameCount: 90, duration: 3.0, memoryMB: 15, fps: 30 },
+      });
     });
-    await waitForStableUI(page);
+    await expect(page.locator('.capture-stats .stat-value').first()).toHaveText('90');
     await expect(page).toHaveScreenshot('integration-1-capture.png', { fullPage: true });
 
-    // 2. US2 & US3: Editor with selection info and proper playback controls
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectClipPayload(90, 30);
-      window.location.hash = '/editor';
+    // 2. Editor with selection info and playback controls
+    await page.evaluate(async () => {
+      await window.__TEST_HOOKS__.injectMockClipPayload({ frameCount: 90, fps: 30 });
+      location.hash = '#/editor';
     });
-
-    await page.waitForSelector('.editor-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    await pauseEditorPlayback(page);
 
     await page.evaluate(() => {
-      window.__TEST_HOOKS__?.setEditorState({
+      window.__TEST_HOOKS__.setEditorState({
         selectedRange: { start: 15, end: 75 },
         currentFrame: 45,
       });
     });
-    await waitForStableUI(page);
+    await expect(page.locator('.timeline-sel-frames')).toHaveText('(61 frames)');
+    await expect(page.locator('.btn-play')).toBeVisible();
     await expect(page).toHaveScreenshot('integration-2-editor.png', { fullPage: true });
 
-    // 3. US4 & US5: Export with styled controls and preview
-    await page.evaluate(() => {
-      window.__TEST_HOOKS__.injectEditorPayload(61, 30);
-      window.location.hash = '/export';
+    // 3. Export with styled controls and canvas preview
+    await page.evaluate(async () => {
+      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 61, fps: 30 });
+      location.hash = '#/export';
     });
+    await page.waitForSelector('.export-canvas', { state: 'visible' });
 
-    await page.waitForSelector('.export-screen', { state: 'visible', timeout: 15000 });
-    await waitForStableUI(page);
+    await expect(page.locator('.export-settings-panel')).toBeVisible();
+    await expect(page.locator('.export-preview-play-btn')).toBeVisible();
     await expect(page).toHaveScreenshot('integration-3-export.png', { fullPage: true });
   });
 });
