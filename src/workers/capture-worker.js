@@ -123,7 +123,13 @@ function handleFrameResponse(bitmap, timestamp) {
   // Clear pending flag to allow next request
   pendingRequest = false;
 
-  if (!bitmap || !isCapturing) {
+  if (!bitmap) {
+    return;
+  }
+
+  if (!isCapturing) {
+    // In-flight frame arrived after STOP: release it instead of leaking (#40)
+    bitmap.close();
     return;
   }
 

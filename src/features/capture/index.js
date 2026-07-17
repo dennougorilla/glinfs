@@ -151,6 +151,15 @@ function render(container) {
 async function handleStart() {
   if (!store) return;
 
+  // Terminate any previous worker before creating a new one.
+  // Without this, re-selecting a screen after "Stop sharing" orphans the old
+  // worker together with its full frame buffer (up to maxFrames ImageBitmaps),
+  // because dedicated workers are not garbage collected (#40).
+  if (workerManager) {
+    await workerManager.terminateWithCleanup();
+    workerManager = null;
+  }
+
   // Clear any existing saved capture state when starting fresh
   clearScreenCaptureState();
 
@@ -304,6 +313,58 @@ export function clearCaptureBuffer() {
 }
 
 /**
+ * Convert transferred ImageBitmap frames into VideoFrames for the Editor.
+ *
+ * Closes every source ImageBitmap regardless of outcome: a VideoFrame copies
+ * the pixel data at construction time, so keeping the bitmap alive after a
+ * successful conversion only defers release to nondeterministic GC (#40).
+ *
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
+ * @returns {import('./types.js').Frame[]}
+ */
+export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
+  const videoFrames = [];
+
+  for (const item of imageBitmapFrames) {
+    // Validate ImageBitmap
+    if (!item.bitmap || item.bitmap.width === 0 || item.bitmap.height === 0) {
+      item.bitmap?.close();
+      continue;
+    }
+
+    let videoFrame;
+    try {
+      videoFrame = new VideoFrame(item.bitmap, {
+        timestamp: item.timestamp * 1000, // Convert ms to microseconds
+      });
+    } catch {
+      item.bitmap.close();
+      continue;
+    }
+
+    // VideoFrame owns its own copy of the pixel data; release the source
+    // bitmap immediately instead of leaving it to GC (success path leak, #40)
+    item.bitmap.close();
+
+    // Validate VideoFrame
+    if (videoFrame.closed || videoFrame.codedWidth === 0 || videoFrame.codedHeight === 0) {
+      videoFrame.close();
+      continue;
+    }
+
+    videoFrames.push({
+      id: item.id,
+      frame: videoFrame,
+      timestamp: item.timestamp * 1000,
+      width: videoFrame.codedWidth,
+      height: videoFrame.codedHeight,
+    });
+  }
+
+  return videoFrames;
+}
+
+/**
  * Handle create clip
  *
  * SIMPLIFIED MODEL:
@@ -326,40 +387,7 @@ async function handleCreateClip() {
   }
 
   // Convert ImageBitmaps to VideoFrames for Editor
-  const videoFrames = [];
-
-  for (const item of imageBitmapFrames) {
-    // Validate ImageBitmap
-    if (!item.bitmap || item.bitmap.width === 0 || item.bitmap.height === 0) {
-      item.bitmap?.close();
-      continue;
-    }
-
-    let videoFrame;
-    try {
-      videoFrame = new VideoFrame(item.bitmap, {
-        timestamp: item.timestamp * 1000, // Convert ms to microseconds
-      });
-    } catch {
-      item.bitmap.close();
-      continue;
-    }
-
-    // Validate VideoFrame
-    if (videoFrame.closed || videoFrame.codedWidth === 0 || videoFrame.codedHeight === 0) {
-      videoFrame.close();
-      item.bitmap.close();
-      continue;
-    }
-
-    videoFrames.push({
-      id: item.id,
-      frame: videoFrame,
-      timestamp: item.timestamp * 1000,
-      width: videoFrame.codedWidth,
-      height: videoFrame.codedHeight,
-    });
-  }
+  const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
     return;
