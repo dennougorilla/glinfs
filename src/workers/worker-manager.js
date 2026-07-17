@@ -286,6 +286,10 @@ export class GifEncoderManager {
 
   /**
    * Release resources
+   *
+   * If a finish() promise is still pending, it is rejected with an
+   * AbortError so callers awaiting it are never left hanging after the
+   * worker is terminated.
    */
   dispose() {
     if (this.worker) {
@@ -298,10 +302,17 @@ export class GifEncoderManager {
       this.worker = null;
     }
 
+    // Reject a pending finish() before clearing callbacks — terminating the
+    // worker means COMPLETE/ERROR/CANCELLED will never arrive.
+    const rejectPending = this._rejectComplete;
     this.onProgress = null;
     this._resolveComplete = null;
     this._rejectComplete = null;
     this._isInitialized = false;
+
+    if (rejectPending) {
+      rejectPending(new DOMException('Encoding cancelled', 'AbortError'));
+    }
   }
 
   /**
