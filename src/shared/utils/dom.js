@@ -43,8 +43,15 @@ export function qsa(selector, parent = document) {
 
 /**
  * Create element with attributes and children
+ *
+ * Attributes whose value is `null`, `undefined`, or boolean `false` are
+ * skipped entirely. This allows conditional attribute patterns like
+ * `{ disabled: isDisabled ? 'true' : undefined }` — without the skip,
+ * `setAttribute` would stringify `undefined` and boolean attributes such
+ * as `disabled` would become enabled by mere presence.
+ *
  * @param {string} tag - HTML tag name
- * @param {Record<string, string>} [attrs={}] - Attributes
+ * @param {Record<string, string|boolean|null|undefined>} [attrs={}] - Attributes
  * @param {(string|Element)[]} [children=[]] - Child elements or text
  * @returns {HTMLElement} Created element
  */
@@ -52,12 +59,13 @@ export function createElement(tag, attrs = {}, children = []) {
   const element = document.createElement(tag);
 
   for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) {
+      continue;
+    }
     if (key === 'className') {
-      element.className = value;
-    } else if (key.startsWith('data-')) {
-      element.setAttribute(key, value);
+      element.className = String(value);
     } else {
-      element.setAttribute(key, value);
+      element.setAttribute(key, String(value));
     }
   }
 
