@@ -220,4 +220,40 @@ describe('encodeGif backpressure (regression #39)', () => {
     await expect(encodePromise).rejects.toThrow('quantization failed');
     expect(fakeManager.disposed).toBe(true);
   });
+
+  it('rejects when a frame error arrives during the final extraction', async () => {
+    // Arrange - the ERROR lands while the loop is awaiting getFrameRGBA for
+    // the last frame, i.e. after the top-of-loop checks already passed
+    const frames = createFrames(2);
+    const err = new Error('quantization failed mid-extraction');
+    frames[1].frame.copyTo.mockImplementation(async () => {
+      fakeManager.onError?.(err);
+    });
+
+    // Act & Assert - before the fix the last frame and FINISH proceeded,
+    // resolving a GIF that silently missed the failed frame
+    await expect(
+      encodeGif({ frames, crop: null, settings: SETTINGS, fps: 30, onProgress: vi.fn() }),
+    ).rejects.toThrow('quantization failed mid-extraction');
+    expect(fakeManager.submitted).toBe(1);
+  });
+
+  it('rejects when a frame error arrives after the last submission', async () => {
+    // Arrange - the ERROR for the final frame lands right after addFrame,
+    // before finish() is called
+    const frames = createFrames(2);
+    const err = new Error('final frame failed');
+    const originalAddFrame = FakeEncoderManager.prototype.addFrame;
+    fakeManager.addFrame = function (...args) {
+      originalAddFrame.apply(this, args);
+      if (this.submitted === frames.length) {
+        this.onError?.(err);
+      }
+    };
+
+    // Act & Assert - before the fix finish() awaited COMPLETE and resolved
+    await expect(
+      encodeGif({ frames, crop: null, settings: SETTINGS, fps: 30, onProgress: vi.fn() }),
+    ).rejects.toThrow('final frame failed');
+  });
 });

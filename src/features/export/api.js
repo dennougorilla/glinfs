@@ -251,9 +251,23 @@ export async function encodeGif(params, signal) {
         throw new DOMException('Encoding cancelled', 'AbortError');
       }
 
+      // Re-check worker errors too: an ERROR that arrived while awaiting
+      // getFrameRGBA would otherwise let this frame and FINISH proceed,
+      // returning a GIF silently missing the failed frame.
+      if (frameError) {
+        throw frameError;
+      }
+
       // Send frame to worker. The buffer is transferred (detached), so
       // `rgba` must not be reused after this call.
       manager.addFrame(rgba, frameWidth, frameHeight, i);
+    }
+
+    // A frame error that arrived after the last submission must fail the
+    // encode — finish() alone would await COMPLETE and resolve a GIF with
+    // the failed frame missing.
+    if (frameError) {
+      throw frameError;
     }
 
     // Finish and return result
