@@ -192,5 +192,33 @@ describe('Toolbar time display updates (issue #44)', () => {
         frameToTimecode(10, 30), // 10 selected frames
       );
     });
+
+    it('survives a range change coalesced with a playback tick in the same throttle window', () => {
+      setClipPayload({
+        frames: createTestFrames(30),
+        fps: 30,
+        capturedAt: Date.now(),
+      });
+
+      cleanup = initEditor();
+      const container = /** @type {HTMLElement} */ (document.querySelector('#main-content'));
+
+      // First update consumes the leading throttle call and heats the window
+      window.__TEST_HOOKS__.setEditorState({ currentFrame: 8 });
+      // Range change immediately followed by a playback tick within 16ms:
+      // the throttle delivers only the LAST (state, prevState) pair, whose
+      // prevState already contains the new range — a prevState diff misses
+      // it (Codex review on #60).
+      window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 5, end: 14 } });
+      window.__TEST_HOOKS__.setEditorState({ currentFrame: 9 });
+      vi.advanceTimersByTime(20);
+
+      expect(container.querySelector('.time-display .total')?.textContent).toBe(
+        frameToTimecode(10, 30),
+      );
+      expect(container.querySelector('.time-display .current')?.textContent).toBe(
+        frameToTimecode(4, 30), // frame 9 is 4 frames past the IN point
+      );
+    });
   });
 });
