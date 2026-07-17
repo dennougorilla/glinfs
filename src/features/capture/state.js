@@ -163,45 +163,6 @@ export function setError(state, error) {
 }
 
 /**
- * Clear error state
- * @param {import('./types.js').CaptureState} state
- * @returns {import('./types.js').CaptureState}
- */
-export function clearError(state) {
-  return {
-    ...state,
-    error: null,
-  };
-}
-
-/**
- * Add clip created during recording
- * @param {import('./types.js').CaptureState} state
- * @param {import('./types.js').ClipExtractionResult} clip
- * @returns {import('./types.js').CaptureState}
- */
-export function addClipDuringRecording(state, clip) {
-  return {
-    ...state,
-    clips: [...state.clips, clip],
-    clipCount: state.clipCount + 1,
-  };
-}
-
-/**
- * Clear all clips from the current session
- * @param {import('./types.js').CaptureState} state
- * @returns {import('./types.js').CaptureState}
- */
-export function clearSessionClips(state) {
-  return {
-    ...state,
-    clips: [],
-    clipCount: 0,
-  };
-}
-
-/**
  * Create a capture store
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
  * @returns {ReturnType<typeof createStore<import('./types.js').CaptureState>>}
