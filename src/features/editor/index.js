@@ -339,7 +339,9 @@ export function initEditor() {
 
   // Use pre-computed scenes from Capture or fallback to async detection
   // (must be after subscription is set up so scenes panel gets updated)
-  if (!hasValidEditorPayload && clipPayload?.sceneDetectionEnabled) {
+  // Also applies when returning from Export: the EditorPayload does not carry
+  // scenes, so re-apply them from the ClipPayload still held in the app store (#43)
+  if (clipPayload?.sceneDetectionEnabled) {
     if (clipPayload.scenes && clipPayload.scenes.length > 0) {
       // Use pre-computed scenes from Capture (no need to run detection again)
       store.setState((state) => completeSceneDetection(state, clipPayload.scenes));
