@@ -248,5 +248,27 @@ test.describe('Frame Grid Modal', () => {
       );
       expect(focusInsideModal).toBe(true);
     });
+
+    test('keyboard focus shows a visible indicator on grid items', async ({ page }) => {
+      await openFrameGrid(page);
+      await expect(page.locator('.frame-grid-item').first()).toBeFocused();
+
+      // Arrow navigation moves real DOM focus after a keyboard interaction,
+      // so :focus-visible applies and the outline must be rendered.
+      await page.keyboard.press('ArrowRight');
+
+      const focused = await page.evaluate(() => {
+        const el = document.activeElement;
+        const style = window.getComputedStyle(el);
+        return {
+          isGridItem: el?.classList.contains('frame-grid-item') ?? false,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+        };
+      });
+      expect(focused.isGridItem).toBe(true);
+      expect(focused.outlineStyle).not.toBe('none');
+      expect(focused.outlineWidth).not.toBe('0px');
+    });
   });
 });
