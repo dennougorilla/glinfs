@@ -3,11 +3,6 @@
  * @module features/capture/core
  */
 
-// Import and re-export VideoFrame utilities
-import { closeAllFrames, safeClose, safeCloseFrame } from '../../shared/utils/videoframe.js';
-
-export { closeAllFrames, safeClose, safeCloseFrame };
-
 import { loadSettings } from '../../shared/user-settings.js';
 
 /**
@@ -176,7 +171,7 @@ export function createDefaultSettings() {
       thumbnailQuality: 0.5, // This is managed separately in quality-settings.js
       sceneDetection: userSettings.capture.sceneDetection,
     };
-  } catch (error) {
+  } catch {
     // Fallback to hardcoded defaults if import fails
     return {
       fps: 30,

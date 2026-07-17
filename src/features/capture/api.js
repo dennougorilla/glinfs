@@ -4,14 +4,6 @@
  */
 
 /**
- * Generate a unique ID
- * @returns {string}
- */
-function generateId() {
-  return crypto.randomUUID();
-}
-
-/**
  * Request screen capture permission and start MediaStream
  * @returns {Promise<MediaStream>}
  * @throws {Error} If permission denied or not supported
