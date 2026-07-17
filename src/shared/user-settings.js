@@ -162,6 +162,20 @@ export const SETTINGS_METADATA = {
 };
 
 /**
+ * Deep copy of the default settings.
+ * A shallow copy would share the nested capture/export objects, letting
+ * callers (e.g. updateSetting) mutate DEFAULT_SETTINGS itself.
+ * @returns {UserSettings}
+ */
+function cloneDefaults() {
+  return {
+    capture: { ...DEFAULT_SETTINGS.capture },
+    export: { ...DEFAULT_SETTINGS.export },
+    thumbnailQuality: DEFAULT_SETTINGS.thumbnailQuality,
+  };
+}
+
+/**
  * Load user settings from localStorage
  * @returns {UserSettings}
  */
@@ -169,7 +183,7 @@ export function loadSettings() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) {
-      return { ...DEFAULT_SETTINGS };
+      return cloneDefaults();
     }
 
     const parsed = JSON.parse(stored);
@@ -182,7 +196,7 @@ export function loadSettings() {
     };
   } catch (error) {
     console.error('Failed to load user settings:', error);
-    return { ...DEFAULT_SETTINGS };
+    return cloneDefaults();
   }
 }
 
@@ -221,7 +235,7 @@ export function updateSetting(category, key, value) {
  * Reset all settings to defaults
  */
 export function resetSettings() {
-  saveSettings({ ...DEFAULT_SETTINGS });
+  saveSettings(cloneDefaults());
   notifyListeners();
 }
 
@@ -243,7 +257,7 @@ export function resetCategory(category) {
  * @returns {UserSettings}
  */
 export function getDefaultSettings() {
-  return { ...DEFAULT_SETTINGS };
+  return cloneDefaults();
 }
 
 // Change notification system

@@ -4,22 +4,23 @@
  */
 
 import { navigate } from '../../shared/router.js';
+import { qsRequired } from '../../shared/utils/dom.js';
 import { renderSettings } from './ui.js';
 
 /**
  * Initialize settings screen
- * @param {HTMLElement} container
+ * Called by the router with no arguments; fetches its own container
+ * like the other features.
  * @returns {Function} Cleanup function
  */
-export function initSettings(container) {
+export function initSettings() {
+  const container = qsRequired('#main-content');
+
   const handlers = {
     onBack: () => {
       navigate('/capture');
     },
   };
-
-  // Store handler for re-rendering
-  container._onBack = handlers.onBack;
 
   return renderSettings(container, handlers);
 }
