@@ -150,13 +150,14 @@ export async function encodeGif(params, signal) {
   // Create worker manager
   const manager = createEncoderManager();
 
-  // Handle cancellation: only request cancellation here. Disposing
-  // immediately would terminate the worker before it can answer with
-  // CANCELLED, leaving a pending finish() promise unsettled forever.
-  // The worker replies CANCELLED (rejecting finish() with AbortError),
-  // and dispose() runs in the finally block below.
+  // Handle cancellation: send CANCEL as a courtesy, then dispose right
+  // away. The worker handles FINISH synchronously, so a CANCEL queued
+  // behind it could never preempt the encode — dispose() terminates the
+  // worker and rejects a pending finish() with AbortError immediately,
+  // which is what lets the UI leave the encoding state promptly.
   const abortHandler = () => {
     manager.cancel();
+    manager.dispose();
   };
   signal?.addEventListener('abort', abortHandler);
 

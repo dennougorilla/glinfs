@@ -152,7 +152,7 @@ describe('encodeGif cancellation (regression #38)', () => {
     await expect(encodePromise).rejects.toMatchObject({ name: 'AbortError' });
   }, 5000);
 
-  it('sends CANCEL to the worker and disposes only after settling', async () => {
+  it('sends CANCEL and terminates immediately without waiting for the worker', async () => {
     // Arrange
     const controller = new AbortController();
     const frames = [createMockFrame('f0'), createMockFrame('f1')];
@@ -170,15 +170,14 @@ describe('encodeGif cancellation (regression #38)', () => {
     // Act
     controller.abort();
 
-    // Assert - abort must only request cancellation, not terminate the
-    // worker (termination would kill the CANCELLED reply path)
+    // Assert - the worker handles FINISH synchronously, so a queued CANCEL
+    // can never preempt it. Abort must therefore terminate right away and
+    // reject the pending finish() instead of waiting for a CANCELLED reply
+    // that may only arrive after the whole encode completes.
     expect(workerInstance?.received(Commands.CANCEL)).toBe(true);
-    expect(workerInstance?.terminated).toBe(false);
+    expect(workerInstance?.terminated).toBe(true);
 
     await expect(encodePromise).rejects.toMatchObject({ name: 'AbortError' });
-
-    // The finally block disposes the manager once the flow settles
-    expect(workerInstance?.terminated).toBe(true);
   }, 5000);
 
   it('rejects with AbortError when aborted during frame submission', async () => {
