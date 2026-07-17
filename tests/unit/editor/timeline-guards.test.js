@@ -80,12 +80,15 @@ describe('Timeline single-frame division-by-zero guards (issue: totalFrames - 1 
     const selectionBox = /** @type {HTMLElement} */ (container.querySelector('.tl-selection'));
     const dimLeft = /** @type {HTMLElement} */ (container.querySelector('.tl-dim--left'));
     const dimRight = /** @type {HTMLElement} */ (container.querySelector('.tl-dim--right'));
-    const playhead = /** @type {HTMLElement} */ (container.querySelector('.tl-playhead'));
 
-    for (const el of [selectionBox, dimLeft, dimRight, playhead]) {
-      expect(el.style.left).not.toMatch(/NaN|Infinity/);
-      expect(el.style.width).not.toMatch(/NaN|Infinity/);
-    }
+    // Exact values: jsdom's CSSOM silently DROPS invalid assignments like
+    // 'NaN%', leaving '', so a not-NaN regex would pass even without the
+    // divisor guard. With the guard, 0/max(1,0) = 0 everywhere.
+    expect(dimLeft.style.width).toBe('0%');
+    expect(dimRight.style.left).toBe('0%');
+    expect(dimRight.style.width).toBe('100%');
+    expect(selectionBox.style.left).toBe('0%');
+    expect(selectionBox.style.width).toBe('0%');
   });
 
   it('produces a finite hover indicator position when hovering a 1-frame clip', () => {
@@ -101,7 +104,9 @@ describe('Timeline single-frame division-by-zero guards (issue: totalFrames - 1 
     track.dispatchEvent(new MouseEvent('mousemove', { clientX: 60, bubbles: true }));
 
     const hoverIndicator = /** @type {HTMLElement} */ (container.querySelector('.tl-hover'));
-    expect(hoverIndicator.style.left).not.toMatch(/NaN|Infinity/);
+    // Frame 0 of a 1-frame clip must land at exactly 0% (guarded divisor),
+    // not '' from a dropped 'NaN%' assignment
+    expect(hoverIndicator.style.left).toBe('0%');
   });
 
   it('updateTimelineRange (exported API) guards totalFrames=1 against NaN/Infinity', () => {
@@ -118,10 +123,11 @@ describe('Timeline single-frame division-by-zero guards (issue: totalFrames - 1 
     const dimLeft = /** @type {HTMLElement} */ (container.querySelector('.tl-dim--left'));
     const dimRight = /** @type {HTMLElement} */ (container.querySelector('.tl-dim--right'));
 
-    for (const el of [selectionBox, dimLeft, dimRight]) {
-      expect(el.style.left).not.toMatch(/NaN|Infinity/);
-      expect(el.style.width).not.toMatch(/NaN|Infinity/);
-    }
+    expect(dimLeft.style.width).toBe('0%');
+    expect(dimRight.style.left).toBe('0%');
+    expect(dimRight.style.width).toBe('100%');
+    expect(selectionBox.style.left).toBe('0%');
+    expect(selectionBox.style.width).toBe('0%');
   });
 
   it('updatePlayheadPosition (exported API) stays guarded for totalFrames=1', () => {

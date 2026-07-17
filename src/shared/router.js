@@ -50,10 +50,17 @@ let isListening = false;
 export function initRouter(routeHandlers) {
   routes = new Map(Object.entries(routeHandlers));
 
-  // Re-initialization replaces the handler map; drop stale cleanup from
-  // the previous handler set so it can't touch the new routes' DOM, and
-  // force the current hash to be processed against the new handlers.
-  currentCleanup = null;
+  // Re-initialization replaces the handler map; run the previous route's
+  // cleanup first so its timers/subscriptions can't outlive their session,
+  // then force the current hash to be processed against the new handlers.
+  if (currentCleanup) {
+    try {
+      currentCleanup(currentRoute);
+    } catch (error) {
+      console.error('[router] Cleanup error during re-initialization:', error);
+    }
+    currentCleanup = null;
+  }
   lastProcessedHash = null;
 
   // Listen for hash changes (once — repeated init must not stack listeners)

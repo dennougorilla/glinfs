@@ -218,17 +218,36 @@ describe('Router', () => {
   });
 
   describe('repeated initialization', () => {
-    it('does not stack hashchange listeners across initRouter calls', async () => {
-      const editorHandler = vi.fn();
+    it('does not stack hashchange listeners across initRouter calls', () => {
+      // Count actual registrations: a handler-call-count assertion would be
+      // masked by the same-hash dedup in handleHashChange.
+      const addSpy = vi.spyOn(window, 'addEventListener');
 
       initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
-      initRouter({ '/capture': vi.fn(), '/editor': editorHandler });
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
 
-      navigate('/editor');
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const hashchangeRegistrations = addSpy.mock.calls.filter(
+        ([type]) => type === 'hashchange',
+      ).length;
+      // The module-level listener may have been registered by an earlier
+      // test's init; within this spy's window at most one registration
+      // may occur, never one per init call.
+      expect(hashchangeRegistrations).toBeLessThanOrEqual(1);
 
-      // With stacked listeners the handler would run once per init call.
-      expect(editorHandler).toHaveBeenCalledTimes(1);
+      addSpy.mockRestore();
+    });
+
+    it('runs the previous route cleanup when re-initialized', () => {
+      const cleanup = vi.fn();
+      initRouter({ '/capture': () => cleanup, '/editor': vi.fn() });
+      expect(cleanup).not.toHaveBeenCalled();
+
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+
+      // Re-init must tear down the mounted route's session (timers,
+      // subscriptions) instead of silently dropping its cleanup.
+      expect(cleanup).toHaveBeenCalledTimes(1);
     });
   });
 });
