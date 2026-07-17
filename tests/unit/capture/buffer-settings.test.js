@@ -17,73 +17,34 @@ describe('Buffer Duration Settings Sync (US1)', () => {
   });
 
   describe('state sync with settings', () => {
-    it('initial state buffer matches settings', () => {
-      const state = initCaptureState({ fps: 30, bufferDuration: 10 });
-
-      expect(state.buffer.maxFrames).toBe(300);
-      expect(state.settings.bufferDuration).toBe(10);
-      expect(state.settings.fps).toBe(30);
-    });
-
-    it('updates buffer when duration changes', () => {
-      let state = initCaptureState({ fps: 30, bufferDuration: 10 });
-
-      state = updateSettings(state, { bufferDuration: 20 });
-
-      expect(state.buffer.maxFrames).toBe(600); // 20s * 30fps
-      expect(state.settings.bufferDuration).toBe(20);
-    });
-
-    it('updates buffer when fps changes', () => {
-      let state = initCaptureState({ fps: 30, bufferDuration: 10 });
-
-      state = updateSettings(state, { fps: 60 });
-
-      expect(state.buffer.maxFrames).toBe(600); // 10s * 60fps
-      expect(state.settings.fps).toBe(60);
-    });
-
-    it('updates buffer when both fps and duration change', () => {
-      let state = initCaptureState({ fps: 30, bufferDuration: 10 });
-
-      state = updateSettings(state, { fps: 15, bufferDuration: 30 });
-
-      expect(state.buffer.maxFrames).toBe(450); // 30s * 15fps
-      expect(state.settings.fps).toBe(15);
-      expect(state.settings.bufferDuration).toBe(30);
-    });
-
-    it('resets buffer stats when settings change', () => {
+    it('resets stats when buffer duration changes', () => {
       let state = initCaptureState({ fps: 30, bufferDuration: 10 });
 
       state = updateSettings(state, { bufferDuration: 20 });
 
       expect(state.stats.frameCount).toBe(0);
       expect(state.stats.duration).toBe(0);
-      expect(state.stats.memoryMB).toBe(0);
-      expect(state.buffer.size).toBe(0);
-    });
-  });
-
-  describe('settings boundary values', () => {
-    it('handles minimum buffer duration (5s)', () => {
-      const state = initCaptureState({ fps: 30, bufferDuration: 5 });
-
-      expect(state.buffer.maxFrames).toBe(150); // 5s * 30fps
-      expect(state.settings.bufferDuration).toBe(5);
+      expect(state.settings.bufferDuration).toBe(20);
     });
 
-    it('handles maximum buffer duration (60s)', () => {
-      const state = initCaptureState({ fps: 30, bufferDuration: 60 });
+    it('resets stats when fps changes', () => {
+      let state = initCaptureState({ fps: 30, bufferDuration: 10 });
 
-      expect(state.buffer.maxFrames).toBe(1800); // 60s * 30fps
-      expect(state.settings.bufferDuration).toBe(60);
+      state = updateSettings(state, { fps: 60 });
+
+      expect(state.stats.frameCount).toBe(0);
+      expect(state.stats.fps).toBe(60);
+      expect(state.settings.fps).toBe(60);
     });
 
-    it('handles high fps with long duration', () => {
-      const state = initCaptureState({ fps: 60, bufferDuration: 60 });
+    it('resets stats when both fps and duration change', () => {
+      let state = initCaptureState({ fps: 30, bufferDuration: 10 });
 
-      expect(state.buffer.maxFrames).toBe(3600); // 60s * 60fps
+      state = updateSettings(state, { fps: 15, bufferDuration: 30 });
+
+      expect(state.stats.frameCount).toBe(0);
+      expect(state.settings.fps).toBe(15);
+      expect(state.settings.bufferDuration).toBe(30);
     });
   });
 });

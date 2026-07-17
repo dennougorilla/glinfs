@@ -14,18 +14,6 @@
  */
 
 /**
- * Circular buffer for frames
- * @typedef {Object} Buffer
- * @property {(Frame|undefined)[]} frames - Internal frame storage
- * @property {number} maxFrames - Maximum capacity
- * @property {number} maxDurationMs - Maximum buffer duration in ms
- * @property {number} head - Index of oldest frame
- * @property {number} tail - Index for next insertion
- * @property {number} size - Current frame count
- * @property {number} totalMemoryBytes - Pre-calculated total memory (for O(1) stats)
- */
-
-/**
  * User-configurable capture settings
  * @typedef {Object} CaptureSettings
  * @property {15|30|60} fps - Frames per second
@@ -39,7 +27,6 @@
  * @typedef {Object} BufferStats
  * @property {number} frameCount - Current frames in buffer
  * @property {number} duration - Buffer duration in seconds
- * @property {number} memoryMB - Estimated memory usage
  * @property {number} fps - Actual capture rate
  */
 
@@ -50,7 +37,6 @@
  * @property {boolean} isPaused - Capture paused (stream preserved, can resume)
  * @property {boolean} isSharing - Screen share active
  * @property {MediaStream|null} stream - Active media stream
- * @property {Buffer} buffer - Frame buffer
  * @property {CaptureSettings} settings - User settings
  * @property {string|null} error - Current error message
  * @property {BufferStats} stats - Real-time statistics

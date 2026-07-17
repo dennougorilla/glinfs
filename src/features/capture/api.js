@@ -105,65 +105,6 @@ export async function createVideoElement(stream, timeoutMs = VIDEO_READY_TIMEOUT
 }
 
 /**
- * Create a hidden canvas for frame capture
- * @returns {HTMLCanvasElement}
- */
-export function createCaptureCanvas() {
-  const canvas = document.createElement('canvas');
-  canvas.style.display = 'none';
-  return canvas;
-}
-
-/**
- * Create a ReadableStreamDefaultReader for VideoFrame objects
- * Uses MediaStreamTrackProcessor with backpressure control
- * @param {MediaStreamTrack} track - Video track from MediaStream
- * @returns {ReadableStreamDefaultReader<VideoFrame>}
- * @throws {Error} If track is not live or processor creation fails
- */
-export function createFrameProcessor(track) {
-  // Validate track state
-  if (track.readyState !== 'live') {
-    throw new Error(
-      `Cannot create frame processor: track state is "${track.readyState}" (expected "live")`,
-    );
-  }
-
-  // Check for MediaStreamTrackProcessor support
-  if (typeof MediaStreamTrackProcessor === 'undefined') {
-    throw new Error('MediaStreamTrackProcessor not supported in this browser');
-  }
-
-  const processor = new MediaStreamTrackProcessor({
-    track,
-    maxBufferSize: 30, // Backpressure control: auto-drop old frames when processing lags
-  });
-  return processor.readable.getReader();
-}
-
-/**
- * Create VideoFrame from HTMLVideoElement
- * This works even when the video content hasn't changed (static screen)
- * @param {HTMLVideoElement} video - Video element with active stream
- * @returns {VideoFrame | null} VideoFrame or null if video not ready
- */
-export function createVideoFrameFromElement(video) {
-  if (!video || video.readyState < 2) {
-    return null;
-  }
-
-  try {
-    // Create VideoFrame directly from video element
-    // This works even when screen content is static
-    return new VideoFrame(video, {
-      timestamp: performance.now() * 1000, // microseconds
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Cleanup screen capture resources
  * This function handles all side effects for screen capture cleanup
  * @param {Partial<import('../../shared/app-store.js').ScreenCaptureState>|null} captureState
