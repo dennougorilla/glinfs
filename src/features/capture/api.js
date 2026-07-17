@@ -54,12 +54,21 @@ export function stopScreenCapture(stream) {
   }
 }
 
+/** How long to wait for stream metadata before giving up */
+const VIDEO_READY_TIMEOUT_MS = 10000;
+
 /**
  * Create a video element for the given stream
+ *
+ * Rejects after a timeout if the stream never becomes ready — otherwise a
+ * stream that fires neither loadedmetadata nor error would leave the caller
+ * (and the capture UI's "Selecting..." state) hanging forever.
+ *
  * @param {MediaStream} stream
+ * @param {number} [timeoutMs=VIDEO_READY_TIMEOUT_MS]
  * @returns {Promise<HTMLVideoElement>}
  */
-export async function createVideoElement(stream) {
+export async function createVideoElement(stream, timeoutMs = VIDEO_READY_TIMEOUT_MS) {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.muted = true;
@@ -67,10 +76,29 @@ export async function createVideoElement(stream) {
 
   // Wait for video to be ready
   await new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.srcObject = null;
+      reject(new Error(`Video stream not ready after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     video.onloadedmetadata = () => {
-      video.play().then(resolve).catch(reject);
+      video
+        .play()
+        .then(() => {
+          clearTimeout(timeoutId);
+          resolve(undefined);
+        })
+        .catch((err) => {
+          clearTimeout(timeoutId);
+          reject(err);
+        });
     };
-    video.onerror = () => reject(new Error('Failed to load video stream'));
+    video.onerror = () => {
+      clearTimeout(timeoutId);
+      reject(new Error('Failed to load video stream'));
+    };
   });
 
   return video;
