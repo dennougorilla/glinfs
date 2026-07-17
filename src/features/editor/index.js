@@ -21,6 +21,7 @@ import {
   constrainAspectRatio,
   getClipFps,
   getPlaybackIntervalMs,
+  getPositionInSelection,
 } from './core.js';
 import {
   clearCrop,
@@ -213,6 +214,12 @@ export function initEditor() {
   // Emit loaded event (thumbnails are now rendered directly from frames)
   emit('editor:loaded', { clip: store?.getState().clip });
 
+  // Tracks the selection the timeline header last rendered. Compared against
+  // the delivered state instead of prevState: the 16ms throttle keeps only
+  // the latest (state, prevState) pair, so a range change coalesced with a
+  // following playback tick would be invisible to a prevState diff (#44).
+  let lastHeaderRange = store.getState().selectedRange;
+
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
   store.subscribe(
     throttle((state, prevState) => {
@@ -233,10 +240,9 @@ export function initEditor() {
         const currentTimeEl = container.querySelector('.time-display .current');
         if (currentTimeEl) {
           // Calculate position within selection range (clamped)
-          const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
-          const currentInSelection = Math.max(
-            0,
-            Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1),
+          const currentInSelection = getPositionInSelection(
+            state.currentFrame,
+            state.selectedRange,
           );
           currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
         }
@@ -292,9 +298,10 @@ export function initEditor() {
 
       // Update timeline header info when selection changes
       if (
-        state.selectedRange.start !== prevState.selectedRange.start ||
-        state.selectedRange.end !== prevState.selectedRange.end
+        state.selectedRange.start !== lastHeaderRange.start ||
+        state.selectedRange.end !== lastHeaderRange.end
       ) {
+        lastHeaderRange = state.selectedRange;
         updateTimelineHeader(container, state.selectedRange, state.currentFrame, fps);
       }
 
