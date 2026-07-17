@@ -60,6 +60,25 @@ export async function pauseEditorPlayback(page) {
 }
 
 /**
+ * Pause the export screen's auto-playing canvas preview. The preview
+ * playback timer keeps redrawing the canvas, so visual snapshots taken
+ * without pausing can never converge.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function pauseExportPreview(page) {
+  const playBtn = page.locator('.export-preview-play-btn');
+  // initExport auto-starts playback; wait for the initial render to reflect
+  // that before toggling, otherwise the click races the autostart.
+  await expect(playBtn).toHaveClass(/playing/);
+  await playBtn.click();
+  // The click stops the RAF loop, but the button's label/icon never
+  // re-renders after toggling (app bug, see issue #62), so the paused
+  // state cannot be asserted via the DOM. Give the last RAF pass a beat.
+  await page.waitForTimeout(100);
+}
+
+/**
  * Load the export screen with an injected mock editor payload
  * @param {import('@playwright/test').Page} page
  * @param {{ frameCount?: number, fps?: number, selectedRange?: { start: number, end: number }, cropArea?: object | null }} [options]

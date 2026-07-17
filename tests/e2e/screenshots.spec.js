@@ -20,6 +20,7 @@ import {
   gotoEditorWithClip,
   gotoExportWithClip,
   pauseEditorPlayback,
+  pauseExportPreview,
 } from './helpers/app.js';
 
 // ============================================================
@@ -64,6 +65,7 @@ test.describe('Capture Screen Screenshots', () => {
 test.describe('Editor Screen Screenshots', () => {
   test('editor-initial: frames loaded state', async ({ page }) => {
     await gotoEditorWithClip(page, { frameCount: 30, fps: 30 });
+    await pauseEditorPlayback(page);
 
     await expect(page.locator('.editor-canvas')).toBeVisible();
     await expect(page.locator('.playback-controls')).toBeVisible();
@@ -119,7 +121,10 @@ test.describe('Editor Screen Screenshots', () => {
 
 test.describe('Export Screen Screenshots', () => {
   test('export-settings: settings panel visible state', async ({ page }) => {
-    await gotoExportWithClip(page, { frameCount: 30, fps: 30 });
+    // Single-frame clip: the preview canvas shows frame 0 no matter when
+    // playback is paused, keeping the snapshot deterministic.
+    await gotoExportWithClip(page, { frameCount: 1, fps: 30 });
+    await pauseExportPreview(page);
 
     await expect(page.locator('.export-settings-panel')).toBeVisible();
     await expect(page.locator('.btn-export-main')).toBeEnabled();
@@ -146,14 +151,17 @@ test.describe('Application Flow Screenshots', () => {
       location.hash = '#/editor';
     });
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    await pauseEditorPlayback(page);
     await expect(page).toHaveScreenshot('flow-2-editor.png', { fullPage: true });
 
-    // 3. Set editor payload and go to export
+    // 3. Set editor payload and go to export (single frame for a
+    // deterministic preview canvas — see pauseExportPreview)
     await page.evaluate(async () => {
-      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 30, fps: 30 });
+      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 1, fps: 30 });
       location.hash = '#/export';
     });
     await page.waitForSelector('.export-canvas', { state: 'visible' });
+    await pauseExportPreview(page);
     await expect(page).toHaveScreenshot('flow-3-export.png', { fullPage: true });
   });
 });
