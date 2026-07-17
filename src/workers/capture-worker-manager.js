@@ -225,11 +225,17 @@ export class CaptureWorkerManager {
    * @param {number} timestamp
    */
   #sendFrameResponse(bitmap, timestamp) {
+    if (!this.#worker) {
+      // Terminated while a capture was in flight: nothing can receive the
+      // bitmap, so close it here instead of leaking it to GC (#40).
+      bitmap?.close();
+      return;
+    }
     const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp } };
     if (bitmap) {
-      this.#worker?.postMessage(message, [bitmap]);
+      this.#worker.postMessage(message, [bitmap]);
     } else {
-      this.#worker?.postMessage(message);
+      this.#worker.postMessage(message);
     }
   }
 

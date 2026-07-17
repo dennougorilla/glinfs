@@ -197,6 +197,36 @@ describe('CaptureWorkerManager', () => {
     expect(response?.transfer).toEqual([bitmap]);
   });
 
+  it('closes an in-flight bitmap when terminated during capture', async () => {
+    // A FRAME_REQUEST whose createImageBitmap resolves only after the
+    // manager was terminated: the bitmap can no longer be transferred and
+    // must be closed instead of leaking to nondeterministic GC.
+    const bitmap = { width: 640, height: 480, close: vi.fn() };
+    /** @type {(b: typeof bitmap) => void} */
+    let resolveCapture;
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        }),
+      ),
+    );
+
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo(4));
+    const worker = MockWorker.instances[0];
+
+    worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 42 } });
+    manager.terminate();
+    resolveCapture(bitmap);
+    await vi.waitFor(() => {
+      expect(bitmap.close).toHaveBeenCalledTimes(1);
+    });
+
+    expect(worker._lastMessage('FRAME_RESPONSE')).toBeUndefined();
+  });
+
   it('terminate() terminates the worker and resets state', () => {
     const manager = new CaptureWorkerManager();
     manager.init(createFakeVideo());
