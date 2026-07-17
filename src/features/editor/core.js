@@ -392,6 +392,19 @@ export function calculateSelectionInfo(selection, fps) {
 }
 
 /**
+ * Get the playhead position within the selection range as a 0-based frame
+ * offset from the selection start, clamped to the selection bounds.
+ * Shared by the toolbar time display renderer and its updaters.
+ * @param {number} currentFrame - Absolute current frame index
+ * @param {import('./types.js').FrameRange} range - Selection range
+ * @returns {number} Clamped frame offset within the selection
+ */
+export function getPositionInSelection(currentFrame, range) {
+  const frameCount = range.end - range.start + 1;
+  return Math.max(0, Math.min(currentFrame - range.start, frameCount - 1));
+}
+
+/**
  * Get handle positions for a crop area
  * @param {import('./types.js').CropArea} crop - Crop area
  * @returns {Object<string, {x: number, y: number}>} - Handle coordinates

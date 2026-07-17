@@ -21,6 +21,7 @@ import {
   constrainAspectRatio,
   getClipFps,
   getPlaybackIntervalMs,
+  getPositionInSelection,
 } from './core.js';
 import {
   clearCrop,
@@ -233,10 +234,9 @@ export function initEditor() {
         const currentTimeEl = container.querySelector('.time-display .current');
         if (currentTimeEl) {
           // Calculate position within selection range (clamped)
-          const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
-          const currentInSelection = Math.max(
-            0,
-            Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1),
+          const currentInSelection = getPositionInSelection(
+            state.currentFrame,
+            state.selectedRange,
           );
           currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
         }

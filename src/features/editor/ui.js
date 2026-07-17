@@ -20,6 +20,7 @@ import {
   calculateSelectionInfo,
   detectBoundaryHit,
   getOutputDimensions,
+  getPositionInSelection,
   moveCrop,
   resizeCropByHandle,
 } from './core.js';
@@ -250,14 +251,11 @@ export function renderEditorScreen(container, state, handlers, fps) {
 
   // Time display - show current position within selection range
   const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
-  const currentInSelection = Math.max(
-    0,
-    Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1),
-  );
+  const currentInSelection = getPositionInSelection(state.currentFrame, state.selectedRange);
   const timeDisplay = createElement('div', { className: 'time-display' }, [
     createElement('span', { className: 'current' }, [frameToTimecode(currentInSelection, fps)]),
     createElement('span', { className: 'separator' }, [' / ']),
-    createElement('span', {}, [frameToTimecode(selectionFrameCount, fps)]),
+    createElement('span', { className: 'total' }, [frameToTimecode(selectionFrameCount, fps)]),
   ]);
   playbackControls.appendChild(timeDisplay);
 
@@ -951,7 +949,7 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
 }
 
 /**
- * Update timeline header info (SEL, IN, OUT, FRAME)
+ * Update timeline header info (SEL, IN, OUT) and the toolbar time display
  * Called when selection range or current frame changes
  * @param {HTMLElement} container - The editor screen container
  * @param {import('./types.js').FrameRange} selectedRange - Current selection range
@@ -978,6 +976,21 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
   // Update SEL frames count
   const selFramesEl = container.querySelector('.timeline-sel-frames');
   if (selFramesEl) selFramesEl.textContent = `(${selectionInfo.formattedFrameCount})`;
+
+  // Recompute the toolbar time display: both the current position within the
+  // selection and the selection total change when the range changes (#44)
+  const currentTimeEl = container.querySelector('.time-display .current');
+  if (currentTimeEl) {
+    currentTimeEl.textContent = frameToTimecode(
+      getPositionInSelection(currentFrame, selectedRange),
+      fps,
+    );
+  }
+
+  const totalTimeEl = container.querySelector('.time-display .total');
+  if (totalTimeEl) {
+    totalTimeEl.textContent = frameToTimecode(selectionInfo.frameCount, fps);
+  }
 }
 
 /**
