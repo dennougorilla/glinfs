@@ -8,9 +8,9 @@
  * @returns {number|null} Bytes or null if not supported
  */
 export function getMemoryUsage() {
-  // @ts-ignore - performance.memory is non-standard Chrome API
+  // @ts-expect-error - performance.memory is non-standard Chrome API
   if (performance.memory) {
-    // @ts-ignore
+    // @ts-expect-error
     return performance.memory.usedJSHeapSize;
   }
   return null;

@@ -4,7 +4,13 @@
  */
 
 import { createStore } from '../../shared/store.js';
-import { createBuffer, addFrame, calculateStats, createDefaultSettings, clearBuffer } from './core.js';
+import {
+  addFrame,
+  calculateStats,
+  clearBuffer,
+  createBuffer,
+  createDefaultSettings,
+} from './core.js';
 
 /**
  * Initialize capture state

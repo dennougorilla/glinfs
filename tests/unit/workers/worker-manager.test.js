@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Events } from '../../../src/workers/worker-protocol.js';
 
 /**
@@ -87,7 +87,7 @@ describe('GifEncoderManager', () => {
 
   beforeEach(async () => {
     // Mock Worker constructor
-    // @ts-ignore - Mock Worker
+    // @ts-expect-error - Mock Worker
     globalThis.Worker = class extends MockWorker {
       constructor() {
         super();

@@ -29,7 +29,7 @@ const CRITICAL_THRESHOLD_MB = 500;
  * @returns {MemoryStatus | null} - null if performance.memory is not available
  */
 export function getMemoryStatus() {
-  // @ts-ignore - Chrome-specific API
+  // @ts-expect-error - Chrome-specific API
   const memory = performance.memory;
 
   if (!memory) {

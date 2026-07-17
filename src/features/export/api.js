@@ -3,8 +3,13 @@
  * @module features/export/api
  */
 
-import { applyFrameSkip, calculateFrameDelay, calculateProgress, getEncoderPreset, calculateMaxColors } from './core.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
+import {
+  applyFrameSkip,
+  calculateFrameDelay,
+  calculateMaxColors,
+  getEncoderPreset,
+} from './core.js';
 
 /**
  * Extract RGBA pixel data from a VideoFrame
@@ -71,7 +76,7 @@ export async function getFrameRGBA(frame, crop) {
     0,
     0,
     outputWidth,
-    outputHeight
+    outputHeight,
   );
 
   const imageData = ctx.getImageData(0, 0, outputWidth, outputHeight);
@@ -184,7 +189,11 @@ export async function encodeGif(params, signal) {
       const frame = skippedFrames[i];
 
       // Extract RGBA data (handles crop internally)
-      const { data: rgba, width: frameWidth, height: frameHeight } = await getFrameRGBA(frame, crop);
+      const {
+        data: rgba,
+        width: frameWidth,
+        height: frameHeight,
+      } = await getFrameRGBA(frame, crop);
 
       // Send frame to worker
       manager.addFrame(rgba, frameWidth, frameHeight, i);
@@ -239,9 +248,7 @@ export function openInNewTab(blob) {
 export async function copyToClipboard(blob) {
   try {
     if (navigator.clipboard && window.ClipboardItem) {
-      await navigator.clipboard.write([
-        new ClipboardItem({ [blob.type]: blob }),
-      ]);
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       return true;
     }
     return false;
@@ -306,4 +313,3 @@ export function scaleFrame(imageData, targetWidth, targetHeight) {
 
   return dstCtx.getImageData(0, 0, targetWidth, targetHeight);
 }
-

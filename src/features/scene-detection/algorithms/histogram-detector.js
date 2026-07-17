@@ -181,9 +181,7 @@ export function createHistogramDetector() {
           endFrame,
           confidence: 1.0, // Histogram detection doesn't provide confidence
           timestamp: startFrameData?.timestamp ?? 0,
-          duration: endFrameData
-            ? (endFrameData.timestamp - startFrameData.timestamp) / 1000
-            : 0,
+          duration: endFrameData ? (endFrameData.timestamp - startFrameData.timestamp) / 1000 : 0,
         });
       } else if (scenes.length > 0) {
         // Merge short scene with previous scene
@@ -192,8 +190,7 @@ export function createHistogramDetector() {
         const endFrameData = frameData[endFrame];
         const startFrameData = frameData[lastScene.startFrame];
         if (endFrameData && startFrameData) {
-          lastScene.duration =
-            (endFrameData.timestamp - startFrameData.timestamp) / 1000;
+          lastScene.duration = (endFrameData.timestamp - startFrameData.timestamp) / 1000;
         }
       }
     }

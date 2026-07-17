@@ -96,24 +96,32 @@ export function createElement(tag, attrs = {}, children = []) {
 export function createErrorScreen(options, cleanups = []) {
   const { title, message, actions = [], icon = '\u26A0\uFE0F' } = options;
 
-  const container = createElement('div', {
-    className: 'error-screen',
-    role: 'alert',
-    'aria-live': 'assertive',
-  }, [
-    createElement('div', { className: 'error-screen__icon' }, [icon]),
-    createElement('h2', { className: 'error-screen__title' }, [title]),
-    createElement('p', { className: 'error-screen__message' }, [message]),
-  ]);
+  const container = createElement(
+    'div',
+    {
+      className: 'error-screen',
+      role: 'alert',
+      'aria-live': 'assertive',
+    },
+    [
+      createElement('div', { className: 'error-screen__icon' }, [icon]),
+      createElement('h2', { className: 'error-screen__title' }, [title]),
+      createElement('p', { className: 'error-screen__message' }, [message]),
+    ],
+  );
 
   if (actions.length > 0) {
     const actionsContainer = createElement('div', { className: 'error-screen__actions' });
 
     for (const action of actions) {
-      const btn = createElement('button', {
-        type: 'button',
-        className: action.primary ? 'btn btn-error' : 'btn btn-secondary',
-      }, [action.label]);
+      const btn = createElement(
+        'button',
+        {
+          type: 'button',
+          className: action.primary ? 'btn btn-error' : 'btn btn-secondary',
+        },
+        [action.label],
+      );
 
       cleanups.push(on(btn, 'click', action.onClick));
       actionsContainer.appendChild(btn);
@@ -184,14 +192,10 @@ export function createCustomSelect(config) {
   if (disabled) button.setAttribute('disabled', 'true');
 
   const selectedOption = options.find((o) => o.value === value);
-  const valueDisplay = createElement(
-    'span',
-    { className: 'custom-select__value' },
-    [selectedOption?.label || '']
-  );
-  const arrow = createElement('span', { className: 'custom-select__arrow' }, [
-    '\u25BC',
+  const valueDisplay = createElement('span', { className: 'custom-select__value' }, [
+    selectedOption?.label || '',
   ]);
+  const arrow = createElement('span', { className: 'custom-select__arrow' }, ['\u25BC']);
 
   button.appendChild(valueDisplay);
   button.appendChild(arrow);
@@ -217,7 +221,7 @@ export function createCustomSelect(config) {
           'aria-selected': option.value === value ? 'true' : 'false',
           'data-value': option.value,
         },
-        [option.label]
+        [option.label],
       );
       if (index === focusedIndex) li.classList.add('custom-select__option--focused');
       dropdown.appendChild(li);
@@ -372,11 +376,9 @@ export function createCustomSlider(config) {
 
   let valueDisplay = null;
   if (showValue) {
-    valueDisplay = createElement(
-      'span',
-      { className: 'custom-slider__value' },
-      [valueFormat(value)]
-    );
+    valueDisplay = createElement('span', { className: 'custom-slider__value' }, [
+      valueFormat(value),
+    ]);
   }
 
   let currentValue = value;

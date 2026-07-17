@@ -3,40 +3,45 @@
  * @module features/editor
  */
 
-import { emit } from '../../shared/bus.js';
 import {
+  clearEditorPayload,
   getClipPayload,
   getEditorPayload,
   setEditorPayload,
-  clearEditorPayload,
   validateClipPayload,
 } from '../../shared/app-store.js';
-import { qsRequired, createElement, on, createErrorScreen } from '../../shared/utils/dom.js';
+import { emit } from '../../shared/bus.js';
 import { navigate } from '../../shared/router.js';
+import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { createSceneDetectionManager } from '../scene-detection/index.js';
+import { centerCropAfterConstraint, constrainAspectRatio } from './core.js';
 import {
+  clearCrop,
+  completeSceneDetection,
   createEditorStore,
   createEditorStoreFromClip,
   goToFrame,
-  nextFrame,
-  previousFrame,
-  togglePlayback,
   setPlaybackSpeed,
-  updateRange,
-  updateCrop,
-  clearCrop,
-  toggleGrid,
+  setSceneDetectionError,
   setSelectedAspectRatio,
   startSceneDetection,
+  toggleGrid,
+  togglePlayback,
+  updateCrop,
+  updateRange,
   updateSceneDetectionProgress,
-  completeSceneDetection,
-  setSceneDetectionError,
 } from './state.js';
-import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { constrainAspectRatio, centerCropAfterConstraint, getSelectedFrames, normalizeSelectionRange, isFrameInRange } from './core.js';
-import { renderEditorScreen, updateBaseCanvas, updateOverlayCanvas, updateTimelineHeader, updateScenesPanel, updateCropInfoPanel } from './ui.js';
-import { renderTimeline, updateTimelineRange, updatePlayheadPosition } from './timeline.js';
+import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './timeline.js';
+import {
+  renderEditorScreen,
+  updateBaseCanvas,
+  updateCropInfoPanel,
+  updateOverlayCanvas,
+  updateScenesPanel,
+  updateTimelineHeader,
+} from './ui.js';
 
 /** @type {ReturnType<typeof createEditorStore> | null} */
 let store = null;
@@ -93,27 +98,34 @@ export function initEditor() {
       /** @type {(() => void)[]} */
       const cleanups = [];
 
-      const errorScreen = createErrorScreen({
-        title: 'Invalid Clip Data',
-        message: validation.errors.join(', '),
-        actions: [
-          {
-            label: '\u2190 Back to Capture',
-            onClick: () => navigate('/capture'),
-            primary: true,
-          },
-        ],
-      }, cleanups);
+      const errorScreen = createErrorScreen(
+        {
+          title: 'Invalid Clip Data',
+          message: validation.errors.join(', '),
+          actions: [
+            {
+              label: '\u2190 Back to Capture',
+              onClick: () => navigate('/capture'),
+              primary: true,
+            },
+          ],
+        },
+        cleanups,
+      );
 
-      const errorState = createElement('section', {
-        className: 'screen editor-screen',
-        'aria-labelledby': 'editor-title',
-      }, [
-        createElement('header', { className: 'screen-header' }, [
-          createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
-        ]),
-        errorScreen,
-      ]);
+      const errorState = createElement(
+        'section',
+        {
+          className: 'screen editor-screen',
+          'aria-labelledby': 'editor-title',
+        },
+        [
+          createElement('header', { className: 'screen-header' }, [
+            createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
+          ]),
+          errorScreen,
+        ],
+      );
 
       container.innerHTML = '';
       container.appendChild(errorState);
@@ -121,51 +133,54 @@ export function initEditor() {
       emit('editor:validation-error', { errors: validation.errors });
 
       return () => {
-        cleanups.forEach(fn => fn());
+        cleanups.forEach((fn) => fn());
         cleanup();
       };
     }
   }
 
   // Determine frames source: prefer EditorPayload when returning from Export
-  const frames = hasValidEditorPayload
-    ? editorPayload.clip.frames
-    : (clipPayload?.frames || []);
-  const fps = hasValidEditorPayload
-    ? editorPayload.clip.fps
-    : (clipPayload?.fps || DEFAULT_FPS);
+  const frames = hasValidEditorPayload ? editorPayload.clip.frames : clipPayload?.frames || [];
+  const fps = hasValidEditorPayload ? editorPayload.clip.fps : clipPayload?.fps || DEFAULT_FPS;
 
   if (frames.length === 0) {
     /** @type {(() => void)[]} */
     const cleanups = [];
 
-    const errorScreen = createErrorScreen({
-      title: 'No Frames Available',
-      message: 'No frames to edit. Please capture some content first.',
-      actions: [
-        {
-          label: '\u2190 Back to Capture',
-          onClick: () => navigate('/capture'),
-          primary: true,
-        },
-      ],
-    }, cleanups);
+    const errorScreen = createErrorScreen(
+      {
+        title: 'No Frames Available',
+        message: 'No frames to edit. Please capture some content first.',
+        actions: [
+          {
+            label: '\u2190 Back to Capture',
+            onClick: () => navigate('/capture'),
+            primary: true,
+          },
+        ],
+      },
+      cleanups,
+    );
 
-    const emptyState = createElement('section', {
-      className: 'screen editor-screen',
-      'aria-labelledby': 'editor-title',
-    }, [
-      createElement('header', { className: 'screen-header' }, [
-        createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
-      ]),
-      errorScreen,
-    ]);
+    const emptyState = createElement(
+      'section',
+      {
+        className: 'screen editor-screen',
+        'aria-labelledby': 'editor-title',
+      },
+      [
+        createElement('header', { className: 'screen-header' }, [
+          createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
+        ]),
+        errorScreen,
+      ],
+    );
 
     container.innerHTML = '';
     container.appendChild(emptyState);
 
     return () => {
-      cleanups.forEach(fn => fn());
+      cleanups.forEach((fn) => fn());
       cleanup();
     };
   }
@@ -216,7 +231,7 @@ export function initEditor() {
           const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
           const currentInSelection = Math.max(
             0,
-            Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1)
+            Math.min(state.currentFrame - state.selectedRange.start, selectionFrameCount - 1),
           );
           currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
         }
@@ -227,21 +242,19 @@ export function initEditor() {
           updatePlayheadPosition(
             /** @type {HTMLElement} */ (timelineContainer),
             state.currentFrame,
-            state.clip.frames.length
+            state.clip.frames.length,
           );
         }
       }
 
       // Update base canvas ONLY when frame changes
-      if (state.currentFrame !== prevState.currentFrame &&
-          state.clip?.frames[state.currentFrame]) {
+      if (state.currentFrame !== prevState.currentFrame && state.clip?.frames[state.currentFrame]) {
         updateBaseCanvas(baseCanvas, state.clip.frames[state.currentFrame]);
       }
 
       // Update overlay ONLY when crop or grid changes
       // Note: During drag, setupCropInteraction handles overlay updates directly
-      if (state.cropArea !== prevState.cropArea ||
-          state.showGrid !== prevState.showGrid) {
+      if (state.cropArea !== prevState.cropArea || state.showGrid !== prevState.showGrid) {
         const frame = state.clip?.frames[state.currentFrame];
         if (frame) {
           updateOverlayCanvas(
@@ -249,7 +262,7 @@ export function initEditor() {
             state.cropArea,
             frame.width,
             frame.height,
-            state.showGrid
+            state.showGrid,
           );
         }
       }
@@ -268,7 +281,7 @@ export function initEditor() {
         updateTimelineRange(
           /** @type {HTMLElement} */ (timelineContainer),
           state.selectedRange,
-          state.clip.frames.length
+          state.clip.frames.length,
         );
       }
 
@@ -300,11 +313,13 @@ export function initEditor() {
       }
 
       // Update scenes panel when scene detection state or selected range changes
-      if (state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
-          state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
-          state.scenes !== prevState.scenes ||
-          state.selectedRange.start !== prevState.selectedRange.start ||
-          state.selectedRange.end !== prevState.selectedRange.end) {
+      if (
+        state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
+        state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
+        state.scenes !== prevState.scenes ||
+        state.selectedRange.start !== prevState.selectedRange.start ||
+        state.selectedRange.end !== prevState.selectedRange.end
+      ) {
         // Clean up previous scene panel event listeners
         scenePanelCleanups.forEach((fn) => fn());
         // Update panel and collect new cleanups
@@ -319,7 +334,7 @@ export function initEditor() {
           onExport: handleExport,
         });
       }
-    }, 16) // ~60fps updates
+    }, 16), // ~60fps updates
   );
 
   // Use pre-computed scenes from Capture or fallback to async detection
@@ -354,21 +369,26 @@ function render(container) {
 
   const state = store.getState();
 
-  const result = renderEditorScreen(container, state, {
-    onTogglePlay: handleTogglePlay,
-    onFrameChange: handleFrameChange,
-    onRangeChange: handleRangeChange,
-    onCropChange: handleCropChange,
-    onToggleGrid: handleToggleGrid,
-    onAspectRatioChange: handleAspectRatioChange,
-    onSpeedChange: handleSpeedChange,
-    onExport: handleExport,
-    getState: () => store?.getState() ?? null,
-    getFrame: () => {
-      const s = store?.getState();
-      return s?.clip?.frames[s.currentFrame] ?? null;
+  const result = renderEditorScreen(
+    container,
+    state,
+    {
+      onTogglePlay: handleTogglePlay,
+      onFrameChange: handleFrameChange,
+      onRangeChange: handleRangeChange,
+      onCropChange: handleCropChange,
+      onToggleGrid: handleToggleGrid,
+      onAspectRatioChange: handleAspectRatioChange,
+      onSpeedChange: handleSpeedChange,
+      onExport: handleExport,
+      getState: () => store?.getState() ?? null,
+      getFrame: () => {
+        const s = store?.getState();
+        return s?.clip?.frames[s.currentFrame] ?? null;
+      },
     },
-  }, DEFAULT_FPS);
+    DEFAULT_FPS,
+  );
 
   uiCleanup = result.cleanup;
   baseCanvas = result.baseCanvas;
@@ -403,7 +423,7 @@ function renderTimelineComponent(container) {
     state.selectedRange,
     {
       onRangeChange: handleRangeChange,
-    }
+    },
   );
 }
 
@@ -432,7 +452,7 @@ function startPlayback() {
   if (!store) return;
 
   const state = store.getState();
-  const interval = (1000 / DEFAULT_FPS) / state.playbackSpeed;
+  const interval = 1000 / DEFAULT_FPS / state.playbackSpeed;
 
   playbackIntervalId = window.setInterval(() => {
     if (!store) return;
@@ -568,7 +588,7 @@ function handleExport() {
   setEditorPayload({
     selectedRange: state.selectedRange,
     cropArea: state.cropArea,
-    clip: state.clip,  // For returning to Editor with preserved state
+    clip: state.clip, // For returning to Editor with preserved state
     fps: state.clip.fps,
   });
 
@@ -621,7 +641,13 @@ async function startSceneDetectionAsync(frames) {
       });
     }
 
-    console.log('[Editor] Scene detection completed:', result.scenes.length, 'scenes found in', result.processingTimeMs, 'ms');
+    console.log(
+      '[Editor] Scene detection completed:',
+      result.scenes.length,
+      'scenes found in',
+      result.processingTimeMs,
+      'ms',
+    );
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       // Detection was cancelled, not an error

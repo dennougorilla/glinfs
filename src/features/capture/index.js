@@ -3,32 +3,28 @@
  * @module features/capture
  */
 
-import { emit } from '../../shared/bus.js';
 import {
-  setClipPayload,
-  getScreenCaptureState,
-  setScreenCaptureState,
   clearScreenCaptureState,
+  getScreenCaptureState,
   hasActiveScreenCapture,
+  setClipPayload,
+  setScreenCaptureState,
 } from '../../shared/app-store.js';
+import { emit } from '../../shared/bus.js';
+import { updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
-import { updateSetting } from '../../shared/user-settings.js';
+import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
+import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
+import { calculateMaxFrames } from './core.js';
 import {
   createCaptureStore,
+  setError,
   startCapture,
   stopCapture,
   updateSettings,
-  setError,
 } from './state.js';
-import { calculateMaxFrames } from './core.js';
-import {
-  startScreenCapture,
-  stopScreenCapture,
-  createVideoElement,
-} from './api.js';
 import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } from './ui.js';
-import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
 let store = null;
@@ -206,7 +202,6 @@ async function handleStart() {
     const maxFrames = calculateMaxFrames(store.getState().settings);
     workerManager.start(fps, maxFrames);
 
-
     // Re-render with video preview
     const container = qsRequired('#main-content');
     render(container);
@@ -281,7 +276,6 @@ function handleStop(preserveBuffer = true) {
   // Update state
   store.setState((currentState) => stopCapture(currentState));
   emit('capture:stopped', {});
-
 
   // Re-render
   const container = qsRequired('#main-content');
@@ -401,7 +395,8 @@ function handleSettingsChange(newSettings) {
 
   // Save settings to localStorage
   Object.entries(newSettings).forEach(([key, value]) => {
-    if (key !== 'thumbnailQuality') { // thumbnailQuality managed separately
+    if (key !== 'thumbnailQuality') {
+      // thumbnailQuality managed separately
       updateSetting('capture', key, value);
     }
   });

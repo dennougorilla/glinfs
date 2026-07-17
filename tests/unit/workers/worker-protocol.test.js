@@ -1,11 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   Commands,
-  Events,
-  createInitMessage,
   createAddFrameMessage,
-  createFinishMessage,
   createCancelMessage,
+  createFinishMessage,
+  createInitMessage,
+  Events,
 } from '../../../src/workers/worker-protocol.js';
 
 describe('Worker Protocol', () => {

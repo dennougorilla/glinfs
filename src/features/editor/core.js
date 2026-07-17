@@ -7,7 +7,7 @@ import { formatCompactDuration } from '../../shared/utils/format.js';
 
 /** @type {Object<string, number>} */
 const ASPECT_RATIOS = {
-  'free': 0,
+  free: 0,
   '1:1': 1,
   '16:9': 16 / 9,
   '4:3': 4 / 3,
@@ -45,13 +45,13 @@ const DEFAULT_FPS = 30;
  * @type {Record<import('./types.js').HandlePosition, HandleConfig>}
  */
 const HANDLE_CONFIG = {
-  'top-left':     { affectsX: true,  affectsY: true,  widthSign: -1, heightSign: -1 },
-  'top':          { affectsX: false, affectsY: true,  widthSign:  0, heightSign: -1 },
-  'top-right':    { affectsX: false, affectsY: true,  widthSign: +1, heightSign: -1 },
-  'left':         { affectsX: true,  affectsY: false, widthSign: -1, heightSign:  0 },
-  'right':        { affectsX: false, affectsY: false, widthSign: +1, heightSign:  0 },
-  'bottom-left':  { affectsX: true,  affectsY: false, widthSign: -1, heightSign: +1 },
-  'bottom':       { affectsX: false, affectsY: false, widthSign:  0, heightSign: +1 },
+  'top-left': { affectsX: true, affectsY: true, widthSign: -1, heightSign: -1 },
+  top: { affectsX: false, affectsY: true, widthSign: 0, heightSign: -1 },
+  'top-right': { affectsX: false, affectsY: true, widthSign: +1, heightSign: -1 },
+  left: { affectsX: true, affectsY: false, widthSign: -1, heightSign: 0 },
+  right: { affectsX: false, affectsY: false, widthSign: +1, heightSign: 0 },
+  'bottom-left': { affectsX: true, affectsY: false, widthSign: -1, heightSign: +1 },
+  bottom: { affectsX: false, affectsY: false, widthSign: 0, heightSign: +1 },
   'bottom-right': { affectsX: false, affectsY: false, widthSign: +1, heightSign: +1 },
 };
 
@@ -71,9 +71,9 @@ const HANDLE_CONFIG = {
  * @type {Record<string, CornerAnchor>}
  */
 const CORNER_ANCHORS = {
-  'top-left':     { anchorRight: true,  anchorBottom: true },
-  'top-right':    { anchorRight: false, anchorBottom: true },
-  'bottom-left':  { anchorRight: true,  anchorBottom: false },
+  'top-left': { anchorRight: true, anchorBottom: true },
+  'top-right': { anchorRight: false, anchorBottom: true },
+  'bottom-left': { anchorRight: true, anchorBottom: false },
   'bottom-right': { anchorRight: false, anchorBottom: false },
 };
 
@@ -257,8 +257,8 @@ export function clampCropArea(crop, frameWidth, frameHeight) {
   let y = Math.max(0, crop.y);
 
   // Clamp dimensions
-  let width = Math.max(MIN_CROP_SIZE, Math.min(crop.width, frameWidth));
-  let height = Math.max(MIN_CROP_SIZE, Math.min(crop.height, frameHeight));
+  const width = Math.max(MIN_CROP_SIZE, Math.min(crop.width, frameWidth));
+  const height = Math.max(MIN_CROP_SIZE, Math.min(crop.height, frameHeight));
 
   // Adjust position if crop extends beyond frame
   if (x + width > frameWidth) {
@@ -380,12 +380,12 @@ export function calculateSelectionInfo(selection, fps) {
 export function getHandlePositions(crop) {
   return {
     'top-left': { x: crop.x, y: crop.y },
-    'top': { x: crop.x + crop.width / 2, y: crop.y },
+    top: { x: crop.x + crop.width / 2, y: crop.y },
     'top-right': { x: crop.x + crop.width, y: crop.y },
-    'left': { x: crop.x, y: crop.y + crop.height / 2 },
-    'right': { x: crop.x + crop.width, y: crop.y + crop.height / 2 },
+    left: { x: crop.x, y: crop.y + crop.height / 2 },
+    right: { x: crop.x + crop.width, y: crop.y + crop.height / 2 },
     'bottom-left': { x: crop.x, y: crop.y + crop.height },
-    'bottom': { x: crop.x + crop.width / 2, y: crop.y + crop.height },
+    bottom: { x: crop.x + crop.width / 2, y: crop.y + crop.height },
     'bottom-right': { x: crop.x + crop.width, y: crop.y + crop.height },
   };
 }
@@ -512,11 +512,7 @@ export function resizeCropByHandle(crop, handle, start, current, frame) {
     proposed = applyAspectRatioToResize(proposed, crop, handle, crop.aspectRatio);
   }
 
-  return clampCropArea(
-    { ...proposed, aspectRatio: crop.aspectRatio },
-    frame.width,
-    frame.height
-  );
+  return clampCropArea({ ...proposed, aspectRatio: crop.aspectRatio }, frame.width, frame.height);
 }
 
 /**
@@ -536,7 +532,7 @@ export function moveCrop(crop, delta, frame) {
       aspectRatio: crop.aspectRatio,
     },
     frame.width,
-    frame.height
+    frame.height,
   );
 }
 
@@ -575,9 +571,7 @@ export function normalizeSelectionRange(start, end, totalFrames) {
   const effectiveEnd = end ?? start;
 
   // Swap if start > end
-  const [min, max] = start <= effectiveEnd
-    ? [start, effectiveEnd]
-    : [effectiveEnd, start];
+  const [min, max] = start <= effectiveEnd ? [start, effectiveEnd] : [effectiveEnd, start];
 
   // Clamp to valid bounds [0, totalFrames - 1]
   return {
@@ -601,9 +595,7 @@ export function isFrameInRange(frameIndex, start, end) {
   const effectiveEnd = end ?? start;
 
   // Normalize in case start > end
-  const [min, max] = start <= effectiveEnd
-    ? [start, effectiveEnd]
-    : [effectiveEnd, start];
+  const [min, max] = start <= effectiveEnd ? [start, effectiveEnd] : [effectiveEnd, start];
 
   return frameIndex >= min && frameIndex <= max;
 }

@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { initRouter, navigate, getCurrentRoute, onRouteChange } from '../../../src/shared/router.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  getCurrentRoute,
+  initRouter,
+  navigate,
+  onRouteChange,
+} from '../../../src/shared/router.js';
 
 describe('Router', () => {
   let originalHash;

@@ -4,26 +4,25 @@
  * @module features/scene-detection
  */
 
-// Re-export types
-export { DEFAULT_DETECTOR_OPTIONS } from './types.js';
+// Re-export manager
+export { createSceneDetectionManager, SceneDetectionManager } from './manager.js';
 
 // Re-export registry functions
 export {
-  registerDetector,
-  unregisterDetector,
   createDetector,
   getAvailableDetectors,
   getDefaultDetectorId,
-  setDefaultDetector,
   isDetectorAvailable,
+  registerDetector,
+  setDefaultDetector,
+  unregisterDetector,
 } from './registry.js';
+// Re-export types
+export { DEFAULT_DETECTOR_OPTIONS } from './types.js';
 
-// Re-export manager
-export { SceneDetectionManager, createSceneDetectionManager } from './manager.js';
-
+import { createHistogramDetector } from './algorithms/histogram-detector.js';
 // Import for initialization
 import { registerDetector } from './registry.js';
-import { createHistogramDetector } from './algorithms/histogram-detector.js';
 
 /**
  * Initialize scene detection module

@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getThumbnailCache, resetThumbnailCache, ThumbnailCache } from '../../../src/shared/utils/thumbnail-cache.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  getThumbnailCache,
+  resetThumbnailCache,
+  ThumbnailCache,
+} from '../../../src/shared/utils/thumbnail-cache.js';
 
 // Mock OffscreenCanvas for JSDOM environment
 class MockOffscreenCanvas {

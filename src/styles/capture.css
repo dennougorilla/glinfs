@@ -48,11 +48,15 @@
 }
 
 .video-preview--active {
-  box-shadow: 0 0 0 3px var(--color-primary), var(--shadow-lg);
+  box-shadow:
+    0 0 0 3px var(--color-primary),
+    var(--shadow-lg);
 }
 
 .video-preview--recording {
-  box-shadow: 0 0 0 3px var(--color-recording), var(--shadow-lg);
+  box-shadow:
+    0 0 0 3px var(--color-recording),
+    var(--shadow-lg);
 }
 
 .preview-video {
@@ -181,8 +185,13 @@
 }
 
 @keyframes pulse-recording {
-  0%, 100% { box-shadow: 0 0 0 0 var(--color-recording-glow); }
-  50% { box-shadow: 0 0 0 6px transparent; }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-recording-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
 }
 
 .btn-capture-stop:hover:not(:disabled) {
@@ -195,7 +204,9 @@
   font-size: var(--font-size-md);
   font-weight: 600;
   border-radius: var(--radius-lg);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 /* Wrapper for clip button with badge */
@@ -285,7 +296,9 @@
   background: var(--color-bg-tertiary);
   border-radius: var(--radius-md);
   border: 1px solid transparent;
-  transition: background-color var(--transition-normal), border-color var(--transition-normal);
+  transition:
+    background-color var(--transition-normal),
+    border-color var(--transition-normal);
 }
 
 .stat-item:hover {

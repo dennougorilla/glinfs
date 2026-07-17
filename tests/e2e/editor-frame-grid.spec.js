@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.describe('Frame Grid Modal', () => {
   test.beforeEach(async ({ page }) => {
@@ -287,8 +287,8 @@ test.describe('Frame Grid Modal', () => {
         // Slider value should be set (auto-fit calculated)
         const sizeSlider = page.locator('.grid-size-slider');
         const value = await sizeSlider.inputValue();
-        expect(parseInt(value)).toBeGreaterThanOrEqual(60);
-        expect(parseInt(value)).toBeLessThanOrEqual(240);
+        expect(parseInt(value, 10)).toBeGreaterThanOrEqual(60);
+        expect(parseInt(value, 10)).toBeLessThanOrEqual(240);
       }
     });
   });
@@ -429,7 +429,9 @@ test.describe('Frame Grid Modal', () => {
         }
 
         // Focus should still be within modal
-        const activeElement = await page.evaluate(() => document.activeElement?.closest('.frame-grid-modal'));
+        const activeElement = await page.evaluate(() =>
+          document.activeElement?.closest('.frame-grid-modal'),
+        );
         expect(activeElement).not.toBeNull();
       }
     });
@@ -445,9 +447,7 @@ test.describe('Frame Grid Modal', () => {
         await firstItem.focus();
 
         // Verify focus is visible (has outline)
-        const outline = await firstItem.evaluate((el) =>
-          window.getComputedStyle(el).outline
-        );
+        const outline = await firstItem.evaluate((el) => window.getComputedStyle(el).outline);
         expect(outline).not.toBe('none');
       }
     });

@@ -4,8 +4,8 @@
  * @module shared/utils/thumbnail-cache
  */
 
-import { getThumbnailSizes } from './quality-settings.js';
 import { getDrawableSource } from './canvas.js';
+import { getThumbnailSizes } from './quality-settings.js';
 
 /** @type {number} Default cache size */
 const DEFAULT_CACHE_SIZE = 300;

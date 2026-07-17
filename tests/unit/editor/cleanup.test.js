@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Create a mock VideoFrame for testing
@@ -105,7 +105,12 @@ describe('Editor cleanup - VideoFrame close', () => {
     // Arrange
     const frameWithoutClose = { id: '1', frame: {}, timestamp: 0, width: 100, height: 100 };
     const state = {
-      clip: { frames: [frameWithoutClose], selectedRange: { start: 0, end: 0 }, cropArea: null, fps: 30 },
+      clip: {
+        frames: [frameWithoutClose],
+        selectedRange: { start: 0, end: 0 },
+        cropArea: null,
+        fps: 30,
+      },
     };
 
     // Act & Assert

@@ -5,7 +5,7 @@
 
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
-import { createClip, setFrameRange, clampCropArea } from './core.js';
+import { clampCropArea, createClip, setFrameRange } from './core.js';
 
 /**
  * Initialize editor state with clip

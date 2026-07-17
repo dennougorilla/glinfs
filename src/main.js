@@ -3,22 +3,28 @@
  * @module main
  */
 
-import { initRouter } from './shared/router.js';
+import { cleanupScreenCaptureResources } from './features/capture/api.js';
 import { initCapture } from './features/capture/index.js';
 import { initEditor } from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
 import { initSettings } from './features/settings/index.js';
 import {
-  setClipPayload,
-  setEditorPayload,
   getClipPayload,
   getEditorPayload,
-  resetAppStore,
   registerScreenCaptureCleanup,
+  resetAppStore,
+  setClipPayload,
+  setEditorPayload,
 } from './shared/app-store.js';
-import { cleanupScreenCaptureResources } from './features/capture/api.js';
-import { initTestMode, isTestMode, getTestConfig, updateTestConfig, getDefaultMockOptions } from './shared/test-mode.js';
+import { initRouter } from './shared/router.js';
+import {
+  getDefaultMockOptions,
+  getTestConfig,
+  initTestMode,
+  isTestMode,
+  updateTestConfig,
+} from './shared/test-mode.js';
 import {
   createMockClipPayload,
   createMockEditorPayload,
@@ -169,7 +175,11 @@ if (IS_TEST_MODE) {
       setClipPayload(clipPayload);
       setEditorPayload(editorPayload);
 
-      console.log('[TestHooks] Injected mock EditorPayload:', editorPayload.clip.frames.length, 'frames');
+      console.log(
+        '[TestHooks] Injected mock EditorPayload:',
+        editorPayload.clip.frames.length,
+        'frames',
+      );
     },
 
     /**

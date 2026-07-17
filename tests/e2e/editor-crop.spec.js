@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.describe('Editor Crop Functionality', () => {
   test.beforeEach(async ({ page }) => {
@@ -42,9 +42,11 @@ test.describe('Editor Crop Functionality', () => {
       // This test would verify the rendering by checking canvas pixels
       // For now, just verify the canvas exists
       const editorCanvas = page.locator('.editor-canvas');
-      await expect(editorCanvas).toBeVisible().catch(() => {
-        // Skip if no clip loaded
-      });
+      await expect(editorCanvas)
+        .toBeVisible()
+        .catch(() => {
+          // Skip if no clip loaded
+        });
     });
   });
 
@@ -112,9 +114,11 @@ test.describe('Editor Crop Functionality', () => {
       await page.goto('/');
       const aspectButtons = page.locator('.aspect-ratio-buttons .aspect-btn');
       // Check that aspect ratio buttons exist (Free, 1:1, 16:9, 4:3, 9:16)
-      await expect(aspectButtons).toHaveCount(5).catch(() => {
-        // Skip if editor not visible
-      });
+      await expect(aspectButtons)
+        .toHaveCount(5)
+        .catch(() => {
+          // Skip if editor not visible
+        });
     });
 
     test('should highlight active aspect ratio button', async ({ page }) => {
@@ -206,9 +210,11 @@ test.describe('Editor Crop Functionality', () => {
       await page.goto('/');
       // Without a crop, Clear Crop button should not be visible
       const clearBtn = page.locator('button:has-text("Clear Crop")');
-      await expect(clearBtn).toBeHidden().catch(() => {
-        // May not be on editor page
-      });
+      await expect(clearBtn)
+        .toBeHidden()
+        .catch(() => {
+          // May not be on editor page
+        });
     });
   });
 });

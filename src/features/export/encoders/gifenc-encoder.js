@@ -4,7 +4,7 @@
  * @module features/export/encoders/gifenc-encoder
  */
 
-import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHandlers } from '../../../src/workers/gif-encoder-handlers.js';
-import { Events, Commands } from '../../../src/workers/worker-protocol.js';
+import { Commands, Events } from '../../../src/workers/worker-protocol.js';
 
 /**
  * Create a mock encoder for testing
@@ -216,7 +216,7 @@ describe('GIF Encoder Handlers', () => {
           width: 10,
           height: 10,
         }),
-        0
+        0,
       );
       expect(postEvent).toHaveBeenCalledWith({
         event: Events.PROGRESS,
@@ -337,7 +337,7 @@ describe('GIF Encoder Handlers', () => {
         expect.objectContaining({
           rgba: expect.any(Uint8ClampedArray),
         }),
-        0
+        0,
       );
     });
   });
@@ -371,7 +371,7 @@ describe('GIF Encoder Handlers', () => {
           gifData: expect.any(ArrayBuffer),
           duration: expect.any(Number),
         }),
-        expect.any(Array) // Transferable array
+        expect.any(Array), // Transferable array
       );
     });
 
@@ -384,9 +384,7 @@ describe('GIF Encoder Handlers', () => {
       handlers.handleFinish();
 
       // Assert
-      const completeCall = postEvent.mock.calls.find(
-        (call) => call[0].event === Events.COMPLETE
-      );
+      const completeCall = postEvent.mock.calls.find((call) => call[0].event === Events.COMPLETE);
       expect(completeCall[0].duration).toBeGreaterThanOrEqual(0);
     });
 

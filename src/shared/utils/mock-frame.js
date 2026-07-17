@@ -105,10 +105,10 @@ function drawGradientPattern(ctx, width, height, baseColor, frameIndex) {
   const angle = (frameIndex * 3) % 360;
   const radians = (angle * Math.PI) / 180;
 
-  const x1 = width / 2 + Math.cos(radians) * width / 2;
-  const y1 = height / 2 + Math.sin(radians) * height / 2;
-  const x2 = width / 2 - Math.cos(radians) * width / 2;
-  const y2 = height / 2 - Math.sin(radians) * height / 2;
+  const x1 = width / 2 + (Math.cos(radians) * width) / 2;
+  const y1 = height / 2 + (Math.sin(radians) * height) / 2;
+  const x2 = width / 2 - (Math.cos(radians) * width) / 2;
+  const y2 = height / 2 - (Math.sin(radians) * height) / 2;
 
   const gradient = ctx.createLinearGradient(x1, y1, x2, y2);
   gradient.addColorStop(0, baseColor);
@@ -136,7 +136,7 @@ function drawCheckerboardPattern(ctx, width, height, baseColor) {
 
   for (let y = 0; y < height; y += tileSize) {
     for (let x = 0; x < width; x += tileSize) {
-      const isEven = ((x / tileSize) + (y / tileSize)) % 2 === 0;
+      const isEven = (x / tileSize + y / tileSize) % 2 === 0;
       ctx.fillStyle = isEven ? baseColor : '#ffffff';
       ctx.fillRect(x, y, tileSize, tileSize);
     }
@@ -194,9 +194,15 @@ function shiftHue(hex, degrees) {
     s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
 
     switch (max) {
-      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
-      case g: h = ((b - r) / d + 2) / 6; break;
-      case b: h = ((r - g) / d + 4) / 6; break;
+      case r:
+        h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        break;
+      case g:
+        h = ((b - r) / d + 2) / 6;
+        break;
+      case b:
+        h = ((r - g) / d + 4) / 6;
+        break;
     }
   }
 
@@ -207,18 +213,18 @@ function shiftHue(hex, degrees) {
   const hue2rgb = (p, q, t) => {
     if (t < 0) t += 1;
     if (t > 1) t -= 1;
-    if (t < 1/6) return p + (q - p) * 6 * t;
-    if (t < 1/2) return q;
-    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
     return p;
   };
 
   const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
   const p = 2 * l - q;
 
-  const newR = Math.round(hue2rgb(p, q, h + 1/3) * 255);
+  const newR = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
   const newG = Math.round(hue2rgb(p, q, h) * 255);
-  const newB = Math.round(hue2rgb(p, q, h - 1/3) * 255);
+  const newB = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
 
   return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
 }
@@ -349,8 +355,8 @@ export async function createMockFrames(count, options = {}) {
       createMockFrame(i, {
         ...frameOptions,
         timestamp: i * frameInterval,
-      })
-    )
+      }),
+    ),
   );
 
   return frames;
@@ -435,10 +441,7 @@ export async function createMockEditorPayload(options = {}) {
  * @returns {boolean} True if mock frames can be created
  */
 export function isMockFrameSupported() {
-  return (
-    typeof OffscreenCanvas !== 'undefined' &&
-    typeof createImageBitmap === 'function'
-  );
+  return typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function';
 }
 
 /**

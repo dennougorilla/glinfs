@@ -7,10 +7,10 @@
  * scene detection is enabled.
  */
 
-import { emit } from '../../shared/bus.js';
 import { getClipPayload, setClipPayload } from '../../shared/app-store.js';
-import { qsRequired } from '../../shared/utils/dom.js';
+import { emit } from '../../shared/bus.js';
 import { navigate } from '../../shared/router.js';
+import { qsRequired } from '../../shared/utils/dom.js';
 import { createSceneDetectionManager } from '../scene-detection/manager.js';
 import { renderLoadingScreen, updateProgress } from './ui.js';
 
@@ -32,7 +32,7 @@ export function initLoading() {
   isNavigating = false;
 
   // If no clipPayload or scene detection not enabled, redirect to editor
-  if (!clipPayload || !clipPayload.sceneDetectionEnabled) {
+  if (!clipPayload?.sceneDetectionEnabled) {
     navigate('/editor');
     return () => {};
   }

@@ -1,15 +1,15 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setClipPayload,
-  getClipPayload,
   clearClipPayload,
-  setEditorPayload,
-  getEditorPayload,
   clearEditorPayload,
-  setExportResult,
-  getExportResult,
   clearExportResult,
+  getClipPayload,
+  getEditorPayload,
+  getExportResult,
   resetAppStore,
+  setClipPayload,
+  setEditorPayload,
+  setExportResult,
 } from '../../src/shared/app-store.js';
 import { closeAllFrames } from '../../src/shared/utils/videoframe.js';
 
@@ -186,7 +186,12 @@ describe('Full Workflow Integration', () => {
       setEditorPayload({
         frames: exportFrames,
         cropArea: null,
-        clip: { frames: editorFrames, fps: 30, selectedRange: { start: 0, end: 1 }, cropArea: null },
+        clip: {
+          frames: editorFrames,
+          fps: 30,
+          selectedRange: { start: 0, end: 1 },
+          cropArea: null,
+        },
         fps: 30,
       });
 
@@ -287,11 +292,7 @@ describe('Full Workflow Integration', () => {
 
     it('should handle partial frame failures', () => {
       // Arrange - One frame will fail to close
-      const frames = [
-        createMockFrame('1'),
-        createMockFrame('2'),
-        createMockFrame('3'),
-      ];
+      const frames = [createMockFrame('1'), createMockFrame('2'), createMockFrame('3')];
 
       frames[1].frame.close.mockImplementation(() => {
         throw new Error('Close failed');

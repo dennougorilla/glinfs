@@ -168,10 +168,7 @@ function sendFrames() {
   // Transfer ownership of all ImageBitmaps to main thread
   const transferables = frameBuffer.map((f) => f.bitmap);
 
-  self.postMessage(
-    { type: 'FRAMES_RESPONSE', payload: { frames: frameBuffer } },
-    transferables
-  );
+  self.postMessage({ type: 'FRAMES_RESPONSE', payload: { frames: frameBuffer } }, transferables);
 
   // Buffer is now empty (bitmaps transferred)
   frameBuffer = [];

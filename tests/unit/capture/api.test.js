@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  startScreenCapture,
-  stopScreenCapture,
-  createVideoElement,
   createCaptureCanvas,
   createFrameProcessor,
+  createVideoElement,
   createVideoFrameFromElement,
+  startScreenCapture,
+  stopScreenCapture,
 } from '../../../src/features/capture/api.js';
 
 // Mock browser APIs
@@ -226,7 +226,7 @@ describe('createFrameProcessor', () => {
 
     // Act & Assert
     expect(() => createFrameProcessor(mockTrack)).toThrow(
-      'Cannot create frame processor: track state is "ended" (expected "live")'
+      'Cannot create frame processor: track state is "ended" (expected "live")',
     );
   });
 
@@ -243,7 +243,7 @@ describe('createFrameProcessor', () => {
 
     // Act & Assert
     expect(() => createFrameProcessor(mockTrack)).toThrow(
-      'MediaStreamTrackProcessor not supported in this browser'
+      'MediaStreamTrackProcessor not supported in this browser',
     );
   });
 

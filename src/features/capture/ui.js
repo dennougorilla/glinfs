@@ -3,9 +3,9 @@
  * @module features/capture/ui
  */
 
+import { navigate } from '../../shared/router.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { formatDuration } from '../../shared/utils/format.js';
-import { navigate } from '../../shared/router.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
 /** @constant {string} GitHub repository URL */
@@ -26,7 +26,7 @@ function createControlSection(title, content) {
   section.appendChild(
     createElement('div', { className: 'control-section-header' }, [
       createElement('span', { className: 'control-section-title' }, [title]),
-    ])
+    ]),
   );
   section.appendChild(content);
   return section;
@@ -63,7 +63,10 @@ function createGitHubIcon() {
   svg.setAttribute('fill', 'currentColor');
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z');
+  path.setAttribute(
+    'd',
+    'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z',
+  );
   svg.appendChild(path);
   return svg;
 }
@@ -78,7 +81,10 @@ function createHeartIcon() {
   svg.setAttribute('fill', 'currentColor');
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.565 20.565 0 008 13.393a20.561 20.561 0 003.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.75.75 0 01-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5z');
+  path.setAttribute(
+    'd',
+    'M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.565 20.565 0 008 13.393a20.561 20.561 0 003.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.75.75 0 01-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5z',
+  );
   svg.appendChild(path);
   return svg;
 }
@@ -120,10 +126,17 @@ export function renderCaptureScreen(container, state, handlers) {
 
   // Sidebar
   const sidebar = createElement('div', { className: 'capture-sidebar' });
-  sidebar.appendChild(createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)));
+  sidebar.appendChild(
+    createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)),
+  );
   sidebar.appendChild(createControlSection('Buffer', renderStats(state.stats)));
   // Disable settings when capture is active (sharing screen)
-  sidebar.appendChild(createControlSection('Settings', renderSettings(state.settings, handlers, cleanups, state.isSharing)));
+  sidebar.appendChild(
+    createControlSection(
+      'Settings',
+      renderSettings(state.settings, handlers, cleanups, state.isSharing),
+    ),
+  );
 
   content.appendChild(sidebar);
   screen.appendChild(content);
@@ -139,7 +152,6 @@ export function renderCaptureScreen(container, state, handlers) {
   };
 }
 
-
 /**
  * Render video preview area
  * @param {import('./types.js').CaptureState} state
@@ -151,7 +163,9 @@ function renderVideoPreview(state) {
       'video-preview',
       'video-preview--active',
       state.isCapturing ? 'video-preview--recording' : '',
-    ].filter(Boolean).join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     const preview = createElement('div', { className: previewClasses });
 
@@ -161,7 +175,7 @@ function renderVideoPreview(state) {
         createElement('div', { className: 'recording-badge' }, [
           createElement('span', { className: 'dot' }),
           'REC',
-        ])
+        ]),
       );
     }
 
@@ -220,7 +234,7 @@ function renderCaptureActions(state, handlers, cleanups) {
         type: 'button',
         'aria-label': 'Select screen to capture',
       },
-      ['Select Screen']
+      ['Select Screen'],
     );
     cleanups.push(
       on(selectBtn, 'click', async () => {
@@ -233,7 +247,7 @@ function renderCaptureActions(state, handlers, cleanups) {
           selectBtn.removeAttribute('disabled');
           selectBtn.textContent = 'Select Screen';
         }
-      })
+      }),
     );
     actions.appendChild(selectBtn);
   } else {
@@ -245,7 +259,7 @@ function renderCaptureActions(state, handlers, cleanups) {
         type: 'button',
         'aria-label': 'Create clip from buffer',
       },
-      ['Create Clip']
+      ['Create Clip'],
     );
     actions.appendChild(clipBtn);
 
@@ -264,20 +278,24 @@ function renderCaptureActions(state, handlers, cleanups) {
           clipBtn.removeAttribute('disabled');
           clipBtn.textContent = 'Create Clip';
         }
-      })
+      }),
     );
   }
 
   // Error display (inline with retry hint)
   if (state.error) {
-    const errorContainer = createElement('div', {
-      className: 'capture-error',
-      role: 'alert',
-      'aria-live': 'assertive',
-    }, [
-      createElement('span', { className: 'capture-error__icon' }, ['\u26A0\uFE0F']),
-      createElement('span', { className: 'capture-error__text' }, [state.error]),
-    ]);
+    const errorContainer = createElement(
+      'div',
+      {
+        className: 'capture-error',
+        role: 'alert',
+        'aria-live': 'assertive',
+      },
+      [
+        createElement('span', { className: 'capture-error__icon' }, ['\u26A0\uFE0F']),
+        createElement('span', { className: 'capture-error__text' }, [state.error]),
+      ],
+    );
     actions.appendChild(errorContainer);
   }
 
@@ -326,7 +344,7 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
   fpsRow.appendChild(
     createElement('div', { className: 'setting-header' }, [
       createElement('span', { className: 'setting-label' }, ['Frame Rate']),
-    ])
+    ]),
   );
   const fpsSelect = /** @type {HTMLSelectElement} */ (
     createElement('select', { disabled: disabled ? 'true' : undefined }, [
@@ -340,7 +358,7 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
     cleanups.push(
       on(fpsSelect, 'change', () => {
         handlers.onSettingsChange({ fps: /** @type {15|30|60} */ (Number(fpsSelect.value)) });
-      })
+      }),
     );
   }
   fpsRow.appendChild(fpsSelect);
@@ -352,7 +370,7 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
     createElement('div', { className: 'slider-header' }, [
       createElement('span', { className: 'setting-label' }, ['Buffer']),
       createElement('span', { className: 'setting-value' }, [`${settings.bufferDuration}s`]),
-    ])
+    ]),
   );
   const durationInput = /** @type {HTMLInputElement} */ (
     createElement('input', {
@@ -369,12 +387,12 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
       on(durationInput, 'input', () => {
         const valueEl = durationRow.querySelector('.setting-value');
         if (valueEl) valueEl.textContent = `${durationInput.value}s`;
-      })
+      }),
     );
     cleanups.push(
       on(durationInput, 'change', () => {
         handlers.onSettingsChange({ bufferDuration: Number(durationInput.value) });
-      })
+      }),
     );
   }
   durationRow.appendChild(durationInput);
@@ -385,18 +403,22 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
   sceneDetectionRow.appendChild(
     createElement('div', { className: 'setting-header' }, [
       createElement('span', { className: 'setting-label' }, ['Scene Detection']),
-    ])
+    ]),
   );
   const sceneDetectionToggle = /** @type {HTMLButtonElement} */ (
-    createElement('button', {
-      className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''} ${disabled ? 'btn-toggle--disabled' : ''}`,
-      type: 'button',
-      'data-setting': 'sceneDetection',
-      'aria-pressed': String(settings.sceneDetection),
-      'aria-disabled': disabled ? 'true' : undefined,
-      disabled: disabled ? 'true' : undefined,
-      title: 'Automatically detect scene changes when creating a clip',
-    }, [settings.sceneDetection ? 'On' : 'Off'])
+    createElement(
+      'button',
+      {
+        className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''} ${disabled ? 'btn-toggle--disabled' : ''}`,
+        type: 'button',
+        'data-setting': 'sceneDetection',
+        'aria-pressed': String(settings.sceneDetection),
+        'aria-disabled': disabled ? 'true' : undefined,
+        disabled: disabled ? 'true' : undefined,
+        title: 'Automatically detect scene changes when creating a clip',
+      },
+      [settings.sceneDetection ? 'On' : 'Off'],
+    )
   );
   if (!disabled) {
     cleanups.push(
@@ -405,7 +427,7 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
         const currentSettings = handlers.getSettings();
         const newValue = currentSettings ? !currentSettings.sceneDetection : true;
         handlers.onSettingsChange({ sceneDetection: newValue });
-      })
+      }),
     );
   }
   sceneDetectionRow.appendChild(sceneDetectionToggle);

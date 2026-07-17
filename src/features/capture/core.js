@@ -4,8 +4,9 @@
  */
 
 // Import and re-export VideoFrame utilities
-import { safeClose, safeCloseFrame, closeAllFrames } from '../../shared/utils/videoframe.js';
-export { safeClose, safeCloseFrame, closeAllFrames };
+import { closeAllFrames, safeClose, safeCloseFrame } from '../../shared/utils/videoframe.js';
+
+export { closeAllFrames, safeClose, safeCloseFrame };
 
 import { loadSettings } from '../../shared/user-settings.js';
 

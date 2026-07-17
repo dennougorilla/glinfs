@@ -96,7 +96,9 @@ export function createCaptureCanvas() {
 export function createFrameProcessor(track) {
   // Validate track state
   if (track.readyState !== 'live') {
-    throw new Error(`Cannot create frame processor: track state is "${track.readyState}" (expected "live")`);
+    throw new Error(
+      `Cannot create frame processor: track state is "${track.readyState}" (expected "live")`,
+    );
   }
 
   // Check for MediaStreamTrackProcessor support

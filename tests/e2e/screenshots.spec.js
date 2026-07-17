@@ -7,7 +7,7 @@
  * 2. UI/UX review with frontend-design analysis
  */
 
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const ANIMATION_SETTLE_MS = 500;
 

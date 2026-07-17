@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  setCropArea,
-  constrainAspectRatio,
-  clampCropArea,
   calculateCropFromDrag,
+  clampCropArea,
+  constrainAspectRatio,
+  setCropArea,
 } from '../../../src/features/editor/core.js';
 
 /**
