@@ -126,6 +126,25 @@ export function createClip(frames, fps = DEFAULT_FPS) {
 }
 
 /**
+ * Get the effective FPS of a clip, falling back to the editor default
+ * @param {import('./types.js').Clip | null | undefined} clip
+ * @returns {number}
+ */
+export function getClipFps(clip) {
+  return clip && clip.fps > 0 ? clip.fps : DEFAULT_FPS;
+}
+
+/**
+ * Calculate the playback interval in milliseconds for a given FPS and speed
+ * @param {number} fps - Frames per second
+ * @param {number} [playbackSpeed] - Playback speed multiplier (default: 1)
+ * @returns {number} Interval in ms between frames
+ */
+export function getPlaybackIntervalMs(fps, playbackSpeed = 1) {
+  return 1000 / fps / playbackSpeed;
+}
+
+/**
  * Update frame range selection
  * @param {import('./types.js').Clip} clip
  * @param {import('./types.js').FrameRange} range

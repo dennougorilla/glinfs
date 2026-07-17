@@ -10,14 +10,12 @@ import { clamp } from '../../shared/utils/math.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
+import { getClipFps } from './core.js';
 
 /**
  * @typedef {Object} TimelineHandlers
  * @property {(range: import('./types.js').FrameRange) => void} onRangeChange - Range changed
  */
-
-/** Default FPS fallback for time calculations */
-const DEFAULT_FPS = 30;
 
 /** Number of thumbnail samples to show */
 const MAX_THUMBNAILS = 30;
@@ -37,7 +35,7 @@ const MIN_SELECTION_FRAMES = 2;
 export function renderTimeline(container, clip, currentFrame, selectedRange, handlers) {
   const cleanups = [];
   const totalFrames = clip.frames.length;
-  const fps = clip.fps || DEFAULT_FPS;
+  const fps = getClipFps(clip);
   const duration = totalFrames / fps;
   const { timeline: thumbnailSize } = getThumbnailSizes();
 
@@ -78,11 +76,9 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     });
 
     if (isMajor) {
-      const frameAtTick = Math.round(t * DEFAULT_FPS);
+      const frameAtTick = Math.round(t * fps);
       tick.appendChild(
-        createElement('span', { className: 'tl-tick-label' }, [
-          frameToTimecode(frameAtTick, DEFAULT_FPS),
-        ]),
+        createElement('span', { className: 'tl-tick-label' }, [frameToTimecode(frameAtTick, fps)]),
       );
     }
 
@@ -287,10 +283,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     // Show hover time during drag
     hoverIndicator.style.display = 'block';
     hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
-      frameIndex,
-      DEFAULT_FPS,
-    );
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, fps);
   };
 
   const onHandleMouseUp = () => {
@@ -336,7 +329,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     hoverIndicator.style.left = `${percent}%`;
     hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
       state.dragStartFrame,
-      DEFAULT_FPS,
+      fps,
     );
   };
 
@@ -355,10 +348,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
     // Update hover time
     hoverIndicator.style.left = `${getPercentFromFrame(currentFrame)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
-      currentFrame,
-      DEFAULT_FPS,
-    );
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(currentFrame, fps);
 
     // Live update the actual selection
     if (endFrame - startFrame >= MIN_SELECTION_FRAMES) {
@@ -401,10 +391,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
       hoverIndicator.style.display = 'block';
       hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-      hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
-        frameIndex,
-        DEFAULT_FPS,
-      );
+      hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, fps);
     }),
   );
 

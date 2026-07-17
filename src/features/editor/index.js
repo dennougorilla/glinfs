@@ -16,7 +16,12 @@ import { createElement, createErrorScreen, qsRequired } from '../../shared/utils
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { centerCropAfterConstraint, constrainAspectRatio } from './core.js';
+import {
+  centerCropAfterConstraint,
+  constrainAspectRatio,
+  getClipFps,
+  getPlaybackIntervalMs,
+} from './core.js';
 import {
   clearCrop,
   completeSceneDetection,
@@ -387,7 +392,7 @@ function render(container) {
         return s?.clip?.frames[s.currentFrame] ?? null;
       },
     },
-    DEFAULT_FPS,
+    getClipFps(state.clip),
   );
 
   uiCleanup = result.cleanup;
@@ -452,7 +457,7 @@ function startPlayback() {
   if (!store) return;
 
   const state = store.getState();
-  const interval = 1000 / DEFAULT_FPS / state.playbackSpeed;
+  const interval = getPlaybackIntervalMs(getClipFps(state.clip), state.playbackSpeed);
 
   playbackIntervalId = window.setInterval(() => {
     if (!store) return;
