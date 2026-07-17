@@ -160,12 +160,7 @@ test.describe('Editor Crop Functionality', () => {
       expect(await readCropInfo(page)).toEqual([null, null, null, null]);
     });
 
-    // FIXME(#37): the Clear Crop button dies after the second crop update —
-    // the subscription in editor/index.js removes its click listener via
-    // cropInfoPanelCleanups on every cropArea change, but updateCropInfoPanel
-    // only re-registers the listener when it creates the button. Any drag
-    // (throttled setState fires multiple times) leaves the button unresponsive.
-    test.fixme('clears crop with Clear Crop button (#37)', async ({ page }) => {
+    test('clears crop with Clear Crop button (#37)', async ({ page }) => {
       await drawCrop(page);
 
       const clearBtn = page.locator('.btn-clear-crop');
