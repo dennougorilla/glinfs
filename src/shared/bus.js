@@ -7,8 +7,9 @@
  * @typedef {Object} EventBus
  * @property {(event: string, payload?: any) => void} emit - Emit event
  * @property {(event: string, handler: (payload: any) => void) => () => void} on - Subscribe to event
- * @property {(event: string, handler: (payload: any) => void) => void} once - Subscribe once
- * @property {(event: string) => void} off - Remove all listeners for event
+ * @property {(event: string, handler: (payload: any) => void) => () => void} once - Subscribe once
+ * @property {(event: string, handler: (payload: any) => void) => void} off - Remove a specific handler
+ * @property {(event: string) => void} offAll - Remove all listeners for event
  */
 
 /** @type {Map<string, Set<(payload: any) => void>>} */
@@ -56,13 +57,14 @@ export function on(event, handler) {
  * Subscribe to event once
  * @param {string} event - Event name
  * @param {(payload: any) => void} handler - Event handler
+ * @returns {() => void} Unsubscribe function (no-op if already fired)
  */
 export function once(event, handler) {
   const wrapper = (payload) => {
     off(event, wrapper);
     handler(payload);
   };
-  on(event, wrapper);
+  return on(event, wrapper);
 }
 
 /**
@@ -70,7 +72,7 @@ export function once(event, handler) {
  * @param {string} event - Event name
  * @param {(payload: any) => void} handler - Handler to remove
  */
-function off(event, handler) {
+export function off(event, handler) {
   const handlers = listeners.get(event);
   if (handlers) {
     handlers.delete(handler);
@@ -90,5 +92,6 @@ export const bus = {
   emit,
   on,
   once,
-  off: offAll,
+  off,
+  offAll,
 };

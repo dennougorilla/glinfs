@@ -242,4 +242,30 @@ describe('createStore', () => {
       expect(store.getState().enabled).toBe(true);
     });
   });
+
+  describe('listener isolation', () => {
+    it('notifies remaining listeners when an earlier listener throws', () => {
+      // Arrange
+      const store = createStore({ count: 0 });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const throwing = vi.fn(() => {
+        throw new Error('listener boom');
+      });
+      const healthy = vi.fn();
+      store.subscribe(throwing);
+      store.subscribe(healthy);
+
+      // Act
+      store.setState({ count: 1 });
+
+      // Assert - the throwing listener must not block the healthy one
+      expect(throwing).toHaveBeenCalledTimes(1);
+      expect(healthy).toHaveBeenCalledTimes(1);
+      expect(healthy).toHaveBeenCalledWith({ count: 1 }, { count: 0 });
+      expect(errorSpy).toHaveBeenCalled();
+      expect(store.getState().count).toBe(1);
+
+      errorSpy.mockRestore();
+    });
+  });
 });

@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearClipPayload,
   clearEditorPayload,
+  clearScreenCaptureState,
   getClipPayload,
   getEditorPayload,
+  registerScreenCaptureCleanup,
   resetAppStore,
   setClipPayload,
   setEditorPayload,
+  setScreenCaptureState,
   validateClipPayload,
   validateEditorPayload,
 } from '../../../src/shared/app-store.js';
@@ -293,5 +296,57 @@ describe('resetAppStore', () => {
 
     expect(getClipPayload()).toBeNull();
     expect(getEditorPayload()).toBeNull();
+  });
+});
+
+describe('clearScreenCaptureState', () => {
+  beforeEach(() => {
+    resetAppStore();
+  });
+
+  it('resolves after the registered async cleanup completes', async () => {
+    let cleanupDone = false;
+    registerScreenCaptureCleanup(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      cleanupDone = true;
+    });
+    setScreenCaptureState({ settings: { fps: 30 } });
+
+    await clearScreenCaptureState();
+
+    expect(cleanupDone).toBe(true);
+  });
+
+  it('passes the cleared state and stopStream option to the cleanup fn', async () => {
+    const cleanupFn = vi.fn();
+    registerScreenCaptureCleanup(cleanupFn);
+    const captureState = { settings: { fps: 30 } };
+    setScreenCaptureState(captureState);
+
+    await clearScreenCaptureState(false);
+
+    expect(cleanupFn).toHaveBeenCalledWith(captureState, { stopStream: false });
+  });
+
+  it('logs instead of throwing when the async cleanup rejects', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    registerScreenCaptureCleanup(async () => {
+      throw new Error('teardown boom');
+    });
+    setScreenCaptureState({ settings: { fps: 30 } });
+
+    await expect(clearScreenCaptureState()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it('resolves immediately when no capture state is stored', async () => {
+    const cleanupFn = vi.fn();
+    registerScreenCaptureCleanup(cleanupFn);
+
+    await clearScreenCaptureState();
+
+    expect(cleanupFn).not.toHaveBeenCalled();
   });
 });
