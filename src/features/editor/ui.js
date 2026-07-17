@@ -120,6 +120,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const dimensions = getOutputDimensions(state.cropArea, frame);
   const totalFrames = state.clip.frames.length;
 
+  // Read live state via handlers to avoid stale closures (render runs once)
+  const getCurrentState = () => handlers.getState?.() ?? state;
+
   // Main layout
   const screen = createElement('div', { className: 'editor-screen screen' });
 
@@ -154,7 +157,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
     },
     ['\u23EE'],
   );
-  cleanups.push(on(firstBtn, 'click', () => handlers.onFrameChange(state.selectedRange.start)));
+  cleanups.push(
+    on(firstBtn, 'click', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
+  );
   playbackControls.appendChild(firstBtn);
 
   // Previous frame
@@ -168,7 +173,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
     },
     ['\u23F4'],
   );
-  cleanups.push(on(prevBtn, 'click', () => handlers.onFrameChange(state.currentFrame - 1)));
+  cleanups.push(
+    on(prevBtn, 'click', () => handlers.onFrameChange(getCurrentState().currentFrame - 1)),
+  );
   playbackControls.appendChild(prevBtn);
 
   // Play/Pause
@@ -196,7 +203,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
     },
     ['\u23F5'],
   );
-  cleanups.push(on(nextBtn, 'click', () => handlers.onFrameChange(state.currentFrame + 1)));
+  cleanups.push(
+    on(nextBtn, 'click', () => handlers.onFrameChange(getCurrentState().currentFrame + 1)),
+  );
   playbackControls.appendChild(nextBtn);
 
   // Last frame
@@ -210,7 +219,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
     },
     ['\u23ED'],
   );
-  cleanups.push(on(lastBtn, 'click', () => handlers.onFrameChange(state.selectedRange.end)));
+  cleanups.push(
+    on(lastBtn, 'click', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
+  );
   playbackControls.appendChild(lastBtn);
 
   // Frame Grid button and modal state
@@ -523,18 +534,19 @@ export function renderEditorScreen(container, state, handlers, fps) {
 
   // Clear crop button (only when cropArea exists)
   if (state.cropArea) {
-    const clearBtn = createElement(
-      'button',
-      {
-        className: 'btn btn-secondary btn-clear-crop',
-        type: 'button',
-        style: 'width: 100%; margin-top: var(--space-4);',
-      },
-      ['Clear Crop'],
-    );
-    cleanups.push(on(clearBtn, 'click', () => handlers.onCropChange(null)));
-    panelContent.appendChild(clearBtn);
+    panelContent.appendChild(createClearCropButton());
   }
+
+  // Clear Crop clicks are handled via delegation so the listener survives
+  // updateCropInfoPanel() re-creating the button on crop updates (issue #37)
+  cleanups.push(
+    on(panelContent, 'click', (e) => {
+      const target = /** @type {Element | null} */ (e.target);
+      if (target instanceof Element && target.closest('.btn-clear-crop')) {
+        handlers.onCropChange(null);
+      }
+    }),
+  );
 
   sidebar.appendChild(panelContent);
   content.appendChild(sidebar);
@@ -653,6 +665,9 @@ export function renderEditorScreen(container, state, handlers, fps) {
  * @returns {() => void} Cleanup function
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
+  // Read live state via handlers to avoid stale closures (render runs once)
+  const getCurrentState = () => handlers.getState?.() ?? state;
+
   const onKeyDown = (e) => {
     // Don't handle if focused on form element
     if (
@@ -670,19 +685,19 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
         break;
       case 'ArrowLeft':
         e.preventDefault();
-        handlers.onFrameChange(state.currentFrame - 1);
+        handlers.onFrameChange(getCurrentState().currentFrame - 1);
         break;
       case 'ArrowRight':
         e.preventDefault();
-        handlers.onFrameChange(state.currentFrame + 1);
+        handlers.onFrameChange(getCurrentState().currentFrame + 1);
         break;
       case 'Home':
         e.preventDefault();
-        handlers.onFrameChange(state.selectedRange.start);
+        handlers.onFrameChange(getCurrentState().selectedRange.start);
         break;
       case 'End':
         e.preventDefault();
-        handlers.onFrameChange(state.selectedRange.end);
+        handlers.onFrameChange(getCurrentState().selectedRange.end);
         break;
       case 'g':
       case 'G':
@@ -1170,13 +1185,34 @@ function openFrameGridModal(container, state, handlers, onClose) {
 }
 
 /**
+ * Create the Clear Crop button element
+ * Click handling is delegated to the sidebar panel in renderEditorScreen,
+ * so no listener is attached here (issue #37).
+ * @returns {HTMLElement}
+ */
+function createClearCropButton() {
+  return createElement(
+    'button',
+    {
+      className: 'btn btn-secondary btn-clear-crop',
+      type: 'button',
+      style: 'width: 100%; margin-top: var(--space-4);',
+    },
+    ['Clear Crop'],
+  );
+}
+
+/**
  * Update crop info panel values
+ * Clear Crop clicks are handled by a delegated listener registered once in
+ * renderEditorScreen, so this function never attaches listeners of its own
+ * (the returned cleanups array is kept for API compatibility).
  * @param {HTMLElement} container - Editor container
  * @param {import('./types.js').CropArea | null} cropArea - Current crop area
- * @param {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop change handler
+ * @param {(crop: import('./types.js').CropArea | null) => void} _onCropChange - Unused (delegation)
  * @returns {(() => void)[]} Cleanup functions for event listeners
  */
-export function updateCropInfoPanel(container, cropArea, onCropChange) {
+export function updateCropInfoPanel(container, cropArea, _onCropChange) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
@@ -1204,18 +1240,8 @@ export function updateCropInfoPanel(container, cropArea, onCropChange) {
   const existingClearBtn = sidebar.querySelector('.btn-clear-crop');
 
   if (cropArea && !existingClearBtn) {
-    // Add Clear Crop button
-    const clearBtn = createElement(
-      'button',
-      {
-        className: 'btn btn-secondary btn-clear-crop',
-        type: 'button',
-        style: 'width: 100%; margin-top: var(--space-4);',
-      },
-      ['Clear Crop'],
-    );
-    cleanups.push(on(clearBtn, 'click', () => onCropChange(null)));
-    sidebar.appendChild(clearBtn);
+    // Add Clear Crop button (clicks handled via delegation)
+    sidebar.appendChild(createClearCropButton());
   } else if (!cropArea && existingClearBtn) {
     // Remove Clear Crop button
     existingClearBtn.remove();
