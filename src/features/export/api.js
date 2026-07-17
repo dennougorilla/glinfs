@@ -150,7 +150,11 @@ export async function encodeGif(params, signal) {
   // Create worker manager
   const manager = createEncoderManager();
 
-  // Handle cancellation
+  // Handle cancellation: send CANCEL as a courtesy, then dispose right
+  // away. The worker handles FINISH synchronously, so a CANCEL queued
+  // behind it could never preempt the encode — dispose() terminates the
+  // worker and rejects a pending finish() with AbortError immediately,
+  // which is what lets the UI leave the encoding state promptly.
   const abortHandler = () => {
     manager.cancel();
     manager.dispose();
@@ -194,6 +198,13 @@ export async function encodeGif(params, signal) {
         width: frameWidth,
         height: frameHeight,
       } = await getFrameRGBA(frame, crop);
+
+      // Re-check after the await: an abort during extraction has already
+      // disposed the manager, and addFrame would throw WorkerError instead
+      // of the AbortError the caller distinguishes cancellation by.
+      if (signal?.aborted) {
+        throw new DOMException('Encoding cancelled', 'AbortError');
+      }
 
       // Send frame to worker
       manager.addFrame(rgba, frameWidth, frameHeight, i);

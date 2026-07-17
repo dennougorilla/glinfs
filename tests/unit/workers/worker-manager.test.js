@@ -335,6 +335,36 @@ describe('GifEncoderManager', () => {
       manager.dispose();
     });
 
+    it('should reject pending finish() with AbortError when CANCELLED received', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      const initPromise = manager.init({
+        width: 10,
+        height: 10,
+        totalFrames: 1,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      // Act - cancel while finish() is pending (worker acknowledges with CANCELLED)
+      const finishPromise = manager.finish();
+      manager.cancel();
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.CANCELLED });
+
+      // Assert
+      await expect(finishPromise).rejects.toMatchObject({ name: 'AbortError' });
+
+      // Cleanup
+      manager.dispose();
+    });
+
     it('should reject on ERROR event', async () => {
       // Arrange
       const manager = new workerManagerModule.GifEncoderManager();
@@ -470,6 +500,34 @@ describe('GifEncoderManager', () => {
         manager.dispose();
         manager.dispose();
       }).not.toThrow();
+    });
+
+    it('should reject a pending finish() with AbortError (regression #38)', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      const initPromise = manager.init({
+        width: 10,
+        height: 10,
+        totalFrames: 1,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      // finish() stays pending: the mock worker never sends COMPLETE
+      const finishPromise = manager.finish();
+
+      // Act - dispose while finish() is pending (e.g. cancel during encoding).
+      // Before the fix this left finishPromise unsettled forever and the
+      // test failed with a timeout.
+      manager.dispose();
+
+      // Assert
+      await expect(finishPromise).rejects.toMatchObject({ name: 'AbortError' });
     });
   });
 
