@@ -79,6 +79,13 @@ export class GifEncoderManager {
     /** @type {ProgressCallback | null} */
     this.onProgress = null;
 
+    /**
+     * Called for every ERROR event from the worker, even when no finish()
+     * promise is pending (e.g. a frame fails during submission).
+     * @type {((error: Error) => void) | null}
+     */
+    this.onError = null;
+
     /** @type {((data: ArrayBuffer) => void) | null} */
     this._resolveComplete = null;
 
@@ -218,6 +225,8 @@ export class GifEncoderManager {
           ? new Error(event.message || 'Worker error')
           : new Error('Unknown worker error');
 
+      this.onError?.(error);
+
       // Reject any pending finish operation
       if (this._rejectComplete) {
         this._rejectComplete(error);
@@ -306,6 +315,7 @@ export class GifEncoderManager {
     // worker means COMPLETE/ERROR/CANCELLED will never arrive.
     const rejectPending = this._rejectComplete;
     this.onProgress = null;
+    this.onError = null;
     this._resolveComplete = null;
     this._rejectComplete = null;
     this._isInitialized = false;
@@ -336,15 +346,18 @@ export class GifEncoderManager {
           this._rejectComplete = null;
           break;
 
-        case Events.ERROR:
-          this._rejectComplete?.(
-            createWorkerError(data.message || 'Encoding failed', WorkerErrorCode.ENCODING_FAILED, {
-              originalMessage: data.message,
-            }),
+        case Events.ERROR: {
+          const error = createWorkerError(
+            data.message || 'Encoding failed',
+            WorkerErrorCode.ENCODING_FAILED,
+            { originalMessage: data.message },
           );
+          this.onError?.(error);
+          this._rejectComplete?.(error);
           this._resolveComplete = null;
           this._rejectComplete = null;
           break;
+        }
 
         case Events.CANCELLED:
           this._rejectComplete?.(new DOMException('Encoding cancelled', 'AbortError'));

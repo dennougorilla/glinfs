@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   Commands,
   createAddFrameMessage,
@@ -127,18 +127,45 @@ describe('Worker Protocol', () => {
       expect(transfer[0]).toBeInstanceOf(ArrayBuffer);
     });
 
-    it('should copy buffer instead of using original', () => {
-      // Arrange
+    it('should transfer the original buffer directly without copying (regression #39)', () => {
+      // Arrange - a view spanning its entire backing buffer (the shape
+      // produced by getFrameRGBA)
       const rgba = new Uint8ClampedArray([1, 2, 3, 4]);
+      const sliceSpy = vi.spyOn(ArrayBuffer.prototype, 'slice');
 
       // Act
-      const { message } = createAddFrameMessage(rgba, 1, 1, 0);
+      const { message, transfer } = createAddFrameMessage(rgba, 1, 1, 0);
 
-      // Assert - original buffer should still be accessible
-      expect(rgba.length).toBe(4);
-      expect(rgba[0]).toBe(1);
-      // rgbaData should be a different buffer
-      expect(message.rgbaData).not.toBe(rgba.buffer);
+      // Assert - zero-copy: the exact same buffer is posted and transferred.
+      // Copying doubled peak memory (~8.3MB per 1080p frame).
+      expect(message.rgbaData).toBe(rgba.buffer);
+      expect(transfer[0]).toBe(rgba.buffer);
+      expect(sliceSpy).not.toHaveBeenCalled();
+
+      // Cleanup
+      sliceSpy.mockRestore();
+    });
+
+    it('should copy only the viewed range for a view into a larger buffer', () => {
+      // Arrange - a 16-byte view at offset 8 of a 32-byte buffer
+      const backing = new ArrayBuffer(32);
+      const full = new Uint8ClampedArray(backing);
+      full.forEach((_, i) => {
+        full[i] = i;
+      });
+      const rgba = new Uint8ClampedArray(backing, 8, 16);
+
+      // Act
+      const { message, transfer } = createAddFrameMessage(rgba, 2, 2, 0);
+
+      // Assert - transferring the whole backing buffer would leak unrelated
+      // bytes and detach the shared buffer, so the exact range is copied
+      expect(message.rgbaData).not.toBe(backing);
+      expect(message.rgbaData.byteLength).toBe(16);
+      expect(Array.from(new Uint8ClampedArray(message.rgbaData))).toEqual(
+        Array.from({ length: 16 }, (_, i) => i + 8),
+      );
+      expect(transfer[0]).toBe(message.rgbaData);
     });
 
     it('should have same byte length as original', () => {

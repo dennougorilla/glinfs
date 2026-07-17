@@ -122,6 +122,14 @@ export async function checkEncoderStatus() {
 /** Default FPS fallback */
 const DEFAULT_FPS = 30;
 
+/**
+ * Maximum number of frames in flight (submitted to the worker but not yet
+ * reported via PROGRESS). Frame extraction is 10-100x faster than worker-side
+ * quantize/encode, so without this cap multi-GB of transferred RGBA buffers
+ * pile up in the worker's message queue and can OOM the tab (#39).
+ */
+export const MAX_IN_FLIGHT_FRAMES = 4;
+
 export async function encodeGif(params, signal) {
   const { frames, crop, settings, fps = DEFAULT_FPS, onProgress } = params;
 
@@ -150,14 +158,30 @@ export async function encodeGif(params, signal) {
   // Create worker manager
   const manager = createEncoderManager();
 
+  // Backpressure bookkeeping: the frame loop waits whenever
+  // (submitted - processed) reaches MAX_IN_FLIGHT_FRAMES and is woken by
+  // PROGRESS events, worker errors, or abort.
+  let processedFrames = 0;
+  /** @type {Error | null} */
+  let frameError = null;
+  /** @type {(() => void) | null} */
+  let wakeUp = null;
+  const notify = () => {
+    const resume = wakeUp;
+    wakeUp = null;
+    resume?.();
+  };
+
   // Handle cancellation: send CANCEL as a courtesy, then dispose right
   // away. The worker handles FINISH synchronously, so a CANCEL queued
   // behind it could never preempt the encode — dispose() terminates the
   // worker and rejects a pending finish() with AbortError immediately,
   // which is what lets the UI leave the encoding state promptly.
+  // notify() wakes the backpressure wait so the loop observes the abort.
   const abortHandler = () => {
     manager.cancel();
     manager.dispose();
+    notify();
   };
   signal?.addEventListener('abort', abortHandler);
 
@@ -174,8 +198,10 @@ export async function encodeGif(params, signal) {
       quantizeFormat: preset.format,
     });
 
-    // Setup progress callback
+    // Setup progress callback (also releases backpressure window slots)
     manager.onProgress = ({ percent, frameIndex, totalFrames }) => {
+      processedFrames++;
+      notify();
       onProgress({
         percent,
         current: frameIndex + 1,
@@ -183,11 +209,30 @@ export async function encodeGif(params, signal) {
       });
     };
 
-    // Extract and send frames to worker
+    // A frame that fails in the worker never emits PROGRESS; surface the
+    // error instead of waiting forever for window space.
+    manager.onError = (error) => {
+      frameError = error;
+      notify();
+    };
+
+    // Extract and send frames to worker with bounded in-flight window
     for (let i = 0; i < skippedFrames.length; i++) {
+      // Wait until the in-flight window has room (i frames submitted so far)
+      while (i - processedFrames >= MAX_IN_FLIGHT_FRAMES && !signal?.aborted && !frameError) {
+        await new Promise((resolve) => {
+          wakeUp = resolve;
+        });
+      }
+
       // Check for cancellation
       if (signal?.aborted) {
         throw new DOMException('Encoding cancelled', 'AbortError');
+      }
+
+      // Surface worker-side frame errors
+      if (frameError) {
+        throw frameError;
       }
 
       const frame = skippedFrames[i];
@@ -206,8 +251,23 @@ export async function encodeGif(params, signal) {
         throw new DOMException('Encoding cancelled', 'AbortError');
       }
 
-      // Send frame to worker
+      // Re-check worker errors too: an ERROR that arrived while awaiting
+      // getFrameRGBA would otherwise let this frame and FINISH proceed,
+      // returning a GIF silently missing the failed frame.
+      if (frameError) {
+        throw frameError;
+      }
+
+      // Send frame to worker. The buffer is transferred (detached), so
+      // `rgba` must not be reused after this call.
       manager.addFrame(rgba, frameWidth, frameHeight, i);
+    }
+
+    // A frame error that arrived after the last submission must fail the
+    // encode — finish() alone would await COMPLETE and resolve a GIF with
+    // the failed frame missing.
+    if (frameError) {
+      throw frameError;
     }
 
     // Finish and return result

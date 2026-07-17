@@ -603,6 +603,55 @@ describe('GifEncoderManager', () => {
     });
   });
 
+  describe('error callback', () => {
+    it('should call onError when ERROR event received without pending finish()', async () => {
+      // Arrange - a frame error during submission emits ERROR while no
+      // finish() promise exists yet (#39 backpressure relies on this hook)
+      const manager = new workerManagerModule.GifEncoderManager();
+      const onError = vi.fn();
+      manager.onError = onError;
+
+      const initPromise = manager.init({
+        width: 10,
+        height: 10,
+        totalFrames: 10,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      // Act
+      mockWorkerInstance?._simulateMessage({
+        event: Events.ERROR,
+        message: 'Failed to add frame',
+      });
+
+      // Assert
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
+      expect(onError.mock.calls[0][0].message).toBe('Failed to add frame');
+
+      // Cleanup
+      manager.dispose();
+    });
+
+    it('should clear onError on dispose', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      manager.onError = vi.fn();
+
+      // Act
+      manager.dispose();
+
+      // Assert
+      expect(manager.onError).toBeNull();
+    });
+  });
+
   describe('createEncoderManager', () => {
     it('should create GifEncoderManager instance', () => {
       // Act
