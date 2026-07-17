@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   checkEncoderStatus,
   copyToClipboard,
@@ -8,6 +8,33 @@ import {
   openInNewTab,
   scaleFrame,
 } from '../../../src/features/export/api.js';
+
+// Original descriptors of globals that individual tests overwrite directly.
+// Captured once at module load so afterEach can restore (or remove) them,
+// keeping tests independent of execution order.
+const ORIGINAL_DESCRIPTORS = {
+  offscreenCanvas: Object.getOwnPropertyDescriptor(globalThis, 'OffscreenCanvas'),
+  clipboardItemGlobal: Object.getOwnPropertyDescriptor(globalThis, 'ClipboardItem'),
+  clipboardItemWindow: Object.getOwnPropertyDescriptor(window, 'ClipboardItem'),
+  navigatorClipboard: Object.getOwnPropertyDescriptor(navigator, 'clipboard'),
+};
+
+function restoreDescriptor(target, key, descriptor) {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+  } else {
+    delete target[key];
+  }
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  restoreDescriptor(globalThis, 'OffscreenCanvas', ORIGINAL_DESCRIPTORS.offscreenCanvas);
+  restoreDescriptor(globalThis, 'ClipboardItem', ORIGINAL_DESCRIPTORS.clipboardItemGlobal);
+  restoreDescriptor(window, 'ClipboardItem', ORIGINAL_DESCRIPTORS.clipboardItemWindow);
+  restoreDescriptor(navigator, 'clipboard', ORIGINAL_DESCRIPTORS.navigatorClipboard);
+});
 
 // Helper to create mock VideoFrame
 function createMockVideoFrame(width = 100, height = 100) {
@@ -186,9 +213,6 @@ describe('openInNewTab', () => {
     // Assert
     expect(URL.createObjectURL).toHaveBeenCalledWith(mockBlob);
     expect(window.open).toHaveBeenCalledWith(mockUrl, '_blank');
-
-    // Cleanup
-    vi.useRealTimers();
   });
 
   it('should schedule URL revocation after delay', () => {
@@ -206,9 +230,6 @@ describe('openInNewTab', () => {
 
     // Assert - setTimeout was called with a 60 second delay
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
-
-    // Cleanup
-    setTimeoutSpy.mockRestore();
   });
 });
 
