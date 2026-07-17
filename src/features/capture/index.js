@@ -19,6 +19,8 @@ import { createVideoElement, startScreenCapture, stopScreenCapture } from './api
 import { calculateMaxFrames } from './core.js';
 import {
   createCaptureStore,
+  pauseCapture,
+  resumeCapture,
   setError,
   startCapture,
   stopCapture,
@@ -28,9 +30,6 @@ import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } f
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
 let store = null;
-
-/** @type {AbortController | null} */
-let captureAbortController = null;
 
 /** @type {HTMLVideoElement | null} */
 let videoElement = null;
@@ -90,6 +89,8 @@ export function initCapture(settings) {
       const state = store.getState();
       const maxFrames = calculateMaxFrames(state.settings);
       workerManager.start(state.settings.fps, maxFrames);
+      // Keep the store's flags aligned with the worker loop actually running
+      store.setState(resumeCapture);
     }
 
     emit('capture:restored', { fromNavigation: true });
@@ -160,8 +161,10 @@ async function handleStart() {
     workerManager = null;
   }
 
-  // Clear any existing saved capture state when starting fresh
-  clearScreenCaptureState();
+  // Clear any existing saved capture state when starting fresh, and wait
+  // for the previous session's async teardown (track stop, worker
+  // termination) to finish so the new pipeline can't race the old one
+  await clearScreenCaptureState();
 
   try {
     const stream = await startScreenCapture();
@@ -196,9 +199,6 @@ async function handleStart() {
           stats: {
             frameCount: stats.frameCount,
             duration: stats.frameCount / stats.fps,
-            // Estimate memory: ImageBitmap uses ~width*height*4 bytes (RGBA)
-            // Assume 1920x1080 average, divide by 10 for GPU-resident estimate
-            memoryMB: (stats.frameCount * 1920 * 1080 * 4) / 10 / (1024 * 1024),
             fps: stats.fps,
           },
         }));
@@ -206,7 +206,6 @@ async function handleStart() {
     });
 
     // Start worker capture
-    captureAbortController = new AbortController();
     const fps = store.getState().settings.fps;
     const maxFrames = calculateMaxFrames(store.getState().settings);
     workerManager.start(fps, maxFrames);
@@ -242,12 +241,6 @@ async function handleStart() {
  */
 function handleStop(preserveBuffer = true) {
   if (!store) return;
-
-  // Abort capture
-  if (captureAbortController) {
-    captureAbortController.abort();
-    captureAbortController = null;
-  }
 
   // Stop worker capture (but preserve buffer for clip creation)
   if (workerManager) {
@@ -305,7 +298,6 @@ export function clearCaptureBuffer() {
       stats: {
         frameCount: 0,
         duration: 0,
-        memoryMB: 0,
         fps: state.stats.fps,
       },
     }));
@@ -472,6 +464,10 @@ function cleanup() {
     if (workerManager) {
       workerManager.stop();
     }
+
+    // Record that the worker loop is paused so isCapturing/isPaused stay
+    // truthful for anyone reading the stashed store during navigation
+    store.setState(pauseCapture);
 
     // Remove stream ended listener (will be re-attached on restore)
     if (streamEndedCleanup) {

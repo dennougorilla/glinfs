@@ -1455,6 +1455,12 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
   // Cleanup function
   function cleanup() {
+    // A pending long-press timer would otherwise fire after the modal is
+    // gone and mutate a detached grid item
+    if (touchTimer) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
+    }
     cleanups.forEach((fn) => fn());
     backdrop.remove();
   }

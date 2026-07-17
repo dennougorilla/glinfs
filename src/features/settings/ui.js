@@ -21,69 +21,83 @@ import { createElement } from '../../shared/utils/dom.js';
 export function renderSettings(container, handlers = {}) {
   const { onBack = () => {} } = handlers;
 
-  const settings = loadSettings();
-  const cleanups = [];
+  // One live cleanups array per render pass. The returned cleanup closure
+  // reads this binding, so it always disposes the CURRENT render — the old
+  // recursive rerender leaked every previous render's listener closures
+  // (holding detached DOM) and left the router cleaning up only the first.
+  /** @type {Array<() => void>} */
+  let cleanups = [];
 
-  // Re-render with the same container/handlers (no DOM expandos needed)
-  const rerender = () => renderSettings(container, handlers);
-
-  container.className = 'settings-container';
-  container.innerHTML = '';
-
-  // Header
-  const header = createElement('div', { className: 'settings-header' });
-
-  const backBtn = createElement('button', { className: 'btn btn-ghost' }, ['← 戻る']);
-  cleanups.push(() => backBtn.removeEventListener('click', onBack));
-  backBtn.addEventListener('click', onBack);
-
-  const title = createElement('h1', { className: 'settings-title' }, ['設定']);
-
-  const resetAllBtn = createElement('button', { className: 'btn btn-ghost' }, ['すべてリセット']);
-  const handleResetAll = () => {
-    if (confirm('すべての設定をデフォルト値にリセットしますか?')) {
-      resetSettings();
-      rerender();
-    }
+  const rerender = () => {
+    cleanups.forEach((cleanup) => cleanup());
+    cleanups = [];
+    renderPass();
   };
-  cleanups.push(() => resetAllBtn.removeEventListener('click', handleResetAll));
-  resetAllBtn.addEventListener('click', handleResetAll);
 
-  header.append(backBtn, title, resetAllBtn);
+  function renderPass() {
+    const settings = loadSettings();
 
-  // Settings content
-  const content = createElement('div', { className: 'settings-content' });
+    container.className = 'settings-container';
+    container.innerHTML = '';
 
-  // Render capture settings
-  const captureSection = renderSettingsCategory(
-    'capture',
-    SETTINGS_METADATA.capture.label,
-    settings.capture,
-    SETTINGS_METADATA.capture.settings,
-    cleanups,
-    rerender,
-  );
-  content.appendChild(captureSection);
+    // Header
+    const header = createElement('div', { className: 'settings-header' });
 
-  // Render export settings
-  const exportSection = renderSettingsCategory(
-    'export',
-    SETTINGS_METADATA.export.label,
-    settings.export,
-    SETTINGS_METADATA.export.settings,
-    cleanups,
-    rerender,
-  );
-  content.appendChild(exportSection);
+    const backBtn = createElement('button', { className: 'btn btn-ghost' }, ['← 戻る']);
+    cleanups.push(() => backBtn.removeEventListener('click', onBack));
+    backBtn.addEventListener('click', onBack);
 
-  // Render thumbnail quality setting
-  const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
-  content.appendChild(thumbnailSection);
+    const title = createElement('h1', { className: 'settings-title' }, ['設定']);
 
-  container.append(header, content);
+    const resetAllBtn = createElement('button', { className: 'btn btn-ghost' }, ['すべてリセット']);
+    const handleResetAll = () => {
+      if (confirm('すべての設定をデフォルト値にリセットしますか?')) {
+        resetSettings();
+        rerender();
+      }
+    };
+    cleanups.push(() => resetAllBtn.removeEventListener('click', handleResetAll));
+    resetAllBtn.addEventListener('click', handleResetAll);
+
+    header.append(backBtn, title, resetAllBtn);
+
+    // Settings content
+    const content = createElement('div', { className: 'settings-content' });
+
+    // Render capture settings
+    const captureSection = renderSettingsCategory(
+      'capture',
+      SETTINGS_METADATA.capture.label,
+      settings.capture,
+      SETTINGS_METADATA.capture.settings,
+      cleanups,
+      rerender,
+    );
+    content.appendChild(captureSection);
+
+    // Render export settings
+    const exportSection = renderSettingsCategory(
+      'export',
+      SETTINGS_METADATA.export.label,
+      settings.export,
+      SETTINGS_METADATA.export.settings,
+      cleanups,
+      rerender,
+    );
+    content.appendChild(exportSection);
+
+    // Render thumbnail quality setting
+    const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
+    content.appendChild(thumbnailSection);
+
+    container.append(header, content);
+  }
+
+  renderPass();
 
   return () => {
     cleanups.forEach((cleanup) => cleanup());
+    cleanups = [];
   };
 }
 
