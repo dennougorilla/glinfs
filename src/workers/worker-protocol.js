@@ -143,15 +143,25 @@ export function createInitMessage(config) {
 
 /**
  * Create AddFrameMessage
- * @param {Uint8ClampedArray} rgba - RGBA data
+ *
+ * The underlying ArrayBuffer is transferred directly (zero-copy) instead of
+ * being duplicated — frames are ~8.3MB at 1080p and copying doubled the peak
+ * memory usage (#39). The buffer is detached (neutered) once the message is
+ * posted, so callers MUST NOT reuse `rgba` after sending.
+ *
+ * @param {Uint8ClampedArray} rgba - RGBA data (consumed; do not reuse)
  * @param {number} width
  * @param {number} height
  * @param {number} frameIndex
  * @returns {{ message: AddFrameMessage, transfer: ArrayBuffer[] }}
  */
 export function createAddFrameMessage(rgba, width, height, frameIndex) {
-  // Copy ArrayBuffer to make it Transferable
-  const buffer = rgba.buffer.slice(0);
+  // Transfer the buffer directly when the view spans it entirely; only a
+  // view into a larger buffer needs the exact byte range copied out.
+  const coversWholeBuffer = rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength;
+  const buffer = coversWholeBuffer
+    ? rgba.buffer
+    : rgba.buffer.slice(rgba.byteOffset, rgba.byteOffset + rgba.byteLength);
 
   return {
     message: {
