@@ -342,13 +342,18 @@ export function initEditor() {
   // Also applies when returning from Export: the EditorPayload does not carry
   // scenes, so re-apply them from the ClipPayload still held in the app store (#43)
   if (clipPayload?.sceneDetectionEnabled) {
-    if (clipPayload.scenes && clipPayload.scenes.length > 0) {
-      // Use pre-computed scenes from Capture (no need to run detection again)
+    if (Array.isArray(clipPayload.scenes)) {
+      // Use pre-computed scenes from Capture. An empty array is a legitimate
+      // completed result (no transitions found) — re-running detection for it
+      // would flash a detecting state and burn worker time on every return
+      // from Export.
       store.setState((state) => completeSceneDetection(state, clipPayload.scenes));
-      emit('editor:scenes-detected', { sceneCount: clipPayload.scenes.length });
-      console.log('[Editor] Using pre-computed scenes:', clipPayload.scenes.length, 'scenes');
+      if (clipPayload.scenes.length > 0) {
+        emit('editor:scenes-detected', { sceneCount: clipPayload.scenes.length });
+        console.log('[Editor] Using pre-computed scenes:', clipPayload.scenes.length, 'scenes');
+      }
     } else if (frames.length > 0) {
-      // Fallback: run detection if scenes not provided (backward compatibility)
+      // Fallback: run detection if scenes were never computed
       startSceneDetectionAsync(frames);
     }
   }

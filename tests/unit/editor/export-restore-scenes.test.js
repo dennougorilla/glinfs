@@ -177,4 +177,26 @@ describe('Scene restoration when returning from Export (issue #43)', () => {
     expect(state?.scenes).toEqual(scenes);
     expect(state?.sceneDetectionStatus).toBe('completed');
   });
+
+  it('treats a cached empty scene list as completed instead of re-detecting', () => {
+    const frames = createTestFrames(10);
+
+    // Detection legitimately found no transitions: loading stored []
+    setClipPayload({
+      frames,
+      fps: 30,
+      capturedAt: Date.now(),
+      sceneDetectionEnabled: true,
+      scenes: [],
+    });
+
+    cleanup = initEditor();
+
+    const state = getEditorState();
+    // Regression (Codex review on #59): [] was treated as "missing" and the
+    // full async detection restarted on every visit, flashing a detecting
+    // state over the correct completed result.
+    expect(state?.sceneDetectionStatus).toBe('completed');
+    expect(state?.scenes).toEqual([]);
+  });
 });
