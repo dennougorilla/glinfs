@@ -30,16 +30,32 @@ export class ThumbnailCache {
   }
 
   /**
+   * Build the internal cache key for a frame at a given thumbnail size.
+   * A frame requested at two different sizes must not collide, otherwise
+   * whichever size was generated first "wins" silently for every later
+   * request at a different size.
+   * @param {string} frameId - Frame ID
+   * @param {number} maxDimension - Maximum thumbnail dimension
+   * @returns {string}
+   * @private
+   */
+  _key(frameId, maxDimension) {
+    return `${frameId}@${maxDimension}`;
+  }
+
+  /**
    * Get thumbnail from cache
    * @param {string} frameId - Frame ID
+   * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {HTMLCanvasElement | null}
    */
-  get(frameId) {
-    const cached = this.cache.get(frameId);
+  get(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+    const key = this._key(frameId, maxDimension);
+    const cached = this.cache.get(key);
     if (cached) {
       // LRU: Move accessed entry to end
-      this.cache.delete(frameId);
-      this.cache.set(frameId, cached);
+      this.cache.delete(key);
+      this.cache.set(key, cached);
       return cached;
     }
     return null;
@@ -48,10 +64,11 @@ export class ThumbnailCache {
   /**
    * Check if thumbnail exists
    * @param {string} frameId - Frame ID
+   * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {boolean}
    */
-  has(frameId) {
-    return this.cache.has(frameId);
+  has(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+    return this.cache.has(this._key(frameId, maxDimension));
   }
 
   /**
@@ -61,8 +78,8 @@ export class ThumbnailCache {
    * @returns {Promise<HTMLCanvasElement>}
    */
   async generate(frame, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
-    // Return if cached
-    const cached = this.get(frame.id);
+    // Return if cached at this exact size
+    const cached = this.get(frame.id, maxDimension);
     if (cached) return cached;
 
     // Calculate scale
@@ -101,7 +118,7 @@ export class ThumbnailCache {
     canvasCtx.drawImage(offscreen, 0, 0);
 
     // Add to cache
-    this._addToCache(frame.id, canvas);
+    this._addToCache(frame.id, canvas, maxDimension);
 
     return canvas;
   }
@@ -115,7 +132,7 @@ export class ThumbnailCache {
    * @returns {Promise<void>}
    */
   async generateBatch(frames, maxDimension = DEFAULT_THUMBNAIL_SIZE, onProgress) {
-    const uncached = frames.filter((f) => !this.cache.has(f.id));
+    const uncached = frames.filter((f) => !this.has(f.id, maxDimension));
 
     if (uncached.length === 0) {
       onProgress?.(100);
@@ -148,9 +165,11 @@ export class ThumbnailCache {
    * Add to cache (LRU)
    * @param {string} frameId
    * @param {HTMLCanvasElement} canvas
+   * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @private
    */
-  _addToCache(frameId, canvas) {
+  _addToCache(frameId, canvas, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+    const key = this._key(frameId, maxDimension);
     // LRU: Remove oldest entry when over capacity
     if (this.cache.size >= this.maxSize) {
       const firstKey = this.cache.keys().next().value;
@@ -158,15 +177,35 @@ export class ThumbnailCache {
         this.cache.delete(firstKey);
       }
     }
-    this.cache.set(frameId, canvas);
+    this.cache.set(key, canvas);
   }
 
   /**
-   * Invalidate cache for specific frame
+   * Add an externally-rendered canvas to the cache (LRU).
+   *
+   * Public counterpart to the private `_addToCache`, for callers (e.g. the
+   * timeline filmstrip) that draw their own thumbnail canvas via a
+   * different code path than `generate()` but still need cache/eviction
+   * semantics consistent with the rest of this class.
+   * @param {string} frameId - Frame ID
+   * @param {number} maxDimension - Maximum size this thumbnail was generated at
+   * @param {HTMLCanvasElement} canvas - Pre-rendered thumbnail canvas
+   */
+  addCanvas(frameId, maxDimension, canvas) {
+    this._addToCache(frameId, canvas, maxDimension);
+  }
+
+  /**
+   * Invalidate cache for specific frame (all cached sizes)
    * @param {string} frameId
    */
   invalidate(frameId) {
-    this.cache.delete(frameId);
+    const prefix = `${frameId}@`;
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   /**
