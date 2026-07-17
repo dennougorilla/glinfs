@@ -34,6 +34,7 @@ const METADATA = {
  * @property {function(number): number} _malloc
  * @property {function(number): void} _free
  * @property {function(function, string): number} addFunction
+ * @property {function(number): void} removeFunction
  * @property {Uint8Array} HEAPU8
  */
 
@@ -163,8 +164,12 @@ function quantizeFrame(module, rgba, width, height) {
     'viii',
   );
 
-  // Call quantize_image
+  // Call quantize_image (the callback runs synchronously inside this call)
   module._quantize_image(width, height, ptr, cb);
+
+  // Release the function-table slot — quantizeFrame runs once per frame,
+  // and un-released slots accumulate until the table growth limit is hit
+  module.removeFunction(cb);
 
   // Free input memory
   module._free(ptr);
@@ -267,8 +272,11 @@ export function createGifsicleEncoder() {
         result.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
       }, 'vii');
 
-      // Finish encoding
+      // Finish encoding (the callback runs synchronously inside this call)
       module._encoder_finish(encoderPtr, cb);
+
+      // Release the function-table slot
+      module.removeFunction(cb);
 
       if (!result) {
         throw new Error('Encoding failed: no result returned');
