@@ -24,32 +24,26 @@ export function renderSettings(container, handlers = {}) {
   const settings = loadSettings();
   const cleanups = [];
 
+  // Re-render with the same container/handlers (no DOM expandos needed)
+  const rerender = () => renderSettings(container, handlers);
+
   container.className = 'settings-container';
   container.innerHTML = '';
 
   // Header
   const header = createElement('div', { className: 'settings-header' });
 
-  const backBtn = createElement('button', {
-    className: 'btn btn-ghost',
-    textContent: '← 戻る',
-  });
+  const backBtn = createElement('button', { className: 'btn btn-ghost' }, ['← 戻る']);
   cleanups.push(() => backBtn.removeEventListener('click', onBack));
   backBtn.addEventListener('click', onBack);
 
-  const title = createElement('h1', {
-    className: 'settings-title',
-    textContent: '設定',
-  });
+  const title = createElement('h1', { className: 'settings-title' }, ['設定']);
 
-  const resetAllBtn = createElement('button', {
-    className: 'btn btn-ghost',
-    textContent: 'すべてリセット',
-  });
+  const resetAllBtn = createElement('button', { className: 'btn btn-ghost' }, ['すべてリセット']);
   const handleResetAll = () => {
     if (confirm('すべての設定をデフォルト値にリセットしますか?')) {
       resetSettings();
-      renderSettings(container, handlers);
+      rerender();
     }
   };
   cleanups.push(() => resetAllBtn.removeEventListener('click', handleResetAll));
@@ -67,6 +61,7 @@ export function renderSettings(container, handlers = {}) {
     settings.capture,
     SETTINGS_METADATA.capture.settings,
     cleanups,
+    rerender,
   );
   content.appendChild(captureSection);
 
@@ -77,6 +72,7 @@ export function renderSettings(container, handlers = {}) {
     settings.export,
     SETTINGS_METADATA.export.settings,
     cleanups,
+    rerender,
   );
   content.appendChild(exportSection);
 
@@ -98,27 +94,20 @@ export function renderSettings(container, handlers = {}) {
  * @param {Object} values
  * @param {Object} metadata
  * @param {Array} cleanups
+ * @param {Function} rerender - Re-render the whole settings screen
  * @returns {HTMLElement}
  */
-function renderSettingsCategory(category, label, values, metadata, cleanups) {
+function renderSettingsCategory(category, label, values, metadata, cleanups, rerender) {
   const section = createElement('div', { className: 'settings-section' });
 
   const header = createElement('div', { className: 'settings-section-header' });
-  const titleEl = createElement('h2', {
-    className: 'settings-section-title',
-    textContent: label,
-  });
+  const titleEl = createElement('h2', { className: 'settings-section-title' }, [label]);
 
-  const resetBtn = createElement('button', {
-    className: 'btn btn-ghost btn-sm',
-    textContent: 'リセット',
-  });
+  const resetBtn = createElement('button', { className: 'btn btn-ghost btn-sm' }, ['リセット']);
   const handleReset = () => {
     if (confirm(`${label}をデフォルト値にリセットしますか?`)) {
       resetCategory(category);
-      const container = section.closest('.settings-container');
-      const handlers = { onBack: container._onBack };
-      renderSettings(container, handlers);
+      rerender();
     }
   };
   cleanups.push(() => resetBtn.removeEventListener('click', handleReset));
@@ -148,10 +137,7 @@ function renderThumbnailQualitySetting(value, cleanups) {
   const section = createElement('div', { className: 'settings-section' });
 
   const header = createElement('div', { className: 'settings-section-header' });
-  const titleEl = createElement('h2', {
-    className: 'settings-section-title',
-    textContent: 'その他',
-  });
+  const titleEl = createElement('h2', { className: 'settings-section-title' }, ['その他']);
   header.appendChild(titleEl);
 
   const list = createElement('div', { className: 'settings-list' });
@@ -181,10 +167,7 @@ function renderThumbnailQualitySetting(value, cleanups) {
 function renderSettingItem(category, key, value, metadata, cleanups) {
   const item = createElement('div', { className: 'settings-item' });
 
-  const labelEl = createElement('label', {
-    className: 'settings-item-label',
-    textContent: metadata.label,
-  });
+  const labelEl = createElement('label', { className: 'settings-item-label' }, [metadata.label]);
 
   const control = renderSettingControl(category, key, value, metadata, cleanups);
 
@@ -212,9 +195,19 @@ function renderSettingControl(category, key, value, metadata, cleanups) {
     }
   };
 
+  // Read the value currently persisted, so controls never act on a stale
+  // closure value after the setting has been changed.
+  const readCurrentValue = () => {
+    const settings = loadSettings();
+    if (key === null) {
+      return settings[category];
+    }
+    return settings[category] ? settings[category][key] : undefined;
+  };
+
   switch (type) {
     case 'boolean':
-      return renderBooleanControl(value, handleChange, cleanups);
+      return renderBooleanControl(value, readCurrentValue, handleChange, cleanups);
 
     case 'select':
       return renderSelectControl(value, metadata.options, handleChange, cleanups);
@@ -226,27 +219,27 @@ function renderSettingControl(category, key, value, metadata, cleanups) {
       return renderNumberControl(value, metadata, handleChange, cleanups);
 
     default:
-      return createElement('span', { textContent: String(value) });
+      return createElement('span', {}, [String(value)]);
   }
 }
 
 /**
  * Render boolean toggle control
- * @param {boolean} value
+ * @param {boolean} value - Initial value at render time
+ * @param {Function} readCurrentValue - Reads the currently persisted value
  * @param {Function} onChange
  * @param {Array} cleanups
  * @returns {HTMLElement}
  */
-function renderBooleanControl(value, onChange, cleanups) {
+function renderBooleanControl(value, readCurrentValue, onChange, cleanups) {
   const control = createElement('div', { className: 'settings-control' });
 
-  const toggle = createElement('button', {
-    className: `btn-toggle ${value ? 'active' : ''}`,
-    textContent: value ? 'ON' : 'OFF',
-  });
+  const toggle = createElement('button', { className: `btn-toggle ${value ? 'active' : ''}` }, [
+    value ? 'ON' : 'OFF',
+  ]);
 
   const handleClick = () => {
-    const newValue = !value;
+    const newValue = !readCurrentValue();
     toggle.className = `btn-toggle ${newValue ? 'active' : ''}`;
     toggle.textContent = newValue ? 'ON' : 'OFF';
     onChange(newValue);
@@ -273,11 +266,11 @@ function renderSelectControl(value, options, onChange, cleanups) {
   const select = createElement('select', { className: 'settings-select' });
 
   options.forEach((option) => {
-    const optionEl = createElement('option', {
-      value: option.value,
-      textContent: option.label,
-      selected: option.value === value,
-    });
+    const attrs = { value: String(option.value) };
+    if (option.value === value) {
+      attrs.selected = 'selected';
+    }
+    const optionEl = createElement('option', attrs, [option.label]);
     select.appendChild(optionEl);
   });
 
@@ -318,10 +311,9 @@ function renderRangeControl(value, metadata, onChange, cleanups) {
     value: String(value),
   });
 
-  const valueDisplay = createElement('span', {
-    className: 'settings-range-value',
-    textContent: format ? format(value) : String(value),
-  });
+  const valueDisplay = createElement('span', { className: 'settings-range-value' }, [
+    format ? format(value) : String(value),
+  ]);
 
   const handleInput = (e) => {
     const newValue = parseFloat(e.target.value);
@@ -360,10 +352,9 @@ function renderNumberControl(value, metadata, onChange, cleanups) {
     value: String(value),
   });
 
-  const display = createElement('span', {
-    className: 'settings-number-display',
-    textContent: format ? format(value) : String(value),
-  });
+  const display = createElement('span', { className: 'settings-number-display' }, [
+    format ? format(value) : String(value),
+  ]);
 
   const handleChange = (e) => {
     const newValue = parseInt(e.target.value, 10);
