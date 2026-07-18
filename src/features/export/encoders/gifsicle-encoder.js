@@ -34,6 +34,7 @@ const METADATA = {
  * @property {function(number): number} _malloc
  * @property {function(number): void} _free
  * @property {function(function, string): number} addFunction
+ * @property {{__indirect_function_table?: WebAssembly.Table}} [asm]
  * @property {Uint8Array} HEAPU8
  */
 
@@ -43,8 +44,141 @@ let wasmModule = null;
 /** @type {Promise<WasmModule> | null} */
 let wasmLoadPromise = null;
 
+/**
+ * The bundled Emscripten runtime exports addFunction but not removeFunction.
+ * Keep one callback of each shape for the lifetime of the loaded module so
+ * the indirect function table cannot grow once per frame/export.
+ *
+ * @type {number | null}
+ */
+let quantizeCallbackPtr = null;
+
+/** @type {number | null} */
+let finishCallbackPtr = null;
+
+/** @type {{ imageLength: number, result: ArrayBuffer | null } | null} */
+let activeQuantizeCallback = null;
+
+/** @type {{ result: Uint8Array | null } | null} */
+let activeFinishCallback = null;
+
 /** Base path for encoder files */
 const ENCODER_BASE_PATH = '/glinfs/encoder';
+
+/** NETSCAPE2.0 application-extension prefix through the application identifier. */
+const NETSCAPE_LOOP_PREFIX = /** @type {const} */ ([
+  0x21, 0xff, 0x0b, 0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30,
+]);
+
+/**
+ * Register the quantization callback once for the module lifetime.
+ * Calls into the encoder are synchronous in its dedicated worker, so the
+ * active context is safe to swap around each call.
+ *
+ * @param {WasmModule} module
+ * @returns {number}
+ */
+function getQuantizeCallbackPtr(module) {
+  if (quantizeCallbackPtr !== null) return quantizeCallbackPtr;
+
+  quantizeCallbackPtr = module.addFunction(
+    (
+      /** @type {number} */ palettePtr,
+      /** @type {number} */ paletteLength,
+      /** @type {number} */ imagePtr,
+    ) => {
+      const context = activeQuantizeCallback;
+      if (!context) return;
+
+      const buffer = new ArrayBuffer(paletteLength + context.imageLength);
+      const resultArray = new Uint8Array(buffer);
+      resultArray.set(new Uint8Array(module.HEAPU8.buffer, palettePtr, paletteLength));
+      resultArray.set(
+        new Uint8Array(module.HEAPU8.buffer, imagePtr, context.imageLength),
+        paletteLength,
+      );
+      context.result = buffer;
+    },
+    'viii',
+  );
+
+  return quantizeCallbackPtr;
+}
+
+/**
+ * Register the finish callback once for the module lifetime.
+ *
+ * @param {WasmModule} module
+ * @returns {number}
+ */
+function getFinishCallbackPtr(module) {
+  if (finishCallbackPtr !== null) return finishCallbackPtr;
+
+  finishCallbackPtr = module.addFunction(
+    (/** @type {number} */ ptr, /** @type {number} */ length) => {
+      const context = activeFinishCallback;
+      if (!context) return;
+
+      const bytes = new Uint8Array(length);
+      bytes.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
+      context.result = bytes;
+    },
+    'vii',
+  );
+
+  return finishCallbackPtr;
+}
+
+/**
+ * Apply the configured repeat count to the GIF application extension.
+ * The bundled C encoder always emits NETSCAPE2.0 with an infinite loop;
+ * patching those two defined bytes avoids requiring a new C/WASM ABI.
+ * If a future encoder omits the extension, insert a valid one immediately
+ * after the logical screen descriptor and global color table.
+ *
+ * @param {Uint8Array} bytes
+ * @param {number} loopCount 0 means infinite; otherwise the GIF repeat count
+ * @returns {Uint8Array}
+ */
+function applyLoopCount(bytes, loopCount) {
+  if (!Number.isInteger(loopCount) || loopCount < 0 || loopCount > 0xffff) {
+    throw new RangeError('Loop count must be an integer between 0 and 65535');
+  }
+
+  const low = loopCount & 0xff;
+  const high = (loopCount >> 8) & 0xff;
+
+  for (let i = 0; i <= bytes.length - NETSCAPE_LOOP_PREFIX.length; i++) {
+    if (!NETSCAPE_LOOP_PREFIX.every((byte, offset) => bytes[i + offset] === byte)) continue;
+
+    // Prefix is followed by: block size 3, sub-block ID 1, low, high, terminator 0.
+    if (i + 18 >= bytes.length || bytes[i + 14] !== 0x03 || bytes[i + 15] !== 0x01) {
+      throw new Error('Invalid NETSCAPE2.0 loop extension');
+    }
+
+    bytes[i + 16] = low;
+    bytes[i + 17] = high;
+    return bytes;
+  }
+
+  if (bytes.length < 13 || bytes[0] !== 0x47 || bytes[1] !== 0x49 || bytes[2] !== 0x46) {
+    throw new Error('Invalid GIF output: missing header');
+  }
+
+  const hasGlobalColorTable = (bytes[10] & 0x80) !== 0;
+  const colorTableBytes = hasGlobalColorTable ? 3 * 2 ** ((bytes[10] & 0x07) + 1) : 0;
+  const insertAt = 13 + colorTableBytes;
+  if (insertAt > bytes.length) {
+    throw new Error('Invalid GIF output: truncated global color table');
+  }
+
+  const extension = new Uint8Array([...NETSCAPE_LOOP_PREFIX, 0x03, 0x01, low, high, 0x00]);
+  const output = new Uint8Array(bytes.length + extension.length);
+  output.set(bytes.subarray(0, insertAt));
+  output.set(extension, insertAt);
+  output.set(bytes.subarray(insertAt), insertAt + extension.length);
+  return output;
+}
 
 /**
  * Load WASM module using fetch and dynamic execution
@@ -143,37 +277,21 @@ function quantizeFrame(module, rgba, width, height) {
   const input = new Uint8Array(module.HEAPU8.buffer, ptr, inputSize);
   input.set(rgba);
 
-  const imageLength = width * height;
-  /** @type {ArrayBuffer | null} */
-  let result = null;
+  const context = { imageLength: width * height, result: null };
+  activeQuantizeCallback = context;
 
-  // Create callback for quantize_image
-  const cb = module.addFunction(
-    (
-      /** @type {number} */ palettePtr,
-      /** @type {number} */ paletteLength,
-      /** @type {number} */ imagePtr,
-    ) => {
-      const buffer = new ArrayBuffer(paletteLength + imageLength);
-      const resultArray = new Uint8Array(buffer);
-      resultArray.set(new Uint8Array(module.HEAPU8.buffer, palettePtr, paletteLength));
-      resultArray.set(new Uint8Array(module.HEAPU8.buffer, imagePtr, imageLength), paletteLength);
-      result = buffer;
-    },
-    'viii',
-  );
+  try {
+    module._quantize_image(width, height, ptr, getQuantizeCallbackPtr(module));
+  } finally {
+    activeQuantizeCallback = null;
+    module._free(ptr);
+  }
 
-  // Call quantize_image
-  module._quantize_image(width, height, ptr, cb);
-
-  // Free input memory
-  module._free(ptr);
-
-  if (!result) {
+  if (!context.result) {
     throw new Error('Quantization failed: no result returned');
   }
 
-  return result;
+  return context.result;
 }
 
 /**
@@ -189,9 +307,6 @@ export function createGifsicleEncoder() {
 
   /** @type {EncoderConfig | null} */
   let config = null;
-
-  /** @type {Array<{buffer: ArrayBuffer, paletteLength: number, width: number, height: number, delay: number}>} */
-  const pendingFrames = [];
 
   return {
     metadata: METADATA,
@@ -219,7 +334,7 @@ export function createGifsicleEncoder() {
      * @param {FrameData} frameData
      * @param {number} frameIndex
      */
-    addFrame(frameData, frameIndex) {
+    addFrame(frameData, _frameIndex) {
       if (!module || !encoderPtr || !config) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
@@ -228,11 +343,6 @@ export function createGifsicleEncoder() {
 
       // Quantize the frame
       const quantizedBuffer = quantizeFrame(module, rgba, width, height);
-
-      // Palette is at the beginning of the buffer (liq_palette struct size)
-      // Based on libimagequant: liq_palette has count (4 bytes) + 256 * liq_color (4 bytes each) = 1028 bytes max
-      // But actual size varies, let's use 1028 as standard
-      const paletteLength = 1028;
 
       // Copy quantized data to WASM memory
       const dataSize = quantizedBuffer.byteLength;
@@ -243,10 +353,11 @@ export function createGifsicleEncoder() {
       // Add frame to encoder
       // Note: delay is in centiseconds (1/100th of a second)
       const delayCentiseconds = Math.round(config.frameDelayMs / 10);
-      module._encoder_add_frame(encoderPtr, 0, 0, width, height, ptr, delayCentiseconds);
-
-      // Free memory
-      module._free(ptr);
+      try {
+        module._encoder_add_frame(encoderPtr, 0, 0, width, height, ptr, delayCentiseconds);
+      } finally {
+        module._free(ptr);
+      }
     },
 
     /**
@@ -254,30 +365,28 @@ export function createGifsicleEncoder() {
      * @returns {Uint8Array}
      */
     finish() {
-      if (!module || !encoderPtr) {
+      if (!module || !encoderPtr || !config) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
 
-      /** @type {Uint8Array | null} */
-      let result = null;
+      const context = { result: null };
+      activeFinishCallback = context;
 
-      // Create callback for encoder_finish
-      const cb = module.addFunction((/** @type {number} */ ptr, /** @type {number} */ length) => {
-        result = new Uint8Array(length);
-        result.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
-      }, 'vii');
+      try {
+        module._encoder_finish(encoderPtr, getFinishCallbackPtr(module));
+      } finally {
+        activeFinishCallback = null;
+        // The C ABI exposes no separate destroy function. Once finish is
+        // attempted, do not reuse a pointer that encoder_finish may consume;
+        // the worker itself is terminated by the caller on failure.
+        encoderPtr = 0;
+      }
 
-      // Finish encoding
-      module._encoder_finish(encoderPtr, cb);
-
-      if (!result) {
+      if (!context.result) {
         throw new Error('Encoding failed: no result returned');
       }
 
-      // Reset encoder pointer (it's deleted in C code)
-      encoderPtr = 0;
-
-      return result;
+      return applyLoopCount(context.result, config.loopCount);
     },
 
     /**
@@ -287,7 +396,6 @@ export function createGifsicleEncoder() {
       // Note: encoder is deleted in encoder_finish, so we don't need to free it here
       encoderPtr = 0;
       config = null;
-      pendingFrames.length = 0;
       // Keep module loaded for reuse
     },
   };
@@ -307,8 +415,14 @@ export function getGifsicleMetadata() {
  */
 export async function isGifsicleAvailable() {
   try {
-    await loadWasmModule();
-    return true;
+    // Availability checks run on the main thread. Only probe the static
+    // asset here; the worker owns fetching and initializing Emscripten/WASM
+    // for a real encoding job.
+    const response = await fetch(`${ENCODER_BASE_PATH}/encoder.wasm`, {
+      method: 'HEAD',
+      cache: 'force-cache',
+    });
+    return response.ok;
   } catch {
     return false;
   }

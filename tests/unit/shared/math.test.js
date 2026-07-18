@@ -59,8 +59,8 @@ describe('mapRange', () => {
 
 describe('round', () => {
   it('rounds to specified decimal places', () => {
-    expect(round(3.14159, 2)).toBe(3.14);
-    expect(round(3.14159, 3)).toBe(3.142);
+    expect(round(1.23456, 2)).toBe(1.23);
+    expect(round(1.23456, 3)).toBe(1.235);
   });
 
   it('rounds to whole number when decimals is 0', () => {
@@ -69,6 +69,6 @@ describe('round', () => {
   });
 
   it('handles negative numbers', () => {
-    expect(round(-3.14159, 2)).toBe(-3.14);
+    expect(round(-1.23456, 2)).toBe(-1.23);
   });
 });

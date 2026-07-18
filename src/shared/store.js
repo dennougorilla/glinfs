@@ -49,7 +49,9 @@ export function createStore(initialState) {
     state = newState;
 
     // Notify listeners with current and previous state
-    listeners.forEach((fn) => fn(state, prevState));
+    listeners.forEach((fn) => {
+      fn(state, prevState);
+    });
   }
 
   /**

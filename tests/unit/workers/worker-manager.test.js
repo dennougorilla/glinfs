@@ -396,6 +396,81 @@ describe('GifEncoderManager', () => {
       // Cleanup
       manager.dispose();
     });
+
+    it('should preserve a frame error received before finish and never post FINISH (#45)', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      const initPromise = manager.init({
+        width: 10,
+        height: 10,
+        totalFrames: 2,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      manager.addFrame(new Uint8ClampedArray(10 * 10 * 4), 10, 10, 0);
+      const lastPostedMessage = mockWorkerInstance?._lastMessage;
+
+      // Act - FRAME_ERROR arrives while finish() has no rejection callback.
+      // This was previously dropped, allowing a partial GIF to succeed.
+      mockWorkerInstance?._simulateMessage({
+        event: Events.ERROR,
+        message: 'Quantization failed',
+        code: 'FRAME_ERROR',
+      });
+
+      // Assert - the failed session refuses both more frames and FINISH.
+      expect(() => manager.addFrame(new Uint8ClampedArray(10 * 10 * 4), 10, 10, 1)).toThrow(
+        'Quantization failed',
+      );
+      await expect(manager.finish()).rejects.toThrow('Quantization failed');
+      expect(mockWorkerInstance?._lastMessage).toBe(lastPostedMessage);
+
+      manager.dispose();
+    });
+
+    it('should keep the first worker error when later errors arrive', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      const onError = vi.fn();
+      manager.onError = onError;
+      const initPromise = manager.init({
+        width: 10,
+        height: 10,
+        totalFrames: 1,
+        maxColors: 256,
+        frameDelayMs: 100,
+        loopCount: 0,
+      });
+
+      await Promise.resolve();
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      // Act
+      mockWorkerInstance?._simulateMessage({
+        event: Events.ERROR,
+        message: 'First frame failed',
+        code: 'FRAME_ERROR',
+      });
+      mockWorkerInstance?._simulateMessage({
+        event: Events.ERROR,
+        message: 'Finish failed later',
+        code: 'FINISH_ERROR',
+      });
+
+      // Assert
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError.mock.calls[0][0].message).toBe('First frame failed');
+      await expect(manager.finish()).rejects.toThrow('First frame failed');
+
+      manager.dispose();
+    });
   });
 
   describe('cancel', () => {

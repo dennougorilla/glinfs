@@ -88,6 +88,42 @@ describe('Editor UI handlers use current state (issue #37)', () => {
     vi.useRealTimers();
   });
 
+  describe('editor mount lifecycle', () => {
+    it('routes an empty clip through validation without mounting the editor UI', () => {
+      initEditorWithClip(0);
+
+      expect(document.querySelector('#main-content')?.textContent).toContain('Invalid Clip Data');
+      expect(document.querySelector('#main-content')?.textContent).toContain(
+        'ClipPayload.frames cannot be empty',
+      );
+      expect(document.querySelector('.editor-toolbar')).toBeNull();
+      expect(getEditorState()).toBeNull();
+    });
+
+    it('cancels a pending throttled render when the editor unmounts', () => {
+      initEditorWithClip(10);
+      const pauseBtn = /** @type {HTMLButtonElement} */ (
+        document.querySelector('[aria-label="Pause"]')
+      );
+      pauseBtn.click();
+      vi.advanceTimersByTime(20);
+
+      const setEditorState = window.__TEST_HOOKS__.setEditorState;
+      setEditorState({ currentFrame: 1 });
+      setEditorState({ currentFrame: 2 });
+      expect(vi.getTimerCount()).toBe(1);
+
+      editorCleanup?.();
+      editorCleanup = null;
+      document.querySelector('#main-content').innerHTML = '<p data-after-cleanup>Unmounted</p>';
+
+      expect(getEditorState()).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(20);
+      expect(document.querySelector('[data-after-cleanup]')?.textContent).toBe('Unmounted');
+    });
+  });
+
   describe('frame navigation buttons', () => {
     it('pressing Next twice advances currentFrame by 2', () => {
       initEditorWithClip(10);
@@ -162,9 +198,63 @@ describe('Editor UI handlers use current state (issue #37)', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
       expect(getEditorState()?.currentFrame).toBe(2);
     });
+
+    it('suppresses editor shortcuts while the Frame Grid modal is open', () => {
+      initEditorWithClip(10);
+      const cropArea = { x: 1, y: 1, width: 8, height: 8, aspectRatio: 'free' };
+
+      const pauseBtn = /** @type {HTMLButtonElement} */ (
+        document.querySelector('[aria-label="Pause"]')
+      );
+      pauseBtn.click();
+      expect(getEditorState()?.isPlaying).toBe(false);
+
+      window.__TEST_HOOKS__.setEditorState({
+        currentFrame: 0,
+        cropArea,
+        showGrid: false,
+      });
+
+      const frameGridBtn = /** @type {HTMLButtonElement} */ (
+        document.querySelector('.btn-frame-grid-compact')
+      );
+      frameGridBtn.focus();
+      frameGridBtn.click();
+      expect(document.querySelector('.frame-grid-modal')).toBeTruthy();
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'g' }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+
+      expect(getEditorState()?.currentFrame).toBe(0);
+      expect(getEditorState()?.showGrid).toBe(false);
+      expect(getEditorState()?.isPlaying).toBe(false);
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+      expect(document.querySelector('.frame-grid-modal')).toBeNull();
+      expect(getEditorState()?.cropArea).toEqual(cropArea);
+    });
   });
 
   describe('Clear Crop button', () => {
+    it('renders a crop change coalesced with a later frame update', () => {
+      initEditorWithClip(10);
+      const setEditorState = window.__TEST_HOOKS__.setEditorState;
+      const cropArea = { x: 1, y: 1, width: 8, height: 8, aspectRatio: 'free' };
+
+      // Heat the leading edge, then make a crop transition that is followed
+      // by another update inside the throttle window. The trailing store
+      // prevState already contains the crop, although the UI has not seen it.
+      setEditorState({ currentFrame: 1 });
+      setEditorState({ cropArea });
+      setEditorState({ currentFrame: 2 });
+      vi.advanceTimersByTime(20);
+
+      expect(document.querySelector('.btn-clear-crop')).toBeTruthy();
+      expect(getEditorState()?.cropArea).toEqual(cropArea);
+    });
+
     it('still clears the crop after multiple crop updates', () => {
       initEditorWithClip(10);
       const setEditorState = window.__TEST_HOOKS__.setEditorState;

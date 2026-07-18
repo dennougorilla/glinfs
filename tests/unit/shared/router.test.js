@@ -12,10 +12,12 @@ describe('Router', () => {
   beforeEach(() => {
     originalHash = window.location.hash;
     window.location.hash = '';
+    document.body.innerHTML = '<main id="main-content"></main>';
   });
 
   afterEach(() => {
     window.location.hash = originalHash;
+    document.body.innerHTML = '';
   });
 
   describe('initRouter', () => {
@@ -58,6 +60,22 @@ describe('Router', () => {
 
       expect(window.location.hash).toBe('#/editor');
     });
+
+    it('matches the route path when query parameters are present', async () => {
+      const editorHandler = vi.fn();
+      initRouter({
+        '/capture': vi.fn(),
+        '/editor': editorHandler,
+        '/export': vi.fn(),
+      });
+
+      navigate('/editor', { source: 'settings', mode: 'crop' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(window.location.hash).toBe('#/editor?source=settings&mode=crop');
+      expect(editorHandler).toHaveBeenCalled();
+      expect(getCurrentRoute()).toBe('/editor');
+    });
   });
 
   describe('onRouteChange', () => {
@@ -72,6 +90,7 @@ describe('Router', () => {
       const unsubscribe = onRouteChange(callback);
 
       expect(typeof unsubscribe).toBe('function');
+      unsubscribe();
     });
   });
 
@@ -98,6 +117,7 @@ describe('Router', () => {
     });
 
     it('handles cleanup errors gracefully', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       const errorCleanup = vi.fn(() => {
         throw new Error('Cleanup error');
       });
@@ -119,6 +139,12 @@ describe('Router', () => {
       expect(errorCleanup).toHaveBeenCalled();
       // Next handler should still be called
       expect(editorHandler).toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to clean up route'),
+        expect.any(Error),
+      );
+
+      consoleError.mockRestore();
     });
 
     it('handles handlers that return undefined', async () => {
@@ -137,6 +163,77 @@ describe('Router', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(editorHandler).toHaveBeenCalled();
+    });
+
+    it('falls back to capture when a route handler throws', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const captureHandler = vi.fn();
+      const editorHandler = vi.fn(() => {
+        throw new Error('Editor init failed');
+      });
+
+      initRouter({
+        '/capture': captureHandler,
+        '/editor': editorHandler,
+        '/export': vi.fn(),
+      });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(editorHandler).toHaveBeenCalled();
+      expect(window.location.hash).toBe('#/capture');
+      expect(captureHandler.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to initialize route'),
+        expect.any(Error),
+      );
+
+      consoleError.mockRestore();
+    });
+
+    it('clears route-specific classes before mounting the next screen', async () => {
+      const main = document.getElementById('main-content');
+      main.className = 'settings-container';
+
+      initRouter({
+        '/capture': vi.fn(),
+        '/editor': vi.fn(),
+        '/export': vi.fn(),
+      });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(main.className).toBe('');
+    });
+
+    it('continues notifying route listeners when one listener throws', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      initRouter({
+        '/capture': vi.fn(),
+        '/editor': vi.fn(),
+        '/export': vi.fn(),
+      });
+      const unsubscribeFailing = onRouteChange(() => {
+        throw new Error('Listener failed');
+      });
+      const healthyListener = vi.fn();
+      const unsubscribeHealthy = onRouteChange(healthyListener);
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(healthyListener).toHaveBeenCalledWith('/editor');
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Route listener failed'),
+        expect.any(Error),
+      );
+
+      unsubscribeFailing();
+      unsubscribeHealthy();
+      consoleError.mockRestore();
     });
   });
 });

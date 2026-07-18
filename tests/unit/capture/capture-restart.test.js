@@ -89,6 +89,7 @@ describe('capture handleStart worker lifecycle (#40)', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     document.body.innerHTML = '';
   });
 
@@ -97,13 +98,13 @@ describe('capture handleStart worker lifecycle (#40)', () => {
    */
   async function initCaptureFeature() {
     const { initCapture } = await import('../../../src/features/capture/index.js');
-    initCapture();
+    const cleanup = initCapture();
     expect(uiCapture.handlers).not.toBeNull();
-    return uiCapture.handlers;
+    return { handlers: uiCapture.handlers, cleanup };
   }
 
   it('creates a worker manager on first start without terminating anything', async () => {
-    const handlers = await initCaptureFeature();
+    const { handlers } = await initCaptureFeature();
 
     await handlers.onStart();
 
@@ -114,7 +115,7 @@ describe('capture handleStart worker lifecycle (#40)', () => {
   });
 
   it('terminates the previous worker manager before creating a new one on re-select (#40)', async () => {
-    const handlers = await initCaptureFeature();
+    const { handlers } = await initCaptureFeature();
 
     // First share
     await handlers.onStart();
@@ -138,7 +139,7 @@ describe('capture handleStart worker lifecycle (#40)', () => {
   });
 
   it('cleans up each orphaned manager across repeated stop/re-select cycles', async () => {
-    const handlers = await initCaptureFeature();
+    const { handlers } = await initCaptureFeature();
 
     for (let cycle = 0; cycle < 3; cycle++) {
       await handlers.onStart();
@@ -150,5 +151,75 @@ describe('capture handleStart worker lifecycle (#40)', () => {
     expect(managerInstances[1].terminateWithCleanup).toHaveBeenCalledTimes(1);
     // The latest manager is still alive (only stopped, buffer preserved)
     expect(managerInstances[2].terminateWithCleanup).not.toHaveBeenCalled();
+  });
+
+  it('uses cleanup-aware termination for a stopped worker with a retained buffer', async () => {
+    const { handlers, cleanup } = await initCaptureFeature();
+    await handlers.onStart();
+    const manager = managerInstances[0];
+    handlers.onStop();
+
+    cleanup();
+
+    expect(manager.terminateWithCleanup).toHaveBeenCalledTimes(1);
+    expect(manager.terminate).not.toHaveBeenCalled();
+  });
+
+  it('closes transferred bitmaps when route cleanup wins the Create Clip race', async () => {
+    const { handlers, cleanup } = await initCaptureFeature();
+    await handlers.onStart();
+    const manager = managerInstances[0];
+    const bitmap = { width: 640, height: 480, close: vi.fn() };
+    /** @type {(frames: any[]) => void} */
+    let resolveFrames;
+    manager.requestFrames.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFrames = resolve;
+      }),
+    );
+
+    const createPromise = handlers.onCreateClip();
+    cleanup();
+    resolveFrames([{ id: 'late', bitmap, timestamp: 1 }]);
+
+    await expect(createPromise).resolves.toBe(false);
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a Create Clip response from an earlier mount after preserving and restoring', async () => {
+    const { handlers, cleanup } = await initCaptureFeature();
+    await handlers.onStart();
+    const manager = managerInstances[0];
+    const bitmap = { width: 640, height: 480, close: vi.fn() };
+    /** @type {(frames: any[]) => void} */
+    let resolveFrames;
+    manager.requestFrames.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFrames = resolve;
+      }),
+    );
+    vi.stubGlobal(
+      'VideoFrame',
+      class {
+        constructor() {
+          this.closed = false;
+          this.codedWidth = 640;
+          this.codedHeight = 480;
+        }
+
+        close() {}
+      },
+    );
+
+    const staleCreatePromise = handlers.onCreateClip();
+    cleanup();
+
+    // The active stream restores the exact same store and manager objects.
+    // Only the mount generation distinguishes this response from the new UI.
+    await initCaptureFeature();
+    resolveFrames([{ id: 'stale', bitmap, timestamp: 1 }]);
+
+    await expect(staleCreatePromise).resolves.toBe(false);
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -80,11 +80,14 @@ export class GifEncoderManager {
     this.onProgress = null;
 
     /**
-     * Called for every ERROR event from the worker, even when no finish()
-     * promise is pending (e.g. a frame fails during submission).
+     * Called for the first ERROR event from the worker, even when no
+     * finish() promise is pending (e.g. a frame fails during submission).
      * @type {((error: Error) => void) | null}
      */
     this.onError = null;
+
+    /** @type {Error | null} */
+    this._encodingError = null;
 
     /** @type {((data: ArrayBuffer) => void) | null} */
     this._resolveComplete = null;
@@ -106,6 +109,8 @@ export class GifEncoderManager {
    * @returns {Promise<void>}
    */
   async init(config, timeoutMs = INIT_TIMEOUT_MS) {
+    this._encodingError = null;
+
     return new Promise((resolve, reject) => {
       /** @type {ReturnType<typeof setTimeout> | null} */
       let timeoutId = null;
@@ -225,11 +230,11 @@ export class GifEncoderManager {
           ? new Error(event.message || 'Worker error')
           : new Error('Unknown worker error');
 
-      this.onError?.(error);
+      const recordedError = this._recordEncodingError(error);
 
       // Reject any pending finish operation
       if (this._rejectComplete) {
-        this._rejectComplete(error);
+        this._rejectComplete(recordedError);
         this._resolveComplete = null;
         this._rejectComplete = null;
       }
@@ -254,6 +259,10 @@ export class GifEncoderManager {
       );
     }
 
+    if (this._encodingError) {
+      throw this._encodingError;
+    }
+
     const { message, transfer } = createAddFrameMessage(rgba, width, height, frameIndex);
     this.worker.postMessage(message, transfer);
   }
@@ -271,6 +280,14 @@ export class GifEncoderManager {
             WorkerErrorCode.NOT_INITIALIZED,
           ),
         );
+        return;
+      }
+
+      // A frame may have failed before finish() installed its rejection
+      // callback. Keep the first worker error sticky so that such failures
+      // can never be turned into a successful, frame-dropped GIF.
+      if (this._encodingError) {
+        reject(this._encodingError);
         return;
       }
 
@@ -318,6 +335,7 @@ export class GifEncoderManager {
     this.onError = null;
     this._resolveComplete = null;
     this._rejectComplete = null;
+    this._encodingError = null;
     this._isInitialized = false;
 
     if (rejectPending) {
@@ -337,11 +355,17 @@ export class GifEncoderManager {
 
       switch (data.event) {
         case Events.PROGRESS:
-          this.onProgress?.(data);
+          if (!this._encodingError) {
+            this.onProgress?.(data);
+          }
           break;
 
         case Events.COMPLETE:
-          this._resolveComplete?.(data.gifData);
+          if (this._encodingError) {
+            this._rejectComplete?.(this._encodingError);
+          } else {
+            this._resolveComplete?.(data.gifData);
+          }
           this._resolveComplete = null;
           this._rejectComplete = null;
           break;
@@ -350,10 +374,10 @@ export class GifEncoderManager {
           const error = createWorkerError(
             data.message || 'Encoding failed',
             WorkerErrorCode.ENCODING_FAILED,
-            { originalMessage: data.message },
+            { originalMessage: data.message, workerCode: data.code },
           );
-          this.onError?.(error);
-          this._rejectComplete?.(error);
+          const recordedError = this._recordEncodingError(error);
+          this._rejectComplete?.(recordedError);
           this._resolveComplete = null;
           this._rejectComplete = null;
           break;
@@ -366,6 +390,23 @@ export class GifEncoderManager {
           break;
       }
     });
+  }
+
+  /**
+   * Preserve and report the first error for the current encoding session.
+   * Later worker errors must not replace the error that actually invalidated
+   * the session.
+   * @param {Error} error
+   * @returns {Error}
+   * @private
+   */
+  _recordEncodingError(error) {
+    if (!this._encodingError) {
+      this._encodingError = error;
+      this.onError?.(error);
+    }
+
+    return this._encodingError;
   }
 }
 

@@ -57,12 +57,17 @@ export function createHandlers({ createEncoder, postEvent }) {
   /** @type {number} */
   let startTime = 0;
 
+  /** @type {{event: typeof Events.ERROR, message: string, code: string} | null} */
+  let sessionError = null;
+
   /**
    * Handle initialization command
    * @param {InitMessage} message
    */
   function handleInit(message) {
     try {
+      sessionError = null;
+
       // Dispose existing encoder if any
       if (encoder) {
         encoder.dispose();
@@ -102,6 +107,10 @@ export function createHandlers({ createEncoder, postEvent }) {
    * @param {AddFrameMessage} message
    */
   function handleAddFrame(message) {
+    // Ignore commands queued after the first failed frame. The current GIF
+    // can no longer be completed without silently dropping that frame.
+    if (sessionError) return;
+
     try {
       if (!encoder) {
         throw new Error('Encoder not initialized');
@@ -129,11 +138,21 @@ export function createHandlers({ createEncoder, postEvent }) {
         percent,
       });
     } catch (error) {
-      postEvent({
+      sessionError = {
         event: Events.ERROR,
         message: error instanceof Error ? error.message : 'Failed to add frame',
         code: 'FRAME_ERROR',
-      });
+      };
+
+      try {
+        encoder?.dispose();
+      } catch {
+        // Preserve the addFrame error; cleanup failures must not replace it.
+      } finally {
+        encoder = null;
+      }
+
+      postEvent(sessionError);
     }
   }
 
@@ -141,6 +160,14 @@ export function createHandlers({ createEncoder, postEvent }) {
    * Handle finish command
    */
   function handleFinish() {
+    if (sessionError) {
+      postEvent(sessionError);
+      sessionError = null;
+      totalFrames = 0;
+      framesProcessed = 0;
+      return;
+    }
+
     try {
       if (!encoder) {
         throw new Error('Encoder not initialized');
@@ -166,6 +193,7 @@ export function createHandlers({ createEncoder, postEvent }) {
       encoder = null;
       totalFrames = 0;
       framesProcessed = 0;
+      sessionError = null;
     } catch (error) {
       postEvent({
         event: Events.ERROR,
@@ -186,6 +214,7 @@ export function createHandlers({ createEncoder, postEvent }) {
 
     totalFrames = 0;
     framesProcessed = 0;
+    sessionError = null;
 
     postEvent({
       event: Events.CANCELLED,

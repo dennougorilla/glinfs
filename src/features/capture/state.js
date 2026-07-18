@@ -4,13 +4,7 @@
  */
 
 import { createStore } from '../../shared/store.js';
-import {
-  addFrame,
-  calculateStats,
-  clearBuffer,
-  createBuffer,
-  createDefaultSettings,
-} from './core.js';
+import { createDefaultSettings } from './core.js';
 
 /**
  * Initialize capture state
@@ -19,14 +13,11 @@ import {
  */
 export function initCaptureState(settings = {}) {
   const mergedSettings = { ...createDefaultSettings(), ...settings };
-  const maxFrames = mergedSettings.fps * mergedSettings.bufferDuration;
 
   return {
     isCapturing: false,
-    isPaused: false,
     isSharing: false,
     stream: null,
-    buffer: createBuffer(maxFrames),
     settings: mergedSettings,
     error: null,
     stats: {
@@ -35,8 +26,6 @@ export function initCaptureState(settings = {}) {
       memoryMB: 0,
       fps: mergedSettings.fps,
     },
-    clips: [],
-    clipCount: 0,
   };
 }
 
@@ -65,53 +54,8 @@ export function stopCapture(state) {
   return {
     ...state,
     isCapturing: false,
-    isPaused: false,
     isSharing: false,
     stream: null,
-  };
-}
-
-/**
- * Pause capturing (preserves stream and buffer, can resume)
- * @param {import('./types.js').CaptureState} state
- * @returns {import('./types.js').CaptureState}
- */
-export function pauseCapture(state) {
-  return {
-    ...state,
-    isCapturing: false,
-    isPaused: true,
-    // Keep isSharing and stream intact for resume
-  };
-}
-
-/**
- * Resume capturing from paused state
- * @param {import('./types.js').CaptureState} state
- * @returns {import('./types.js').CaptureState}
- */
-export function resumeCapture(state) {
-  return {
-    ...state,
-    isCapturing: true,
-    isPaused: false,
-  };
-}
-
-/**
- * Add a frame to state
- * @param {import('./types.js').CaptureState} state
- * @param {import('./types.js').Frame} frame
- * @returns {import('./types.js').CaptureState}
- */
-export function addFrameToState(state, frame) {
-  const newBuffer = addFrame(state.buffer, frame);
-  const newStats = calculateStats(newBuffer, state.settings.fps);
-
-  return {
-    ...state,
-    buffer: newBuffer,
-    stats: newStats,
   };
 }
 
@@ -124,15 +68,12 @@ export function addFrameToState(state, frame) {
 export function updateSettings(state, settings) {
   const newSettings = { ...state.settings, ...settings };
 
-  // If fps or bufferDuration changed, recreate buffer
+  // Settings are disabled during sharing, so changing the capture cadence
+  // also resets the worker-derived counters for the next session.
   if (settings.fps !== undefined || settings.bufferDuration !== undefined) {
-    const maxFrames = newSettings.fps * newSettings.bufferDuration;
-    // Clear old buffer to release VideoFrame resources before creating new one
-    clearBuffer(state.buffer);
     return {
       ...state,
       settings: newSettings,
-      buffer: createBuffer(maxFrames),
       stats: {
         frameCount: 0,
         duration: 0,

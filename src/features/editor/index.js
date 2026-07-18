@@ -73,8 +73,11 @@ let sceneDetectionManager = null;
 /** @type {(() => void)[]} */
 let scenePanelCleanups = [];
 
-/** @type {(() => void)[]} */
-let cropInfoPanelCleanups = [];
+/** @type {(() => void) | null} */
+let storeUnsubscribe = null;
+
+/** @type {ReturnType<typeof throttle> | null} */
+let throttledStoreUpdate = null;
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -139,7 +142,9 @@ export function initEditor() {
       emit('editor:validation-error', { errors: validation.errors });
 
       return () => {
-        cleanups.forEach((fn) => fn());
+        cleanups.forEach((fn) => {
+          fn();
+        });
         cleanup();
       };
     }
@@ -186,7 +191,9 @@ export function initEditor() {
     container.appendChild(emptyState);
 
     return () => {
-      cleanups.forEach((fn) => fn());
+      cleanups.forEach((fn) => {
+        fn();
+      });
       cleanup();
     };
   }
@@ -214,140 +221,139 @@ export function initEditor() {
   // Emit loaded event (thumbnails are now rendered directly from frames)
   emit('editor:loaded', { clip: store?.getState().clip });
 
-  // Tracks the selection the timeline header last rendered. Compared against
-  // the delivered state instead of prevState: the 16ms throttle keeps only
-  // the latest (state, prevState) pair, so a range change coalesced with a
-  // following playback tick would be invisible to a prevState diff (#44).
-  let lastHeaderRange = store.getState().selectedRange;
+  // Compare each delivered state with the state the UI actually rendered.
+  // A throttled callback keeps only its latest argument pair, so the store's
+  // immediate prevState can already contain an intermediate transition that
+  // the UI never saw (#50).
+  let lastRenderedState = store.getState();
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
-  store.subscribe(
-    throttle((state, prevState) => {
-      if (!store || !baseCanvas || !overlayCanvas) return;
+  throttledStoreUpdate = throttle((state) => {
+    if (!store || !baseCanvas || !overlayCanvas) return;
+    const prevState = lastRenderedState;
 
-      // Update play button icon when playback state changes
-      if (state.isPlaying !== prevState.isPlaying) {
-        const playBtn = container.querySelector('.btn-play');
-        if (playBtn) {
-          playBtn.classList.toggle('playing', state.isPlaying);
-          playBtn.textContent = state.isPlaying ? '\u23F8' : '\u25B6';
-          playBtn.setAttribute('aria-label', state.isPlaying ? 'Pause' : 'Play');
-        }
+    // Update play button icon when playback state changes
+    if (state.isPlaying !== prevState.isPlaying) {
+      const playBtn = container.querySelector('.btn-play');
+      if (playBtn) {
+        playBtn.classList.toggle('playing', state.isPlaying);
+        playBtn.textContent = state.isPlaying ? '\u23F8' : '\u25B6';
+        playBtn.setAttribute('aria-label', state.isPlaying ? 'Pause' : 'Play');
+      }
+    }
+
+    // Update current time display and playhead position
+    if (state.currentFrame !== prevState.currentFrame) {
+      const currentTimeEl = container.querySelector('.time-display .current');
+      if (currentTimeEl) {
+        // Calculate position within selection range (clamped)
+        const currentInSelection = getPositionInSelection(state.currentFrame, state.selectedRange);
+        currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
       }
 
-      // Update current time display and playhead position
-      if (state.currentFrame !== prevState.currentFrame) {
-        const currentTimeEl = container.querySelector('.time-display .current');
-        if (currentTimeEl) {
-          // Calculate position within selection range (clamped)
-          const currentInSelection = getPositionInSelection(
-            state.currentFrame,
-            state.selectedRange,
-          );
-          currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
-        }
-
-        // Update playhead position on timeline
-        const timelineContainer = container.querySelector('.editor-timeline-container');
-        if (timelineContainer && state.clip) {
-          updatePlayheadPosition(
-            /** @type {HTMLElement} */ (timelineContainer),
-            state.currentFrame,
-            state.clip.frames.length,
-          );
-        }
-      }
-
-      // Update base canvas ONLY when frame changes
-      if (state.currentFrame !== prevState.currentFrame && state.clip?.frames[state.currentFrame]) {
-        updateBaseCanvas(baseCanvas, state.clip.frames[state.currentFrame]);
-      }
-
-      // Update overlay ONLY when crop or grid changes
-      // Note: During drag, setupCropInteraction handles overlay updates directly
-      if (state.cropArea !== prevState.cropArea || state.showGrid !== prevState.showGrid) {
-        const frame = state.clip?.frames[state.currentFrame];
-        if (frame) {
-          updateOverlayCanvas(
-            overlayCanvas,
-            state.cropArea,
-            frame.width,
-            frame.height,
-            state.showGrid,
-          );
-        }
-      }
-
-      // Update crop info panel when crop changes
-      if (state.cropArea !== prevState.cropArea) {
-        // Clean up previous crop info panel event listeners
-        cropInfoPanelCleanups.forEach((fn) => fn());
-        // Update panel and collect new cleanups
-        cropInfoPanelCleanups = updateCropInfoPanel(container, state.cropArea, handleCropChange);
-      }
-
-      // Update timeline selection
+      // Update playhead position on timeline
       const timelineContainer = container.querySelector('.editor-timeline-container');
       if (timelineContainer && state.clip) {
-        updateTimelineRange(
+        updatePlayheadPosition(
           /** @type {HTMLElement} */ (timelineContainer),
-          state.selectedRange,
+          state.currentFrame,
           state.clip.frames.length,
         );
       }
+    }
 
-      // Update timeline header info when selection changes
-      if (
-        state.selectedRange.start !== lastHeaderRange.start ||
-        state.selectedRange.end !== lastHeaderRange.end
-      ) {
-        lastHeaderRange = state.selectedRange;
-        updateTimelineHeader(container, state.selectedRange, state.currentFrame, fps);
-      }
+    // Update base canvas ONLY when frame changes
+    if (state.currentFrame !== prevState.currentFrame && state.clip?.frames[state.currentFrame]) {
+      updateBaseCanvas(baseCanvas, state.clip.frames[state.currentFrame]);
+    }
 
-      // Update aspect ratio buttons when selection changes
-      if (state.selectedAspectRatio !== prevState.selectedAspectRatio) {
-        const aspectBtns = container.querySelectorAll('.aspect-btn');
-        aspectBtns.forEach((btn) => {
-          const ratio = btn.textContent === 'Free' ? 'free' : btn.textContent;
-          btn.classList.toggle('active', ratio === state.selectedAspectRatio);
-        });
+    // Update overlay ONLY when crop or grid changes
+    // Note: During drag, setupCropInteraction handles overlay updates directly
+    if (state.cropArea !== prevState.cropArea || state.showGrid !== prevState.showGrid) {
+      const frame = state.clip?.frames[state.currentFrame];
+      if (frame) {
+        updateOverlayCanvas(
+          overlayCanvas,
+          state.cropArea,
+          frame.width,
+          frame.height,
+          state.showGrid,
+        );
       }
+    }
 
-      // Update grid button when grid state changes
-      if (state.showGrid !== prevState.showGrid) {
-        const gridBtn = container.querySelector('.property-group .btn-secondary');
-        if (gridBtn) {
-          gridBtn.classList.toggle('active', state.showGrid);
-          gridBtn.textContent = state.showGrid ? 'On' : 'Off';
-          gridBtn.setAttribute('aria-pressed', String(state.showGrid));
-        }
-      }
+    // Update crop info panel when crop changes
+    if (state.cropArea !== prevState.cropArea) {
+      // Click handling is delegated by renderEditorScreen, so this partial
+      // update does not create listener cleanups that need module storage.
+      updateCropInfoPanel(container, state.cropArea, handleCropChange);
+    }
 
-      // Update scenes panel when scene detection state or selected range changes
-      if (
-        state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
-        state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
-        state.scenes !== prevState.scenes ||
-        state.selectedRange.start !== prevState.selectedRange.start ||
-        state.selectedRange.end !== prevState.selectedRange.end
-      ) {
-        // Clean up previous scene panel event listeners
-        scenePanelCleanups.forEach((fn) => fn());
-        // Update panel and collect new cleanups
-        scenePanelCleanups = updateScenesPanel(container, state, {
-          onTogglePlay: handleTogglePlay,
-          onFrameChange: handleFrameChange,
-          onRangeChange: handleRangeChange,
-          onCropChange: handleCropChange,
-          onToggleGrid: handleToggleGrid,
-          onAspectRatioChange: handleAspectRatioChange,
-          onSpeedChange: handleSpeedChange,
-          onExport: handleExport,
-        });
+    // Update timeline selection
+    const timelineContainer = container.querySelector('.editor-timeline-container');
+    if (timelineContainer && state.clip) {
+      updateTimelineRange(
+        /** @type {HTMLElement} */ (timelineContainer),
+        state.selectedRange,
+        state.clip.frames.length,
+      );
+    }
+
+    // Update timeline header info when selection changes
+    if (
+      state.selectedRange.start !== prevState.selectedRange.start ||
+      state.selectedRange.end !== prevState.selectedRange.end
+    ) {
+      updateTimelineHeader(container, state.selectedRange, state.currentFrame, fps);
+    }
+
+    // Update aspect ratio buttons when selection changes
+    if (state.selectedAspectRatio !== prevState.selectedAspectRatio) {
+      const aspectBtns = container.querySelectorAll('.aspect-btn');
+      aspectBtns.forEach((btn) => {
+        const ratio = btn.textContent === 'Free' ? 'free' : btn.textContent;
+        btn.classList.toggle('active', ratio === state.selectedAspectRatio);
+      });
+    }
+
+    // Update grid button when grid state changes
+    if (state.showGrid !== prevState.showGrid) {
+      const gridBtn = container.querySelector('.property-group .btn-secondary');
+      if (gridBtn) {
+        gridBtn.classList.toggle('active', state.showGrid);
+        gridBtn.textContent = state.showGrid ? 'On' : 'Off';
+        gridBtn.setAttribute('aria-pressed', String(state.showGrid));
       }
-    }, 16), // ~60fps updates
-  );
+    }
+
+    // Update scenes panel when scene detection state or selected range changes
+    if (
+      state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
+      state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
+      state.scenes !== prevState.scenes ||
+      state.selectedRange.start !== prevState.selectedRange.start ||
+      state.selectedRange.end !== prevState.selectedRange.end
+    ) {
+      // Clean up previous scene panel event listeners
+      scenePanelCleanups.forEach((fn) => {
+        fn();
+      });
+      // Update panel and collect new cleanups
+      scenePanelCleanups = updateScenesPanel(container, state, {
+        onTogglePlay: handleTogglePlay,
+        onFrameChange: handleFrameChange,
+        onRangeChange: handleRangeChange,
+        onCropChange: handleCropChange,
+        onToggleGrid: handleToggleGrid,
+        onAspectRatioChange: handleAspectRatioChange,
+        onSpeedChange: handleSpeedChange,
+        onExport: handleExport,
+      });
+    }
+
+    lastRenderedState = state;
+  }, 16); // ~60fps updates
+  storeUnsubscribe = store.subscribe(throttledStoreUpdate);
 
   // Use pre-computed scenes from Capture or fallback to async detection
   // (must be after subscription is set up so scenes panel gets updated)
@@ -630,35 +636,43 @@ function handleExport() {
  */
 async function startSceneDetectionAsync(frames) {
   if (!store) return;
+  const detectionStore = store;
 
   // Update state to show detection in progress
-  store.setState(startSceneDetection);
+  detectionStore.setState(startSceneDetection);
+
+  // Tie async work to the Editor mount that started it. A previous manager
+  // may settle after cleanup and a new Editor mount; stale work must never
+  // use or dispose that new mount's manager/store.
+  const manager = createSceneDetectionManager();
+  sceneDetectionManager = manager;
+  const isCurrentRun = () => store === detectionStore && sceneDetectionManager === manager;
 
   try {
-    // Create and initialize manager
-    sceneDetectionManager = createSceneDetectionManager();
-    await sceneDetectionManager.init();
+    await manager.init();
+
+    if (!isCurrentRun()) return;
 
     // Run detection with progress updates
-    const result = await sceneDetectionManager.detect(frames, {
+    const result = await manager.detect(frames, {
       threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {
-        if (store) {
-          store.setState((state) => updateSceneDetectionProgress(state, progress.percent));
+        if (isCurrentRun()) {
+          detectionStore.setState((state) => updateSceneDetectionProgress(state, progress.percent));
         }
       },
     });
 
+    if (!isCurrentRun()) return;
+
     // Update state with results
-    if (store) {
-      store.setState((state) => completeSceneDetection(state, result.scenes));
-      emit('editor:scenes-detected', {
-        sceneCount: result.scenes.length,
-        processingTimeMs: result.processingTimeMs,
-      });
-    }
+    detectionStore.setState((state) => completeSceneDetection(state, result.scenes));
+    emit('editor:scenes-detected', {
+      sceneCount: result.scenes.length,
+      processingTimeMs: result.processingTimeMs,
+    });
 
     console.log(
       '[Editor] Scene detection completed:',
@@ -668,20 +682,19 @@ async function startSceneDetectionAsync(frames) {
       'ms',
     );
   } catch (error) {
+    if (!isCurrentRun()) return;
+
     if (error instanceof DOMException && error.name === 'AbortError') {
       // Detection was cancelled, not an error
       console.log('[Editor] Scene detection cancelled');
     } else {
       const message = error instanceof Error ? error.message : 'Scene detection failed';
       console.error('[Editor] Scene detection error:', message);
-      if (store) {
-        store.setState((state) => setSceneDetectionError(state, message));
-      }
+      detectionStore.setState((state) => setSceneDetectionError(state, message));
     }
   } finally {
-    // Clean up manager after detection
-    if (sceneDetectionManager) {
-      sceneDetectionManager.dispose();
+    manager.dispose();
+    if (sceneDetectionManager === manager) {
       sceneDetectionManager = null;
     }
   }
@@ -696,6 +709,16 @@ async function startSceneDetectionAsync(frames) {
  */
 function cleanup() {
   stopPlayback();
+
+  if (storeUnsubscribe) {
+    storeUnsubscribe();
+    storeUnsubscribe = null;
+  }
+
+  if (throttledStoreUpdate) {
+    throttledStoreUpdate.cancel();
+    throttledStoreUpdate = null;
+  }
 
   // Cancel and dispose scene detection
   if (sceneDetectionManager) {
@@ -714,7 +737,9 @@ function cleanup() {
   }
 
   // Clean up scene panel event listeners
-  scenePanelCleanups.forEach((fn) => fn());
+  scenePanelCleanups.forEach((fn) => {
+    fn();
+  });
   scenePanelCleanups = [];
 
   baseCanvas = null;

@@ -16,6 +16,15 @@ export default defineConfig({
         'src/workers/gif-encoder-worker.js',
         'src/workers/scene-detection-worker.js',
       ],
+      // Deliberately conservative global floor. This catches a large loss of
+      // production-path coverage without making ordinary refactors fail for
+      // small line-count changes.
+      thresholds: {
+        statements: 55,
+        branches: 45,
+        functions: 55,
+        lines: 55,
+      },
     },
   },
 });

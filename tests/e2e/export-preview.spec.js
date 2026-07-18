@@ -30,6 +30,20 @@ test.describe('Export Canvas Preview', () => {
     await expect(page.locator('.export-preview-size')).toHaveText('640×480');
   });
 
+  test('play/pause control reflects playback state after each toggle', async ({ page }) => {
+    const playBtn = page.locator('.export-preview-play-btn');
+
+    await playBtn.click();
+    await expect(playBtn).toHaveAttribute('aria-label', 'Play preview');
+    await expect(playBtn).toHaveText('\u25B6');
+    await expect(playBtn).not.toHaveClass(/playing/);
+
+    await playBtn.click();
+    await expect(playBtn).toHaveAttribute('aria-label', 'Pause preview');
+    await expect(playBtn).toHaveText('\u23F8');
+    await expect(playBtn).toHaveClass(/playing/);
+  });
+
   test('preview canvas draws actual frame pixels', async ({ page }) => {
     // The playback loop draws the injected mock frames onto the canvas.
     // A blank (never-drawn) canvas is fully transparent black.

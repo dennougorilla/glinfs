@@ -13,7 +13,6 @@ describe('initCaptureState', () => {
     // Assert
     expect(state.isCapturing).toBe(false);
     expect(state.isSharing).toBe(false);
-    expect(state.isPaused).toBe(false);
     expect(state.stream).toBe(null);
     expect(state.error).toBe(null);
   });
@@ -73,23 +72,7 @@ describe('stopCapture', () => {
     // Assert
     expect(stoppedState.isCapturing).toBe(false);
     expect(stoppedState.isSharing).toBe(false);
-    expect(stoppedState.isPaused).toBe(false);
     expect(stoppedState.stream).toBe(null);
-  });
-
-  it('should preserve the buffer when stopping', () => {
-    // Arrange
-    const capturingState = startCapture(initCaptureState(), { id: 'test-stream' });
-    const stateWithBuffer = {
-      ...capturingState,
-      buffer: { ...capturingState.buffer, size: 10 },
-    };
-
-    // Act
-    const stoppedState = stopCapture(stateWithBuffer);
-
-    // Assert
-    expect(stoppedState.buffer.size).toBe(10);
   });
 
   it('should not mutate the previous state', () => {

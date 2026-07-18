@@ -238,6 +238,16 @@ describe('CaptureWorkerManager', () => {
     expect(manager.isInitialized).toBe(false);
   });
 
+  it('terminate() resolves a pending frame request with an empty array', async () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+
+    const framesPromise = manager.requestFrames();
+    manager.terminate();
+
+    await expect(framesPromise).resolves.toEqual([]);
+  });
+
   it('terminateWithCleanup posts CLEAR and terminates once the buffer is empty (#40)', async () => {
     const manager = new CaptureWorkerManager();
     manager.init(createFakeVideo());
@@ -273,6 +283,7 @@ describe('CaptureWorkerManager', () => {
     await promise;
 
     expect(worker.terminated).toBe(true);
+    expect(worker.listeners.get('message')).toHaveLength(0);
   });
 
   it('terminateWithCleanup on an uninitialized manager resolves without a worker', async () => {

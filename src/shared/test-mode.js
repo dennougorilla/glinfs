@@ -104,7 +104,7 @@ function parseUrlConfig() {
   const mockFrames = urlParams.get('mockFrames');
   if (mockFrames) {
     const count = parseInt(mockFrames, 10);
-    if (!isNaN(count) && count > 0 && count <= 300) {
+    if (!Number.isNaN(count) && count > 0 && count <= 300) {
       urlConfig.defaultFrameCount = count;
     }
   }
@@ -120,7 +120,7 @@ function parseUrlConfig() {
   const mockWidth = urlParams.get('mockWidth');
   if (mockWidth) {
     const width = parseInt(mockWidth, 10);
-    if (!isNaN(width) && width >= 100 && width <= 3840) {
+    if (!Number.isNaN(width) && width >= 100 && width <= 3840) {
       urlConfig.defaultWidth = width;
     }
   }
@@ -128,7 +128,7 @@ function parseUrlConfig() {
   const mockHeight = urlParams.get('mockHeight');
   if (mockHeight) {
     const height = parseInt(mockHeight, 10);
-    if (!isNaN(height) && height >= 100 && height <= 2160) {
+    if (!Number.isNaN(height) && height >= 100 && height <= 2160) {
       urlConfig.defaultHeight = height;
     }
   }

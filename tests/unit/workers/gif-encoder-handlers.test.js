@@ -318,6 +318,52 @@ describe('GIF Encoder Handlers', () => {
       });
     });
 
+    it('should abort the session after the first frame failure (#45)', () => {
+      // Arrange
+      handlers.handleInit(initMessage);
+      mockEncoder.addFrame.mockImplementationOnce(() => {
+        throw new Error('Quantization failed');
+      });
+      postEvent.mockClear();
+
+      const failedFrame = {
+        command: Commands.ADD_FRAME,
+        rgbaData: new ArrayBuffer(400),
+        width: 10,
+        height: 10,
+        frameIndex: 0,
+      };
+      const queuedFrame = {
+        ...failedFrame,
+        rgbaData: new ArrayBuffer(400),
+        frameIndex: 1,
+      };
+
+      // Act - these commands model messages already queued before the main
+      // thread can observe FRAME_ERROR.
+      handlers.handleAddFrame(failedFrame);
+      handlers.handleAddFrame(queuedFrame);
+      handlers.handleFinish();
+
+      // Assert - no later frame or FINISH reaches the encoder, and COMPLETE
+      // is never emitted for a GIF missing the failed frame.
+      expect(mockEncoder.addFrame).toHaveBeenCalledOnce();
+      expect(mockEncoder.finish).not.toHaveBeenCalled();
+      expect(mockEncoder.dispose).toHaveBeenCalledOnce();
+      expect(postEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: Events.PROGRESS }),
+      );
+      expect(postEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: Events.COMPLETE }),
+        expect.anything(),
+      );
+      expect(postEvent).toHaveBeenLastCalledWith({
+        event: Events.ERROR,
+        message: 'Quantization failed',
+        code: 'FRAME_ERROR',
+      });
+    });
+
     it('should convert ArrayBuffer to Uint8ClampedArray', () => {
       // Arrange
       handlers.handleInit(initMessage);

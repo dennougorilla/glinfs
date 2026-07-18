@@ -35,7 +35,7 @@ import {
   updateProgress,
   updateSettings,
 } from './state.js';
-import { renderExportScreen, updateProgressUI } from './ui.js';
+import { renderExportScreen, updatePreviewPlaybackUI, updateProgressUI } from './ui.js';
 
 /** @type {ReturnType<typeof createExportStore> | null} */
 let store = null;
@@ -137,7 +137,12 @@ export function initExport() {
   // Restore saved export result if available (user returning to Export screen)
   const savedResult = getExportResult();
   if (savedResult) {
-    store.setState((s) => completeEncoding(s, savedResult.blob));
+    const state = store.getState();
+    const restoredJob = createEncodingJob(
+      applyFrameSkip(frames, state.settings.frameSkip).length,
+      state.settings.encoderId,
+    );
+    store.setState((s) => completeEncoding(startEncoding(s, restoredJob), savedResult.blob));
   }
 
   // Check encoder status
@@ -151,9 +156,12 @@ export function initExport() {
   render(container);
 
   // Subscribe to state changes
-  store.subscribe(() => {
+  store.subscribe((state, prevState) => {
     if (!store) return;
-    const state = store.getState();
+
+    if (state.preview.isPlaying !== prevState.preview.isPlaying) {
+      updatePreviewPlaybackUI(container, state.preview.isPlaying);
+    }
 
     // Update progress UI if encoding
     if (state.job?.status === 'encoding') {
@@ -256,10 +264,7 @@ async function handleExport() {
 
   // Create encoding job
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
-  const job = createEncodingJob(
-    effectiveFrames.length,
-    state.encoderStatus === 'gifsicle-wasm' ? 'gifsicle-wasm' : 'gifenc-js',
-  );
+  const job = createEncodingJob(effectiveFrames.length, state.settings.encoderId);
 
   // Create AbortController for cancellation support
   encodingController = new AbortController();

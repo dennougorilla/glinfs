@@ -8,6 +8,8 @@
  * - EditorPayload: editor -> export
  */
 
+import { resetThumbnailCache } from './utils/thumbnail-cache.js';
+
 /**
  * @typedef {Object} ClipPayload
  * @property {import('../features/capture/types.js').Frame[]} frames - Captured frames
@@ -50,7 +52,7 @@ const state = {
 /** @type {Partial<ScreenCaptureState>|null} */
 let screenCaptureState = null;
 
-/** @type {((state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void) | null} */
+/** @type {((state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void | Promise<void>) | null} */
 let screenCaptureCleanupFn = null;
 
 // ============================================================
@@ -114,6 +116,10 @@ export function setClipPayload(payload) {
   // Only close old VideoFrames if frames array is different
   // (prevents closing frames when just adding metadata like scenes)
   if (state.clipPayload?.frames !== payload.frames) {
+    // Cached canvases are keyed by the previous clip's frame IDs. Keeping the
+    // singleton alive across clips retains pixel buffers that can otherwise
+    // never be reused.
+    resetThumbnailCache();
     closePayloadFrames(state.clipPayload);
     // Clear old editor state since frames are now different
     state.editorPayload = null;
@@ -129,6 +135,7 @@ export function clearClipPayload(closeFrames = false) {
   if (closeFrames && state.clipPayload) {
     closePayloadFrames(state.clipPayload);
   }
+  resetThumbnailCache();
   state.clipPayload = null;
 }
 
@@ -169,6 +176,7 @@ export function releaseAllFramesAndReset() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
+  resetThumbnailCache();
   // Also clear screen capture state for fresh start
   clearScreenCaptureState();
 }
@@ -299,7 +307,7 @@ export function clearExportResult() {
 /**
  * Register a cleanup function for screen capture resources
  * Called once at app startup from main.js
- * @param {(state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void} fn
+ * @param {(state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void | Promise<void>} fn
  */
 export function registerScreenCaptureCleanup(fn) {
   screenCaptureCleanupFn = fn;
@@ -336,7 +344,9 @@ export function clearScreenCaptureState(stopStream = true) {
     try {
       // Fire and forget - cleanup is async but we don't await
       // This maintains backward compatibility with sync callers
-      screenCaptureCleanupFn(oldState, { stopStream });
+      Promise.resolve(screenCaptureCleanupFn(oldState, { stopStream })).catch((err) => {
+        console.error('[app-store] Screen capture cleanup failed:', err);
+      });
     } catch (err) {
       console.error('[app-store] Screen capture cleanup failed:', err);
     }
@@ -366,5 +376,6 @@ export function resetAppStore() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
+  resetThumbnailCache();
   clearScreenCaptureState();
 }

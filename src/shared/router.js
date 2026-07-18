@@ -4,7 +4,7 @@
  */
 
 /**
- * @typedef {'/capture' | '/editor' | '/export' | '/loading'} Route
+ * @typedef {'/capture' | '/editor' | '/export' | '/loading' | '/settings'} Route
  */
 
 /** @type {Map<string, () => (() => void) | void>} */
@@ -38,7 +38,10 @@ export function initRouter(routeHandlers) {
  */
 function handleHashChange() {
   const hash = window.location.hash.slice(1) || '/capture';
-  const route = /** @type {Route} */ (hash);
+  // Route matching is based on the path only. `navigate()` may append query
+  // parameters, which must not turn an otherwise valid route into a 404.
+  const [path] = hash.split('?');
+  const route = /** @type {Route} */ (path);
 
   if (routes.has(route)) {
     // Call cleanup from previous route before switching
@@ -46,8 +49,10 @@ function handleHashChange() {
     if (currentCleanup) {
       try {
         currentCleanup(route);
-      } catch {
-        // Cleanup errors are silently ignored
+      } catch (error) {
+        // Cleanup failures must not block navigation, but hiding them entirely
+        // makes lifecycle/resource leaks almost impossible to diagnose.
+        console.error(`[Router] Failed to clean up route "${currentRoute}":`, error);
       }
       currentCleanup = null;
     }
@@ -57,20 +62,45 @@ function handleHashChange() {
     // Clear main content
     const main = document.getElementById('main-content');
     if (main) {
+      // Feature screens may apply route-specific classes (for example the
+      // Settings screen). Reset them before mounting the next route.
+      main.className = '';
       main.innerHTML = '';
     }
 
     // Call route handler and store cleanup function
     const handler = routes.get(route);
     if (handler) {
-      const cleanup = handler();
-      if (typeof cleanup === 'function') {
-        currentCleanup = cleanup;
+      try {
+        const cleanup = handler();
+        if (typeof cleanup === 'function') {
+          currentCleanup = cleanup;
+        }
+      } catch (error) {
+        console.error(`[Router] Failed to initialize route "${route}":`, error);
+
+        // Recover to the known entry screen. If that screen itself fails,
+        // render a stable error instead of creating a redirect loop.
+        if (route !== '/capture') {
+          navigate('/capture');
+          return;
+        }
+
+        if (main) {
+          main.textContent = 'Unable to load the application. Please reload the page.';
+        }
+        return;
       }
     }
 
     // Notify listeners
-    listeners.forEach((fn) => fn(route));
+    listeners.forEach((fn) => {
+      try {
+        fn(route);
+      } catch (error) {
+        console.error(`[Router] Route listener failed for "${route}":`, error);
+      }
+    });
   } else {
     // Fallback to capture
     navigate('/capture');

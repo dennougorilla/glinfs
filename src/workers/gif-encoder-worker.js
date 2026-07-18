@@ -29,6 +29,9 @@ let framesProcessed = 0;
 /** @type {number} */
 let startTime = 0;
 
+/** @type {{event: typeof Events.ERROR, message: string, code: string} | null} */
+let sessionError = null;
+
 /**
  * Send event to main thread
  * @param {import('./worker-protocol.js').WorkerEvent} event
@@ -48,6 +51,8 @@ function postEvent(event, transfer) {
  */
 async function handleInit(message) {
   try {
+    sessionError = null;
+
     // Dispose existing encoder if any
     if (encoder) {
       encoder.dispose();
@@ -95,6 +100,11 @@ async function handleInit(message) {
  * @param {import('./worker-protocol.js').AddFrameMessage} message
  */
 function handleAddFrame(message) {
+  // Once a frame has failed, the current GIF is invalid. Ignore commands
+  // that were already queued behind the failed frame instead of allowing
+  // later frames to produce progress for a partial GIF.
+  if (sessionError) return;
+
   try {
     if (!encoder) {
       throw new Error('Encoder not initialized');
@@ -122,11 +132,23 @@ function handleAddFrame(message) {
       percent,
     });
   } catch (error) {
-    postEvent({
+    sessionError = {
       event: Events.ERROR,
       message: error instanceof Error ? error.message : 'Failed to add frame',
       code: 'FRAME_ERROR',
-    });
+    };
+
+    // Release encoder-owned memory immediately. handleFinish() checks
+    // sessionError before encoder, so it will report the original failure.
+    try {
+      encoder?.dispose();
+    } catch {
+      // Preserve the addFrame error; cleanup failures must not replace it.
+    } finally {
+      encoder = null;
+    }
+
+    postEvent(sessionError);
   }
 }
 
@@ -134,6 +156,17 @@ function handleAddFrame(message) {
  * Handle finish command
  */
 function handleFinish() {
+  if (sessionError) {
+    // FINISH may already be in the worker queue when the main thread receives
+    // FRAME_ERROR. Repeat the original error rather than completing a GIF
+    // that omitted the failed frame.
+    postEvent(sessionError);
+    sessionError = null;
+    totalFrames = 0;
+    framesProcessed = 0;
+    return;
+  }
+
   try {
     if (!encoder) {
       throw new Error('Encoder not initialized');
@@ -159,6 +192,7 @@ function handleFinish() {
     encoder = null;
     totalFrames = 0;
     framesProcessed = 0;
+    sessionError = null;
   } catch (error) {
     postEvent({
       event: Events.ERROR,
@@ -179,6 +213,7 @@ function handleCancel() {
 
   totalFrames = 0;
   framesProcessed = 0;
+  sessionError = null;
 
   postEvent({
     event: Events.CANCELLED,

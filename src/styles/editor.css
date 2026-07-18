@@ -253,21 +253,6 @@
   font-family: var(--font-mono);
 }
 
-/* Empty State - Uses unified .empty-state from global.css */
-.editor-empty {
-  /* Inherits from .empty-state */
-}
-
-/* Editor-specific icon styling */
-.editor-empty .empty-state-icon {
-  background: var(--gradient-glinfs-subtle);
-  border-color: rgba(139, 92, 246, 0.2);
-}
-
-.editor-empty .empty-state-icon svg {
-  color: var(--color-highlight);
-}
-
 /* Sidebar Panel */
 .editor-sidebar {
   flex-shrink: 0;
@@ -702,11 +687,6 @@
   z-index: var(--z-timeline-handle);
 }
 
-.tl-handle:focus-visible .tl-handle-grip {
-  outline: 3px solid var(--color-primary);
-  outline-offset: 2px;
-}
-
 .tl-handle--in {
   left: -22px;
   justify-content: flex-end;
@@ -777,6 +757,11 @@
     0 0 0 2px rgba(252, 211, 77, 0.5),
     0 0 24px rgba(251, 191, 36, 0.6),
     0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.tl-handle:focus-visible .tl-handle-grip {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

@@ -53,6 +53,18 @@ export class SceneDetectionManager {
     /** @type {boolean} */
     this.#isCancelled = false;
 
+    /** @type {boolean} */
+    this.#isDetectionActive = false;
+
+    /** @type {Error | null} */
+    this.#workerError = null;
+
+    /** @type {Promise<void> | null} */
+    this.#initPromise = null;
+
+    /** @type {(() => void) | null} */
+    this.#cancelInit = null;
+
     /** @type {OffscreenCanvas | null} */
     this.#canvas = null;
 
@@ -78,6 +90,18 @@ export class SceneDetectionManager {
   /** @type {boolean} */
   #isCancelled;
 
+  /** @type {boolean} */
+  #isDetectionActive;
+
+  /** @type {Error | null} */
+  #workerError;
+
+  /** @type {Promise<void> | null} */
+  #initPromise;
+
+  /** @type {(() => void) | null} */
+  #cancelInit;
+
   /** @type {OffscreenCanvas | null} */
   #canvas;
 
@@ -94,61 +118,92 @@ export class SceneDetectionManager {
       return;
     }
 
-    return new Promise((resolve, reject) => {
-      let timeoutId = null;
-      let isSettled = false;
+    if (this.#initPromise) {
+      return this.#initPromise;
+    }
 
-      const settle = (type, error) => {
+    this.#workerError = null;
+
+    /** @type {() => void} */
+    let resolveInit = () => {};
+    /** @type {(error: Error) => void} */
+    let rejectInit = () => {};
+    const initPromise = new Promise((resolve, reject) => {
+      resolveInit = resolve;
+      rejectInit = reject;
+    });
+    this.#initPromise = initPromise;
+
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let timeoutId = null;
+    let isSettled = false;
+
+    const settle = (type, error) => {
+      if (isSettled) return;
+      isSettled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      this.#initPromise = null;
+      this.#cancelInit = null;
+      if (type === 'resolve') {
+        resolveInit();
+      } else {
+        rejectInit(error);
+      }
+    };
+
+    const fail = (error) => {
+      if (isSettled) return;
+      settle('reject', error);
+      this.#worker?.terminate();
+      this.#worker = null;
+      this.#isInitialized = false;
+    };
+
+    this.#cancelInit = () => {
+      fail(new DOMException('Scene detection initialization cancelled', 'AbortError'));
+    };
+
+    try {
+      this.#worker = new Worker(
+        new URL('../../workers/scene-detection-worker.js', import.meta.url),
+        { type: 'module' },
+      );
+
+      timeoutId = setTimeout(() => {
+        fail(new Error('Worker initialization timed out'));
+      }, INIT_TIMEOUT_MS);
+
+      const handleReady = (event) => {
         if (isSettled) return;
-        isSettled = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (type === 'resolve') {
-          resolve();
-        } else {
-          reject(error);
+        const data = event.data;
+        if (data.type === 'READY') {
+          this.#worker?.removeEventListener('message', handleReady);
+          this.#worker?.removeEventListener('error', handleError);
+          this.#setupListeners();
+          this.#isInitialized = true;
+          settle('resolve');
+        } else if (data.type === 'ERROR') {
+          fail(new Error(data.payload?.message || 'Worker init failed'));
         }
       };
 
-      try {
-        this.#worker = new Worker(
-          new URL('../../workers/scene-detection-worker.js', import.meta.url),
-          { type: 'module' },
-        );
+      const handleError = (error) => {
+        fail(new Error(error.message || 'Worker creation failed'));
+      };
 
-        timeoutId = setTimeout(() => {
-          settle('reject', new Error('Worker initialization timed out'));
-          this.dispose();
-        }, INIT_TIMEOUT_MS);
+      this.#worker.addEventListener('message', handleReady);
+      this.#worker.addEventListener('error', handleError, { once: true });
 
-        const handleReady = (event) => {
-          const data = event.data;
-          if (data.type === 'READY') {
-            this.#worker?.removeEventListener('message', handleReady);
-            this.#setupListeners();
-            this.#isInitialized = true;
-            settle('resolve');
-          } else if (data.type === 'ERROR') {
-            this.#worker?.removeEventListener('message', handleReady);
-            settle('reject', new Error(data.payload?.message || 'Worker init failed'));
-          }
-        };
+      // Send init message with algorithm config
+      this.#worker.postMessage({
+        type: 'INIT',
+        payload: { algorithmId: config.algorithmId },
+      });
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error('Failed to create worker'));
+    }
 
-        const handleError = (error) => {
-          settle('reject', new Error(error.message || 'Worker creation failed'));
-        };
-
-        this.#worker.addEventListener('message', handleReady);
-        this.#worker.addEventListener('error', handleError, { once: true });
-
-        // Send init message with algorithm config
-        this.#worker.postMessage({
-          type: 'INIT',
-          payload: { algorithmId: config.algorithmId },
-        });
-      } catch (error) {
-        settle('reject', error instanceof Error ? error : new Error('Failed to create worker'));
-      }
-    });
+    return initPromise;
   }
 
   /**
@@ -156,6 +211,23 @@ export class SceneDetectionManager {
    */
   #setupListeners() {
     if (!this.#worker) return;
+
+    this.#worker.addEventListener(
+      'error',
+      (event) => {
+        const error = new Error(event.message || 'Scene detection worker failed');
+        this.#workerError = error;
+        this.#rejectDetect?.(error);
+        this.#resolveDetect = null;
+        this.#rejectDetect = null;
+        this.#onProgress = null;
+        this.#isDetectionActive = false;
+        this.#worker?.terminate();
+        this.#worker = null;
+        this.#isInitialized = false;
+      },
+      { once: true },
+    );
 
     this.#worker.addEventListener('message', (event) => {
       /** @type {WorkerOutMessage} */
@@ -170,12 +242,16 @@ export class SceneDetectionManager {
           this.#resolveDetect?.(/** @type {SceneDetectionResult} */ (data.payload));
           this.#resolveDetect = null;
           this.#rejectDetect = null;
+          this.#onProgress = null;
+          this.#isDetectionActive = false;
           break;
 
         case 'ERROR':
           this.#rejectDetect?.(new Error(/** @type {{message: string}} */ (data.payload).message));
           this.#resolveDetect = null;
           this.#rejectDetect = null;
+          this.#onProgress = null;
+          this.#isDetectionActive = false;
           break;
       }
     });
@@ -188,11 +264,25 @@ export class SceneDetectionManager {
    * @returns {Promise<SceneDetectionResult>}
    */
   async detect(frames, options = DEFAULT_DETECTOR_OPTIONS) {
+    if (this.#workerError) {
+      throw this.#workerError;
+    }
+
     if (!this.#isInitialized || !this.#worker) {
       throw new Error('Manager not initialized. Call init() first.');
     }
 
+    if (this.#isDetectionActive) {
+      throw new Error('Scene detection is already in progress');
+    }
+
+    const sampleInterval = options.sampleInterval ?? 1;
+    if (!Number.isInteger(sampleInterval) || sampleInterval < 1) {
+      throw new RangeError('sampleInterval must be a positive integer');
+    }
+
     this.#isCancelled = false;
+    this.#isDetectionActive = true;
     this.#onProgress = options.onProgress ?? null;
 
     // Report initial progress
@@ -204,9 +294,26 @@ export class SceneDetectionManager {
     });
 
     // Extract frame data in batches to avoid blocking
-    const frameData = await this.#extractFrameData(frames, options.sampleInterval ?? 1);
+    let frameData;
+    try {
+      frameData = await this.#extractFrameData(frames, sampleInterval);
+    } catch (error) {
+      this.#isDetectionActive = false;
+      this.#onProgress = null;
+      throw error;
+    }
+
+    // A native worker error can happen while thumbnail extraction is yielding
+    // to the event loop, before the detection promise installs its rejector.
+    if (this.#workerError) {
+      this.#isDetectionActive = false;
+      this.#onProgress = null;
+      throw this.#workerError;
+    }
 
     if (this.#isCancelled) {
+      this.#isDetectionActive = false;
+      this.#onProgress = null;
       throw new DOMException('Detection cancelled', 'AbortError');
     }
 
@@ -220,20 +327,28 @@ export class SceneDetectionManager {
         .filter((f) => f.imageData)
         .map((f) => /** @type {ImageData} */ (f.imageData).data.buffer);
 
-      this.#worker?.postMessage(
-        {
-          type: 'DETECT',
-          payload: {
-            frameData,
-            options: {
-              threshold: options.threshold,
-              minSceneDuration: options.minSceneDuration,
-              sampleInterval: 1, // Already sampled during extraction
+      try {
+        this.#worker?.postMessage(
+          {
+            type: 'DETECT',
+            payload: {
+              frameData,
+              options: {
+                threshold: options.threshold,
+                minSceneDuration: options.minSceneDuration,
+                sampleInterval: 1, // Already sampled during extraction
+              },
             },
           },
-        },
-        transferables,
-      );
+          transferables,
+        );
+      } catch (error) {
+        this.#resolveDetect = null;
+        this.#rejectDetect = null;
+        this.#onProgress = null;
+        this.#isDetectionActive = false;
+        reject(error instanceof Error ? error : new Error('Failed to start scene detection'));
+      }
     });
   }
 
@@ -325,16 +440,32 @@ export class SceneDetectionManager {
    * Cancel ongoing detection
    */
   cancel() {
+    const wasDetectionActive = this.#isDetectionActive;
     this.#isCancelled = true;
-
-    if (this.#worker && this.#isInitialized) {
-      this.#worker.postMessage({ type: 'CANCEL' });
-    }
+    this.#onProgress = null;
 
     if (this.#rejectDetect) {
       this.#rejectDetect(new DOMException('Detection cancelled', 'AbortError'));
       this.#resolveDetect = null;
       this.#rejectDetect = null;
+    }
+    this.#isDetectionActive = false;
+
+    // A worker can still be yielding inside an async DETECT handler when it
+    // receives CANCEL. Reusing that worker immediately would allow a new
+    // DETECT message to clear the worker's cancellation flag and interleave
+    // results from both runs. Make cancellation terminal for the active
+    // worker; callers can explicitly init() again before starting a new run.
+    if (wasDetectionActive && this.#worker) {
+      try {
+        if (this.#isInitialized) {
+          this.#worker.postMessage({ type: 'CANCEL' });
+        }
+      } finally {
+        this.#worker.terminate();
+        this.#worker = null;
+        this.#isInitialized = false;
+      }
     }
   }
 
@@ -343,13 +474,14 @@ export class SceneDetectionManager {
    * @returns {boolean}
    */
   isDetecting() {
-    return this.#resolveDetect !== null;
+    return this.#isDetectionActive;
   }
 
   /**
    * Dispose resources
    */
   dispose() {
+    this.#cancelInit?.();
     this.cancel();
 
     if (this.#worker) {
@@ -361,6 +493,10 @@ export class SceneDetectionManager {
     this.#ctx = null;
     this.#isInitialized = false;
     this.#onProgress = null;
+    this.#workerError = null;
+    this.#isDetectionActive = false;
+    this.#initPromise = null;
+    this.#cancelInit = null;
   }
 }
 

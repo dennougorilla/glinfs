@@ -16,6 +16,60 @@ const {
   gridMax: MAX_THUMBNAIL_SIZE,
 } = getThumbnailSizes();
 
+/** Controls that must retain their native keyboard behavior inside the modal. */
+const INTERACTIVE_ELEMENT_SELECTOR = [
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'a[href]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="slider"]',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[role="switch"]',
+  '[role="tab"]',
+].join(', ');
+
+/**
+ * Check whether a keyboard event came from a control with its own key semantics.
+ * @param {EventTarget | null} target
+ * @returns {boolean}
+ */
+function isInteractiveElement(target) {
+  return target instanceof Element && target.closest(INTERACTIVE_ELEMENT_SELECTOR) !== null;
+}
+
+const GRID_GAP = 12;
+const GRID_PADDING = 4;
+const GRID_ASPECT_RATIO = 16 / 9;
+const VIRTUALIZATION_THRESHOLD = 200;
+const VIRTUAL_OVERSCAN_ROWS = 3;
+
+/**
+ * Calculate the backing-store size for a thumbnail displayed at a CSS width.
+ * The quality preset remains an upper bound, while high-DPI displays receive
+ * enough source pixels to avoid unnecessary upscaling.
+ * @param {number} displayWidth
+ * @param {number} [devicePixelRatio]
+ * @param {number} [maximumSize]
+ * @returns {number}
+ */
+export function calculateThumbnailRenderSize(
+  displayWidth,
+  devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+  maximumSize = MAX_THUMBNAIL_SIZE,
+) {
+  const safeWidth = Number.isFinite(displayWidth) ? Math.max(1, displayWidth) : 1;
+  const safePixelRatio = Number.isFinite(devicePixelRatio) ? Math.max(1, devicePixelRatio) : 1;
+  const safeMaximum = Number.isFinite(maximumSize) ? Math.max(1, maximumSize) : 1;
+  return Math.min(safeMaximum, Math.ceil(safeWidth * safePixelRatio));
+}
+
 /** CSS styles for frame grid modal */
 const FRAME_GRID_STYLES = `
   .frame-grid-backdrop {
@@ -152,6 +206,16 @@ const FRAME_GRID_STYLES = `
     gap: 12px;
     padding: 4px; /* Space for focus-visible outline */
     content-visibility: auto;
+  }
+
+  .frame-grid-container.is-virtualized {
+    display: block;
+    position: relative;
+    content-visibility: visible;
+  }
+
+  .frame-grid-container.is-virtualized .frame-grid-item {
+    position: absolute;
   }
 
   .frame-grid-item {
@@ -666,7 +730,10 @@ function calculateOptimalThumbnailSize(frameCount, containerWidth, containerHeig
   // Binary search for optimal size
   let low = MIN_THUMBNAIL_SIZE;
   let high = MAX_THUMBNAIL_SIZE;
-  let optimal = DEFAULT_THUMBNAIL_SIZE;
+  // If even the minimum size cannot fit every frame, stay at the minimum.
+  // Starting from the default made very large clips silently auto-fit back to
+  // a larger and more memory-intensive thumbnail size.
+  let optimal = MIN_THUMBNAIL_SIZE;
 
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
@@ -711,6 +778,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   let focusedFrame = startFrame;
   let thumbnailSize = DEFAULT_THUMBNAIL_SIZE;
   const hasScenes = scenes.length > 0;
+  let disposed = false;
 
   // Track previous selection for optimized updates (null initially to trigger full update)
   /** @type {number | null} */
@@ -721,6 +789,8 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   // Touch device support
   /** @type {number | null} */
   let touchTimer = null;
+  /** @type {HTMLElement | null} */
+  let touchPendingItem = null;
   /** @type {HTMLElement | null} */
   let touchActiveItem = null;
 
@@ -862,10 +932,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
           // Update scene button states
           updateSceneButtonStates();
           // Scroll to scene start
-          const firstItem = gridItems[scene.startFrame];
-          if (firstItem) {
-            firstItem.scrollIntoView({ block: 'center', behavior: 'smooth' });
-          }
+          scrollToFrame(scene.startFrame, { block: 'center' });
         }),
       );
 
@@ -893,28 +960,103 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   // Body with grid
   const body = createElement('div', { className: 'frame-grid-body' });
   const gridContainer = createElement('div', { className: 'frame-grid-container' });
+  const isVirtualized = frames.length > VIRTUALIZATION_THRESHOLD;
+  if (isVirtualized) {
+    gridContainer.classList.add('is-virtualized');
+  }
 
-  // Generate thumbnails and grid items
-  /** @type {HTMLElement[]} */
+  // Sparse array: large clips only keep visible items materialized.
+  /** @type {(HTMLElement | undefined)[]} */
   const gridItems = [];
+  const materializedIndices = new Set();
+  /** @type {number | null} */
+  let virtualRenderFrame = null;
+  /** @type {number | null} */
+  let autoFitFrame = null;
+
+  /**
+   * Get current grid geometry for both CSS-grid and virtualized layouts.
+   */
+  function getGridMetrics() {
+    const measuredWidth =
+      gridContainer.clientWidth ||
+      gridContainer.offsetWidth ||
+      Math.max(0, body.clientWidth - GRID_PADDING * 2);
+    const containerWidth = Math.max(thumbnailSize + GRID_PADDING * 2, measuredWidth);
+    const contentWidth = Math.max(1, containerWidth - GRID_PADDING * 2);
+    const columns = Math.max(1, Math.floor((contentWidth + GRID_GAP) / (thumbnailSize + GRID_GAP)));
+    const cellWidth = Math.max(1, (contentWidth - GRID_GAP * (columns - 1)) / columns);
+    const cellHeight = cellWidth / GRID_ASPECT_RATIO;
+    const rowStride = cellHeight + GRID_GAP;
+    const rowCount = Math.ceil(frames.length / columns);
+    const totalHeight =
+      GRID_PADDING * 2 + rowCount * cellHeight + Math.max(0, rowCount - 1) * GRID_GAP;
+
+    return { columns, cellWidth, cellHeight, rowStride, rowCount, totalHeight };
+  }
+
+  /**
+   * Release a canvas backing store immediately instead of waiting for GC.
+   * @param {HTMLElement} item
+   */
+  function releaseThumbnail(item) {
+    item.querySelectorAll('canvas').forEach((canvas) => {
+      canvas.width = 0;
+      canvas.height = 0;
+      canvas.remove();
+    });
+  }
+
+  /**
+   * Add a placeholder when an item does not yet have a thumbnail.
+   * @param {HTMLElement} item
+   */
+  function ensureThumbnailPlaceholder(item) {
+    if (
+      !item.querySelector('canvas') &&
+      !item.querySelector('.frame-grid-placeholder') &&
+      !item.querySelector('.frame-grid-thumbnail-error')
+    ) {
+      item.insertBefore(
+        createElement('div', { className: 'frame-grid-placeholder' }),
+        item.firstChild,
+      );
+    }
+  }
 
   /**
    * Render thumbnail for a grid item
    * @param {HTMLElement} item
-   * @param {import('../capture/types.js').Frame} frame
+   * @param {number} [displayWidthOverride] - Known CSS width for virtual items
    */
-  function renderThumbnail(item, frame) {
-    // Remove placeholder if exists
-    const placeholder = item.querySelector('.frame-grid-placeholder');
-    if (placeholder) placeholder.remove();
+  function renderThumbnail(item, displayWidthOverride) {
+    if (disposed) return;
+
+    const index = Number.parseInt(item.dataset.index, 10);
+    const frame = frames[index];
+    if (!frame) return;
+
+    const measuredWidth = displayWidthOverride ?? item.getBoundingClientRect().width;
+    const displayWidth = measuredWidth > 0 ? measuredWidth : getGridMetrics().cellWidth;
+    const renderSize = calculateThumbnailRenderSize(displayWidth);
+    const existingCanvas = /** @type {HTMLCanvasElement | null} */ (item.querySelector('canvas'));
+    if (existingCanvas?.dataset.renderSize === String(renderSize)) {
+      return;
+    }
+
+    releaseThumbnail(item);
+    item.querySelector('.frame-grid-placeholder')?.remove();
+    item.querySelector('.frame-grid-thumbnail-error')?.remove();
 
     try {
-      const canvas = createThumbnailCanvas(frame, MAX_THUMBNAIL_SIZE);
+      const canvas = createThumbnailCanvas(frame, renderSize);
+      canvas.dataset.renderSize = String(renderSize);
       item.insertBefore(canvas, item.firstChild);
     } catch {
       const errorPlaceholder = createElement(
         'div',
         {
+          className: 'frame-grid-thumbnail-error',
           style:
             'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#666;',
         },
@@ -924,9 +1066,167 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     }
   }
 
+  /**
+   * Create one frame item without registering per-item listeners.
+   * @param {number} index
+   * @returns {HTMLElement}
+   */
+  function createGridItem(index) {
+    const item = createElement('div', {
+      className: 'frame-grid-item',
+      tabIndex: 0,
+      'data-index': String(index),
+      'aria-label': `Frame ${index + 1}`,
+    });
+
+    ensureThumbnailPlaceholder(item);
+    item.appendChild(
+      createElement('div', { className: 'frame-hover-actions' }, [
+        createElement(
+          'button',
+          {
+            className: 'frame-action-btn action-start',
+            type: 'button',
+            title: 'Set as Start',
+          },
+          ['S'],
+        ),
+        createElement(
+          'button',
+          {
+            className: 'frame-action-btn action-end',
+            type: 'button',
+            title: 'Set as End',
+          },
+          ['E'],
+        ),
+      ]),
+    );
+    item.appendChild(
+      createElement('span', { className: 'frame-grid-number' }, [String(index + 1)]),
+    );
+    return item;
+  }
+
+  /**
+   * Position an item in the virtual grid.
+   * @param {HTMLElement} item
+   * @param {number} index
+   * @param {ReturnType<typeof getGridMetrics>} metrics
+   */
+  function positionVirtualItem(item, index, metrics) {
+    const row = Math.floor(index / metrics.columns);
+    const column = index % metrics.columns;
+    item.style.left = `${GRID_PADDING + column * (metrics.cellWidth + GRID_GAP)}px`;
+    item.style.top = `${GRID_PADDING + row * metrics.rowStride}px`;
+    item.style.width = `${metrics.cellWidth}px`;
+    item.style.height = `${metrics.cellHeight}px`;
+  }
+
+  /**
+   * Materialize a virtual item and its thumbnail.
+   * @param {number} index
+   * @param {ReturnType<typeof getGridMetrics>} metrics
+   */
+  function materializeGridItem(index, metrics) {
+    let item = gridItems[index];
+    if (!item) {
+      item = createGridItem(index);
+      gridItems[index] = item;
+      materializedIndices.add(index);
+      gridContainer.appendChild(item);
+      updateSingleItemVisualState(item, index);
+    }
+
+    positionVirtualItem(item, index, metrics);
+    // The virtual layout already calculated this width. Passing it through
+    // avoids a layout read after writing position/size for every visible cell.
+    renderThumbnail(item, metrics.cellWidth);
+  }
+
+  /**
+   * Remove a virtual item and release its canvas memory.
+   * @param {number} index
+   */
+  function evictGridItem(index) {
+    const item = gridItems[index];
+    if (!item) return;
+
+    if (touchPendingItem === item) {
+      cancelTouchTimer();
+    }
+    if (touchActiveItem === item) {
+      touchActiveItem = null;
+    }
+    releaseThumbnail(item);
+    item.remove();
+    gridItems[index] = undefined;
+    materializedIndices.delete(index);
+  }
+
+  /** Materialize visible virtual rows plus a small overscan buffer. */
+  function renderVirtualWindow() {
+    if (!isVirtualized || disposed) return;
+
+    const metrics = getGridMetrics();
+    gridContainer.style.height = `${metrics.totalHeight}px`;
+    if (metrics.rowCount === 0) return;
+
+    const viewportHeight = body.clientHeight || 600;
+    const firstVisibleRow = Math.min(
+      metrics.rowCount - 1,
+      Math.max(0, Math.floor(body.scrollTop / metrics.rowStride)),
+    );
+    const lastVisibleRow = Math.min(
+      metrics.rowCount - 1,
+      Math.max(firstVisibleRow, Math.ceil((body.scrollTop + viewportHeight) / metrics.rowStride)),
+    );
+    const firstRow = Math.max(0, firstVisibleRow - VIRTUAL_OVERSCAN_ROWS);
+    const lastRow = Math.min(metrics.rowCount - 1, lastVisibleRow + VIRTUAL_OVERSCAN_ROWS);
+    const firstIndex = firstRow * metrics.columns;
+    const lastIndex = Math.min(frames.length - 1, (lastRow + 1) * metrics.columns - 1);
+
+    materializedIndices.forEach((index) => {
+      if (index < firstIndex || index > lastIndex) {
+        evictGridItem(index);
+      }
+    });
+
+    for (let index = firstIndex; index <= lastIndex; index++) {
+      materializeGridItem(index, metrics);
+    }
+  }
+
+  /** Coalesce rapid scroll events into one virtual-window update per frame. */
+  function scheduleVirtualWindowRender() {
+    if (!isVirtualized || virtualRenderFrame !== null) return;
+
+    // -1 keeps this correct even in tests where requestAnimationFrame executes synchronously.
+    virtualRenderFrame = -1;
+    const frameId = window.requestAnimationFrame(() => {
+      virtualRenderFrame = null;
+      if (disposed || !backdrop.isConnected) return;
+      renderVirtualWindow();
+    });
+    if (virtualRenderFrame === -1) {
+      virtualRenderFrame = frameId;
+    }
+  }
+
+  /** Re-render loaded thumbnails after grid width or density changes. */
+  function refreshMaterializedThumbnails() {
+    materializedIndices.forEach((index) => {
+      const item = gridItems[index];
+      if (!item) return;
+      if (isVirtualized || item.querySelector('canvas, .frame-grid-thumbnail-error')) {
+        renderThumbnail(item);
+      }
+    });
+  }
+
   // Lazy loading with IntersectionObserver (with fallback for unsupported environments)
   const supportsIntersectionObserver =
-    typeof window !== 'undefined' && 'IntersectionObserver' in window;
+    !isVirtualized && typeof window !== 'undefined' && 'IntersectionObserver' in window;
 
   /** @type {IntersectionObserver | null} */
   const thumbnailObserver = supportsIntersectionObserver
@@ -935,11 +1235,10 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
           entries.forEach((entry) => {
             if (entry.isIntersecting) {
               const item = /** @type {HTMLElement} */ (entry.target);
-              const index = parseInt(item.dataset.index, 10);
 
               // Render thumbnail if not already rendered
               if (!item.querySelector('canvas')) {
-                renderThumbnail(item, frames[index]);
+                renderThumbnail(item);
               }
 
               thumbnailObserver.unobserve(item);
@@ -958,99 +1257,74 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     cleanups.push(() => thumbnailObserver.disconnect());
   }
 
-  frames.forEach((frame, index) => {
-    const item = createElement('div', {
-      className: 'frame-grid-item',
-      tabIndex: 0,
-      'data-index': String(index),
-      'aria-label': `Frame ${index + 1}`,
+  if (!isVirtualized) {
+    frames.forEach((_frame, index) => {
+      const item = createGridItem(index);
+      gridItems[index] = item;
+      materializedIndices.add(index);
+      gridContainer.appendChild(item);
+
+      const isInitiallySelected = index === initialRange.start || index === initialRange.end;
+      if (isInitiallySelected || !thumbnailObserver) {
+        renderThumbnail(item);
+      } else {
+        thumbnailObserver.observe(item);
+      }
     });
+  }
 
-    // Immediately render selected frames, lazy-load others
-    const isInitiallySelected = index === initialRange.start || index === initialRange.end;
-
-    if (isInitiallySelected || !thumbnailObserver) {
-      // Selected frames OR no observer support: render immediately
-      renderThumbnail(item, frame);
-    } else {
-      // Other frames with observer support: add placeholder and observe
-      const placeholder = createElement('div', {
-        className: 'frame-grid-placeholder',
-      });
-      item.appendChild(placeholder);
-      thumbnailObserver.observe(item);
+  /** Cancel a pending long-press timer. */
+  function cancelTouchTimer() {
+    if (touchTimer !== null) {
+      clearTimeout(touchTimer);
+      touchTimer = null;
     }
+    touchPendingItem = null;
+  }
 
-    // Hover actions: [S] [E] buttons
-    const hoverActions = createElement('div', { className: 'frame-hover-actions' }, [
-      createElement(
-        'button',
-        {
-          className: 'frame-action-btn action-start',
-          type: 'button',
-          title: 'Set as Start',
-        },
-        ['S'],
-      ),
-      createElement(
-        'button',
-        {
-          className: 'frame-action-btn action-end',
-          type: 'button',
-          title: 'Set as End',
-        },
-        ['E'],
-      ),
-    ]);
-    item.appendChild(hoverActions);
+  // Touch handlers are delegated so the listener count stays constant even
+  // for non-virtualized clips near the threshold.
+  cleanups.push(
+    on(
+      gridContainer,
+      'touchstart',
+      (e) => {
+        const target = e.target instanceof Element ? e.target : null;
+        const item = /** @type {HTMLElement | null} */ (target?.closest('.frame-grid-item'));
+        if (!item) return;
 
-    // Frame number label
-    const numberLabel = createElement('span', { className: 'frame-grid-number' }, [
-      String(index + 1),
-    ]);
-    item.appendChild(numberLabel);
-
-    gridItems.push(item);
-    gridContainer.appendChild(item);
-
-    // Touch device support: long-press (400ms) to show S/E buttons
-    // (kept on individual items due to timer complexity)
-    cleanups.push(
-      on(
-        item,
-        'touchstart',
-        () => {
-          clearTouchActive();
-          touchTimer = window.setTimeout(() => {
-            item.classList.add('touch-active');
-            touchActiveItem = item;
-          }, 400);
-        },
-        { passive: true },
-      ),
-    );
-
-    cleanups.push(
-      on(item, 'touchend', () => {
-        if (touchTimer) {
-          clearTimeout(touchTimer);
+        cancelTouchTimer();
+        clearTouchActive();
+        touchPendingItem = item;
+        touchTimer = window.setTimeout(() => {
           touchTimer = null;
-        }
-      }),
-    );
+          touchPendingItem = null;
+          if (!item.isConnected) return;
+          item.classList.add('touch-active');
+          touchActiveItem = item;
+        }, 400);
+      },
+      { passive: true },
+    ),
+  );
+  cleanups.push(on(gridContainer, 'touchend', cancelTouchTimer));
+  cleanups.push(on(gridContainer, 'touchmove', cancelTouchTimer));
+  cleanups.push(on(gridContainer, 'touchcancel', cancelTouchTimer));
+  cleanups.push(cancelTouchTimer);
 
-    cleanups.push(
-      on(item, 'touchmove', () => {
-        if (touchTimer) {
-          clearTimeout(touchTimer);
-          touchTimer = null;
-        }
-      }),
-    );
-  });
+  if (isVirtualized) {
+    cleanups.push(on(body, 'scroll', scheduleVirtualWindowRender, { passive: true }));
+  }
 
-  // Event delegation for mouse events on grid container
-  // (reduces ~1200 listeners to 2 listeners)
+  // Delegate focus and mouse events instead of registering them per item.
+  cleanups.push(
+    on(gridContainer, 'focusin', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target?.classList.contains('frame-grid-item')) return;
+      focusedFrame = Number.parseInt(/** @type {HTMLElement} */ (target).dataset.index, 10);
+    }),
+  );
+
   cleanups.push(
     on(gridContainer, 'click', (e) => {
       const target = /** @type {HTMLElement} */ (e.target);
@@ -1143,11 +1417,19 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   // Add to container
   container.appendChild(backdrop);
 
+  if (isVirtualized) {
+    renderVirtualWindow();
+  }
+
   // Update visual state
   updateVisualState();
 
   // Auto-fit grid size after DOM is ready
-  requestAnimationFrame(() => {
+  autoFitFrame = -1;
+  const autoFitFrameId = window.requestAnimationFrame(() => {
+    autoFitFrame = null;
+    if (!backdrop.isConnected) return;
+
     const optimalSize = calculateOptimalThumbnailSize(
       frames.length,
       gridContainer.offsetWidth,
@@ -1158,11 +1440,16 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     sizeValue.textContent = `${optimalSize}px`;
     updateGridSize();
 
-    // Focus first selected item
-    if (gridItems[focusedFrame]) {
-      gridItems[focusedFrame].focus();
+    // Focus first selected item (materializing its row when virtualized).
+    if (isVirtualized) {
+      scrollToFrame(focusedFrame, { focus: true });
+    } else {
+      gridItems[focusedFrame]?.focus();
     }
   });
+  if (autoFitFrame === -1) {
+    autoFitFrame = autoFitFrameId;
+  }
 
   // Slider change handler
   cleanups.push(
@@ -1173,11 +1460,20 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     }),
   );
 
+  const handleResize = () => updateGridSize();
+  window.addEventListener('resize', handleResize);
+  cleanups.push(() => window.removeEventListener('resize', handleResize));
+
   // Escape key handler
   const handleKeyDown = (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       callbacks.onCancel();
+      return;
+    }
+
+    const eventTarget = e.target instanceof Element ? e.target : document.activeElement;
+    if (isInteractiveElement(eventTarget)) {
       return;
     }
 
@@ -1295,7 +1591,48 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * Update grid template columns based on thumbnail size
    */
   function updateGridSize() {
-    gridContainer.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbnailSize}px, 1fr))`;
+    if (isVirtualized) {
+      renderVirtualWindow();
+    } else {
+      gridContainer.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbnailSize}px, 1fr))`;
+      refreshMaterializedThumbnails();
+    }
+  }
+
+  /**
+   * Scroll a frame into view, materializing it first for large clips.
+   * @param {number} index
+   * @param {{ block?: 'nearest' | 'center', focus?: boolean }} [options]
+   */
+  function scrollToFrame(index, options = {}) {
+    const { block = 'nearest', focus = false } = options;
+    const safeIndex = Math.max(0, Math.min(frames.length - 1, index));
+
+    if (!isVirtualized) {
+      const item = gridItems[safeIndex];
+      if (!item) return;
+      if (focus) item.focus();
+      item.scrollIntoView({ block, behavior: 'smooth' });
+      return;
+    }
+
+    const metrics = getGridMetrics();
+    const row = Math.floor(safeIndex / metrics.columns);
+    const itemTop = GRID_PADDING + row * metrics.rowStride;
+    const itemBottom = itemTop + metrics.cellHeight;
+    const viewportHeight = body.clientHeight || 600;
+
+    if (block === 'center') {
+      body.scrollTop = Math.max(0, itemTop - (viewportHeight - metrics.cellHeight) / 2);
+    } else if (itemTop < body.scrollTop) {
+      body.scrollTop = itemTop;
+    } else if (itemBottom > body.scrollTop + viewportHeight) {
+      body.scrollTop = itemBottom - viewportHeight;
+    }
+
+    renderVirtualWindow();
+    const item = gridItems[safeIndex];
+    if (focus) item?.focus();
   }
 
   /**
@@ -1303,7 +1640,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {string} key
    */
   function navigateGrid(key) {
-    const itemsPerRow = Math.floor(gridContainer.offsetWidth / (thumbnailSize + 12));
+    const itemsPerRow = getGridMetrics().columns;
     let newIndex = focusedFrame;
 
     switch (key) {
@@ -1323,10 +1660,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     if (newIndex !== focusedFrame) {
       focusedFrame = newIndex;
-      if (gridItems[focusedFrame]) {
-        gridItems[focusedFrame].focus();
-        gridItems[focusedFrame].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      }
+      scrollToFrame(focusedFrame, { focus: true });
     }
   }
 
@@ -1356,7 +1690,9 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     item.classList.toggle('is-in-range', inRange);
 
     // Remove existing badges
-    item.querySelectorAll('.frame-grid-badge').forEach((b) => b.remove());
+    item.querySelectorAll('.frame-grid-badge').forEach((badge) => {
+      badge.remove();
+    });
 
     // Add badges
     if (isStart && isEnd && startFrame === endFrame) {
@@ -1414,20 +1750,26 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * Update visual state of grid items (optimized: only changed items)
    */
   function updateVisualState() {
-    // Collect all affected indices
-    const changedIndices = getAffectedRangeIndices(
-      prevStartFrame,
-      prevEndFrame,
-      startFrame,
-      endFrame,
-    );
+    if (isVirtualized) {
+      // The visible window is bounded, so updating every materialized item is
+      // cheaper than constructing sets spanning thousands of selected frames.
+      materializedIndices.forEach((index) => {
+        const item = gridItems[index];
+        if (item) updateSingleItemVisualState(item, index);
+      });
+    } else {
+      const changedIndices = getAffectedRangeIndices(
+        prevStartFrame,
+        prevEndFrame,
+        startFrame,
+        endFrame,
+      );
 
-    // Update only changed items
-    changedIndices.forEach((index) => {
-      if (gridItems[index]) {
-        updateSingleItemVisualState(gridItems[index], index);
-      }
-    });
+      changedIndices.forEach((index) => {
+        const item = gridItems[index];
+        if (item) updateSingleItemVisualState(item, index);
+      });
+    }
 
     // Update tracking state
     prevStartFrame = startFrame;
@@ -1455,7 +1797,32 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
   // Cleanup function
   function cleanup() {
-    cleanups.forEach((fn) => fn());
+    if (disposed) return;
+    disposed = true;
+
+    cleanups.forEach((fn) => {
+      fn();
+    });
+    if (virtualRenderFrame !== null && virtualRenderFrame >= 0) {
+      window.cancelAnimationFrame(virtualRenderFrame);
+      virtualRenderFrame = null;
+    }
+    if (autoFitFrame !== null && autoFitFrame >= 0) {
+      window.cancelAnimationFrame(autoFitFrame);
+      autoFitFrame = null;
+    }
+    materializedIndices.forEach((index) => {
+      const item = gridItems[index];
+      if (item) releaseThumbnail(item);
+    });
+    materializedIndices.clear();
+    // Scene thumbnails are outside gridItems. Release every remaining
+    // backing store as well so closing the modal drops canvas memory now,
+    // instead of waiting for detached DOM to be garbage-collected.
+    backdrop.querySelectorAll('canvas').forEach((canvas) => {
+      canvas.width = 0;
+      canvas.height = 0;
+    });
     backdrop.remove();
   }
 

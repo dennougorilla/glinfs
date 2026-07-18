@@ -17,8 +17,8 @@ import { renderLoadingScreen, updateProgress } from './ui.js';
 /** @type {import('../scene-detection/manager.js').SceneDetectionManager | null} */
 let sceneDetectionManager = null;
 
-/** @type {boolean} */
-let isNavigating = false;
+/** Incremented to invalidate async work from a previous loading route mount. */
+let detectionRunId = 0;
 
 /**
  * Initialize loading feature
@@ -27,9 +27,7 @@ let isNavigating = false;
 export function initLoading() {
   const container = qsRequired('#main-content');
   const clipPayload = getClipPayload();
-
-  // Reset navigation flag
-  isNavigating = false;
+  const runId = ++detectionRunId;
 
   // If no clipPayload or scene detection not enabled, redirect to editor
   if (!clipPayload?.sceneDetectionEnabled) {
@@ -39,15 +37,19 @@ export function initLoading() {
 
   // Render loading screen
   const cleanup = renderLoadingScreen(container);
+  const manager = createSceneDetectionManager();
+  sceneDetectionManager = manager;
 
   // Start scene detection
-  runSceneDetection(container, clipPayload);
+  runSceneDetection(container, clipPayload, runId, manager);
 
   return () => {
+    if (detectionRunId === runId) {
+      detectionRunId++;
+    }
     cleanup();
-    // Cancel detection if navigating away
-    if (sceneDetectionManager && !isNavigating) {
-      sceneDetectionManager.dispose();
+    manager.dispose();
+    if (sceneDetectionManager === manager) {
       sceneDetectionManager = null;
     }
   };
@@ -57,21 +59,29 @@ export function initLoading() {
  * Run scene detection and navigate to editor when complete
  * @param {HTMLElement} container
  * @param {import('../../shared/app-store.js').ClipPayload} clipPayload
+ * @param {number} runId - Loading route mount that owns this operation
+ * @param {import('../scene-detection/manager.js').SceneDetectionManager} manager
  */
-async function runSceneDetection(container, clipPayload) {
-  sceneDetectionManager = createSceneDetectionManager();
+async function runSceneDetection(container, clipPayload, runId, manager) {
+  const isCurrentRun = () => detectionRunId === runId;
 
   try {
-    await sceneDetectionManager.init();
+    await manager.init();
 
-    const result = await sceneDetectionManager.detect(clipPayload.frames, {
+    if (!isCurrentRun()) return;
+
+    const result = await manager.detect(clipPayload.frames, {
       threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {
-        updateProgress(container, progress.percent);
+        if (isCurrentRun()) {
+          updateProgress(container, progress.percent);
+        }
       },
     });
+
+    if (!isCurrentRun()) return;
 
     console.log('[Loading] Scene detection completed:', result.scenes.length, 'scenes');
 
@@ -87,9 +97,10 @@ async function runSceneDetection(container, clipPayload) {
     });
 
     // Navigate to editor
-    isNavigating = true;
     navigate('/editor');
   } catch (error) {
+    if (!isCurrentRun()) return;
+
     if (error instanceof DOMException && error.name === 'AbortError') {
       console.log('[Loading] Scene detection cancelled');
     } else {
@@ -99,12 +110,11 @@ async function runSceneDetection(container, clipPayload) {
       });
 
       // Navigate to editor even on error (without scenes)
-      isNavigating = true;
       navigate('/editor');
     }
   } finally {
-    if (sceneDetectionManager) {
-      sceneDetectionManager.dispose();
+    manager.dispose();
+    if (sceneDetectionManager === manager) {
       sceneDetectionManager = null;
     }
   }

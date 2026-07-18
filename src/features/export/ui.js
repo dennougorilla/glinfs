@@ -34,26 +34,6 @@ const ENCODER_OPTIONS = [
 ];
 
 /**
- * Create SVG export icon
- * @returns {SVGElement}
- */
-function createExportIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = `
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-    <circle cx="8.5" cy="8.5" r="1.5"/>
-    <polyline points="21 15 16 10 5 21"/>
-  `;
-  return svg;
-}
-
-/**
  * @typedef {Object} ExportUIHandlers
  * @property {(settings: Partial<import('./types.js').ExportSettings>) => void} onSettingsChange
  * @property {() => void} onExport
@@ -174,7 +154,11 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   container.appendChild(screen);
 
   return {
-    cleanup: () => cleanups.forEach((fn) => fn()),
+    cleanup: () => {
+      cleanups.forEach((fn) => {
+        fn();
+      });
+    },
     canvas: previewCanvas,
   };
 }
@@ -227,6 +211,23 @@ function renderCanvasPreview(previewState, handlers, clipInfo, cleanups) {
   canvasContainer.appendChild(sizeIndicator);
 
   return { element: canvasContainer, canvas };
+}
+
+/**
+ * Keep the preview toggle's visual and accessible state in sync without
+ * replacing the canvas that the playback loop is currently drawing into.
+ *
+ * @param {HTMLElement} container
+ * @param {boolean} isPlaying
+ */
+export function updatePreviewPlaybackUI(container, isPlaying) {
+  const button = container.querySelector('.export-preview-play-btn');
+  if (!button) return;
+
+  button.classList.toggle('playing', isPlaying);
+  button.setAttribute('aria-label', isPlaying ? 'Pause preview' : 'Play preview');
+  button.setAttribute('title', isPlaying ? 'Pause (Space)' : 'Play (Space)');
+  button.textContent = isPlaying ? '\u23F8' : '\u25B6';
 }
 
 /**

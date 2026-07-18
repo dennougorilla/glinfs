@@ -16,31 +16,31 @@ describe('Buffer Duration Settings Sync (US1)', () => {
     });
   });
 
-  describe('state sync with settings', () => {
-    it('initial state buffer matches settings', () => {
+  describe('state sync with worker settings', () => {
+    it('initial state keeps the configured cadence', () => {
       const state = initCaptureState({ fps: 30, bufferDuration: 10 });
 
-      expect(state.buffer.maxFrames).toBe(300);
       expect(state.settings.bufferDuration).toBe(10);
       expect(state.settings.fps).toBe(30);
     });
 
-    it('updates buffer when duration changes', () => {
+    it('updates duration and resets worker-derived stats', () => {
       let state = initCaptureState({ fps: 30, bufferDuration: 10 });
+      state = { ...state, stats: { frameCount: 12, duration: 0.4, memoryMB: 0, fps: 30 } };
 
       state = updateSettings(state, { bufferDuration: 20 });
 
-      expect(state.buffer.maxFrames).toBe(600); // 20s * 30fps
       expect(state.settings.bufferDuration).toBe(20);
+      expect(state.stats.frameCount).toBe(0);
     });
 
-    it('updates buffer when fps changes', () => {
+    it('updates fps in settings and stats', () => {
       let state = initCaptureState({ fps: 30, bufferDuration: 10 });
 
       state = updateSettings(state, { fps: 60 });
 
-      expect(state.buffer.maxFrames).toBe(600); // 10s * 60fps
       expect(state.settings.fps).toBe(60);
+      expect(state.stats.fps).toBe(60);
     });
 
     it('updates buffer when both fps and duration change', () => {
@@ -48,7 +48,6 @@ describe('Buffer Duration Settings Sync (US1)', () => {
 
       state = updateSettings(state, { fps: 15, bufferDuration: 30 });
 
-      expect(state.buffer.maxFrames).toBe(450); // 30s * 15fps
       expect(state.settings.fps).toBe(15);
       expect(state.settings.bufferDuration).toBe(30);
     });
@@ -61,7 +60,6 @@ describe('Buffer Duration Settings Sync (US1)', () => {
       expect(state.stats.frameCount).toBe(0);
       expect(state.stats.duration).toBe(0);
       expect(state.stats.memoryMB).toBe(0);
-      expect(state.buffer.size).toBe(0);
     });
   });
 
@@ -69,21 +67,20 @@ describe('Buffer Duration Settings Sync (US1)', () => {
     it('handles minimum buffer duration (5s)', () => {
       const state = initCaptureState({ fps: 30, bufferDuration: 5 });
 
-      expect(state.buffer.maxFrames).toBe(150); // 5s * 30fps
       expect(state.settings.bufferDuration).toBe(5);
     });
 
     it('handles maximum buffer duration (60s)', () => {
       const state = initCaptureState({ fps: 30, bufferDuration: 60 });
 
-      expect(state.buffer.maxFrames).toBe(1800); // 60s * 30fps
       expect(state.settings.bufferDuration).toBe(60);
     });
 
     it('handles high fps with long duration', () => {
       const state = initCaptureState({ fps: 60, bufferDuration: 60 });
 
-      expect(state.buffer.maxFrames).toBe(3600); // 60s * 60fps
+      expect(state.settings.fps).toBe(60);
+      expect(state.settings.bufferDuration).toBe(60);
     });
   });
 });

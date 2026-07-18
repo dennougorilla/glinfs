@@ -16,7 +16,6 @@ import {
 } from './api.js';
 import {
   calculateCropFromDrag,
-  calculateSelection,
   calculateSelectionInfo,
   detectBoundaryHit,
   getOutputDimensions,
@@ -25,28 +24,6 @@ import {
   resizeCropByHandle,
 } from './core.js';
 import { renderFrameGridModal } from './frame-grid.js';
-
-/**
- * Create SVG scissors icon for editor empty state
- * @returns {SVGElement}
- */
-function createScissorsIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = `
-    <circle cx="6" cy="6" r="3"/>
-    <circle cx="6" cy="18" r="3"/>
-    <line x1="20" y1="4" x2="8.12" y2="15.88"/>
-    <line x1="14.47" y1="14.48" x2="20" y2="20"/>
-    <line x1="8.12" y1="8.12" x2="12" y2="12"/>
-  `;
-  return svg;
-}
 
 /**
  * @typedef {Object} EditorUIHandlers
@@ -82,44 +59,8 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Update step indicator
   updateStepIndicator('editor');
 
-  if (!state.clip || state.clip.frames.length === 0) {
-    const backBtn = createElement(
-      'button',
-      {
-        className: 'btn btn-primary',
-        type: 'button',
-      },
-      ['\u2190 Back to Capture'],
-    );
-
-    const cleanupBackBtn = on(backBtn, 'click', () => navigate('/capture'));
-
-    container.innerHTML = '';
-    container.appendChild(
-      createElement('div', { className: 'editor-screen screen' }, [
-        createElement('div', { className: 'editor-content' }, [
-          createElement('div', { className: 'editor-preview-panel' }, [
-            createElement('div', { className: 'editor-preview-wrapper' }, [
-              createElement('div', { className: 'empty-state editor-empty' }, [
-                createElement('div', { className: 'empty-state-icon' }, [createScissorsIcon()]),
-                createElement('h2', { className: 'empty-state-title' }, ['No Clip to Edit']),
-                createElement('p', { className: 'empty-state-description' }, [
-                  'Capture some content first, then come back to trim and crop your clip.',
-                ]),
-                createElement('div', { className: 'empty-state-actions' }, [backBtn]),
-              ]),
-            ]),
-          ]),
-        ]),
-      ]),
-    );
-    return { cleanup: () => cleanupBackBtn(), canvas: document.createElement('canvas') };
-  }
-
   const frame = state.clip.frames[state.currentFrame];
-  const selection = calculateSelection(state.selectedRange, fps);
   const dimensions = getOutputDimensions(state.cropArea, frame);
-  const totalFrames = state.clip.frames.length;
 
   // Read live state via handlers to avoid stale closures (render runs once)
   const getCurrentState = () => handlers.getState?.() ?? state;
@@ -235,7 +176,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   function handleOpenFrameGrid() {
     const currentState = handlers.getState?.() ?? state;
     if (currentState.clip && currentState.clip.frames.length > 0 && !frameGridCleanup) {
-      frameGridCleanup = openFrameGridModal(container, currentState, handlers, () => {
+      frameGridCleanup = openFrameGridModal(currentState, handlers, () => {
         frameGridCleanup = null;
       });
     }
@@ -646,10 +587,19 @@ export function renderEditorScreen(container, state, handlers, fps) {
   cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
 
   // Setup keyboard shortcuts
-  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
+  cleanups.push(
+    setupKeyboardShortcuts(handlers, state, {
+      onOpenFrameGrid: handleOpenFrameGrid,
+      isFrameGridOpen: () => frameGridCleanup !== null,
+    }),
+  );
 
   return {
-    cleanup: () => cleanups.forEach((fn) => fn()),
+    cleanup: () => {
+      cleanups.forEach((fn) => {
+        fn();
+      });
+    },
     baseCanvas,
     overlayCanvas,
   };
@@ -659,7 +609,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
  * Setup keyboard shortcuts
  * @param {EditorUIHandlers} handlers
  * @param {import('./types.js').EditorState} state
- * @param {{ onOpenFrameGrid?: () => void }} [options]
+ * @param {{ onOpenFrameGrid?: () => void, isFrameGridOpen?: () => boolean }} [options]
  * @returns {() => void} Cleanup function
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
@@ -667,6 +617,12 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
   const getCurrentState = () => handlers.getState?.() ?? state;
 
   const onKeyDown = (e) => {
+    // The Frame Grid owns keyboard input while its modal is open. In
+    // particular, Escape must close the modal without also clearing crop.
+    if (options.isFrameGridOpen?.()) {
+      return;
+    }
+
     // Don't handle if focused on form element
     if (
       document.activeElement instanceof HTMLInputElement ||
@@ -1097,7 +1053,7 @@ function renderScenesSidebar(container, state, handlers) {
         const canvas = createThumbnailCanvas(state.clip.frames[scene.startFrame], 160);
         canvas.className = 'scene-thumbnail-canvas';
         thumbnailContainer.appendChild(canvas);
-      } catch (e) {
+      } catch {
         thumbnailContainer.appendChild(
           createElement('div', { className: 'scene-thumbnail-placeholder' }, ['\uD83C\uDFA5']),
         );
@@ -1167,13 +1123,12 @@ export function updateScenesPanel(container, state, handlers) {
 
 /**
  * Open Frame Grid Modal
- * @param {HTMLElement} container - Container to render modal into
  * @param {import('./types.js').EditorState} state - Current editor state
  * @param {EditorUIHandlers} handlers - UI handlers
  * @param {() => void} [onClose] - Callback when modal closes
  * @returns {() => void} Cleanup function
  */
-function openFrameGridModal(container, state, handlers, onClose) {
+function openFrameGridModal(state, handlers, onClose) {
   if (!state.clip) return () => {};
 
   const { cleanup } = renderFrameGridModal({
@@ -1183,9 +1138,14 @@ function openFrameGridModal(container, state, handlers, onClose) {
     scenes: state.scenes,
     callbacks: {
       onApply: (range) => {
-        handlers.onRangeChange(range);
-        cleanup();
-        onClose?.();
+        try {
+          handlers.onRangeChange(range);
+        } finally {
+          // A failed state handler must not leave a modal (and its document
+          // listeners/canvases) mounted indefinitely.
+          cleanup();
+          onClose?.();
+        }
       },
       onCancel: () => {
         cleanup();

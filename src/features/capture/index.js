@@ -54,10 +54,18 @@ let throttledUpdate = null;
 let storeUnsubscribe = null;
 
 /**
+ * Identifies the current Capture route mount. Preserved stores and workers can
+ * be restored with the same object identity, so identity checks alone cannot
+ * distinguish a response belonging to an earlier mount.
+ */
+let captureMountGeneration = 0;
+
+/**
  * Initialize capture feature
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
  */
 export function initCapture(settings) {
+  captureMountGeneration++;
   const container = qsRequired('#main-content');
 
   // Register test hooks
@@ -196,9 +204,9 @@ async function handleStart() {
           stats: {
             frameCount: stats.frameCount,
             duration: stats.frameCount / stats.fps,
-            // Estimate memory: ImageBitmap uses ~width*height*4 bytes (RGBA)
-            // Assume 1920x1080 average, divide by 10 for GPU-resident estimate
-            memoryMB: (stats.frameCount * 1920 * 1080 * 4) / 10 / (1024 * 1024),
+            // Retained for the CaptureState shape; memory is no longer shown
+            // and cannot be estimated accurately from worker frame counts.
+            memoryMB: 0,
             fps: stats.fps,
           },
         }));
@@ -374,26 +382,44 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
  * - No ownership tracking needed
  * - Scene detection runs in Loading screen (if enabled)
  *
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} Whether a clip payload was created
  */
 async function handleCreateClip() {
-  if (!store || !workerManager) return;
+  if (!store || !workerManager) return false;
+
+  // Capture stable references across the worker round-trip. Route cleanup
+  // intentionally clears the module globals while a preserved worker may
+  // still deliver the requested, transferred ImageBitmaps.
+  const requestingStore = store;
+  const requestingManager = workerManager;
+  const requestingGeneration = captureMountGeneration;
 
   // Request frames from worker (transfers ImageBitmap ownership to main thread)
-  const imageBitmapFrames = await workerManager.requestFrames();
+  const imageBitmapFrames = await requestingManager.requestFrames();
+
+  if (
+    captureMountGeneration !== requestingGeneration ||
+    store !== requestingStore ||
+    workerManager !== requestingManager
+  ) {
+    for (const item of imageBitmapFrames) {
+      item.bitmap?.close();
+    }
+    return false;
+  }
 
   if (imageBitmapFrames.length === 0) {
-    return;
+    return false;
   }
 
   // Convert ImageBitmaps to VideoFrames for Editor
   const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
-    return;
+    return false;
   }
 
-  const settings = store.getState().settings;
+  const settings = requestingStore.getState().settings;
 
   // Store clip payload (old frames closed automatically by setClipPayload)
   // Scene detection will run in Loading screen if sceneDetectionEnabled is true
@@ -409,6 +435,8 @@ async function handleCreateClip() {
     frameCount: videoFrames.length,
     fps: settings.fps,
   });
+
+  return true;
 }
 
 /**
@@ -450,6 +478,10 @@ function handleSettingsChange(newSettings) {
  * - Preserves screen capture state for restoration on return
  */
 function cleanup() {
+  // Invalidate every async action started by this route mount before any
+  // preserved state can be restored by a later mount.
+  captureMountGeneration++;
+
   // Cancel pending throttled updates before store = null
   if (throttledUpdate) {
     throttledUpdate.cancel();
@@ -497,10 +529,15 @@ function cleanup() {
     // No active capture - do full cleanup
     handleStop(false);
 
-    // Terminate worker
+    // Give the worker a chance to close every buffered ImageBitmap before
+    // termination. Cleanup itself remains synchronous for the router.
     if (workerManager) {
-      workerManager.terminate();
+      const managerToTerminate = workerManager;
       workerManager = null;
+      managerToTerminate.terminateWithCleanup().catch((error) => {
+        console.error('[Capture] Worker cleanup failed:', error);
+        managerToTerminate.terminate();
+      });
     }
   }
 

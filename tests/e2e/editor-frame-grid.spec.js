@@ -57,6 +57,21 @@ test.describe('Frame Grid Modal', () => {
       await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
     });
 
+    test('Escape closes the modal without clearing the editor crop', async ({ page }) => {
+      await page.evaluate(() => {
+        window.__TEST_HOOKS__.setEditorState({
+          cropArea: { x: 1, y: 1, width: 8, height: 8, aspectRatio: 'free' },
+        });
+      });
+      await expect(page.locator('.btn-clear-crop')).toBeVisible();
+
+      await openFrameGrid(page);
+      await page.keyboard.press('Escape');
+
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
+      await expect(page.locator('.btn-clear-crop')).toBeVisible();
+    });
+
     test('closes modal when clicking the backdrop', async ({ page }) => {
       await openFrameGrid(page);
 
@@ -225,6 +240,29 @@ test.describe('Frame Grid Modal', () => {
       const items = page.locator('.frame-grid-item');
       await expect(items.first()).toHaveClass(/is-start/);
       await expect(items.nth(2)).toHaveClass(/is-end/);
+    });
+
+    test('lets the grid-size slider handle arrow keys', async ({ page }) => {
+      await openFrameGrid(page);
+      const slider = page.locator('.grid-size-slider');
+      await slider.focus();
+
+      const initialValue = Number.parseInt(await slider.inputValue(), 10);
+      const max = Number.parseInt(await slider.getAttribute('max'), 10);
+      await page.keyboard.press('ArrowRight');
+
+      await expect(slider).toBeFocused();
+      await expect(slider).toHaveValue(String(Math.min(initialValue + 1, max)));
+    });
+
+    test('activates the focused Apply button with Enter', async ({ page }) => {
+      await openFrameGrid(page);
+      const applyBtn = page.locator('.frame-grid-btn-apply');
+      await applyBtn.focus();
+
+      await page.keyboard.press('Enter');
+
+      await expect(page.locator('.frame-grid-modal')).not.toBeVisible();
     });
   });
 

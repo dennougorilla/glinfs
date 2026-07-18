@@ -83,7 +83,9 @@ export function renderSettings(container, handlers = {}) {
   container.append(header, content);
 
   return () => {
-    cleanups.forEach((cleanup) => cleanup());
+    cleanups.forEach((cleanup) => {
+      cleanup();
+    });
   };
 }
 
@@ -358,7 +360,7 @@ function renderNumberControl(value, metadata, onChange, cleanups) {
 
   const handleChange = (e) => {
     const newValue = parseInt(e.target.value, 10);
-    if (!isNaN(newValue) && newValue >= min && newValue <= max) {
+    if (!Number.isNaN(newValue) && newValue >= min && newValue <= max) {
       display.textContent = format ? format(newValue) : String(newValue);
       onChange(newValue);
     }
