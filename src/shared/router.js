@@ -109,15 +109,38 @@ function handleHashChange() {
     // Clear main content
     const main = document.getElementById('main-content');
     if (main) {
+      // Feature screens may apply route-specific classes to the container
+      // (e.g. Settings sets 'settings-container') and never reset them;
+      // clear before mounting the next route
+      main.className = '';
       main.innerHTML = '';
     }
 
     // Call route handler and store cleanup function
     const handler = routes.get(route);
     if (handler) {
-      const cleanup = handler();
-      if (typeof cleanup === 'function') {
-        currentCleanup = cleanup;
+      try {
+        const cleanup = handler();
+        if (typeof cleanup === 'function') {
+          currentCleanup = cleanup;
+        }
+      } catch (error) {
+        console.error(`[router] Failed to initialize route "${route}":`, error);
+
+        // Allow a later navigation back to this hash to retry the mount
+        lastProcessedHash = null;
+
+        // Recover to the known entry screen. If that screen itself fails,
+        // render a stable message instead of creating a redirect loop.
+        if (route !== '/capture') {
+          navigate('/capture');
+          return;
+        }
+
+        if (main) {
+          main.textContent = 'Unable to load the application. Please reload the page.';
+        }
+        return;
       }
     }
 

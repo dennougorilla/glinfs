@@ -366,23 +366,24 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
  * - No ownership tracking needed
  * - Scene detection runs in Loading screen (if enabled)
  *
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true if a clip payload was stored — the UI
+ *   must not navigate to Editor/Loading when no clip was produced
  */
 async function handleCreateClip() {
-  if (!store || !workerManager) return;
+  if (!store || !workerManager) return false;
 
   // Request frames from worker (transfers ImageBitmap ownership to main thread)
   const imageBitmapFrames = await workerManager.requestFrames();
 
   if (imageBitmapFrames.length === 0) {
-    return;
+    return false;
   }
 
   // Convert ImageBitmaps to VideoFrames for Editor
   const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
-    return;
+    return false;
   }
 
   const settings = store.getState().settings;
@@ -401,6 +402,8 @@ async function handleCreateClip() {
     frameCount: videoFrames.length,
     fps: settings.fps,
   });
+
+  return true;
 }
 
 /**
@@ -493,10 +496,13 @@ function cleanup() {
     // No active capture - do full cleanup
     handleStop(false);
 
-    // Terminate worker
+    // Terminate worker, letting it close its buffered ImageBitmaps first
+    // (bare terminate() skips the CLEAR handshake and leaks them to GC).
+    // Fire-and-forget: the router expects cleanup() to be synchronous.
     if (workerManager) {
-      workerManager.terminate();
+      const manager = workerManager;
       workerManager = null;
+      manager.terminateWithCleanup().catch(() => manager.terminate());
     }
   }
 

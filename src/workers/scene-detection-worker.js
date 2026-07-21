@@ -6,6 +6,7 @@
 
 // Import algorithm directly (Worker has module support)
 import {
+  buildSceneRanges,
   compareHistograms,
   computeHistogram,
 } from '../features/scene-detection/algorithms/histogram-detector.js';
@@ -122,35 +123,20 @@ async function detectScenes(frameData, options) {
   const lastFrameIndex = frameData[frameData.length - 1].index;
   sceneBreaks.push(lastFrameIndex + 1); // End marker
 
-  for (let i = 0; i < sceneBreaks.length - 1; i++) {
-    const startFrame = sceneBreaks[i];
-    const endFrame = sceneBreaks[i + 1] - 1;
-    const sceneDuration = endFrame - startFrame + 1;
+  const ranges = buildSceneRanges(sceneBreaks, opts.minSceneDuration);
+  for (const { startFrame, endFrame } of ranges) {
+    // Get timestamps from frameData using O(1) Map lookup
+    const startData = frameByIndex.get(startFrame);
+    const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
 
-    if (sceneDuration >= opts.minSceneDuration) {
-      // Get timestamps from frameData using O(1) Map lookup
-      const startData = frameByIndex.get(startFrame);
-      const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
-
-      scenes.push({
-        id: generateSceneId(),
-        startFrame,
-        endFrame,
-        confidence: 1.0,
-        timestamp: startData?.timestamp ?? 0,
-        duration: startData && endData ? (endData.timestamp - startData.timestamp) / 1000 : 0,
-      });
-    } else if (scenes.length > 0) {
-      // Merge short scene with previous
-      const lastScene = scenes[scenes.length - 1];
-      lastScene.endFrame = endFrame;
-
-      const startData = frameByIndex.get(lastScene.startFrame);
-      const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
-      if (startData && endData) {
-        lastScene.duration = (endData.timestamp - startData.timestamp) / 1000;
-      }
-    }
+    scenes.push({
+      id: generateSceneId(),
+      startFrame,
+      endFrame,
+      confidence: 1.0,
+      timestamp: startData?.timestamp ?? 0,
+      duration: startData && endData ? (endData.timestamp - startData.timestamp) / 1000 : 0,
+    });
   }
 
   // Final progress

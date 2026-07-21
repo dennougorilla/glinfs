@@ -239,7 +239,9 @@ export function getThumbnailCache() {
 }
 
 /**
- * Reset singleton instance (for testing)
+ * Reset the singleton instance. Called by the app store whenever the clip's
+ * frames change or are cleared — cached canvases are keyed by the previous
+ * clip's frame IDs and can never be reused afterwards. Also used by tests.
  */
 export function resetThumbnailCache() {
   if (instance) {

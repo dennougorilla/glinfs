@@ -70,6 +70,45 @@ export function compareHistograms(hist1, hist2) {
 }
 
 /**
+ * Build non-overlapping scene ranges from exclusive scene boundaries.
+ * Short scenes are merged into the previous range; a short leading range is
+ * merged forward because no previous range exists yet.
+ *
+ * @param {number[]} sceneBreaks - Ordered boundaries including start and exclusive end
+ * @param {number} minSceneDuration - Minimum range length in frames
+ * @returns {Array<{startFrame: number, endFrame: number}>}
+ */
+export function buildSceneRanges(sceneBreaks, minSceneDuration) {
+  const rawRanges = [];
+
+  for (let i = 0; i < sceneBreaks.length - 1; i++) {
+    rawRanges.push({
+      startFrame: sceneBreaks[i],
+      endFrame: sceneBreaks[i + 1] - 1,
+    });
+  }
+
+  const ranges = [];
+  for (let i = 0; i < rawRanges.length; i++) {
+    const range = rawRanges[i];
+    const duration = range.endFrame - range.startFrame + 1;
+
+    if (duration >= minSceneDuration) {
+      ranges.push(range);
+    } else if (ranges.length > 0) {
+      ranges[ranges.length - 1].endFrame = range.endFrame;
+    } else if (rawRanges[i + 1]) {
+      // Preserve a short leading scene by folding it into the next range.
+      rawRanges[i + 1].startFrame = range.startFrame;
+    }
+    // A clip consisting of one short range keeps the existing [] semantics:
+    // callers treat that as a single scene with no detected changes.
+  }
+
+  return ranges;
+}
+
+/**
  * Generate unique scene ID
  * @returns {string}
  */
@@ -162,37 +201,22 @@ export function createHistogramDetector() {
       }
     }
 
-    // Add final frame as last scene end
-    sceneBreaks.push(frameData.length - 1);
+    // Add an exclusive end marker so the final frame remains included.
+    sceneBreaks.push(frameData.length);
 
-    // Convert breaks to scenes, filtering by minimum duration
-    for (let i = 0; i < sceneBreaks.length - 1; i++) {
-      const startFrame = sceneBreaks[i];
-      const endFrame = sceneBreaks[i + 1] - 1;
-      const sceneDuration = endFrame - startFrame + 1;
+    const ranges = buildSceneRanges(sceneBreaks, opts.minSceneDuration);
+    for (const { startFrame, endFrame } of ranges) {
+      const startFrameData = frameData[startFrame];
+      const endFrameData = frameData[endFrame];
 
-      if (sceneDuration >= opts.minSceneDuration) {
-        const startFrameData = frameData[startFrame];
-        const endFrameData = frameData[endFrame];
-
-        scenes.push({
-          id: generateSceneId(),
-          startFrame,
-          endFrame,
-          confidence: 1.0, // Histogram detection doesn't provide confidence
-          timestamp: startFrameData?.timestamp ?? 0,
-          duration: endFrameData ? (endFrameData.timestamp - startFrameData.timestamp) / 1000 : 0,
-        });
-      } else if (scenes.length > 0) {
-        // Merge short scene with previous scene
-        scenes[scenes.length - 1].endFrame = endFrame;
-        const lastScene = scenes[scenes.length - 1];
-        const endFrameData = frameData[endFrame];
-        const startFrameData = frameData[lastScene.startFrame];
-        if (endFrameData && startFrameData) {
-          lastScene.duration = (endFrameData.timestamp - startFrameData.timestamp) / 1000;
-        }
-      }
+      scenes.push({
+        id: generateSceneId(),
+        startFrame,
+        endFrame,
+        confidence: 1.0, // Histogram detection doesn't provide confidence
+        timestamp: startFrameData?.timestamp ?? 0,
+        duration: endFrameData ? (endFrameData.timestamp - startFrameData.timestamp) / 1000 : 0,
+      });
     }
 
     // Final progress

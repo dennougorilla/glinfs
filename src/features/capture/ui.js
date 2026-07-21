@@ -93,7 +93,7 @@ function createHeartIcon() {
  * @typedef {Object} CaptureUIHandlers
  * @property {() => Promise<void>} onStart - Start capture handler
  * @property {() => void} onStop - Stop capture handler
- * @property {() => Promise<void>} onCreateClip - Create clip handler (async)
+ * @property {() => Promise<boolean>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
  * @property {() => import('./types.js').CaptureSettings | null} getSettings - Get current settings
  */
@@ -268,7 +268,12 @@ function renderCaptureActions(state, handlers, cleanups) {
         clipBtn.setAttribute('disabled', 'true');
         clipBtn.textContent = 'Creating...';
         try {
-          await handlers.onCreateClip();
+          const created = await handlers.onCreateClip();
+          if (!created) {
+            clipBtn.removeAttribute('disabled');
+            clipBtn.textContent = 'Create Clip';
+            return;
+          }
           // Navigate to loading screen if scene detection is enabled, otherwise to editor
           const settings = handlers.getSettings();
           const targetRoute = settings?.sceneDetection ? '/loading' : '/editor';
