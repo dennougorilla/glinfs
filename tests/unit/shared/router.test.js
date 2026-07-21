@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getCurrentRoute,
+  getPreviousRoute,
   getRouteParams,
   initRouter,
   navigate,
@@ -287,6 +288,24 @@ describe('Router', () => {
       expect(main.className).toBe('');
 
       main.remove();
+    });
+  });
+
+  describe('getPreviousRoute', () => {
+    it('reports the route that was active before the current one', async () => {
+      initRouter({
+        '/capture': vi.fn(),
+        '/editor': vi.fn(),
+        '/settings': vi.fn(),
+      });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(getPreviousRoute()).toBe('/capture');
+
+      navigate('/settings');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(getPreviousRoute()).toBe('/editor');
     });
   });
 

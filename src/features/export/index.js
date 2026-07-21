@@ -203,6 +203,12 @@ export function initExport() {
       } else {
         throttledUpdateProgressUI?.(container, state.job);
       }
+    } else if (prevState.job?.status === 'encoding') {
+      // Left the encoding state (e.g. cancel). Cancel any armed trailing
+      // timer so it doesn't fire ~ms later and paint the previous job's
+      // progress over whatever the next job renders (issue: stale progress
+      // flash after cancel + immediate re-export).
+      throttledUpdateProgressUI?.cancel();
     }
   });
 

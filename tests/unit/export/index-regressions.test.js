@@ -27,6 +27,19 @@ vi.mock('../../../src/features/export/api.js', async (importOriginal) => {
   };
 });
 
+// Spy on updateProgressUI (keeping its real implementation) so tests can
+// assert whether the throttled progress redraw actually fires, without
+// depending on DOM structure that the error/cancelled screen doesn't have
+// (it has no .progress-bar-fill, so a stale write there would otherwise be
+// unobservable from the DOM alone).
+vi.mock('../../../src/features/export/ui.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    updateProgressUI: vi.fn(actual.updateProgressUI),
+  };
+});
+
 /** @type {(() => void) | null} */
 let exportCleanup = null;
 /** @type {PropertyDescriptor | undefined} */
@@ -249,6 +262,83 @@ describe('Export regressions', () => {
 
       resolveEncode?.();
       await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the armed trailing throttle timer when leaving the encoding state', async () => {
+    // Regression: the subscriber only drove throttledUpdateProgressUI while
+    // state.job.status === 'encoding'; on any other transition it left an
+    // already-armed trailing timer running. That timer would fire ~16ms
+    // later and call updateProgressUI with the *previous* job's progress —
+    // a call that's a visual no-op right now only because the error screen
+    // happens to lack a .progress-bar-fill element, so DOM assertions alone
+    // can't see the bug. Assert on the call directly instead.
+    injectEditorPayload();
+
+    const { updateProgressUI } = await import('../../../src/features/export/ui.js');
+
+    /** @type {((progress: { percent: number, current: number, total: number }) => void) | null} */
+    let capturedOnProgress = null;
+    vi.mocked(encodeGif).mockImplementationOnce((params, signal) => {
+      capturedOnProgress = params.onProgress;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Encoding cancelled', 'AbortError')),
+          { once: true },
+        );
+      });
+    });
+
+    exportCleanup = initExport();
+
+    // Drain the mocked checkEncoderStatus().then(...) microtask (see the
+    // throttling test above for why this must happen before fake timers).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    try {
+      document.querySelector('.btn-export-main')?.dispatchEvent(new MouseEvent('click'));
+      await Promise.resolve();
+
+      // Consume the throttle's initial "no prior call" allowance, same as
+      // the throttling test above.
+      vi.advanceTimersByTime(20);
+
+      // First event applies immediately (outside the throttle window).
+      capturedOnProgress?.({ percent: 10, current: 1, total: 10 });
+      const callsAfterFirstEvent = vi.mocked(updateProgressUI).mock.calls.length;
+
+      // Second event lands inside the window: throttled, so it does NOT
+      // call updateProgressUI yet — it arms a trailing setTimeout instead.
+      capturedOnProgress?.({ percent: 55, current: 5, total: 10 });
+      expect(vi.mocked(updateProgressUI).mock.calls.length).toBe(callsAfterFirstEvent);
+
+      // Cancel while that trailing timer is still armed.
+      const cancelBtn = Array.from(document.querySelectorAll('button')).find(
+        (btn) => btn.textContent?.trim() === 'Cancel',
+      );
+      cancelBtn?.dispatchEvent(new MouseEvent('click'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // cancelEncodingState models a user cancel as job.status 'error' with
+      // a specific message (there's no separate 'cancelled' status).
+      expect(getExportState()?.job?.status).toBe('error');
+      expect(getExportState()?.job?.error).toBe('Encoding cancelled by user');
+
+      const callsAfterCancel = vi.mocked(updateProgressUI).mock.calls.length;
+
+      // Advance past when the trailing timer would have fired with the
+      // stale 55% job1 data. With the fix, leaving 'encoding' cancels it,
+      // so no further call happens here.
+      vi.advanceTimersByTime(20);
+
+      expect(vi.mocked(updateProgressUI).mock.calls.length).toBe(callsAfterCancel);
     } finally {
       vi.useRealTimers();
     }
