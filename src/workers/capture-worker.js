@@ -21,6 +21,9 @@
 /** @type {FrameEntry[]} */
 let frameBuffer = [];
 
+/** Index of the oldest entry when the buffer has wrapped */
+let frameBufferStart = 0;
+
 /** @type {number} */
 let maxFrames = 300;
 
@@ -46,7 +49,7 @@ self.onmessage = (e) => {
   switch (type) {
     case 'START':
       fps = payload.fps;
-      maxFrames = payload.maxFrames;
+      resizeBuffer(payload.maxFrames);
       startCapture();
       break;
 
@@ -133,20 +136,24 @@ function handleFrameResponse(bitmap, timestamp) {
     return;
   }
 
-  // Evict oldest frame if buffer is full
-  if (frameBuffer.length >= maxFrames) {
-    const evicted = frameBuffer.shift();
-    if (evicted?.bitmap) {
-      evicted.bitmap.close();
-    }
-  }
-
-  // Add new frame
-  frameBuffer.push({
+  const frame = {
     bitmap,
     timestamp,
     id: crypto.randomUUID(),
-  });
+  };
+
+  // Evict the oldest frame in O(1). Array.shift() moved every remaining
+  // entry on each captured frame once the rolling buffer was full.
+  if (frameBuffer.length >= maxFrames) {
+    const evicted = frameBuffer[frameBufferStart];
+    if (evicted?.bitmap) {
+      evicted.bitmap.close();
+    }
+    frameBuffer[frameBufferStart] = frame;
+    frameBufferStart = (frameBufferStart + 1) % maxFrames;
+  } else {
+    frameBuffer.push(frame);
+  }
 
   // Send stats update
   sendStats();
@@ -171,13 +178,17 @@ function sendStats() {
  * After this call, the buffer will be empty
  */
 function sendFrames() {
-  // Transfer ownership of all ImageBitmaps to main thread
-  const transferables = frameBuffer.map((f) => f.bitmap);
+  const orderedFrames = getFramesInCaptureOrder();
 
-  self.postMessage({ type: 'FRAMES_RESPONSE', payload: { frames: frameBuffer } }, transferables);
+  // Transfer ownership of all ImageBitmaps to main thread
+  const transferables = orderedFrames.map((f) => f.bitmap);
+
+  self.postMessage({ type: 'FRAMES_RESPONSE', payload: { frames: orderedFrames } }, transferables);
 
   // Buffer is now empty (bitmaps transferred)
   frameBuffer = [];
+  frameBufferStart = 0;
+  sendStats();
 }
 
 /**
@@ -188,6 +199,43 @@ function clearBuffer() {
     frame.bitmap?.close();
   }
   frameBuffer = [];
+  frameBufferStart = 0;
   pendingRequest = false;
   sendStats();
+}
+
+/**
+ * Return buffered entries from oldest to newest.
+ * @returns {FrameEntry[]}
+ */
+function getFramesInCaptureOrder() {
+  if (frameBufferStart === 0 || frameBuffer.length === 0) {
+    return frameBuffer;
+  }
+
+  return [...frameBuffer.slice(frameBufferStart), ...frameBuffer.slice(0, frameBufferStart)];
+}
+
+/**
+ * Apply a new capacity while preserving the newest frames.
+ * @param {number} requestedMaxFrames
+ */
+function resizeBuffer(requestedMaxFrames) {
+  const nextMaxFrames = Number.isFinite(requestedMaxFrames)
+    ? Math.max(1, Math.floor(requestedMaxFrames))
+    : maxFrames;
+  const orderedFrames = getFramesInCaptureOrder();
+
+  if (orderedFrames.length > nextMaxFrames) {
+    const discardCount = orderedFrames.length - nextMaxFrames;
+    for (let i = 0; i < discardCount; i++) {
+      orderedFrames[i].bitmap?.close();
+    }
+    frameBuffer = orderedFrames.slice(discardCount);
+  } else if (frameBufferStart !== 0) {
+    frameBuffer = orderedFrames;
+  }
+
+  frameBufferStart = 0;
+  maxFrames = nextMaxFrames;
 }
