@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/dennougorilla/glinfs/compare/v0.3.1...v0.4.0) (2026-07-21)
+
+
+### Features
+
+* **security:** add Content-Security-Policy meta tag ([#71](https://github.com/dennougorilla/glinfs/issues/71)) ([62c5259](https://github.com/dennougorilla/glinfs/commit/62c52590f6fd34a6b7ba7ccc45c6fd8f5100cffc))
+
+
+### Bug Fixes
+
+* **editor:** frame-grid keyboard guard for interactive controls, min-size fallback, guaranteed modal close ([#68](https://github.com/dennougorilla/glinfs/issues/68)) ([30d69ff](https://github.com/dennougorilla/glinfs/commit/30d69ff51d21486f898b5816e1b49fb664541292))
+* **export:** restore saved results on revisit, label jobs with selected encoder, sync play/pause UI ([#69](https://github.com/dennougorilla/glinfs/issues/69)) ([36b9db4](https://github.com/dennougorilla/glinfs/commit/36b9db4245360e34dbcbe63be7f8e8dbf8fca026))
+* salvage verified reliability fixes from [#66](https://github.com/dennougorilla/glinfs/issues/66) (scene-detection, router, capture) ([#70](https://github.com/dennougorilla/glinfs/issues/70)) ([7ec3345](https://github.com/dennougorilla/glinfs/commit/7ec33458aa6bd532ee6d129972b2fb87a54b6a7d))
+
+
+### Performance Improvements
+
+* **capture:** O(1) ring-buffer eviction, capacity reconciliation on restart, fresh stats after buffer drain ([#67](https://github.com/dennougorilla/glinfs/issues/67)) ([833ea08](https://github.com/dennougorilla/glinfs/commit/833ea088b713e64d5b12988ac985ee14e2c58a35))
+* **editor:** windowed virtualization for the frame grid ([#72](https://github.com/dennougorilla/glinfs/issues/72)) ([42c2f7f](https://github.com/dennougorilla/glinfs/commit/42c2f7fa6b3a32bae74578e3ce023146fb93a7e1))
+
 ## [0.3.1](https://github.com/dennougorilla/glinfs/compare/v0.3.0...v0.3.1) (2026-07-21)
 
 
