@@ -30,6 +30,16 @@ let framesProcessed = 0;
 let startTime = 0;
 
 /**
+ * Set once a frame add (or finish) fails mid-session. While set, further
+ * ADD_FRAME commands are dropped without touching the encoder (which may be
+ * left in an inconsistent state) and FINISH fails immediately instead of
+ * emitting a GIF that is silently missing frames (#45). Reset on every INIT
+ * so a fresh session is never poisoned by a previous one's failure.
+ * @type {boolean}
+ */
+let sessionAborted = false;
+
+/**
  * Send event to main thread
  * @param {import('./worker-protocol.js').WorkerEvent} event
  * @param {Transferable[]} [transfer]
@@ -76,6 +86,8 @@ async function handleInit(message) {
     totalFrames = message.totalFrames;
     framesProcessed = 0;
     startTime = Date.now();
+    // A new session starts clean regardless of how the previous one ended.
+    sessionAborted = false;
 
     postEvent({
       event: Events.READY,
@@ -95,6 +107,14 @@ async function handleInit(message) {
  * @param {import('./worker-protocol.js').AddFrameMessage} message
  */
 function handleAddFrame(message) {
+  if (sessionAborted) {
+    // A prior frame already failed this session; the encoder may be in an
+    // inconsistent state so it must not receive further frames. Silently
+    // drop rather than re-emitting ERROR for every subsequent frame the
+    // main thread might still send before it notices the failure.
+    return;
+  }
+
   try {
     if (!encoder) {
       throw new Error('Encoder not initialized');
@@ -122,6 +142,7 @@ function handleAddFrame(message) {
       percent,
     });
   } catch (error) {
+    sessionAborted = true;
     postEvent({
       event: Events.ERROR,
       message: error instanceof Error ? error.message : 'Failed to add frame',
@@ -134,6 +155,17 @@ function handleAddFrame(message) {
  * Handle finish command
  */
 function handleFinish() {
+  if (sessionAborted) {
+    // A frame already failed; finishing now would silently produce a GIF
+    // missing frames (#45). Fail fast instead.
+    postEvent({
+      event: Events.ERROR,
+      message: 'Cannot finish encoding: a previous frame failed',
+      code: 'SESSION_ABORTED',
+    });
+    return;
+  }
+
   try {
     if (!encoder) {
       throw new Error('Encoder not initialized');
@@ -179,6 +211,7 @@ function handleCancel() {
 
   totalFrames = 0;
   framesProcessed = 0;
+  sessionAborted = false;
 
   postEvent({
     event: Events.CANCELLED,
