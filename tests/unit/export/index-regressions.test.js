@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeGif } from '../../../src/features/export/api.js';
-import { getExportState, initExport } from '../../../src/features/export/index.js';
+import {
+  computeResultFingerprint,
+  getExportState,
+  initExport,
+} from '../../../src/features/export/index.js';
 import {
   getExportResult,
   resetAppStore,
@@ -123,8 +127,19 @@ describe('Export regressions', () => {
 
   it('restores a retained GIF as a completed job on Export revisit', () => {
     injectEditorPayload();
+    // First visit establishes the settings the fingerprint is computed from
+    exportCleanup = initExport();
+    const fingerprint = computeResultFingerprint(
+      { start: 0, end: 3 },
+      null,
+      4,
+      30,
+      getExportState().settings,
+    );
+    exportCleanup();
+
     const blob = new Blob(['gif89a'], { type: 'image/gif' });
-    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now() });
+    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now(), fingerprint });
 
     exportCleanup = initExport();
 
@@ -141,8 +156,18 @@ describe('Export regressions', () => {
 
   it('retains the result across route cleanup and releases its object URL', () => {
     injectEditorPayload();
+    exportCleanup = initExport();
+    const fingerprint = computeResultFingerprint(
+      { start: 0, end: 3 },
+      null,
+      4,
+      30,
+      getExportState().settings,
+    );
+    exportCleanup();
+
     const blob = new Blob(['gif89a'], { type: 'image/gif' });
-    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now() });
+    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now(), fingerprint });
     exportCleanup = initExport();
 
     exportCleanup();

@@ -53,11 +53,42 @@ let frames = [];
 /** @type {import('../editor/types.js').CropArea | null} */
 let cropArea = null;
 
+/** @type {import('../editor/types.js').FrameRange | null} Selection this mount exports */
+let exportSelection = null;
+
 /** @type {{ frameCount: number, width: number, height: number, duration: number, fps: number }} */
 let clipInfo = { frameCount: 0, width: 0, height: 0, duration: 0, fps: 30 };
 
 /** @type {AbortController | null} */
 let encodingController = null;
+
+/**
+ * Fingerprint of everything that determines an encoded GIF's bytes. A saved
+ * export result may only be restored on a later visit when the fingerprints
+ * match (#69 restore feature; re-review finding: without this, a result from
+ * an old selection/crop/clip/settings was resurrected as "complete").
+ *
+ * @param {import('../editor/types.js').FrameRange} selectedRange
+ * @param {import('../editor/types.js').CropArea | null} crop
+ * @param {number} frameCount - Frames in the selection (pre frame-skip)
+ * @param {number} fps
+ * @param {import('./types.js').ExportSettings} settings
+ * @returns {string}
+ */
+export function computeResultFingerprint(selectedRange, crop, frameCount, fps, settings) {
+  return JSON.stringify({
+    range: [selectedRange.start, selectedRange.end],
+    crop: crop ? [crop.x, crop.y, crop.width, crop.height] : null,
+    frameCount,
+    fps,
+    encoderId: settings.encoderId,
+    encoderPreset: settings.encoderPreset,
+    quality: settings.quality,
+    frameSkip: settings.frameSkip,
+    playbackSpeed: settings.playbackSpeed,
+    loopCount: settings.loopCount,
+  });
+}
 
 /**
  * Minimum interval between progress-bar DOM updates during encoding.
@@ -123,6 +154,7 @@ export function initExport() {
   const { start, end } = editorPayload.selectedRange;
   frames = clipPayload.frames.slice(start, end + 1);
   cropArea = editorPayload?.cropArea || null;
+  exportSelection = editorPayload.selectedRange;
   const fps = editorPayload?.fps || DEFAULT_FPS;
 
   if (frames.length === 0) {
@@ -159,14 +191,31 @@ export function initExport() {
   // Restore saved export result if available (user returning to Export screen).
   // completeEncoding() is a no-op when state.job is null, so a job must be
   // created and started first before the saved blob can be attached to it.
+  //
+  // Restore ONLY when the saved fingerprint matches this visit's inputs: a
+  // result produced for a different selection, crop, clip, or settings must
+  // not be resurrected as this visit's "complete" state — the user would be
+  // offered a stale GIF without any re-encode having happened.
   const savedResult = getExportResult();
   if (savedResult) {
     const state = store.getState();
-    const restoredJob = createEncodingJob(
-      applyFrameSkip(frames, state.settings.frameSkip).length,
-      state.settings.encoderId,
+    const currentFingerprint = computeResultFingerprint(
+      editorPayload.selectedRange,
+      cropArea,
+      frames.length,
+      fps,
+      state.settings,
     );
-    store.setState((s) => completeEncoding(startEncoding(s, restoredJob), savedResult.blob));
+    if (savedResult.fingerprint === currentFingerprint) {
+      const restoredJob = createEncodingJob(
+        applyFrameSkip(frames, state.settings.frameSkip).length,
+        state.settings.encoderId,
+      );
+      store.setState((s) => completeEncoding(startEncoding(s, restoredJob), savedResult.blob));
+    } else {
+      // Definitively stale — drop it so no later path can restore it either
+      clearExportResult();
+    }
   }
 
   // Check encoder status
@@ -337,11 +386,20 @@ async function handleExport() {
 
     // Save export result for later retrieval (e.g., when returning to Export
     // screen). The filename is generated once here so a later download gets
-    // the same name that was recorded with the result.
+    // the same name that was recorded with the result. The fingerprint ties
+    // the blob to the exact inputs that produced it; the restore path in
+    // initExport refuses to resurrect it for any other inputs.
     setExportResult({
       blob: result,
       filename: generateFilename(),
       completedAt: Date.now(),
+      fingerprint: computeResultFingerprint(
+        exportSelection ?? { start: 0, end: clipInfo.frameCount - 1 },
+        cropArea,
+        clipInfo.frameCount,
+        clipInfo.fps,
+        store.getState().settings,
+      ),
     });
 
     emit('export:complete', { blob: result, size: result.size });
@@ -615,6 +673,7 @@ function cleanup() {
 
   frames = [];
   cropArea = null;
+  exportSelection = null;
   store = null;
   previewCanvas = null;
   currentFrameIndex = 0;
