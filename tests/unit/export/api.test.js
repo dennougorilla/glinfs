@@ -110,6 +110,7 @@ describe('getFrameRGBA', () => {
 
     const mockCtx = {
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue(mockImageData),
     };
 
@@ -164,6 +165,7 @@ describe('getFrameRGBA', () => {
 
     const mockCtx = {
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue({
         data: new Uint8ClampedArray(50 * 40 * 4),
         width: 50,
@@ -194,6 +196,7 @@ describe('getFrameRGBA', () => {
 
     const mockCtx = {
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue({
         data: new Uint8ClampedArray(80 * 60 * 4),
         width: 80,
@@ -467,6 +470,7 @@ describe('scaleFrame', () => {
       imageSmoothingEnabled: false,
       imageSmoothingQuality: '',
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue({
         data: scaledData,
         width: 50,

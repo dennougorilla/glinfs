@@ -49,10 +49,16 @@ function getExtractionCanvas(width, height) {
     return extractionCanvasCache;
   }
 
-  const { canvas } = extractionCanvasCache;
+  const { canvas, ctx } = extractionCanvasCache;
   if (canvas.width !== width || canvas.height !== height) {
+    // Resizing resets the canvas to transparent black per spec
     canvas.width = width;
     canvas.height = height;
+  } else {
+    // Same-size reuse keeps the previous frame's pixels; clear so
+    // source-over drawImage of a source with alpha cannot composite over
+    // stale content (a fresh canvas per call was implicitly clear).
+    ctx.clearRect(0, 0, width, height);
   }
   return extractionCanvasCache;
 }
