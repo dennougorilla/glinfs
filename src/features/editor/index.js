@@ -220,28 +220,49 @@ export function initEditor() {
   // Emit loaded event (thumbnails are now rendered directly from frames)
   emit('editor:loaded', { clip: store?.getState().clip });
 
-  // Tracks the selection the timeline header last rendered. Compared against
-  // the delivered state instead of prevState: the 16ms throttle keeps only
-  // the latest (state, prevState) pair, so a range change coalesced with a
-  // following playback tick would be invisible to a prevState diff (#44).
-  let lastHeaderRange = store.getState().selectedRange;
+  // Tracks the values each piece of UI last actually rendered, compared
+  // against the delivered state instead of prevState: the 16ms throttle
+  // keeps only the latest (state, prevState) pair, so a change coalesced
+  // with a following tick (e.g. a range drag followed by a playback frame
+  // advance within the same window) would be invisible to a prevState diff
+  // (#44, #50). Every field is updated only after its DOM update runs, so
+  // it always reflects "what's currently on screen", not "what setState
+  // last saw".
+  const initialState = store.getState();
+  const lastRendered = {
+    isPlaying: initialState.isPlaying,
+    currentFrame: initialState.currentFrame,
+    cropArea: initialState.cropArea,
+    showGrid: initialState.showGrid,
+    selectedAspectRatio: initialState.selectedAspectRatio,
+    sceneDetectionStatus: initialState.sceneDetectionStatus,
+    sceneDetectionProgress: initialState.sceneDetectionProgress,
+    scenes: initialState.scenes,
+    selectedRange: initialState.selectedRange,
+  };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
-  subscriptionThrottle = throttle((state, prevState) => {
+  subscriptionThrottle = throttle((state) => {
     if (!store || !baseCanvas || !overlayCanvas) return;
 
     // Update play button icon when playback state changes
-    if (state.isPlaying !== prevState.isPlaying) {
+    if (state.isPlaying !== lastRendered.isPlaying) {
       const playBtn = container.querySelector('.btn-play');
       if (playBtn) {
         playBtn.classList.toggle('playing', state.isPlaying);
         playBtn.textContent = state.isPlaying ? '\u23F8' : '\u25B6';
         playBtn.setAttribute('aria-label', state.isPlaying ? 'Pause' : 'Play');
       }
+      lastRendered.isPlaying = state.isPlaying;
     }
 
+    // Single lookup reused by every update below that needs the timeline DOM.
+    const timelineContainer = container.querySelector('.editor-timeline-container');
+
+    const frameChanged = state.currentFrame !== lastRendered.currentFrame;
+
     // Update current time display and playhead position
-    if (state.currentFrame !== prevState.currentFrame) {
+    if (frameChanged) {
       const currentTimeEl = container.querySelector('.time-display .current');
       if (currentTimeEl) {
         // Calculate position within selection range (clamped)
@@ -250,7 +271,6 @@ export function initEditor() {
       }
 
       // Update playhead position on timeline
-      const timelineContainer = container.querySelector('.editor-timeline-container');
       if (timelineContainer && state.clip) {
         updatePlayheadPosition(
           /** @type {HTMLElement} */ (timelineContainer),
@@ -261,13 +281,20 @@ export function initEditor() {
     }
 
     // Update base canvas ONLY when frame changes
-    if (state.currentFrame !== prevState.currentFrame && state.clip?.frames[state.currentFrame]) {
+    if (frameChanged && state.clip?.frames[state.currentFrame]) {
       updateBaseCanvas(baseCanvas, state.clip.frames[state.currentFrame]);
     }
 
+    if (frameChanged) {
+      lastRendered.currentFrame = state.currentFrame;
+    }
+
+    const cropChanged = state.cropArea !== lastRendered.cropArea;
+    const gridChanged = state.showGrid !== lastRendered.showGrid;
+
     // Update overlay ONLY when crop or grid changes
     // Note: During drag, setupCropInteraction handles overlay updates directly
-    if (state.cropArea !== prevState.cropArea || state.showGrid !== prevState.showGrid) {
+    if (cropChanged || gridChanged) {
       const frame = state.clip?.frames[state.currentFrame];
       if (frame) {
         updateOverlayCanvas(
@@ -281,15 +308,15 @@ export function initEditor() {
     }
 
     // Update crop info panel when crop changes
-    if (state.cropArea !== prevState.cropArea) {
+    if (cropChanged) {
       // Clean up previous crop info panel event listeners
       cropInfoPanelCleanups.forEach((fn) => fn());
       // Update panel and collect new cleanups
       cropInfoPanelCleanups = updateCropInfoPanel(container, state.cropArea, handleCropChange);
+      lastRendered.cropArea = state.cropArea;
     }
 
     // Update timeline selection
-    const timelineContainer = container.querySelector('.editor-timeline-container');
     if (timelineContainer && state.clip) {
       updateTimelineRange(
         /** @type {HTMLElement} */ (timelineContainer),
@@ -298,17 +325,17 @@ export function initEditor() {
       );
     }
 
+    const rangeChanged =
+      state.selectedRange.start !== lastRendered.selectedRange.start ||
+      state.selectedRange.end !== lastRendered.selectedRange.end;
+
     // Update timeline header info when selection changes
-    if (
-      state.selectedRange.start !== lastHeaderRange.start ||
-      state.selectedRange.end !== lastHeaderRange.end
-    ) {
-      lastHeaderRange = state.selectedRange;
+    if (rangeChanged) {
       updateTimelineHeader(container, state.selectedRange, state.currentFrame, fps);
     }
 
     // Update aspect ratio buttons when selection changes
-    if (state.selectedAspectRatio !== prevState.selectedAspectRatio) {
+    if (state.selectedAspectRatio !== lastRendered.selectedAspectRatio) {
       const aspectBtns = container.querySelectorAll('.aspect-btn');
       aspectBtns.forEach((btn) => {
         btn.classList.toggle(
@@ -316,25 +343,26 @@ export function initEditor() {
           /** @type {HTMLElement} */ (btn).dataset.ratio === state.selectedAspectRatio,
         );
       });
+      lastRendered.selectedAspectRatio = state.selectedAspectRatio;
     }
 
     // Update grid button when grid state changes
-    if (state.showGrid !== prevState.showGrid) {
+    if (gridChanged) {
       const gridBtn = container.querySelector('.btn-grid-toggle');
       if (gridBtn) {
         gridBtn.classList.toggle('active', state.showGrid);
         gridBtn.textContent = state.showGrid ? 'On' : 'Off';
         gridBtn.setAttribute('aria-pressed', String(state.showGrid));
       }
+      lastRendered.showGrid = state.showGrid;
     }
 
     // Update scenes panel when scene detection state or selected range changes
     if (
-      state.sceneDetectionStatus !== prevState.sceneDetectionStatus ||
-      state.sceneDetectionProgress !== prevState.sceneDetectionProgress ||
-      state.scenes !== prevState.scenes ||
-      state.selectedRange.start !== prevState.selectedRange.start ||
-      state.selectedRange.end !== prevState.selectedRange.end
+      state.sceneDetectionStatus !== lastRendered.sceneDetectionStatus ||
+      state.sceneDetectionProgress !== lastRendered.sceneDetectionProgress ||
+      state.scenes !== lastRendered.scenes ||
+      rangeChanged
     ) {
       // Clean up previous scene panel event listeners
       scenePanelCleanups.forEach((fn) => fn());
@@ -349,6 +377,15 @@ export function initEditor() {
         onSpeedChange: handleSpeedChange,
         onExport: handleExport,
       });
+      lastRendered.sceneDetectionStatus = state.sceneDetectionStatus;
+      lastRendered.sceneDetectionProgress = state.sceneDetectionProgress;
+      lastRendered.scenes = state.scenes;
+    }
+
+    // Committed after both the header and the scenes-panel checks above, since
+    // both branch on rangeChanged against the same last-rendered snapshot.
+    if (rangeChanged) {
+      lastRendered.selectedRange = state.selectedRange;
     }
   }, 16); // ~60fps updates
   storeUnsubscribe = store.subscribe(subscriptionThrottle);
