@@ -959,7 +959,13 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
   // Body with grid
   const body = createElement('div', { className: 'frame-grid-body' });
-  const gridContainer = createElement('div', { className: 'frame-grid-container' });
+  // tabindex="-1" makes the container a valid programmatic-focus target
+  // (not a Tab stop) so eviction can safely relocate focus without leaving
+  // the modal's focus trap.
+  const gridContainer = createElement('div', {
+    className: 'frame-grid-container',
+    tabindex: '-1',
+  });
   const isVirtualized = frames.length > VIRTUALIZATION_THRESHOLD;
   if (isVirtualized) {
     gridContainer.classList.add('is-virtualized');
@@ -1157,6 +1163,12 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     }
     if (touchActiveItem === item) {
       touchActiveItem = null;
+    }
+    // Removing a focused item drops focus to <body>, silently escaping the
+    // modal's Tab trap. Relocate focus to the (non-tab-stop) grid container
+    // first so it stays inside the modal.
+    if (item.contains(document.activeElement)) {
+      gridContainer.focus();
     }
     releaseThumbnail(item);
     item.remove();
