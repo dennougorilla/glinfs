@@ -145,7 +145,9 @@ export function initEditor() {
       emit('editor:validation-error', { errors: validation.errors });
 
       return () => {
-        cleanups.forEach((fn) => fn());
+        cleanups.forEach((fn) => {
+          fn();
+        });
         cleanup();
       };
     }
@@ -192,7 +194,9 @@ export function initEditor() {
     container.appendChild(emptyState);
 
     return () => {
-      cleanups.forEach((fn) => fn());
+      cleanups.forEach((fn) => {
+        fn();
+      });
       cleanup();
     };
   }
@@ -310,7 +314,9 @@ export function initEditor() {
     // Update crop info panel when crop changes
     if (cropChanged) {
       // Clean up previous crop info panel event listeners
-      cropInfoPanelCleanups.forEach((fn) => fn());
+      cropInfoPanelCleanups.forEach((fn) => {
+        fn();
+      });
       // Update panel and collect new cleanups
       cropInfoPanelCleanups = updateCropInfoPanel(container, state.cropArea, handleCropChange);
       lastRendered.cropArea = state.cropArea;
@@ -365,7 +371,9 @@ export function initEditor() {
       rangeChanged
     ) {
       // Clean up previous scene panel event listeners
-      scenePanelCleanups.forEach((fn) => fn());
+      scenePanelCleanups.forEach((fn) => {
+        fn();
+      });
       // Update panel and collect new cleanups
       scenePanelCleanups = updateScenesPanel(container, state, {
         onTogglePlay: handleTogglePlay,
@@ -776,11 +784,15 @@ function cleanup() {
   }
 
   // Clean up scene panel event listeners
-  scenePanelCleanups.forEach((fn) => fn());
+  scenePanelCleanups.forEach((fn) => {
+    fn();
+  });
   scenePanelCleanups = [];
 
   // Clean up crop info panel event listeners
-  cropInfoPanelCleanups.forEach((fn) => fn());
+  cropInfoPanelCleanups.forEach((fn) => {
+    fn();
+  });
   cropInfoPanelCleanups = [];
 
   baseCanvas = null;

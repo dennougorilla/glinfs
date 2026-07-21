@@ -111,7 +111,9 @@ export async function cleanupScreenCaptureResources(captureState, options = {}) 
 
   // Stop MediaStream tracks
   if (stopStream && captureState.stream) {
-    captureState.stream.getTracks().forEach((track) => track.stop());
+    captureState.stream.getTracks().forEach((track) => {
+      track.stop();
+    });
   }
 
   // Cleanup worker with proper resource release (fixes memory leak)
