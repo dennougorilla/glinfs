@@ -44,8 +44,12 @@ let wasmModule = null;
 /** @type {Promise<WasmModule> | null} */
 let wasmLoadPromise = null;
 
-/** Base path for encoder files */
-const ENCODER_BASE_PATH = '/glinfs/encoder';
+/**
+ * Base path for encoder files, derived from Vite's base so it cannot drift
+ * from vite.config.js (previously hardcoded '/glinfs/encoder').
+ * BASE_URL always ends with '/'.
+ */
+const ENCODER_BASE_PATH = `${import.meta.env?.BASE_URL ?? '/'}encoder`;
 
 /**
  * Load WASM module using fetch and dynamic execution
@@ -245,22 +249,19 @@ export function createGifsicleEncoder() {
     /**
      * Add frame
      * @param {FrameData} frameData
-     * @param {number} frameIndex
+     * @param {number} _frameIndex - Unused; frames are appended in call order
      */
-    addFrame(frameData, frameIndex) {
+    addFrame(frameData, _frameIndex) {
       if (!module || !encoderPtr || !config) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
 
       const { rgba, width, height } = frameData;
 
-      // Quantize the frame
+      // Quantize the frame. The buffer starts with the liq_palette struct
+      // (count + 256 colors ≈ 1028 bytes) followed by the indexed image;
+      // _encoder_add_frame consumes the combined layout as-is.
       const quantizedBuffer = quantizeFrame(module, rgba, width, height);
-
-      // Palette is at the beginning of the buffer (liq_palette struct size)
-      // Based on libimagequant: liq_palette has count (4 bytes) + 256 * liq_color (4 bytes each) = 1028 bytes max
-      // But actual size varies, let's use 1028 as standard
-      const paletteLength = 1028;
 
       // Copy quantized data to WASM memory
       const dataSize = quantizedBuffer.byteLength;
@@ -310,6 +311,19 @@ export function createGifsicleEncoder() {
       // Reset encoder pointer (it's deleted in C code)
       encoderPtr = 0;
 
+      // The WASM API (_encoder_new/_encoder_add_frame/_encoder_finish) has
+      // no loop-count parameter, so honor the setting by patching the
+      // NETSCAPE application extension in the produced bytes (issue #46/#50).
+      const loopCount = config?.loopCount;
+      if (typeof loopCount === 'number' && loopCount >= 0) {
+        const patched = patchGifLoopCount(result, loopCount);
+        if (!patched && loopCount > 0) {
+          console.warn(
+            '[gifsicle-encoder] NETSCAPE loop block not found; loopCount setting ignored',
+          );
+        }
+      }
+
       return result;
     },
 
@@ -326,6 +340,46 @@ export function createGifsicleEncoder() {
   };
 }
 
+/** Bytes of the "NETSCAPE2.0" application identifier */
+const NETSCAPE_MARKER = [0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30];
+
+/**
+ * Patch the loop count of an encoded GIF in place.
+ *
+ * GIF stores looping in the NETSCAPE2.0 application extension:
+ *   21 FF 0B "NETSCAPE2.0" 03 01 <count u16 LE> 00
+ * where count 0 means loop forever — the same semantics as the app's
+ * loopCount setting and gifenc's `repeat`.
+ *
+ * @param {Uint8Array} bytes - Encoded GIF (mutated in place)
+ * @param {number} loopCount - 0 for infinite, 1+ for a specific count
+ * @returns {boolean} true if a NETSCAPE block was found and patched
+ */
+export function patchGifLoopCount(bytes, loopCount) {
+  const value = Math.max(0, Math.min(0xffff, Math.floor(loopCount)));
+  // Extension introducer (21) + label (FF) + block size (0B) + 11-byte
+  // identifier + sub-block (03 01 lo hi) must all fit before the end.
+  for (let i = 0; i + 17 < bytes.length; i++) {
+    if (bytes[i] !== 0x21 || bytes[i + 1] !== 0xff || bytes[i + 2] !== 0x0b) continue;
+
+    let matches = true;
+    for (let j = 0; j < NETSCAPE_MARKER.length; j++) {
+      if (bytes[i + 3 + j] !== NETSCAPE_MARKER[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (!matches) continue;
+
+    if (bytes[i + 14] !== 0x03 || bytes[i + 15] !== 0x01) continue;
+
+    bytes[i + 16] = value & 0xff;
+    bytes[i + 17] = (value >> 8) & 0xff;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Get Gifsicle encoder metadata
  * @returns {EncoderMetadata}
@@ -334,15 +388,44 @@ export function getGifsicleMetadata() {
   return METADATA;
 }
 
+/** @type {Promise<boolean> | null} */
+let availabilityPromise = null;
+
 /**
- * Check if Gifsicle WASM encoder is available
+ * Check if Gifsicle WASM encoder is available.
+ *
+ * This runs on the export screen's main thread (via checkEncoderStatus), so
+ * it must stay cheap: probe the static assets with HEAD requests instead of
+ * downloading and compiling the whole Emscripten module here (issue #46 —
+ * the old implementation double-loaded the WASM and polluted the global
+ * Module). The real load happens inside the encoder worker on first use.
+ *
  * @returns {Promise<boolean>}
  */
 export async function isGifsicleAvailable() {
-  try {
-    await loadWasmModule();
+  if (wasmModule) {
     return true;
-  } catch {
-    return false;
   }
+
+  if (!availabilityPromise) {
+    availabilityPromise = (async () => {
+      try {
+        const [js, wasm] = await Promise.all([
+          fetch(`${ENCODER_BASE_PATH}/encoder.js`, { method: 'HEAD' }),
+          fetch(`${ENCODER_BASE_PATH}/encoder.wasm`, { method: 'HEAD' }),
+        ]);
+        const ok = js.ok && wasm.ok;
+        if (!ok) {
+          // Allow a later retry (e.g. transient 5xx during deploy)
+          availabilityPromise = null;
+        }
+        return ok;
+      } catch {
+        availabilityPromise = null;
+        return false;
+      }
+    })();
+  }
+
+  return availabilityPromise;
 }
