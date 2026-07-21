@@ -16,6 +16,34 @@ const {
   gridMax: MAX_THUMBNAIL_SIZE,
 } = getThumbnailSizes();
 
+/** Controls that must retain their native keyboard behavior inside the modal. */
+const INTERACTIVE_ELEMENT_SELECTOR = [
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'a[href]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="slider"]',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[role="switch"]',
+  '[role="tab"]',
+].join(', ');
+
+/**
+ * Check whether a keyboard event came from a control with its own key semantics.
+ * @param {EventTarget | null} target
+ * @returns {boolean}
+ */
+function isInteractiveElement(target) {
+  return target instanceof Element && target.closest(INTERACTIVE_ELEMENT_SELECTOR) !== null;
+}
+
 /** CSS styles for frame grid modal */
 const FRAME_GRID_STYLES = `
   .frame-grid-backdrop {
@@ -666,7 +694,9 @@ function calculateOptimalThumbnailSize(frameCount, containerWidth, containerHeig
   // Binary search for optimal size
   let low = MIN_THUMBNAIL_SIZE;
   let high = MAX_THUMBNAIL_SIZE;
-  let optimal = DEFAULT_THUMBNAIL_SIZE;
+  // If even the minimum size cannot fit every frame, stay at the minimum
+  // instead of silently falling back to a larger, more memory-intensive size.
+  let optimal = MIN_THUMBNAIL_SIZE;
 
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
@@ -1178,6 +1208,13 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     if (e.key === 'Escape') {
       e.preventDefault();
       callbacks.onCancel();
+      return;
+    }
+
+    // Leave native keyboard behavior alone for interactive controls (the
+    // size slider, Apply/Cancel buttons) that have their own key semantics
+    const eventTarget = e.target instanceof Element ? e.target : document.activeElement;
+    if (isInteractiveElement(eventTarget)) {
       return;
     }
 

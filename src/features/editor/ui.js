@@ -1197,9 +1197,14 @@ function openFrameGridModal(container, state, handlers, onClose) {
     scenes: state.scenes,
     callbacks: {
       onApply: (range) => {
-        handlers.onRangeChange(range);
-        cleanup();
-        onClose?.();
+        // If onRangeChange throws, the modal must still close instead of
+        // leaving its document-level listeners mounted forever
+        try {
+          handlers.onRangeChange(range);
+        } finally {
+          cleanup();
+          onClose?.();
+        }
       },
       onCancel: () => {
         cleanup();
