@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { updateSetting } from '../../../../src/shared/user-settings.js';
-import { getQualityPreset, getThumbnailSizes } from '../../../../src/shared/utils/quality-settings.js';
+import {
+  getQualityPreset,
+  getThumbnailSizes,
+} from '../../../../src/shared/utils/quality-settings.js';
 
-const USER_SETTINGS_KEY = 'glinfs_user_settings';
 const LEGACY_KEY = 'thumbnailQuality';
 
 describe('quality-settings', () => {
