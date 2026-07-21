@@ -30,7 +30,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      # test:coverage runs the same suite once and additionally enforces the
+      # coverage thresholds in vitest.config.js (plain `npm test` skips them)
+      - run: npm run test:coverage
 
   e2e:
     runs-on: ubuntu-latest
