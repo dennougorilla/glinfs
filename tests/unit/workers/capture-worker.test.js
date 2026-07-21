@@ -93,6 +93,7 @@ describe('capture-worker', () => {
     expect(response.payload.frames).toHaveLength(1);
     expect(response.payload.frames[0].bitmap).toBe(bitmap);
     expect(response.payload.frames[0].timestamp).toBe(123);
+    expect(lastPosted('STATS_UPDATE').payload.frameCount).toBe(0);
   });
 
   it('closes an in-flight frame that arrives after STOP instead of leaking it (#40)', () => {
@@ -131,6 +132,43 @@ describe('capture-worker', () => {
     expect(first.close).toHaveBeenCalledTimes(1);
     expect(second.close).not.toHaveBeenCalled();
     expect(third.close).not.toHaveBeenCalled();
+  });
+
+  it('returns wrapped frames in capture order without shifting the array', () => {
+    const first = createMockBitmap();
+    const second = createMockBitmap();
+    const third = createMockBitmap();
+    const fourth = createMockBitmap();
+
+    send('START', { fps: 30, maxFrames: 2 });
+    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
+    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
+    send('FRAME_RESPONSE', { bitmap: third, timestamp: 3 });
+    send('FRAME_RESPONSE', { bitmap: fourth, timestamp: 4 });
+    send('GET_FRAMES');
+
+    const response = lastPosted('FRAMES_RESPONSE');
+    expect(response.payload.frames.map((frame) => frame.timestamp)).toEqual([3, 4]);
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(second.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the newest frames when the buffer capacity shrinks', () => {
+    const first = createMockBitmap();
+    const second = createMockBitmap();
+    const third = createMockBitmap();
+
+    send('START', { fps: 30, maxFrames: 3 });
+    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
+    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
+    send('FRAME_RESPONSE', { bitmap: third, timestamp: 3 });
+    send('STOP');
+    send('START', { fps: 30, maxFrames: 2 });
+    send('GET_FRAMES');
+
+    const response = lastPosted('FRAMES_RESPONSE');
+    expect(response.payload.frames.map((frame) => frame.timestamp)).toEqual([2, 3]);
+    expect(first.close).toHaveBeenCalledTimes(1);
   });
 
   it('closes all buffered frames on CLEAR', () => {
