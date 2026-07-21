@@ -3,6 +3,10 @@
  * @module shared/utils/quality-settings
  */
 
+// user-settings.js has no dependency on this module (verified: it does not
+// import quality-settings.js), so this static import cannot form a cycle.
+import { loadSettings } from '../user-settings.js';
+
 /**
  * @typedef {'low' | 'standard' | 'high' | 'ultra'} QualityPreset
  */
@@ -57,11 +61,24 @@ function getDeviceMemory() {
 
 /**
  * Get quality preset based on device specs
- * User preference in localStorage takes priority over auto-detection
+ * The settings screen's preference (stored in the `glinfs_user_settings` blob
+ * and read via user-settings.js's loadSettings()) takes priority over
+ * auto-detection. 'auto' (the default) and any legacy raw-key preference
+ * fall through to auto-detection.
  * @returns {QualityPreset}
  */
 export function getQualityPreset() {
-  // Check user preference first
+  // Check the settings screen's preference first.
+  try {
+    const { thumbnailQuality } = loadSettings();
+    if (thumbnailQuality && thumbnailQuality !== 'auto' && thumbnailQuality in QUALITY_PRESETS) {
+      return /** @type {QualityPreset} */ (thumbnailQuality);
+    }
+  } catch {
+    // user-settings/localStorage may be unavailable
+  }
+
+  // Legacy raw-key preference, kept for backward compatibility.
   try {
     const userPref = localStorage.getItem(STORAGE_KEY);
     if (userPref && userPref in QUALITY_PRESETS) {
