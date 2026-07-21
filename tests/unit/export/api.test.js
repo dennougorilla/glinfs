@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  __resetFrameExtractionCacheForTests,
   checkEncoderStatus,
   copyToClipboard,
   downloadBlob,
@@ -34,6 +35,9 @@ afterEach(() => {
   restoreDescriptor(globalThis, 'ClipboardItem', ORIGINAL_DESCRIPTORS.clipboardItemGlobal);
   restoreDescriptor(window, 'ClipboardItem', ORIGINAL_DESCRIPTORS.clipboardItemWindow);
   restoreDescriptor(navigator, 'clipboard', ORIGINAL_DESCRIPTORS.navigatorClipboard);
+  // getFrameRGBA caches its OffscreenCanvas at module scope; clear it so
+  // each test starts from a clean slate regardless of execution order.
+  __resetFrameExtractionCacheForTests();
 });
 
 // Helper to create mock VideoFrame
@@ -106,6 +110,7 @@ describe('getFrameRGBA', () => {
 
     const mockCtx = {
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue(mockImageData),
     };
 
@@ -151,6 +156,73 @@ describe('getFrameRGBA', () => {
     await expect(getFrameRGBA(frame, crop)).rejects.toThrow(
       'Failed to get OffscreenCanvas 2d context',
     );
+  });
+
+  it('should reuse a single OffscreenCanvas across consecutive same-size calls', async () => {
+    // Arrange
+    const frame = createMockFrame(200, 150);
+    const crop = { x: 0, y: 0, width: 50, height: 40 };
+
+    const mockCtx = {
+      drawImage: vi.fn(),
+      clearRect: vi.fn(),
+      getImageData: vi.fn().mockReturnValue({
+        data: new Uint8ClampedArray(50 * 40 * 4),
+        width: 50,
+        height: 40,
+      }),
+    };
+
+    const OffscreenCanvasSpy = vi.fn(function (w, h) {
+      this.width = w;
+      this.height = h;
+      this.getContext = vi.fn().mockReturnValue(mockCtx);
+    });
+    global.OffscreenCanvas = OffscreenCanvasSpy;
+
+    // Act: two consecutive extractions at the same crop size
+    await getFrameRGBA(frame, crop);
+    await getFrameRGBA(frame, crop);
+
+    // Assert: only the first call constructed an OffscreenCanvas
+    expect(OffscreenCanvasSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should resize (not recreate) the cached canvas when dimensions change', async () => {
+    // Arrange
+    const frame = createMockFrame(200, 150);
+    const smallCrop = { x: 0, y: 0, width: 50, height: 40 };
+    const bigCrop = { x: 0, y: 0, width: 80, height: 60 };
+
+    const mockCtx = {
+      drawImage: vi.fn(),
+      clearRect: vi.fn(),
+      getImageData: vi.fn().mockReturnValue({
+        data: new Uint8ClampedArray(80 * 60 * 4),
+        width: 80,
+        height: 60,
+      }),
+    };
+
+    /** @type {{ width: number, height: number, getContext: () => typeof mockCtx }[]} */
+    const createdCanvases = [];
+    const OffscreenCanvasSpy = vi.fn(function (w, h) {
+      this.width = w;
+      this.height = h;
+      this.getContext = vi.fn().mockReturnValue(mockCtx);
+      createdCanvases.push(this);
+    });
+    global.OffscreenCanvas = OffscreenCanvasSpy;
+
+    // Act
+    await getFrameRGBA(frame, smallCrop);
+    await getFrameRGBA(frame, bigCrop);
+
+    // Assert: still only one OffscreenCanvas instance, but its dimensions
+    // were updated in place to match the new crop size
+    expect(OffscreenCanvasSpy).toHaveBeenCalledTimes(1);
+    expect(createdCanvases[0].width).toBe(80);
+    expect(createdCanvases[0].height).toBe(60);
   });
 });
 
@@ -398,6 +470,7 @@ describe('scaleFrame', () => {
       imageSmoothingEnabled: false,
       imageSmoothingQuality: '',
       drawImage: vi.fn(),
+      clearRect: vi.fn(),
       getImageData: vi.fn().mockReturnValue({
         data: scaledData,
         width: 50,
