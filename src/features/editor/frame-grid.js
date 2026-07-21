@@ -9,13 +9,6 @@ import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { createThumbnailCanvas } from './api.js';
 import { isFrameInRange, normalizeSelectionRange } from './core.js';
 
-/** Thumbnail sizes from quality settings (device-adaptive) */
-const {
-  gridDefault: DEFAULT_THUMBNAIL_SIZE,
-  gridMin: MIN_THUMBNAIL_SIZE,
-  gridMax: MAX_THUMBNAIL_SIZE,
-} = getThumbnailSizes();
-
 /** Controls that must retain their native keyboard behavior inside the modal. */
 const INTERACTIVE_ELEMENT_SELECTOR = [
   'button',
@@ -62,7 +55,7 @@ const VIRTUAL_OVERSCAN_ROWS = 3;
 export function calculateThumbnailRenderSize(
   displayWidth,
   devicePixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-  maximumSize = MAX_THUMBNAIL_SIZE,
+  maximumSize = getThumbnailSizes().gridMax,
 ) {
   const safeWidth = Number.isFinite(displayWidth) ? Math.max(1, displayWidth) : 1;
   const safePixelRatio = Number.isFinite(devicePixelRatio) ? Math.max(1, devicePixelRatio) : 1;
@@ -721,19 +714,27 @@ function injectStyles() {
  * @param {number} frameCount - Total number of frames
  * @param {number} containerWidth - Available width
  * @param {number} containerHeight - Available height
+ * @param {number} minThumbnailSize - Quality-preset minimum thumbnail size
+ * @param {number} maxThumbnailSize - Quality-preset maximum thumbnail size
  * @returns {number} - Optimal thumbnail width
  */
-function calculateOptimalThumbnailSize(frameCount, containerWidth, containerHeight) {
+function calculateOptimalThumbnailSize(
+  frameCount,
+  containerWidth,
+  containerHeight,
+  minThumbnailSize,
+  maxThumbnailSize,
+) {
   const aspectRatio = 16 / 9;
   const gap = 12;
 
   // Binary search for optimal size
-  let low = MIN_THUMBNAIL_SIZE;
-  let high = MAX_THUMBNAIL_SIZE;
+  let low = minThumbnailSize;
+  let high = maxThumbnailSize;
   // If even the minimum size cannot fit every frame, stay at the minimum.
   // Starting from the default made very large clips silently auto-fit back to
   // a larger and more memory-intensive thumbnail size.
-  let optimal = MIN_THUMBNAIL_SIZE;
+  let optimal = minThumbnailSize;
 
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
@@ -754,7 +755,7 @@ function calculateOptimalThumbnailSize(frameCount, containerWidth, containerHeig
     }
   }
 
-  return Math.max(MIN_THUMBNAIL_SIZE, Math.min(optimal, MAX_THUMBNAIL_SIZE));
+  return Math.max(minThumbnailSize, Math.min(optimal, maxThumbnailSize));
 }
 
 /**
@@ -771,6 +772,15 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   injectStyles();
 
   const cleanups = [];
+
+  // Thumbnail size bounds from quality settings (device-adaptive). Read on
+  // every call rather than cached at module load so a mid-session quality
+  // preference change is picked up the next time the modal opens.
+  const {
+    gridDefault: DEFAULT_THUMBNAIL_SIZE,
+    gridMin: MIN_THUMBNAIL_SIZE,
+    gridMax: MAX_THUMBNAIL_SIZE,
+  } = getThumbnailSizes();
 
   // Local state
   let startFrame = initialRange.start;
@@ -1044,7 +1054,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     const measuredWidth = displayWidthOverride ?? item.getBoundingClientRect().width;
     const displayWidth = measuredWidth > 0 ? measuredWidth : getGridMetrics().cellWidth;
-    const renderSize = calculateThumbnailRenderSize(displayWidth);
+    const renderSize = calculateThumbnailRenderSize(displayWidth, undefined, MAX_THUMBNAIL_SIZE);
     const existingCanvas = /** @type {HTMLCanvasElement | null} */ (item.querySelector('canvas'));
     if (existingCanvas?.dataset.renderSize === String(renderSize)) {
       return;
@@ -1446,6 +1456,8 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       frames.length,
       gridContainer.offsetWidth,
       body.offsetHeight - 32, // padding
+      MIN_THUMBNAIL_SIZE,
+      MAX_THUMBNAIL_SIZE,
     );
     thumbnailSize = optimalSize;
     sizeSlider.value = String(optimalSize);
