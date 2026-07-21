@@ -12,6 +12,61 @@ import {
 } from './core.js';
 
 /**
+ * Cached OffscreenCanvas + 2d context used by getFrameRGBA's non-copyTo
+ * paths (the crop path, and the full-frame fallback for environments
+ * without VideoFrame.copyTo). Resized in place instead of being recreated
+ * on every call.
+ *
+ * SAFETY: getFrameRGBA is only ever invoked sequentially, from the
+ * frame-extraction loop in encodeGif — there is no concurrent/overlapping
+ * use of this cache. Do not call getFrameRGBA from more than one place at
+ * a time without revisiting this assumption.
+ *
+ * The cached canvas intentionally stays allocated for the lifetime of the
+ * module (i.e. it is not freed once an export completes) — a single small
+ * canvas held in memory is an acceptable tradeoff for not re-allocating
+ * one per frame.
+ *
+ * @type {{ canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D } | null}
+ */
+let extractionCanvasCache = null;
+
+/**
+ * Get the cached extraction canvas/context, creating it on first use and
+ * resizing it in place whenever the requested dimensions change.
+ * @param {number} width
+ * @param {number} height
+ * @returns {{ canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D }}
+ */
+function getExtractionCanvas(width, height) {
+  if (!extractionCanvasCache) {
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to get OffscreenCanvas 2d context');
+    }
+    extractionCanvasCache = { canvas, ctx };
+    return extractionCanvasCache;
+  }
+
+  const { canvas } = extractionCanvasCache;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  return extractionCanvasCache;
+}
+
+/**
+ * Reset the cached extraction canvas. Not used by production code —
+ * getFrameRGBA resizes the cache in place instead of ever needing to clear
+ * it — exported solely so tests can isolate module-level cache state.
+ */
+export function __resetFrameExtractionCacheForTests() {
+  extractionCanvasCache = null;
+}
+
+/**
  * Extract RGBA pixel data from a VideoFrame
  * Handles both full-frame (copyTo) and cropped (OffscreenCanvas) cases
  *
@@ -45,11 +100,7 @@ export async function getFrameRGBA(frame, crop) {
     }
 
     // Fallback: use OffscreenCanvas (for environments without copyTo)
-    const offscreen = new OffscreenCanvas(sourceWidth, sourceHeight);
-    const ctx = offscreen.getContext('2d');
-    if (!ctx) {
-      throw new Error('Failed to get OffscreenCanvas 2d context');
-    }
+    const { ctx } = getExtractionCanvas(sourceWidth, sourceHeight);
 
     ctx.drawImage(videoFrame, 0, 0);
     const imageData = ctx.getImageData(0, 0, sourceWidth, sourceHeight);
@@ -60,11 +111,7 @@ export async function getFrameRGBA(frame, crop) {
   const outputWidth = crop.width;
   const outputHeight = crop.height;
 
-  const offscreen = new OffscreenCanvas(outputWidth, outputHeight);
-  const ctx = offscreen.getContext('2d');
-  if (!ctx) {
-    throw new Error('Failed to get OffscreenCanvas 2d context');
-  }
+  const { ctx } = getExtractionCanvas(outputWidth, outputHeight);
 
   // Draw cropped region from VideoFrame
   ctx.drawImage(

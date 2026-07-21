@@ -21,6 +21,7 @@ import {
   syncCanvasSize,
 } from '../../shared/utils/canvas.js';
 import { qsRequired } from '../../shared/utils/dom.js';
+import { throttle } from '../../shared/utils/performance.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
 import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
 import {
@@ -57,6 +58,24 @@ let clipInfo = { frameCount: 0, width: 0, height: 0, duration: 0, fps: 30 };
 
 /** @type {AbortController | null} */
 let encodingController = null;
+
+/**
+ * Minimum interval between progress-bar DOM updates during encoding.
+ * Encode progress events can arrive faster than the display can usefully
+ * redraw (worker posts a PROGRESS message per frame); throttling to a
+ * single frame budget keeps the main thread from doing needless layout
+ * work while still feeling live.
+ */
+const PROGRESS_UI_THROTTLE_MS = 16;
+
+/**
+ * Throttled updateProgressUI, (re)created per mount so its internal timer
+ * doesn't outlive the container it renders into. The final 100% update is
+ * always applied immediately (bypassing the throttle) so the progress bar
+ * never appears to stall short of completion.
+ * @type {import('../../shared/utils/performance.js').ThrottledFunction | null}
+ */
+let throttledUpdateProgressUI = null;
 
 /** @type {number | null} */
 let animationFrameId = null;
@@ -160,6 +179,9 @@ export function initExport() {
   // Initial render
   render(container);
 
+  // Throttled progress redraw for this mount (see PROGRESS_UI_THROTTLE_MS).
+  throttledUpdateProgressUI = throttle(updateProgressUI, PROGRESS_UI_THROTTLE_MS);
+
   // Subscribe to state changes
   storeUnsubscribe = store.subscribe((state, prevState) => {
     if (!store) return;
@@ -170,9 +192,17 @@ export function initExport() {
       updatePreviewPlaybackUI(container, state.preview.isPlaying);
     }
 
-    // Update progress UI if encoding
+    // Update progress UI if encoding. Throttled to avoid redundant DOM
+    // writes on every worker PROGRESS message, but the final 100% frame
+    // always bypasses the throttle so the bar reliably reaches "done"
+    // instead of possibly stalling behind a pending timer.
     if (state.job?.status === 'encoding') {
-      updateProgressUI(container, state.job);
+      if (state.job.progress >= 100) {
+        throttledUpdateProgressUI?.cancel();
+        updateProgressUI(container, state.job);
+      } else {
+        throttledUpdateProgressUI?.(container, state.job);
+      }
     }
   });
 
@@ -570,6 +600,11 @@ function cleanup() {
   if (uiCleanup) {
     uiCleanup();
     uiCleanup = null;
+  }
+
+  if (throttledUpdateProgressUI) {
+    throttledUpdateProgressUI.cancel();
+    throttledUpdateProgressUI = null;
   }
 
   // Cancel any in-progress encoding

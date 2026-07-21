@@ -190,6 +190,70 @@ describe('Export regressions', () => {
     );
   });
 
+  it('throttles progress bar redraws but always renders the final 100% frame', async () => {
+    injectEditorPayload();
+
+    /** @type {((progress: { percent: number, current: number, total: number }) => void) | null} */
+    let capturedOnProgress = null;
+    /** @type {(() => void) | null} */
+    let resolveEncode = null;
+    vi.mocked(encodeGif).mockImplementationOnce((params) => {
+      capturedOnProgress = params.onProgress;
+      return new Promise((resolve) => {
+        resolveEncode = () => resolve(new Blob(['gif89a'], { type: 'image/gif' }));
+      });
+    });
+
+    exportCleanup = initExport();
+
+    // Drain the mocked checkEncoderStatus().then(...) microtask scheduled
+    // during mount before switching to fake timers below — otherwise it
+    // resolves mid-test and its (harmless, unrelated) state update rides
+    // along on the throttle timing we're about to assert on.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    vi.useFakeTimers();
+    // throttle() measures elapsed time from Date.now(); start the clock
+    // well past 0 so the throttle's internal "lastCall = 0" sentinel
+    // doesn't make the very first progress event look like it's inside
+    // the throttle window.
+    vi.setSystemTime(1_000_000);
+    try {
+      document.querySelector('.btn-export-main')?.dispatchEvent(new MouseEvent('click'));
+      await Promise.resolve();
+
+      const fill = /** @type {HTMLElement} */ (document.querySelector('.progress-bar-fill'));
+      expect(capturedOnProgress).not.toBeNull();
+
+      // Starting the job itself fires one throttled update (progress 0,
+      // against the pre-render DOM) which consumes the throttle's initial
+      // "no prior call" allowance. Advance the clock past the throttle
+      // window, as real elapsed time would between job start and the
+      // first worker PROGRESS message, before asserting on real updates.
+      vi.advanceTimersByTime(20);
+
+      // First real progress event applies immediately (outside the window).
+      capturedOnProgress?.({ percent: 10, current: 1, total: 10 });
+      expect(fill.style.width).toBe('10%');
+
+      // A second event arriving inside the throttle window is queued, not
+      // drawn immediately.
+      capturedOnProgress?.({ percent: 50, current: 5, total: 10 });
+      expect(fill.style.width).toBe('10%');
+
+      // The final (100%) frame always bypasses the throttle so the bar
+      // reaches "done" instead of possibly stalling on a queued mid-value.
+      capturedOnProgress?.({ percent: 100, current: 10, total: 10 });
+      expect(fill.style.width).toBe('100%');
+
+      resolveEncode?.();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('updates the play/pause icon, class, title and aria-label immediately', () => {
     injectEditorPayload();
     exportCleanup = initExport();
