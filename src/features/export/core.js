@@ -108,7 +108,7 @@ export function createDefaultSettings() {
       encoderPreset: userSettings.export.encoderPreset,
       encoderId: userSettings.export.encoderId,
     };
-  } catch (error) {
+  } catch {
     // Fallback to hardcoded defaults if import fails
     return {
       quality: 0.8,
