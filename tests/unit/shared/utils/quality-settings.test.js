@@ -42,13 +42,24 @@ describe('quality-settings', () => {
       expect(getQualityPreset()).toBe('low');
     });
 
-    it('still honors a legacy raw thumbnailQuality key when no blob preference is set', () => {
-      localStorage.setItem(LEGACY_KEY, 'ultra');
+    it('ignores a stale raw thumbnailQuality key entirely (no legacy fallback)', () => {
+      // Nothing shipped ever wrote this key; honoring it would let a stale
+      // value override an explicit Auto (Codex review on #86)
+      Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 8 });
+      localStorage.setItem(LEGACY_KEY, 'low');
 
-      expect(getQualityPreset()).toBe('ultra');
+      expect(getQualityPreset()).toBe('high'); // device auto-detect wins
     });
 
-    it('prefers the settings-screen blob over a legacy raw key', () => {
+    it('an explicit Auto in settings beats a stale raw key', () => {
+      Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 8 });
+      localStorage.setItem(LEGACY_KEY, 'low');
+      updateSetting('thumbnailQuality', undefined, 'auto');
+
+      expect(getQualityPreset()).toBe('high');
+    });
+
+    it('prefers the settings-screen blob over a stale raw key', () => {
       localStorage.setItem(LEGACY_KEY, 'low');
       updateSetting('thumbnailQuality', undefined, 'ultra');
 
