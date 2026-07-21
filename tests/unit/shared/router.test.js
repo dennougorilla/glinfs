@@ -217,6 +217,79 @@ describe('Router', () => {
     });
   });
 
+  describe('route handler failure recovery', () => {
+    it('falls back to /capture when a route handler throws', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const captureHandler = vi.fn();
+
+      initRouter({
+        '/capture': captureHandler,
+        '/editor': () => {
+          throw new Error('handler boom');
+        },
+      });
+      captureHandler.mockClear();
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Previously the exception escaped the hashchange listener and left
+      // the app on a blank, half-initialized screen
+      expect(captureHandler).toHaveBeenCalled();
+      expect(getCurrentRoute()).toBe('/capture');
+      expect(errorSpy).toHaveBeenCalled();
+
+      errorSpy.mockRestore();
+    });
+
+    it('renders a static message instead of looping when /capture itself fails', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const main = document.createElement('div');
+      main.id = 'main-content';
+      document.body.appendChild(main);
+
+      initRouter({
+        '/capture': () => {
+          throw new Error('capture boom');
+        },
+      });
+
+      expect(main.textContent).toContain('reload the page');
+
+      main.remove();
+      errorSpy.mockRestore();
+    });
+  });
+
+  describe('container class reset', () => {
+    it('clears route-specific classes from #main-content before mounting', async () => {
+      const main = document.createElement('div');
+      main.id = 'main-content';
+      document.body.appendChild(main);
+
+      initRouter({
+        '/capture': vi.fn(),
+        '/settings': () => {
+          // Mimic the Settings screen, which sets a container class and
+          // never resets it in its cleanup
+          main.className = 'settings-container';
+        },
+        '/editor': vi.fn(),
+      });
+
+      navigate('/settings');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(main.className).toBe('settings-container');
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(main.className).toBe('');
+
+      main.remove();
+    });
+  });
+
   describe('repeated initialization', () => {
     it('does not stack hashchange listeners across initRouter calls', () => {
       // Count actual registrations: a handler-call-count assertion would be

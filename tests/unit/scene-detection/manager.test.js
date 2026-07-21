@@ -249,6 +249,58 @@ describe('SceneDetectionManager detect', () => {
   });
 });
 
+describe('SceneDetectionManager after worker crash', () => {
+  it('fails later detect() calls fast instead of posting to the dead worker', async () => {
+    const manager = await createInitializedManager();
+    const detectPromise = manager.detect([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    mockWorker._simulateError('worker crashed');
+    await expect(detectPromise).rejects.toThrow('worker crashed');
+    expect(mockWorker.terminated).toBe(true);
+
+    // Previously this passed the init guard and hung forever on a dead worker
+    await expect(manager.detect([])).rejects.toThrow('Scene detection worker crashed');
+  });
+
+  it('recovers after a successful re-init', async () => {
+    const manager = await createInitializedManager();
+    const detectPromise = manager.detect([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    mockWorker._simulateError('worker crashed');
+    await detectPromise.catch(() => {});
+
+    // Re-init creates a fresh worker (same mock instance in this harness)
+    mockWorker.terminated = false;
+    const initPromise = manager.init();
+    mockWorker._simulateMessage({ type: 'READY' });
+    await initPromise;
+
+    const second = manager.detect([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(second).resolves.toEqual({ scenes: [] });
+  });
+});
+
+describe('SceneDetectionManager sampleInterval validation', () => {
+  it.each([0, -1, 1.5, Number.NaN])('rejects invalid sampleInterval %p', async (interval) => {
+    const manager = await createInitializedManager();
+
+    await expect(manager.detect([], { sampleInterval: interval })).rejects.toThrow(RangeError);
+  });
+
+  it('allows a subsequent valid detect() after a rejected sampleInterval', async () => {
+    const manager = await createInitializedManager();
+    await expect(manager.detect([], { sampleInterval: 0 })).rejects.toThrow(RangeError);
+
+    const detectPromise = manager.detect([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
+  });
+});
+
 describe('SceneDetectionManager dispose', () => {
   it('is idempotent', async () => {
     const manager = await createInitializedManager();

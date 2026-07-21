@@ -13,6 +13,7 @@ import {
   validateClipPayload,
   validateEditorPayload,
 } from '../../../src/shared/app-store.js';
+import { getThumbnailCache } from '../../../src/shared/utils/thumbnail-cache.js';
 
 // Mock frame for testing (use plain object instead of ImageData for Node.js compatibility)
 function createMockFrame(id = '1') {
@@ -70,6 +71,45 @@ describe('ClipPayload', () => {
     setClipPayload(payload60fps);
 
     expect(getClipPayload()?.fps).toBe(60);
+  });
+});
+
+describe('ClipPayload thumbnail cache lifecycle', () => {
+  beforeEach(() => {
+    resetAppStore();
+  });
+
+  it('releases cached thumbnails when replacing the clip frames', () => {
+    setClipPayload({ frames: [createMockFrame('old')], fps: 30, capturedAt: Date.now() });
+    getThumbnailCache().cache.set('old', document.createElement('canvas'));
+
+    setClipPayload({ frames: [createMockFrame('new')], fps: 30, capturedAt: Date.now() });
+
+    expect(getThumbnailCache().size).toBe(0);
+  });
+
+  it('keeps cached thumbnails when only clip metadata changes', () => {
+    const frames = [createMockFrame('same')];
+    setClipPayload({ frames, fps: 30, capturedAt: Date.now() });
+    getThumbnailCache().cache.set('same', document.createElement('canvas'));
+
+    setClipPayload({
+      frames,
+      fps: 30,
+      capturedAt: Date.now(),
+      scenes: [{ id: 'scene-1', startFrame: 0, endFrame: 0 }],
+    });
+
+    expect(getThumbnailCache().size).toBe(1);
+  });
+
+  it('releases cached thumbnails when clearing the clip', () => {
+    setClipPayload({ frames: [createMockFrame()], fps: 30, capturedAt: Date.now() });
+    getThumbnailCache().cache.set('1', document.createElement('canvas'));
+
+    clearClipPayload();
+
+    expect(getThumbnailCache().size).toBe(0);
   });
 });
 

@@ -8,6 +8,8 @@
  * - EditorPayload: editor -> export
  */
 
+import { resetThumbnailCache } from './utils/thumbnail-cache.js';
+
 /**
  * @typedef {Object} ClipPayload
  * @property {import('../features/capture/types.js').Frame[]} frames - Captured frames
@@ -114,6 +116,10 @@ export function setClipPayload(payload) {
   // Only close old VideoFrames if frames array is different
   // (prevents closing frames when just adding metadata like scenes)
   if (state.clipPayload?.frames !== payload.frames) {
+    // Cached thumbnails are keyed by the previous clip's frame IDs; keeping
+    // the singleton alive across clips retains canvases that can never be
+    // reused for the new clip
+    resetThumbnailCache();
     closePayloadFrames(state.clipPayload);
     // Clear old editor state since frames are now different
     state.editorPayload = null;
@@ -129,6 +135,7 @@ export function clearClipPayload(closeFrames = false) {
   if (closeFrames && state.clipPayload) {
     closePayloadFrames(state.clipPayload);
   }
+  resetThumbnailCache();
   state.clipPayload = null;
 }
 
@@ -169,6 +176,7 @@ export function releaseAllFramesAndReset() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
+  resetThumbnailCache();
   // Also clear screen capture state for fresh start
   clearScreenCaptureState();
 }

@@ -127,14 +127,20 @@ export class CaptureWorkerManager {
    * Terminate the worker and cleanup
    */
   terminate() {
+    const pendingFramesCallback = this.#pendingFramesCallback;
+    this.#pendingFramesCallback = null;
+
     if (this.#worker) {
       this.#worker.terminate();
       this.#worker = null;
     }
     this.#video = null;
     this.#onStatsUpdate = null;
-    this.#pendingFramesCallback = null;
     this.#isInitialized = false;
+
+    // Do not leave requestFrames() callers waiting forever when teardown wins
+    // the race with a worker response.
+    pendingFramesCallback?.([]);
   }
 
   /**
@@ -151,18 +157,33 @@ export class CaptureWorkerManager {
     // Send CLEAR and wait for STATS_UPDATE with frameCount=0
     await new Promise((resolve) => {
       const CLEANUP_TIMEOUT_MS = 100;
-      const timeout = setTimeout(resolve, CLEANUP_TIMEOUT_MS);
+      const worker = this.#worker;
+      let settled = false;
+      /** @type {ReturnType<typeof setTimeout> | null} */
+      let timeoutId = null;
+
+      /** Finish waiting and remove the temporary listener on every path. */
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        worker.removeEventListener('message', handler);
+        resolve();
+      };
 
       const handler = (e) => {
         if (e.data.type === 'STATS_UPDATE' && e.data.payload.frameCount === 0) {
-          clearTimeout(timeout);
-          this.#worker?.removeEventListener('message', handler);
-          resolve();
+          finish();
         }
       };
 
-      this.#worker.addEventListener('message', handler);
-      this.#worker.postMessage({ type: 'CLEAR' });
+      timeoutId = setTimeout(finish, CLEANUP_TIMEOUT_MS);
+
+      worker.addEventListener('message', handler);
+      worker.postMessage({ type: 'CLEAR' });
     });
 
     this.terminate();

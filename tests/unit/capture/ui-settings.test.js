@@ -3,15 +3,17 @@ import { initCaptureState } from '../../../src/features/capture/state.js';
 import { renderCaptureScreen } from '../../../src/features/capture/ui.js';
 
 /**
+ * @param {Partial<import('../../../src/features/capture/ui.js').CaptureUIHandlers>} [overrides]
  * @returns {import('../../../src/features/capture/ui.js').CaptureUIHandlers}
  */
-function createHandlers() {
+function createHandlers(overrides = {}) {
   return {
     onStart: vi.fn(async () => {}),
     onStop: vi.fn(),
-    onCreateClip: vi.fn(async () => {}),
+    onCreateClip: vi.fn(async () => false),
     onSettingsChange: vi.fn(),
     getSettings: vi.fn(() => null),
+    ...overrides,
   };
 }
 
@@ -23,6 +25,7 @@ describe('renderCaptureScreen settings panel (issue #35)', () => {
     container = document.createElement('div');
     document.body.innerHTML = '';
     document.body.appendChild(container);
+    window.location.hash = '';
   });
 
   describe('when not sharing (isSharing=false)', () => {
@@ -98,6 +101,33 @@ describe('renderCaptureScreen settings panel (issue #35)', () => {
       expect(rangeInput.disabled).toBe(true);
       expect(toggle.disabled).toBe(true);
       expect(toggle.getAttribute('aria-disabled')).toBe('true');
+    });
+
+    it('stays on Capture and re-enables Create Clip when no payload was created', async () => {
+      const handlers = createHandlers({
+        onCreateClip: vi.fn(async () => false),
+        getSettings: vi.fn(() => ({ sceneDetection: true })),
+      });
+      renderCaptureScreen(container, createSharingState(), handlers);
+      const button = /** @type {HTMLButtonElement} */ (container.querySelector('.btn-create-clip'));
+
+      button.click();
+
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      expect(button.textContent).toBe('Create Clip');
+      expect(window.location.hash).toBe('');
+    });
+
+    it('navigates only after Create Clip reports success', async () => {
+      const handlers = createHandlers({
+        onCreateClip: vi.fn(async () => true),
+        getSettings: vi.fn(() => ({ sceneDetection: true })),
+      });
+      renderCaptureScreen(container, createSharingState(), handlers);
+
+      container.querySelector('.btn-create-clip')?.dispatchEvent(new MouseEvent('click'));
+
+      await vi.waitFor(() => expect(window.location.hash).toBe('#/loading'));
     });
   });
 });

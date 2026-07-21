@@ -96,6 +96,14 @@ export class SceneDetectionManager {
   #detectInFlight = false;
 
   /**
+   * Set when the worker fired a fatal error event after init; cleared on a
+   * successful re-init. While set, detect() fails fast instead of posting
+   * to a dead worker.
+   * @type {Error | null}
+   */
+  #workerCrashError = null;
+
+  /**
    * Initialize the worker
    * @param {SceneDetectionConfig} [config={}] - Configuration options
    * @returns {Promise<void>}
@@ -141,6 +149,7 @@ export class SceneDetectionManager {
             this.#worker?.removeEventListener('error', handleInitError);
             this.#setupListeners();
             this.#isInitialized = true;
+            this.#workerCrashError = null;
             settle('resolve');
           } else if (data.type === 'ERROR') {
             this.#worker?.removeEventListener('message', handleReady);
@@ -206,6 +215,15 @@ export class SceneDetectionManager {
       const error = new Error(
         (event instanceof ErrorEvent && event.message) || 'Scene detection worker crashed',
       );
+
+      // The crashed worker cannot serve further requests: mark the manager
+      // unusable so a later detect() fails fast instead of posting to a dead
+      // worker and hanging. init() can be called again to recover.
+      this.#workerCrashError = error;
+      this.#isInitialized = false;
+      this.#worker?.terminate();
+      this.#worker = null;
+
       if (this.#rejectDetect) {
         this.#rejectDetect(error);
         this.#resolveDetect = null;
@@ -221,6 +239,9 @@ export class SceneDetectionManager {
    * @returns {Promise<SceneDetectionResult>}
    */
   async detect(frames, options = DEFAULT_DETECTOR_OPTIONS) {
+    if (this.#workerCrashError) {
+      throw new Error(`Scene detection worker crashed: ${this.#workerCrashError.message}`);
+    }
     if (!this.#isInitialized || !this.#worker) {
       throw new Error('Manager not initialized. Call init() first.');
     }
@@ -228,6 +249,12 @@ export class SceneDetectionManager {
       // A second detect() would overwrite #resolveDetect/#rejectDetect and
       // orphan the first caller's promise forever
       throw new Error('Detection already in progress');
+    }
+
+    const sampleInterval = options.sampleInterval ?? 1;
+    if (!Number.isInteger(sampleInterval) || sampleInterval < 1) {
+      // A non-positive interval would spin the extraction loop forever
+      throw new RangeError(`sampleInterval must be a positive integer, got ${sampleInterval}`);
     }
 
     this.#detectInFlight = true;
@@ -244,7 +271,7 @@ export class SceneDetectionManager {
       });
 
       // Extract frame data in batches to avoid blocking
-      const frameData = await this.#extractFrameData(frames, options.sampleInterval ?? 1);
+      const frameData = await this.#extractFrameData(frames, sampleInterval);
 
       if (this.#isCancelled) {
         throw new DOMException('Detection cancelled', 'AbortError');
