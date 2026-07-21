@@ -3,6 +3,10 @@
  * @module shared/utils/quality-settings
  */
 
+// user-settings.js has no dependency on this module (verified: it does not
+// import quality-settings.js), so this static import cannot form a cycle.
+import { loadSettings } from '../user-settings.js';
+
 /**
  * @typedef {'low' | 'standard' | 'high' | 'ultra'} QualityPreset
  */
@@ -43,9 +47,6 @@ const QUALITY_PRESETS = {
   },
 };
 
-/** localStorage key for user preference */
-const STORAGE_KEY = 'thumbnailQuality';
-
 /**
  * Detect device memory in GB
  * @returns {number} Device memory in GB (defaults to 4 if unavailable)
@@ -57,18 +58,25 @@ function getDeviceMemory() {
 
 /**
  * Get quality preset based on device specs
- * User preference in localStorage takes priority over auto-detection
+ * The settings screen's preference (stored in the `glinfs_user_settings` blob
+ * and read via user-settings.js's loadSettings()) takes priority over
+ * auto-detection. 'auto' (the default) and any legacy raw-key preference
+ * fall through to auto-detection.
  * @returns {QualityPreset}
  */
 export function getQualityPreset() {
-  // Check user preference first
+  // The settings screen's preference (user-settings blob) is the single
+  // source of truth. 'auto' — the default — means device auto-detection.
+  // There is deliberately no fallback to the old raw 'thumbnailQuality'
+  // localStorage key: nothing ever wrote it (its writer had zero callers),
+  // and honoring it would let a stale value override an explicit Auto.
   try {
-    const userPref = localStorage.getItem(STORAGE_KEY);
-    if (userPref && userPref in QUALITY_PRESETS) {
-      return /** @type {QualityPreset} */ (userPref);
+    const { thumbnailQuality } = loadSettings();
+    if (thumbnailQuality && thumbnailQuality in QUALITY_PRESETS) {
+      return /** @type {QualityPreset} */ (thumbnailQuality);
     }
   } catch {
-    // localStorage may be unavailable (private browsing, etc.)
+    // user-settings/localStorage may be unavailable
   }
 
   // Auto-detect based on device memory
@@ -88,32 +96,6 @@ export function getQualityPreset() {
 export function getThumbnailSizes(preset) {
   const activePreset = preset || getQualityPreset();
   return QUALITY_PRESETS[activePreset] || QUALITY_PRESETS.standard;
-}
-
-/**
- * Set user's quality preference
- * @param {QualityPreset} preset - Desired quality preset
- */
-export function setQualityPreset(preset) {
-  if (!(preset in QUALITY_PRESETS)) {
-    throw new Error(`Invalid quality preset: ${preset}`);
-  }
-  try {
-    localStorage.setItem(STORAGE_KEY, preset);
-  } catch {
-    // localStorage may be unavailable
-  }
-}
-
-/**
- * Clear user's quality preference (revert to auto-detection)
- */
-export function clearQualityPreset() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // localStorage may be unavailable
-  }
 }
 
 /**
