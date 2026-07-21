@@ -253,21 +253,6 @@
   font-family: var(--font-mono);
 }
 
-/* Empty State - Uses unified .empty-state from global.css */
-.editor-empty {
-  /* Inherits from .empty-state */
-}
-
-/* Editor-specific icon styling */
-.editor-empty .empty-state-icon {
-  background: var(--gradient-glinfs-subtle);
-  border-color: rgba(139, 92, 246, 0.2);
-}
-
-.editor-empty .empty-state-icon svg {
-  color: var(--color-highlight);
-}
-
 /* Sidebar Panel */
 .editor-sidebar {
   flex-shrink: 0;
@@ -702,6 +687,29 @@
   z-index: var(--z-timeline-handle);
 }
 
+/* Handle Grip - Visual grab target */
+.tl-handle-grip {
+  width: 14px;
+  height: 64px;
+  max-height: 80%;
+  background: var(--color-selection);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: all var(--transition-fast);
+}
+
+.tl-handle-grip svg {
+  width: 8px;
+  height: 24px;
+  opacity: 0.8;
+}
+
 .tl-handle:focus-visible .tl-handle-grip {
   outline: 3px solid var(--color-primary);
   outline-offset: 2px;
@@ -735,29 +743,6 @@
 }
 
 .tl-handle:active .tl-handle-wing {
-  opacity: 0.8;
-}
-
-/* Handle Grip - Visual grab target */
-.tl-handle-grip {
-  width: 14px;
-  height: 64px;
-  max-height: 80%;
-  background: var(--color-selection);
-  border-radius: 3px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.3),
-    0 2px 8px rgba(0, 0, 0, 0.3);
-  transition: all var(--transition-fast);
-}
-
-.tl-handle-grip svg {
-  width: 8px;
-  height: 24px;
   opacity: 0.8;
 }
 

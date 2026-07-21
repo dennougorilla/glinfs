@@ -148,7 +148,9 @@ export function renderCaptureScreen(container, state, handlers) {
   container.appendChild(screen);
 
   return () => {
-    cleanups.forEach((fn) => fn());
+    cleanups.forEach((fn) => {
+      fn();
+    });
   };
 }
 

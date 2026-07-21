@@ -285,26 +285,6 @@ function handleStop(preserveBuffer = true) {
 }
 
 /**
- * Clear all frame resources from buffer
- * Call this after clip creation or when discarding captured frames
- */
-export function clearCaptureBuffer() {
-  if (workerManager) {
-    workerManager.clear();
-  }
-  if (store) {
-    store.setState((state) => ({
-      ...state,
-      stats: {
-        frameCount: 0,
-        duration: 0,
-        fps: state.stats.fps,
-      },
-    }));
-  }
-}
-
-/**
  * Convert transferred ImageBitmap frames into VideoFrames for the Editor.
  *
  * Closes every source ImageBitmap regardless of outcome: a VideoFrame copies
@@ -520,15 +500,6 @@ function cleanup() {
  */
 export function getCaptureState() {
   return store?.getState() ?? null;
-}
-
-/**
- * Get captured frames count
- * Note: Frames are stored in worker, use handleCreateClip to get actual frames
- * @returns {number}
- */
-export function getCapturedFramesCount() {
-  return store?.getState()?.stats?.frameCount ?? 0;
 }
 
 // ============================================================

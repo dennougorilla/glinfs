@@ -469,7 +469,9 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   container.appendChild(timeline);
 
   return () => {
-    cleanups.forEach((fn) => fn());
+    cleanups.forEach((fn) => {
+      fn();
+    });
   };
 }
 
