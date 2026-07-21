@@ -22,6 +22,14 @@ const listeners = new Set();
 /** @type {Route} */
 let currentRoute = '/capture';
 
+/**
+ * Route that was active immediately before the current one. Used by
+ * screens like Settings, reachable from anywhere, to return to wherever
+ * the user actually came from instead of a hardcoded destination.
+ * @type {Route | null}
+ */
+let previousRoute = null;
+
 /** @type {RouteCleanup | null} */
 let currentCleanup = null;
 
@@ -104,6 +112,7 @@ function handleHashChange() {
       currentCleanup = null;
     }
 
+    previousRoute = currentRoute;
     currentRoute = route;
 
     // Clear main content
@@ -179,6 +188,15 @@ export function navigate(route, params) {
  */
 export function getCurrentRoute() {
   return currentRoute;
+}
+
+/**
+ * Get the route that was active immediately before the current one.
+ * Returns null before any navigation has occurred.
+ * @returns {Route | null}
+ */
+export function getPreviousRoute() {
+  return previousRoute;
 }
 
 /**
