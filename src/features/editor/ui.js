@@ -392,6 +392,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       {
         className: `aspect-btn ${(state.selectedAspectRatio || 'free') === ratio ? 'active' : ''}`,
         type: 'button',
+        'data-ratio': ratio,
       },
       [ratio === 'free' ? 'Free' : ratio],
     );
@@ -411,7 +412,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const gridBtn = createElement(
     'button',
     {
-      className: `btn btn-secondary ${state.showGrid ? 'active' : ''}`,
+      className: `btn btn-secondary btn-grid-toggle ${state.showGrid ? 'active' : ''}`,
       type: 'button',
       'aria-pressed': String(state.showGrid),
     },
@@ -645,8 +646,15 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Populate scenes sidebar with thumbnails
   cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
 
-  // Setup keyboard shortcuts
-  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
+  // Setup keyboard shortcuts. The frame-grid modal owns keyboard input
+  // while it is open — without the guard, Escape would close the modal AND
+  // clear the crop, Space would select a grid frame AND toggle playback.
+  cleanups.push(
+    setupKeyboardShortcuts(handlers, state, {
+      onOpenFrameGrid: handleOpenFrameGrid,
+      isFrameGridOpen: () => frameGridCleanup !== null,
+    }),
+  );
 
   return {
     cleanup: () => cleanups.forEach((fn) => fn()),
@@ -659,7 +667,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
  * Setup keyboard shortcuts
  * @param {EditorUIHandlers} handlers
  * @param {import('./types.js').EditorState} state
- * @param {{ onOpenFrameGrid?: () => void }} [options]
+ * @param {{ onOpenFrameGrid?: () => void, isFrameGridOpen?: () => boolean }} [options]
  * @returns {() => void} Cleanup function
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
@@ -667,6 +675,12 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
   const getCurrentState = () => handlers.getState?.() ?? state;
 
   const onKeyDown = (e) => {
+    // The frame-grid modal registers its own document-level handler for
+    // the same keys; while it is open it has exclusive keyboard ownership
+    if (options.isFrameGridOpen?.()) {
+      return;
+    }
+
     // Don't handle if focused on form element
     if (
       document.activeElement instanceof HTMLInputElement ||

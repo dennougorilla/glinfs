@@ -4,13 +4,7 @@
  */
 
 import { createStore } from '../../shared/store.js';
-import {
-  addFrame,
-  calculateStats,
-  clearBuffer,
-  createBuffer,
-  createDefaultSettings,
-} from './core.js';
+import { createDefaultSettings } from './core.js';
 
 /**
  * Initialize capture state
@@ -19,20 +13,17 @@ import {
  */
 export function initCaptureState(settings = {}) {
   const mergedSettings = { ...createDefaultSettings(), ...settings };
-  const maxFrames = mergedSettings.fps * mergedSettings.bufferDuration;
 
   return {
     isCapturing: false,
     isPaused: false,
     isSharing: false,
     stream: null,
-    buffer: createBuffer(maxFrames),
     settings: mergedSettings,
     error: null,
     stats: {
       frameCount: 0,
       duration: 0,
-      memoryMB: 0,
       fps: mergedSettings.fps,
     },
     clips: [],
@@ -72,7 +63,7 @@ export function stopCapture(state) {
 }
 
 /**
- * Pause capturing (preserves stream and buffer, can resume)
+ * Pause capturing (preserves stream, can resume)
  * @param {import('./types.js').CaptureState} state
  * @returns {import('./types.js').CaptureState}
  */
@@ -99,23 +90,6 @@ export function resumeCapture(state) {
 }
 
 /**
- * Add a frame to state
- * @param {import('./types.js').CaptureState} state
- * @param {import('./types.js').Frame} frame
- * @returns {import('./types.js').CaptureState}
- */
-export function addFrameToState(state, frame) {
-  const newBuffer = addFrame(state.buffer, frame);
-  const newStats = calculateStats(newBuffer, state.settings.fps);
-
-  return {
-    ...state,
-    buffer: newBuffer,
-    stats: newStats,
-  };
-}
-
-/**
  * Update settings
  * @param {import('./types.js').CaptureState} state
  * @param {Partial<import('./types.js').CaptureSettings>} settings
@@ -124,19 +98,14 @@ export function addFrameToState(state, frame) {
 export function updateSettings(state, settings) {
   const newSettings = { ...state.settings, ...settings };
 
-  // If fps or bufferDuration changed, recreate buffer
+  // If fps or bufferDuration changed, reset in-progress stats
   if (settings.fps !== undefined || settings.bufferDuration !== undefined) {
-    const maxFrames = newSettings.fps * newSettings.bufferDuration;
-    // Clear old buffer to release VideoFrame resources before creating new one
-    clearBuffer(state.buffer);
     return {
       ...state,
       settings: newSettings,
-      buffer: createBuffer(maxFrames),
       stats: {
         frameCount: 0,
         duration: 0,
-        memoryMB: 0,
         fps: newSettings.fps,
       },
     };

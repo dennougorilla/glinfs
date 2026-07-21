@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getCurrentRoute,
+  getRouteParams,
   initRouter,
   navigate,
   onRouteChange,
@@ -137,6 +138,116 @@ describe('Router', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(editorHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe('query params in hash', () => {
+    it('matches the route when the hash carries query params', async () => {
+      const editorHandler = vi.fn();
+      const captureHandler = vi.fn();
+
+      initRouter({
+        '/capture': captureHandler,
+        '/editor': editorHandler,
+      });
+      captureHandler.mockClear();
+
+      navigate('/editor', { frame: '5', mode: 'crop' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Previously '#/editor?frame=5' failed the route lookup and silently
+      // fell back to '/capture'.
+      expect(editorHandler).toHaveBeenCalledTimes(1);
+      expect(captureHandler).not.toHaveBeenCalled();
+      expect(getCurrentRoute()).toBe('/editor');
+      expect(getRouteParams()).toEqual({ frame: '5', mode: 'crop' });
+    });
+
+    it('returns empty params for a plain route', async () => {
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(getRouteParams()).toEqual({});
+    });
+  });
+
+  describe('error isolation', () => {
+    it('continues navigation when the previous route cleanup throws', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const editorHandler = vi.fn();
+
+      initRouter({
+        '/capture': () => () => {
+          throw new Error('cleanup boom');
+        },
+        '/editor': editorHandler,
+      });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(editorHandler).toHaveBeenCalledTimes(1);
+      expect(getCurrentRoute()).toBe('/editor');
+      expect(errorSpy).toHaveBeenCalled();
+
+      errorSpy.mockRestore();
+    });
+
+    it('notifies later route listeners when an earlier one throws', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+
+      const healthy = vi.fn();
+      const unsubThrowing = onRouteChange(() => {
+        throw new Error('listener boom');
+      });
+      const unsubHealthy = onRouteChange(healthy);
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(healthy).toHaveBeenCalledWith('/editor');
+      expect(errorSpy).toHaveBeenCalled();
+
+      unsubThrowing();
+      unsubHealthy();
+      errorSpy.mockRestore();
+    });
+  });
+
+  describe('repeated initialization', () => {
+    it('does not stack hashchange listeners across initRouter calls', () => {
+      // Count actual registrations: a handler-call-count assertion would be
+      // masked by the same-hash dedup in handleHashChange.
+      const addSpy = vi.spyOn(window, 'addEventListener');
+
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+
+      const hashchangeRegistrations = addSpy.mock.calls.filter(
+        ([type]) => type === 'hashchange',
+      ).length;
+      // The module-level listener may have been registered by an earlier
+      // test's init; within this spy's window at most one registration
+      // may occur, never one per init call.
+      expect(hashchangeRegistrations).toBeLessThanOrEqual(1);
+
+      addSpy.mockRestore();
+    });
+
+    it('runs the previous route cleanup when re-initialized', () => {
+      const cleanup = vi.fn();
+      initRouter({ '/capture': () => cleanup, '/editor': vi.fn() });
+      expect(cleanup).not.toHaveBeenCalled();
+
+      initRouter({ '/capture': vi.fn(), '/editor': vi.fn() });
+
+      // Re-init must tear down the mounted route's session (timers,
+      // subscriptions) instead of silently dropping its cleanup.
+      expect(cleanup).toHaveBeenCalledTimes(1);
     });
   });
 });

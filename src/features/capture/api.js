@@ -46,12 +46,21 @@ export function stopScreenCapture(stream) {
   }
 }
 
+/** How long to wait for stream metadata before giving up */
+const VIDEO_READY_TIMEOUT_MS = 10000;
+
 /**
  * Create a video element for the given stream
+ *
+ * Rejects after a timeout if the stream never becomes ready — otherwise a
+ * stream that fires neither loadedmetadata nor error would leave the caller
+ * (and the capture UI's "Selecting..." state) hanging forever.
+ *
  * @param {MediaStream} stream
+ * @param {number} [timeoutMs=VIDEO_READY_TIMEOUT_MS]
  * @returns {Promise<HTMLVideoElement>}
  */
-export async function createVideoElement(stream) {
+export async function createVideoElement(stream, timeoutMs = VIDEO_READY_TIMEOUT_MS) {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.muted = true;
@@ -59,72 +68,32 @@ export async function createVideoElement(stream) {
 
   // Wait for video to be ready
   await new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.srcObject = null;
+      reject(new Error(`Video stream not ready after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     video.onloadedmetadata = () => {
-      video.play().then(resolve).catch(reject);
+      video
+        .play()
+        .then(() => {
+          clearTimeout(timeoutId);
+          resolve(undefined);
+        })
+        .catch((err) => {
+          clearTimeout(timeoutId);
+          reject(err);
+        });
     };
-    video.onerror = () => reject(new Error('Failed to load video stream'));
+    video.onerror = () => {
+      clearTimeout(timeoutId);
+      reject(new Error('Failed to load video stream'));
+    };
   });
 
   return video;
-}
-
-/**
- * Create a hidden canvas for frame capture
- * @returns {HTMLCanvasElement}
- */
-export function createCaptureCanvas() {
-  const canvas = document.createElement('canvas');
-  canvas.style.display = 'none';
-  return canvas;
-}
-
-/**
- * Create a ReadableStreamDefaultReader for VideoFrame objects
- * Uses MediaStreamTrackProcessor with backpressure control
- * @param {MediaStreamTrack} track - Video track from MediaStream
- * @returns {ReadableStreamDefaultReader<VideoFrame>}
- * @throws {Error} If track is not live or processor creation fails
- */
-export function createFrameProcessor(track) {
-  // Validate track state
-  if (track.readyState !== 'live') {
-    throw new Error(
-      `Cannot create frame processor: track state is "${track.readyState}" (expected "live")`,
-    );
-  }
-
-  // Check for MediaStreamTrackProcessor support
-  if (typeof MediaStreamTrackProcessor === 'undefined') {
-    throw new Error('MediaStreamTrackProcessor not supported in this browser');
-  }
-
-  const processor = new MediaStreamTrackProcessor({
-    track,
-    maxBufferSize: 30, // Backpressure control: auto-drop old frames when processing lags
-  });
-  return processor.readable.getReader();
-}
-
-/**
- * Create VideoFrame from HTMLVideoElement
- * This works even when the video content hasn't changed (static screen)
- * @param {HTMLVideoElement} video - Video element with active stream
- * @returns {VideoFrame | null} VideoFrame or null if video not ready
- */
-export function createVideoFrameFromElement(video) {
-  if (!video || video.readyState < 2) {
-    return null;
-  }
-
-  try {
-    // Create VideoFrame directly from video element
-    // This works even when screen content is static
-    return new VideoFrame(video, {
-      timestamp: performance.now() * 1000, // microseconds
-    });
-  } catch {
-    return null;
-  }
 }
 
 /**

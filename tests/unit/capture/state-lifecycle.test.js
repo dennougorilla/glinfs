@@ -77,21 +77,6 @@ describe('stopCapture', () => {
     expect(stoppedState.stream).toBe(null);
   });
 
-  it('should preserve the buffer when stopping', () => {
-    // Arrange
-    const capturingState = startCapture(initCaptureState(), { id: 'test-stream' });
-    const stateWithBuffer = {
-      ...capturingState,
-      buffer: { ...capturingState.buffer, size: 10 },
-    };
-
-    // Act
-    const stoppedState = stopCapture(stateWithBuffer);
-
-    // Assert
-    expect(stoppedState.buffer.size).toBe(10);
-  });
-
   it('should not mutate the previous state', () => {
     // Arrange
     const mockStream = { id: 'test-stream' };

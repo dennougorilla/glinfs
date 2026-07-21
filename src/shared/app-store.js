@@ -50,7 +50,7 @@ const state = {
 /** @type {Partial<ScreenCaptureState>|null} */
 let screenCaptureState = null;
 
-/** @type {((state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void) | null} */
+/** @type {((state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void | Promise<void>) | null} */
 let screenCaptureCleanupFn = null;
 
 // ============================================================
@@ -299,7 +299,7 @@ export function clearExportResult() {
 /**
  * Register a cleanup function for screen capture resources
  * Called once at app startup from main.js
- * @param {(state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void} fn
+ * @param {(state: Partial<ScreenCaptureState>, options: {stopStream: boolean}) => void | Promise<void>} fn
  */
 export function registerScreenCaptureCleanup(fn) {
   screenCaptureCleanupFn = fn;
@@ -324,8 +324,15 @@ export function setScreenCaptureState(captureState) {
 /**
  * Clear stored screen capture state
  * Calls registered cleanup function if available (side effects delegated)
+ *
+ * The returned promise settles when the delegated cleanup (stopping tracks,
+ * terminating the capture worker) has actually finished, so callers that are
+ * about to start a NEW capture session can await it and avoid racing the old
+ * session's teardown. Callers that don't care may ignore the return value —
+ * cleanup failures are logged either way and never thrown.
+ *
  * @param {boolean} [stopStream=true] - If true, stop the MediaStream
- * @returns {Partial<ScreenCaptureState>|null} The cleared state
+ * @returns {Promise<void>} Settles when the delegated cleanup completes
  */
 export function clearScreenCaptureState(stopStream = true) {
   const oldState = screenCaptureState;
@@ -334,15 +341,18 @@ export function clearScreenCaptureState(stopStream = true) {
   // Delegate side effects to registered cleanup function
   if (oldState && screenCaptureCleanupFn) {
     try {
-      // Fire and forget - cleanup is async but we don't await
-      // This maintains backward compatibility with sync callers
-      screenCaptureCleanupFn(oldState, { stopStream });
+      const result = screenCaptureCleanupFn(oldState, { stopStream });
+      return Promise.resolve(result)
+        .then(() => undefined)
+        .catch((err) => {
+          console.error('[app-store] Screen capture cleanup failed:', err);
+        });
     } catch (err) {
       console.error('[app-store] Screen capture cleanup failed:', err);
     }
   }
 
-  return oldState;
+  return Promise.resolve();
 }
 
 /**

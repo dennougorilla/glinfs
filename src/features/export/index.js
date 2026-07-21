@@ -41,6 +41,9 @@ import { renderExportScreen, updateProgressUI } from './ui.js';
 let store = null;
 
 /** @type {(() => void) | null} */
+let storeUnsubscribe = null;
+
+/** @type {(() => void) | null} */
 let uiCleanup = null;
 
 /** @type {import('../capture/types.js').Frame[]} */
@@ -151,7 +154,7 @@ export function initExport() {
   render(container);
 
   // Subscribe to state changes
-  store.subscribe(() => {
+  storeUnsubscribe = store.subscribe(() => {
     if (!store) return;
     const state = store.getState();
 
@@ -161,7 +164,10 @@ export function initExport() {
     }
   });
 
-  // Start playback loop
+  // Ensure the playback loop is running even when the preview starts
+  // paused — handleTogglePlay only flips state; the loop itself renders
+  // (or idles) based on preview.isPlaying. startPlaybackLoop is idempotent,
+  // so this cannot double-start a loop render() already began.
   startPlaybackLoop();
 
   return cleanup;
@@ -290,7 +296,9 @@ async function handleExport() {
 
     store.setState((s) => completeEncoding(s, result));
 
-    // Save export result for later retrieval (e.g., when returning to Export screen)
+    // Save export result for later retrieval (e.g., when returning to Export
+    // screen). The filename is generated once here so a later download gets
+    // the same name that was recorded with the result.
     setExportResult({
       blob: result,
       filename: generateFilename(),
@@ -342,7 +350,9 @@ function handleDownload() {
 
   const state = store.getState();
   if (state.job?.result) {
-    const filename = generateFilename();
+    // Prefer the filename recorded when the export completed so repeated
+    // downloads (or downloads after returning to this screen) match it
+    const filename = getExportResult()?.filename ?? generateFilename();
     downloadBlob(state.job.result, filename);
   }
 }
@@ -454,8 +464,13 @@ function renderCroppedFrame(ctx, frame, crop) {
 
 /**
  * Start the playback loop
+ *
+ * Idempotent: a second call while a loop is running is a no-op. Two
+ * concurrent rAF chains would race on currentFrameIndex/lastFrameTime and
+ * only the last-registered chain would remain cancellable.
  */
 function startPlaybackLoop() {
+  if (animationFrameId !== null) return;
   if (!store || !previewCanvas || frames.length === 0) return;
 
   const ctx = previewCanvas.getContext('2d');
@@ -537,6 +552,11 @@ function handleTogglePlay() {
 function cleanup() {
   // Stop playback loop
   stopPlaybackLoop();
+
+  if (storeUnsubscribe) {
+    storeUnsubscribe();
+    storeUnsubscribe = null;
+  }
 
   if (uiCleanup) {
     uiCleanup();

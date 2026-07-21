@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { bus, emit, offAll, on, once } from '../../../src/shared/bus.js';
+import { bus, emit, off, offAll, on, once } from '../../../src/shared/bus.js';
 
 describe('Event Bus', () => {
   beforeEach(() => {
@@ -204,24 +204,75 @@ describe('Event Bus', () => {
     });
   });
 
+  describe('off', () => {
+    it('removes only the specified handler, leaving others subscribed', () => {
+      const removed = vi.fn();
+      const kept = vi.fn();
+      on('test:event', removed);
+      on('test:event', kept);
+
+      off('test:event', removed);
+      emit('test:event', {});
+
+      expect(removed).not.toHaveBeenCalled();
+      expect(kept).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles unknown events and handlers gracefully', () => {
+      expect(() => off('nonexistent:event', () => {})).not.toThrow();
+    });
+  });
+
   describe('bus object', () => {
-    it('should expose emit, on, once, and off functions', () => {
+    it('should expose emit, on, once, off, and offAll functions', () => {
       expect(typeof bus.emit).toBe('function');
       expect(typeof bus.on).toBe('function');
       expect(typeof bus.once).toBe('function');
       expect(typeof bus.off).toBe('function');
+      expect(typeof bus.offAll).toBe('function');
     });
 
-    it('should work with bus.off (alias for offAll)', () => {
+    it('bus.off removes a specific handler only', () => {
       // Arrange
-      const handler = vi.fn();
-      bus.on('test:event', handler);
+      const removed = vi.fn();
+      const kept = vi.fn();
+      bus.on('test:event', removed);
+      bus.on('test:event', kept);
 
       // Act
-      bus.off('test:event');
+      bus.off('test:event', removed);
       bus.emit('test:event', {});
 
       // Assert
+      expect(removed).not.toHaveBeenCalled();
+      expect(kept).toHaveBeenCalledTimes(1);
+    });
+
+    it('bus.offAll removes every handler for the event', () => {
+      // Arrange
+      const a = vi.fn();
+      const b = vi.fn();
+      bus.on('test:event', a);
+      bus.on('test:event', b);
+
+      // Act
+      bus.offAll('test:event');
+      bus.emit('test:event', {});
+
+      // Assert
+      expect(a).not.toHaveBeenCalled();
+      expect(b).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('once unsubscribe', () => {
+    it('returns an unsubscribe function that prevents the handler from firing', () => {
+      const handler = vi.fn();
+      const unsubscribe = once('test:once', handler);
+
+      unsubscribe();
+      emit('test:once', {});
+
       expect(handler).not.toHaveBeenCalled();
     });
   });

@@ -106,11 +106,11 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     if (frame) {
       try {
         // Check cache first (sync) - reuse on subsequent renders
-        let canvas = thumbnailCache.get(frame.id);
+        let canvas = thumbnailCache.get(frame.id, thumbnailSize);
         if (!canvas) {
           // Generate and cache for future renders
           canvas = createThumbnailCanvas(frame, thumbnailSize);
-          thumbnailCache._addToCache(frame.id, canvas);
+          thumbnailCache.addCanvas(frame.id, thumbnailSize, canvas);
         }
         // Copy canvas content using drawImage (cloneNode doesn't copy pixel data)
         const canvasClone = document.createElement('canvas');
@@ -231,7 +231,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   };
 
   const getPercentFromFrame = (frame) => {
-    return (frame / (totalFrames - 1)) * 100;
+    return (frame / Math.max(1, totalFrames - 1)) * 100;
   };
 
   // ═══════════════════════════════════════════════════════════
@@ -491,8 +491,9 @@ function calculateTickInterval(duration) {
  * Update selection and dim positions
  */
 function updateSelectionPositions(dimLeft, dimRight, selectionBox, range, totalFrames) {
-  const startPercent = (range.start / (totalFrames - 1)) * 100;
-  const endPercent = (range.end / (totalFrames - 1)) * 100;
+  const divisor = Math.max(1, totalFrames - 1);
+  const startPercent = (range.start / divisor) * 100;
+  const endPercent = (range.end / divisor) * 100;
 
   dimLeft.style.width = `${startPercent}%`;
   dimRight.style.left = `${endPercent}%`;

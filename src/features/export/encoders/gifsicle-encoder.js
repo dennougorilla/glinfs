@@ -34,6 +34,7 @@ const METADATA = {
  * @property {function(number): number} _malloc
  * @property {function(number): void} _free
  * @property {function(function, string): number} addFunction
+ * @property {function(number): void} [removeFunction] - Absent from the current shipped build
  * @property {Uint8Array} HEAPU8
  */
 
@@ -128,6 +129,27 @@ async function loadWasmModule() {
 }
 
 /**
+ * Reusable function-table slot for the quantize callback.
+ *
+ * quantizeFrame runs once per encoded frame, and the shipped Emscripten
+ * build exports addFunction but NOT removeFunction — so a per-call
+ * addFunction would leak one table slot per frame until the table growth
+ * limit is hit. Instead one slot is registered per module and reused;
+ * per-call state is passed through quantizeCall.
+ *
+ * Safe because the callback runs synchronously inside _quantize_image and
+ * the worker is single-threaded: quantizeCall cannot be reentered.
+ * @type {number | null}
+ */
+let quantizeCbSlot = null;
+
+/** @type {WasmModule | null} Module the cached slot was registered on */
+let quantizeCbModule = null;
+
+/** @type {{ imageLength: number, result: ArrayBuffer | null } | null} */
+let quantizeCall = null;
+
+/**
  * Quantize a frame using libimagequant
  * @param {WasmModule} module - WASM module
  * @param {Uint8ClampedArray} rgba - RGBA pixel data
@@ -143,28 +165,34 @@ function quantizeFrame(module, rgba, width, height) {
   const input = new Uint8Array(module.HEAPU8.buffer, ptr, inputSize);
   input.set(rgba);
 
-  const imageLength = width * height;
-  /** @type {ArrayBuffer | null} */
-  let result = null;
+  // Register the shared callback once per module instance
+  if (quantizeCbSlot === null || quantizeCbModule !== module) {
+    quantizeCbSlot = module.addFunction(
+      (
+        /** @type {number} */ palettePtr,
+        /** @type {number} */ paletteLength,
+        /** @type {number} */ imagePtr,
+      ) => {
+        if (!quantizeCall) return;
+        const buffer = new ArrayBuffer(paletteLength + quantizeCall.imageLength);
+        const resultArray = new Uint8Array(buffer);
+        resultArray.set(new Uint8Array(module.HEAPU8.buffer, palettePtr, paletteLength));
+        resultArray.set(
+          new Uint8Array(module.HEAPU8.buffer, imagePtr, quantizeCall.imageLength),
+          paletteLength,
+        );
+        quantizeCall.result = buffer;
+      },
+      'viii',
+    );
+    quantizeCbModule = module;
+  }
 
-  // Create callback for quantize_image
-  const cb = module.addFunction(
-    (
-      /** @type {number} */ palettePtr,
-      /** @type {number} */ paletteLength,
-      /** @type {number} */ imagePtr,
-    ) => {
-      const buffer = new ArrayBuffer(paletteLength + imageLength);
-      const resultArray = new Uint8Array(buffer);
-      resultArray.set(new Uint8Array(module.HEAPU8.buffer, palettePtr, paletteLength));
-      resultArray.set(new Uint8Array(module.HEAPU8.buffer, imagePtr, imageLength), paletteLength);
-      result = buffer;
-    },
-    'viii',
-  );
-
-  // Call quantize_image
-  module._quantize_image(width, height, ptr, cb);
+  // Call quantize_image (the callback runs synchronously inside this call)
+  quantizeCall = { imageLength: width * height, result: null };
+  module._quantize_image(width, height, ptr, quantizeCbSlot);
+  const result = quantizeCall.result;
+  quantizeCall = null;
 
   // Free input memory
   module._free(ptr);
@@ -267,8 +295,13 @@ export function createGifsicleEncoder() {
         result.set(new Uint8Array(module.HEAPU8.buffer, ptr, length));
       }, 'vii');
 
-      // Finish encoding
+      // Finish encoding (the callback runs synchronously inside this call)
       module._encoder_finish(encoderPtr, cb);
+
+      // Release the function-table slot when the build exports
+      // removeFunction (the current shipped glue does not — this runs once
+      // per encode, so the fallback leak is a single slot per worker)
+      module.removeFunction?.(cb);
 
       if (!result) {
         throw new Error('Encoding failed: no result returned');

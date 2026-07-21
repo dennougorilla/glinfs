@@ -48,8 +48,16 @@ export function createStore(initialState) {
 
     state = newState;
 
-    // Notify listeners with current and previous state
-    listeners.forEach((fn) => fn(state, prevState));
+    // Notify listeners with current and previous state.
+    // Isolate exceptions so one failing listener cannot prevent the
+    // remaining listeners from observing the state change.
+    for (const fn of listeners) {
+      try {
+        fn(state, prevState);
+      } catch (error) {
+        console.error('[store] Listener error during state update:', error);
+      }
+    }
   }
 
   /**
