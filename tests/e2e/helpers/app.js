@@ -72,10 +72,8 @@ export async function pauseExportPreview(page) {
   // that before toggling, otherwise the click races the autostart.
   await expect(playBtn).toHaveClass(/playing/);
   await playBtn.click();
-  // The click stops the RAF loop, but the button's label/icon never
-  // re-renders after toggling (app bug, see issue #62), so the paused
-  // state cannot be asserted via the DOM. Give the last RAF pass a beat.
-  await page.waitForTimeout(100);
+  await expect(playBtn).toHaveAttribute('aria-label', 'Play preview');
+  await expect(playBtn).not.toHaveClass(/playing/);
 }
 
 /**

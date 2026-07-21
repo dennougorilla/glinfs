@@ -55,7 +55,7 @@ export function createGifencEncoder() {
      * @param {FrameData} frameData
      * @param {number} frameIndex
      */
-    addFrame(frameData, frameIndex) {
+    addFrame(frameData, _frameIndex) {
       if (!encoder || !config) {
         throw new Error('Encoder not initialized. Call init() first.');
       }

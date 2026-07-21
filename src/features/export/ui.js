@@ -230,6 +230,23 @@ function renderCanvasPreview(previewState, handlers, clipInfo, cleanups) {
 }
 
 /**
+ * Keep the preview toggle's visual and accessible state in sync without
+ * replacing the canvas that the playback loop is currently drawing into.
+ *
+ * @param {HTMLElement} container
+ * @param {boolean} isPlaying
+ */
+export function updatePreviewPlaybackUI(container, isPlaying) {
+  const button = container.querySelector('.export-preview-play-btn');
+  if (!button) return;
+
+  button.classList.toggle('playing', isPlaying);
+  button.setAttribute('aria-label', isPlaying ? 'Pause preview' : 'Play preview');
+  button.setAttribute('title', isPlaying ? 'Pause (Space)' : 'Play (Space)');
+  button.textContent = isPlaying ? '\u23F8' : '\u25B6';
+}
+
+/**
  * Render encoder selection cards
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
