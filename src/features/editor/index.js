@@ -32,6 +32,7 @@ import {
   getPlaybackIntervalMs,
   getPositionInSelection,
 } from './core.js';
+import { initLiveMonitor } from './live-monitor.js';
 import {
   clearCrop,
   completeSceneDetection,
@@ -90,6 +91,9 @@ let storeUnsubscribe = null;
 
 /** @type {(() => void)[]} */
 let scenePanelCleanups = [];
+
+/** @type {(() => void) | null} Live source monitor dock teardown (#100) */
+let liveMonitorCleanup = null;
 
 /** @type {(() => void)[]} */
 let cropInfoPanelCleanups = [];
@@ -263,6 +267,16 @@ export function initEditor() {
 
   // Initial render
   render(container);
+
+  // Dock the live source monitor into the sidebar slot (#100). Mounted
+  // after render so the slot exists; owns its own bus subscriptions and
+  // visibility.
+  {
+    const slot = container.querySelector('[data-live-monitor]');
+    if (slot instanceof HTMLElement) {
+      liveMonitorCleanup = initLiveMonitor(slot);
+    }
+  }
 
   // Keep the Clips section (and memory footer) live: Clip Now, deletes and
   // promotes from the header popover all mutate the queue from outside this
@@ -1113,6 +1127,11 @@ async function startSceneDetectionAsync(frames) {
  */
 function cleanup() {
   stopPlayback();
+
+  if (liveMonitorCleanup) {
+    liveMonitorCleanup();
+    liveMonitorCleanup = null;
+  }
 
   // Cancel any pending throttled subscription update and drop the
   // subscription itself (same pattern as capture's cleanup)

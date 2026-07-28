@@ -228,7 +228,8 @@ function buildEntry(clip, options, cleanups) {
 
 /**
  * Render the clip entry list into a container (replacing its contents).
- * Active clip first (highlighted "Editing"), then queue entries newest first.
+ * One stable list, newest capture first; the active clip is highlighted in
+ * place and never hoisted (#100).
  *
  * @param {HTMLElement} container
  * @param {ClipEntriesOptions} options
@@ -242,14 +243,20 @@ export function renderClipEntries(container, options = {}) {
   container.innerHTML = '';
   const list = createElement('div', { className: 'clip-entries' });
 
-  if (activeClip) {
-    list.appendChild(buildEntry(activeClip, { active: true }, cleanups));
-  }
-  for (const entry of queue) {
-    list.appendChild(buildEntry(entry, { active: false, onPromote, onDelete }, cleanups));
+  // ONE stable list ordered by capture time, newest first (#100). The
+  // active clip is highlighted IN PLACE — hoisting it to the top made the
+  // list reshuffle on every promote, which reads as the bin "jumping
+  // around" (a Premiere-style media bin never reorders on selection).
+  const rows = [
+    ...(activeClip ? [{ clip: activeClip, active: true }] : []),
+    ...queue.map((entry) => ({ clip: entry, active: false })),
+  ].sort((a, b) => (b.clip.capturedAt ?? 0) - (a.clip.capturedAt ?? 0));
+
+  for (const row of rows) {
+    list.appendChild(buildEntry(row.clip, { active: row.active, onPromote, onDelete }, cleanups));
   }
 
-  if (!activeClip && queue.length === 0) {
+  if (rows.length === 0) {
     list.appendChild(
       createElement('div', { className: 'clip-entries-empty' }, ['No clips in queue']),
     );

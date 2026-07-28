@@ -1185,6 +1185,180 @@
   display: none;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Left sidebar Layout A (#100): live source monitor dock + CLIPS/SCENES tabs
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.editor-sidebar-left .panel-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-sidebar-left .live-monitor-slot {
+  flex-shrink: 0;
+}
+
+.editor-sidebar-left .live-monitor {
+  margin: var(--space-3);
+  border: 1px solid var(--color-recording);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: black;
+}
+
+.editor-sidebar-left .live-monitor-viewport {
+  position: relative;
+  aspect-ratio: 16 / 9;
+}
+
+.editor-sidebar-left .live-monitor-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.editor-sidebar-left .live-monitor-rec {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-recording);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 700;
+}
+
+.editor-sidebar-left .live-monitor-rec-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: white;
+  animation: live-monitor-pulse 1s infinite;
+}
+
+@keyframes live-monitor-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-sidebar-left .live-monitor-rec-dot {
+    animation: none;
+  }
+}
+
+.editor-sidebar-left .live-monitor-shutter {
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-sidebar-left .live-monitor-shutter--flash {
+  animation: live-monitor-flash 0.28s ease-out;
+}
+
+@keyframes live-monitor-flash {
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.editor-sidebar-left .live-monitor-ended {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.editor-sidebar-left .live-monitor--ended .live-monitor-ended {
+  display: flex;
+}
+
+.editor-sidebar-left .live-monitor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-panel-header);
+}
+
+.editor-sidebar-left .live-monitor-buffer {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.editor-sidebar-left .live-monitor-clip-btn {
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.editor-sidebar-left .live-monitor-clip-btn:hover {
+  background: var(--color-primary-hover);
+}
+
+/* Tab bar */
+.editor-sidebar-left .sidebar-tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-sidebar-left .sidebar-tab {
+  flex: 1;
+  padding: var(--space-2) 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.editor-sidebar-left .sidebar-tab--active {
+  color: var(--color-text);
+  background: var(--color-panel-header);
+  box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+/* Panes fill the remaining sidebar height; each list scrolls internally */
+.editor-sidebar-left .sidebar-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-sidebar-left .sidebar-pane[hidden] {
+  display: none;
+}
+
 /* One-line quiet hint for empty scenes (#98) */
 .editor-sidebar-left .scenes-sidebar-hint {
   padding: var(--space-3);
@@ -1194,8 +1368,8 @@
 }
 
 .editor-sidebar-left .clips-sidebar-content {
-  flex-shrink: 0;
-  max-height: 45%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-3);
   /* Bottom fade as a scroll cue (#98): macOS overlay scrollbars are

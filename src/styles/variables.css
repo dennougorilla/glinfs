@@ -140,7 +140,6 @@
   /* Header clip-queue popover: above sticky chrome, below modals */
   --z-popover: 350;
   /* Persistent live-capture PiP (#94): above the sticky header, below overlays */
-  --z-pip: 250;
 
   /* Timeline-specific z-index layers */
   --z-timeline-handle: 10;

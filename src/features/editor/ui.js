@@ -240,47 +240,91 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Content area (left sidebar + preview + right sidebar)
   const content = createElement('div', { className: 'editor-content' });
 
-  // Left Sidebar - Clips (queue) above Scenes
+  // Left Sidebar (#100, Layout A): docked live source monitor on top,
+  // CLIPS/SCENES as tabs below — the two lists stop fighting over vertical
+  // space, and the live monitor has a fixed home instead of floating.
   const leftSidebar = createElement('div', { className: 'editor-sidebar-left' });
   const leftPanelContent = createElement('div', { className: 'panel-content' });
 
-  // Clips section: active clip + queue entries, memory footer (#95)
+  // Live source monitor dock slot; populated by live-monitor.js while a
+  // capture session is live, empty (and invisible) otherwise
   leftPanelContent.appendChild(
-    createElement('div', { className: 'clips-sidebar-header' }, [
-      createElement('div', { className: 'property-group-title' }, ['Clips']),
-      // Queue-full banner slot; shown transiently via showClipsQueueFullBanner
-      createElement('div', {
-        className: 'clips-queue-banner',
-        role: 'status',
-        hidden: true,
-      }),
-    ]),
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
   );
-  leftPanelContent.appendChild(
+
+  // Tab bar
+  const clipsTab = createElement(
+    'button',
+    {
+      className: 'sidebar-tab sidebar-tab--active',
+      type: 'button',
+      'data-tab': 'clips',
+      role: 'tab',
+      'aria-selected': 'true',
+      'data-testid': 'tab-clips',
+    },
+    ['Clips'],
+  );
+  const scenesTab = createElement(
+    'button',
+    {
+      className: 'sidebar-tab',
+      type: 'button',
+      'data-tab': 'scenes',
+      role: 'tab',
+      'aria-selected': 'false',
+      'data-testid': 'tab-scenes',
+    },
+    ['Scenes'],
+  );
+  const tabBar = createElement('div', { className: 'sidebar-tabs', role: 'tablist' }, [
+    clipsTab,
+    scenesTab,
+  ]);
+  leftPanelContent.appendChild(tabBar);
+
+  // CLIPS pane — keeps the existing container hooks so refreshClipsPanel /
+  // the queue-full banner keep working unchanged
+  const clipsPane = createElement('div', { className: 'sidebar-pane', 'data-pane': 'clips' }, [
+    createElement('div', {
+      className: 'clips-queue-banner',
+      role: 'status',
+      hidden: true,
+    }),
     createElement('div', {
       className: 'clips-sidebar-content',
       'data-clips-container': 'true',
     }),
-  );
-  leftPanelContent.appendChild(
     createElement('div', {
       className: 'clips-sidebar-memory',
       'data-clips-footer': 'true',
     }),
-  );
-
-  // Scenes sidebar header
-  const scenesHeader = createElement('div', { className: 'scenes-sidebar-header' }, [
-    createElement('div', { className: 'property-group-title' }, ['Scenes']),
   ]);
-  leftPanelContent.appendChild(scenesHeader);
+  leftPanelContent.appendChild(clipsPane);
 
-  // Scenes container - will be populated by updateScenesSidebar
+  // SCENES pane — same hook as before for updateScenesSidebar
   const scenesContainer = createElement('div', {
     className: 'scenes-sidebar-content',
     'data-scenes-container': 'true',
   });
-  leftPanelContent.appendChild(scenesContainer);
+  const scenesPane = createElement(
+    'div',
+    { className: 'sidebar-pane', 'data-pane': 'scenes', hidden: true },
+    [scenesContainer],
+  );
+  leftPanelContent.appendChild(scenesPane);
+
+  const selectTab = (name) => {
+    for (const tab of [clipsTab, scenesTab]) {
+      const active = tab.dataset.tab === name;
+      tab.classList.toggle('sidebar-tab--active', active);
+      tab.setAttribute('aria-selected', String(active));
+    }
+    clipsPane.hidden = name !== 'clips';
+    scenesPane.hidden = name !== 'scenes';
+  };
+  cleanups.push(on(clipsTab, 'click', () => selectTab('clips')));
+  cleanups.push(on(scenesTab, 'click', () => selectTab('scenes')));
 
   leftSidebar.appendChild(leftPanelContent);
   content.appendChild(leftSidebar);

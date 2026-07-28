@@ -81,7 +81,9 @@ test('Shift+C from the editor queues clips without disturbing the open editor', 
   // Active clip entry still listed first and highlighted
   const allEntries = page.locator('[data-testid="clip-entry"]');
   await expect(allEntries).toHaveCount(3);
-  await expect(allEntries.first()).toHaveAttribute('data-clip-active', 'true');
+  // Stable ordering (#100): rows sort by capture time (newest first), so
+  // the active clip is highlighted IN PLACE rather than hoisted to the top
+  await expect(page.locator('[data-testid="clip-entry"][data-clip-active="true"]')).toHaveCount(1);
 
   // Header badge reflects the queue size
   await expect(page.locator('#clip-queue-badge')).toHaveText('2');
