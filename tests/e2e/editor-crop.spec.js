@@ -138,6 +138,9 @@ test.describe('Editor Crop Functionality', () => {
     });
 
     test('toggles grid with button click', async ({ page }) => {
+      // Overlay lives in a collapsed accordion since #100 v3 — a user must
+      // open it to reach the button, and so must the test
+      await page.locator('.prop-accordion-summary', { hasText: 'Overlay' }).click();
       const gridBtn = page.locator('.editor-sidebar button[aria-pressed]');
       await expect(gridBtn).toHaveAttribute('aria-pressed', 'false');
 
