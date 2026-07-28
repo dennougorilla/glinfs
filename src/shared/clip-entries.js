@@ -31,6 +31,58 @@ function formatCapturedTime(capturedAt) {
   });
 }
 
+/** Milliseconds the inline "Delete?" confirm state stays armed (#98) */
+const DELETE_CONFIRM_MS = 3000;
+
+/**
+ * Wire a delete button as an inline two-step control (#98): first click
+ * arms it ("Delete?", danger styling); a second click within
+ * DELETE_CONFIRM_MS actually deletes; timeout or losing focus reverts.
+ * Replaces window.confirm(), which blocked the main thread and looked
+ * foreign next to the app's own UI.
+ *
+ * @param {HTMLButtonElement} btn
+ * @param {string} armedLabel - aria-label while armed
+ * @param {string} idleLabel - aria-label while idle
+ * @param {() => void} onConfirmed
+ * @param {(() => void)[]} cleanups
+ */
+function wireTwoStepDelete(btn, armedLabel, idleLabel, onConfirmed, cleanups) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let revertTimer = null;
+  let armed = false;
+
+  const disarm = () => {
+    if (revertTimer !== null) {
+      clearTimeout(revertTimer);
+      revertTimer = null;
+    }
+    armed = false;
+    btn.classList.remove('clip-entry-delete--armed');
+    btn.textContent = '×';
+    btn.setAttribute('aria-label', idleLabel);
+    btn.title = 'Delete clip';
+  };
+
+  cleanups.push(
+    on(btn, 'click', () => {
+      if (armed) {
+        disarm();
+        onConfirmed();
+        return;
+      }
+      armed = true;
+      btn.classList.add('clip-entry-delete--armed');
+      btn.textContent = 'Delete?';
+      btn.setAttribute('aria-label', armedLabel);
+      btn.title = '';
+      revertTimer = setTimeout(disarm, DELETE_CONFIRM_MS);
+    }),
+  );
+  cleanups.push(on(btn, 'blur', disarm));
+  cleanups.push(disarm);
+}
+
 /**
  * Build the thumbnail element for an entry (dataURL image or placeholder)
  * @param {string|null|undefined} thumbnailDataUrl
@@ -79,12 +131,20 @@ function buildEntry(clip, options, cleanups) {
   const frameCount = clip.frameCount ?? clip.frames?.length ?? 0;
   const durationSec = clip.fps > 0 ? frameCount / clip.fps : 0;
   const timeLabel = formatCapturedTime(clip.capturedAt);
+  const shortTime = new Date(clip.capturedAt).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
   const status = options.active ? undefined : (clip.status ?? 'raw');
   const sizeLabel =
     status === 'compressed' && typeof clip.byteLengthMB === 'number'
       ? ` · ${clip.byteLengthMB < 0.1 ? '<0.1' : clip.byteLengthMB.toFixed(1)} MB`
       : '';
-  const metaLabel = `${durationSec.toFixed(1)}s · ${frameCount} frames${sizeLabel}`;
+  // One compact line ("3.9s · 117f · 08:36"); full detail lives in the
+  // title tooltip - the stacked layout wrapped badly at sidebar width (#98)
+  const metaLabel = `${durationSec.toFixed(1)}s · ${frameCount}f · ${shortTime}`;
+  const fullDetail = `${durationSec.toFixed(1)}s · ${frameCount} frames${sizeLabel} · captured ${timeLabel}`;
   const busyLabel = status ? BUSY_STATUS_LABELS[status] : undefined;
 
   const entry = createElement('div', {
@@ -95,10 +155,9 @@ function buildEntry(clip, options, cleanups) {
     'data-clip-status': status,
   });
 
-  const info = createElement('div', { className: 'clip-entry-info' }, [
-    createElement('div', { className: 'clip-entry-meta' }, [metaLabel]),
-    createElement('div', { className: 'clip-entry-time' }, [
-      timeLabel,
+  const info = createElement('div', { className: 'clip-entry-info', title: fullDetail }, [
+    createElement('div', { className: 'clip-entry-meta' }, [
+      metaLabel,
       ...(options.active
         ? [createElement('span', { className: 'clip-entry-editing-badge' }, ['Editing'])]
         : []),
@@ -154,7 +213,13 @@ function buildEntry(clip, options, cleanups) {
   );
   if (options.onDelete && clip.id) {
     const id = clip.id;
-    cleanups.push(on(deleteBtn, 'click', () => options.onDelete?.(id)));
+    wireTwoStepDelete(
+      /** @type {HTMLButtonElement} */ (deleteBtn),
+      `Confirm delete of clip captured at ${timeLabel}`,
+      `Delete clip captured at ${timeLabel}`,
+      () => options.onDelete?.(id),
+      cleanups,
+    );
   }
   entry.appendChild(deleteBtn);
 

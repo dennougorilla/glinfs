@@ -347,7 +347,6 @@ function setupClipQueueHeader() {
         });
       },
       onDelete: (id) => {
-        if (!confirm('Delete this clip? Its frames will be discarded.')) return;
         if (deleteQueuedClip(id)) {
           announce('Clip deleted from queue');
         }

@@ -26,6 +26,12 @@
   bottom: calc(var(--timeline-height) + var(--statusbar-height) + var(--space-4));
 }
 
+/* User-dragged position (#98): inline left/top from JS win over every
+   route-default anchor; bottom must release or it fights the top value */
+.pip-root--dragged {
+  bottom: auto;
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
    Expanded card
    ─────────────────────────────────────────────────────────────────────────── */

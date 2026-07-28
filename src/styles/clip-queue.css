@@ -273,6 +273,17 @@
   color: white;
 }
 
+/* Inline two-step confirm (#98): first click arms the button into a
+   labeled danger state; the confirming click deletes, timeout reverts */
+.clip-entries .clip-entry-delete--armed {
+  width: auto;
+  padding: 0 var(--space-2);
+  background: var(--color-recording);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+}
+
 .clip-entries .clip-entries-empty {
   padding: var(--space-4);
   font-size: var(--font-size-xs);

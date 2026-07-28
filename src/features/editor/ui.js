@@ -1013,13 +1013,11 @@ function renderScenesSidebar(container, state, handlers) {
 
   // Show different content based on scene detection status
   if (state.sceneDetectionStatus === 'idle') {
+    // One quiet line (#98) - the old icon + two-line empty state ate more
+    // sidebar height than the actual scenes list usually does
     container.appendChild(
-      createElement('div', { className: 'scenes-sidebar-empty' }, [
-        createElement('div', { className: 'scenes-sidebar-icon' }, ['\uD83C\uDFAC']),
-        createElement('div', { className: 'scenes-sidebar-text' }, ['No scenes to show']),
-        createElement('div', { className: 'scenes-sidebar-subtext' }, [
-          'Enable scene detection in Capture settings to see scenes here',
-        ]),
+      createElement('div', { className: 'scenes-sidebar-hint' }, [
+        'No scenes \u2014 enable Scene Detection in Capture',
       ]),
     );
     return cleanups;

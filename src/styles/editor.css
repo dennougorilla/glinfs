@@ -1185,11 +1185,23 @@
   display: none;
 }
 
+/* One-line quiet hint for empty scenes (#98) */
+.editor-sidebar-left .scenes-sidebar-hint {
+  padding: var(--space-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
 .editor-sidebar-left .clips-sidebar-content {
   flex-shrink: 0;
   max-height: 45%;
   overflow-y: auto;
   padding: var(--space-3);
+  /* Bottom fade as a scroll cue (#98): macOS overlay scrollbars are
+     invisible at rest, so a cut-off list read as "only 2 clips exist" */
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent);
 }
 
 .editor-sidebar-left .clips-sidebar-memory {
@@ -1197,6 +1209,9 @@
   font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-bottom: 1px solid var(--color-border);
 }
 

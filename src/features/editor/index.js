@@ -891,11 +891,12 @@ async function promoteWhenDecoded(id) {
 }
 
 /**
- * Delete a queued clip after user confirmation (confirm() is accepted v1 debt)
+ * Delete a queued clip. Confirmation is the inline two-step control on the
+ * entry's delete button (#98) - by the time this runs the user has already
+ * confirmed; no blocking dialog.
  * @param {string} id
  */
 function handleDeleteClip(id) {
-  if (!confirm('Delete this clip? Its frames will be discarded.')) return;
   if (deleteQueuedClip(id)) {
     announce('Clip deleted from queue');
   }

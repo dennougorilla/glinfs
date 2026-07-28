@@ -319,3 +319,107 @@ describe('accessibility', () => {
     expect(document.querySelector('.pip-video').getAttribute('aria-hidden')).toBe('true');
   });
 });
+
+describe('draggable PiP (#98)', () => {
+  /** Dispatch a synthetic pointer event with coordinates (jsdom-safe) */
+  function firePointer(el, type, x, y) {
+    const e = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    // MouseEvent lacks pointerId; the code only reads clientX/Y + button
+    el.dispatchEvent(e);
+  }
+
+  async function showPip() {
+    const { initPip } = await loadPip();
+    initPip();
+    captureState.active = true;
+    changeRoute('/export'); // visible, expanded (editor defaults to pill)
+    const root = document.getElementById('pip-root');
+    const card = root.querySelector('.pip-card');
+    return { root, card };
+  }
+
+  it('a drag beyond the threshold moves the card to inline left/top', async () => {
+    const { root, card } = await showPip();
+
+    firePointer(card, 'pointerdown', 100, 100);
+    firePointer(card, 'pointermove', 160, 40);
+    firePointer(card, 'pointerup', 160, 40);
+
+    expect(root.classList.contains('pip-root--dragged')).toBe(true);
+    // base rect in jsdom is 0,0; delta = (+60, -60) clamped to viewport >= 0
+    expect(root.style.left).toBe('60px');
+    expect(root.style.top).toBe('0px');
+  });
+
+  it('movement under the threshold is not a drag', async () => {
+    const { root, card } = await showPip();
+
+    firePointer(card, 'pointerdown', 100, 100);
+    firePointer(card, 'pointermove', 102, 101);
+    firePointer(card, 'pointerup', 102, 101);
+
+    expect(root.classList.contains('pip-root--dragged')).toBe(false);
+    expect(root.style.left).toBe('');
+  });
+
+  it('never leaves the viewport (clamped to >= 0)', async () => {
+    const { root, card } = await showPip();
+
+    firePointer(card, 'pointerdown', 500, 500);
+    firePointer(card, 'pointermove', -300, -300);
+    firePointer(card, 'pointerup', -300, -300);
+
+    expect(root.style.left).toBe('0px');
+    expect(root.style.top).toBe('0px');
+  });
+
+  it('pointerdown on a button inside the card does not start a drag', async () => {
+    const { root } = await showPip();
+    const minimize = document.querySelector('.pip-minimize');
+
+    firePointer(minimize, 'pointerdown', 10, 10);
+    firePointer(minimize, 'pointermove', 100, 100);
+    firePointer(minimize, 'pointerup', 100, 100);
+
+    expect(root.classList.contains('pip-root--dragged')).toBe(false);
+  });
+
+  it('double-click on the card resets to the route-default anchor', async () => {
+    const { root, card } = await showPip();
+
+    firePointer(card, 'pointerdown', 100, 100);
+    firePointer(card, 'pointermove', 200, 50);
+    firePointer(card, 'pointerup', 200, 50);
+    expect(root.classList.contains('pip-root--dragged')).toBe(true);
+
+    card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+    expect(root.classList.contains('pip-root--dragged')).toBe(false);
+    expect(root.style.left).toBe('');
+    expect(root.style.top).toBe('');
+  });
+
+  it('dragging the pill does not toggle expand, but a plain click still does', async () => {
+    const { initPip } = await loadPip();
+    initPip();
+    captureState.active = true;
+    changeRoute('/editor'); // pill by default on editor
+    const root = document.getElementById('pip-root');
+    const pill = root.querySelector('.pip-pill');
+    expect(root.classList.contains('pip-root--collapsed')).toBe(true);
+
+    // Drag: move beyond threshold — collapse state must not change
+    firePointer(pill, 'pointerdown', 50, 50);
+    firePointer(pill, 'pointermove', 120, 120);
+    firePointer(pill, 'pointerup', 120, 120);
+    pill.click(); // the browser-generated click after a drag is swallowed
+    expect(root.classList.contains('pip-root--collapsed')).toBe(true);
+    expect(root.classList.contains('pip-root--dragged')).toBe(true);
+
+    // Plain click (no preceding drag) still toggles
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    pill.click();
+    expect(root.classList.contains('pip-root--collapsed')).toBe(false);
+  });
+});

@@ -50,6 +50,13 @@ let collapsed = false;
 /** True once the user explicitly toggled; stops route defaults from overriding their choice */
 let userToggled = false;
 
+/**
+ * Dragged position {x, y} in viewport px, or null = route-default anchor.
+ * Remembered for the session (#98); double-click on the drag surface resets.
+ * @type {{x: number, y: number} | null}
+ */
+let dragPos = null;
+
 /** True while showing the ~2s "Capture ended" terminal state, overriding normal visibility */
 let showingEnded = false;
 
@@ -179,6 +186,118 @@ function buildDom() {
   on(openCaptureBtn, 'click', () => navigate('/capture'));
   on(minimizeBtn, 'click', toggleCollapse);
   on(pill, 'click', toggleCollapse);
+
+  wireDrag(card);
+  wireDrag(pill);
+  window.addEventListener('resize', clampDragPosition);
+}
+
+/**
+ * Pixels of pointer travel before a press becomes a drag. Below this the
+ * gesture stays a click - required so the pill's toggle still works (#98).
+ */
+const DRAG_THRESHOLD_PX = 5;
+
+/**
+ * Make an element a drag surface for the whole PiP (#98). Buttons inside
+ * the card never start a drag (the surface check ignores them); the pill
+ * both drags and clicks, disambiguated by DRAG_THRESHOLD_PX.
+ * @param {HTMLElement} surface
+ */
+function wireDrag(surface) {
+  /** @type {{startX: number, startY: number, baseX: number, baseY: number} | null} */
+  let session = null;
+  let moved = false;
+
+  surface.addEventListener('pointerdown', (e) => {
+    if (!root || e.button !== 0) return;
+    const target = /** @type {Element} */ (e.target);
+    // Buttons keep their own behavior; the pill itself is the exception
+    // (its click-vs-drag is resolved by the movement threshold below)
+    if (surface !== pillEl && target.closest('button')) return;
+
+    const rect = root.getBoundingClientRect();
+    session = { startX: e.clientX, startY: e.clientY, baseX: rect.left, baseY: rect.top };
+    moved = false;
+    surface.setPointerCapture?.(e.pointerId);
+  });
+
+  surface.addEventListener('pointermove', (e) => {
+    if (!session || !root) return;
+    const dx = e.clientX - session.startX;
+    const dy = e.clientY - session.startY;
+    if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    moved = true;
+    dragPos = clampToViewport(session.baseX + dx, session.baseY + dy);
+    applyDragPosition();
+  });
+
+  const end = (e) => {
+    if (!session) return;
+    surface.releasePointerCapture?.(e.pointerId);
+    session = null;
+    if (moved && surface === pillEl) {
+      // Swallow the click the browser fires after this pointerup so a
+      // drag of the pill doesn't also toggle expand
+      const swallow = (ce) => {
+        ce.stopPropagation();
+        ce.preventDefault();
+      };
+      surface.addEventListener('click', swallow, { capture: true, once: true });
+      // In case no click follows (pointer released off-element), drop the
+      // guard on the next tick
+      setTimeout(() => surface.removeEventListener('click', swallow, { capture: true }), 0);
+    }
+  };
+  surface.addEventListener('pointerup', end);
+  surface.addEventListener('pointercancel', end);
+
+  surface.addEventListener('dblclick', (e) => {
+    const target = /** @type {Element} */ (e.target);
+    if (surface !== pillEl && target.closest('button')) return;
+    dragPos = null;
+    applyDragPosition();
+  });
+}
+
+/**
+ * Clamp a prospective top-left position so the PiP stays fully on screen.
+ * @param {number} x
+ * @param {number} y
+ * @returns {{x: number, y: number}}
+ */
+function clampToViewport(x, y) {
+  const rect = root?.getBoundingClientRect();
+  const w = rect?.width || 0;
+  const h = rect?.height || 0;
+  return {
+    x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w)),
+    y: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - h)),
+  };
+}
+
+/** Re-clamp the remembered position after a viewport resize */
+function clampDragPosition() {
+  if (!dragPos) return;
+  dragPos = clampToViewport(dragPos.x, dragPos.y);
+  applyDragPosition();
+}
+
+/**
+ * Apply dragPos as inline styles, or clear them so the route-default CSS
+ * anchors (left/bottom + --above-dock offsets) take over again.
+ */
+function applyDragPosition() {
+  if (!root) return;
+  if (dragPos) {
+    root.classList.add('pip-root--dragged');
+    root.style.left = `${dragPos.x}px`;
+    root.style.top = `${dragPos.y}px`;
+  } else {
+    root.classList.remove('pip-root--dragged');
+    root.style.left = '';
+    root.style.top = '';
+  }
 }
 
 /** @param {import('../../shared/router.js').Route} route */
