@@ -1241,6 +1241,21 @@
   cursor: pointer;
 }
 
+/* Tab count (#100 r7): shows how many items each pane holds; empty when 0 */
+.editor-sidebar-left .sidebar-tab-count {
+  margin-left: var(--space-1);
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.editor-sidebar-left .sidebar-tab-count:empty {
+  display: none;
+}
+
+.editor-sidebar-left .sidebar-tab--active .sidebar-tab-count {
+  color: var(--color-primary);
+}
+
 .editor-sidebar-left .sidebar-tab--active {
   color: var(--color-text);
   background: var(--color-panel-header);

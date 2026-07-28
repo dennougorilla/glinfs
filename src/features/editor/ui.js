@@ -10,7 +10,7 @@ import {
   getClipQueueLimit,
   hasActiveScreenCapture,
 } from '../../shared/app-store.js';
-import { renderClipEntries } from '../../shared/clip-entries.js';
+import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries.js';
 import { navigate } from '../../shared/router.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { createElement, on } from '../../shared/utils/dom.js';
@@ -258,7 +258,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-selected': 'true',
       'data-testid': 'tab-clips',
     },
-    ['Clips'],
+    ['Clips', createElement('span', { className: 'sidebar-tab-count', 'data-count': 'clips' })],
   );
   const scenesTab = createElement(
     'button',
@@ -270,7 +270,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
       'aria-selected': 'false',
       'data-testid': 'tab-scenes',
     },
-    ['Scenes'],
+    ['Scenes', createElement('span', { className: 'sidebar-tab-count', 'data-count': 'scenes' })],
   );
   const tabBar = createElement('div', { className: 'sidebar-tabs', role: 'tablist' }, [
     clipsTab,
@@ -590,6 +590,14 @@ export function renderEditorScreen(container, state, handlers, fps) {
             ' Grid',
           ]),
           createElement('span', { className: 'shortcut' }, [
+            createElement('span', { className: 'kbd' }, ['1-9']),
+            ' Switch Clip',
+          ]),
+          createElement('span', { className: 'shortcut' }, [
+            createElement('span', { className: 'kbd' }, ['Del']),
+            ' Delete Clip',
+          ]),
+          createElement('span', { className: 'shortcut' }, [
             createElement('span', { className: 'kbd' }, ['Shift+C']),
             ' Clip Now',
           ]),
@@ -663,6 +671,28 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       return;
     }
 
+    // 1-9 address clips by their LIST POSITION (browser-tab model, #100
+    // r7): plain digit switches, Shift+digit deletes. e.code is used so
+    // Shift+1 works on every keyboard layout (e.key would be '!' on US).
+    // Cmd/Ctrl/Alt+digit stays with the browser (tab switching).
+    if (/^Digit[1-9]$/.test(e.code) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const rows = getOrderedClipRows(getClipPayload(), getClipQueue());
+      const row = rows[Number(e.code.slice(5)) - 1];
+      if (row) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (row.active) {
+            handlers.onDeleteActiveClip?.();
+          } else {
+            handlers.onDeleteClip?.(row.clip.id);
+          }
+        } else if (!row.active) {
+          handlers.onPromoteClip?.(row.clip.id);
+        }
+      }
+      return;
+    }
+
     switch (e.key) {
       case ' ':
         e.preventDefault();
@@ -697,6 +727,12 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       case 'F':
         e.preventDefault();
         options.onOpenFrameGrid?.();
+        break;
+      case 'Delete':
+      case 'Backspace':
+        // Delete the clip being edited (undo toast covers safety, #100 r7)
+        e.preventDefault();
+        handlers.onDeleteActiveClip?.();
         break;
       case 'e':
         if (e.ctrlKey || e.metaKey) {
@@ -1166,6 +1202,13 @@ export function updateScenesPanel(container, state, handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
+  // Keep the SCENES tab count current (#100 r7)
+  const scenesCount = container.querySelector('[data-count="scenes"]');
+  if (scenesCount instanceof HTMLElement) {
+    const n = state.sceneDetectionStatus === 'completed' ? state.scenes.length : 0;
+    scenesCount.textContent = n > 0 ? String(n) : '';
+  }
+
   // Find the scenes container in the left sidebar
   const scenesContainer = container.querySelector('[data-scenes-container]');
   if (!scenesContainer) return cleanups;
@@ -1277,6 +1320,13 @@ export function updateClipsPanel(container, handlers) {
       onDeleteActive: handlers.onDeleteActiveClip,
     }),
   );
+
+  // Keep the tab label's count in sync with the list it fronts (#100 r7)
+  const clipsCount = container.querySelector('[data-count="clips"]');
+  if (clipsCount instanceof HTMLElement) {
+    const total = getClipQueue().length + (getClipPayload() ? 1 : 0);
+    clipsCount.textContent = total > 0 ? String(total) : '';
+  }
 
   // Memory footer: conservative raw-RGBA estimate for active + queued frames,
   // shown AGAINST the budget so the user sees the wall before hitting it

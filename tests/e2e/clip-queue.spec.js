@@ -253,3 +253,97 @@ test('raw fallback: queue and promote still work when WebCodecs encode is unsupp
 
   expect(pageErrors).toEqual([]);
 });
+
+test('digit shortcuts switch and delete clips by their list position (#100 r7)', async ({
+  page,
+}) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    window.__TEST_HOOKS__.updateTestConfig({ mockStream: true });
+  });
+  const sceneToggle = page.locator('[data-setting="sceneDetection"]');
+  if ((await sceneToggle.getAttribute('aria-pressed')) === 'true') {
+    await sceneToggle.click();
+  }
+  await page.locator('.btn-capture-start').click();
+  await expect(page.locator('.video-preview--active')).toBeVisible();
+  await expect
+    .poll(async () => Number(await page.locator('.stat-value').first().textContent()), {
+      timeout: 10000,
+    })
+    .toBeGreaterThanOrEqual(10);
+  await page.locator('.btn-create-clip').click();
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Shift+C');
+  await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(1);
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Shift+C');
+  await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(2);
+
+  // Every entry carries its position badge, 1..3 in visual order, and the
+  // Clips tab shows the total
+  await expect(page.locator('.clip-entry-num')).toHaveText(['1', '2', '3']);
+  await expect(page.locator('[data-count="clips"]')).toHaveText('3');
+
+  // Wait until queued entries reach a terminal state so promote-by-digit
+  // is deterministic (decode path vs raw path both settle)
+  await expect
+    .poll(
+      async () =>
+        page.$$eval('[data-testid="clip-entry"]:not([data-clip-active])', (els) =>
+          els.every((el) =>
+            ['compressed', 'raw'].includes(el.getAttribute('data-clip-status') ?? ''),
+          ),
+        ),
+      { timeout: 20000 },
+    )
+    .toBe(true);
+
+  // Press the digit of a NON-active row -> that clip becomes active,
+  // keeping its position (stable ordering means the badge stays put)
+  const rowIds = await page.$$eval('[data-testid="clip-entry"]', (els) =>
+    els.map((el) => ({
+      id: el.getAttribute('data-clip-id'),
+      active: el.hasAttribute('data-clip-active'),
+    })),
+  );
+  const target = rowIds.find((r) => !r.active);
+  const targetPos = rowIds.indexOf(target) + 1;
+  await page.keyboard.press(String(targetPos));
+  await expect(page.locator('[data-testid="clip-entry"][data-clip-active="true"]')).toHaveAttribute(
+    'data-clip-id',
+    String(target.id),
+    { timeout: 15000 },
+  );
+  await expect(page.locator('.editor-canvas')).toBeVisible();
+
+  // Shift+digit deletes a queued row (undo toast appears)
+  const queuedBefore = await page.locator(QUEUE_ENTRIES).count();
+  const rows2 = await page.$$eval('[data-testid="clip-entry"]', (els) =>
+    els.map((el) => el.hasAttribute('data-clip-active')),
+  );
+  const queuedPos = rows2.indexOf(false) + 1;
+  await page.keyboard.press(`Shift+Digit${queuedPos}`);
+  await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(queuedBefore - 1);
+  await expect(page.locator('.app-toast')).toBeVisible();
+  await expect(page.locator('[data-count="clips"]')).toHaveText('2');
+
+  // Delete key removes the ACTIVE clip; the survivor is promoted in place
+  const activeBefore = await page
+    .locator('[data-testid="clip-entry"][data-clip-active="true"]')
+    .getAttribute('data-clip-id');
+  await page.keyboard.press('Delete');
+  await expect
+    .poll(
+      async () =>
+        page
+          .locator('[data-testid="clip-entry"][data-clip-active="true"]')
+          .getAttribute('data-clip-id'),
+      { timeout: 15000 },
+    )
+    .not.toBe(activeBefore);
+  await expect(page.locator('[data-testid="clip-entry"]')).toHaveCount(1);
+  await expect(page.locator('.editor-canvas')).toBeVisible();
+});

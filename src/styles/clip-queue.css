@@ -163,6 +163,29 @@
   background: var(--color-surface);
 }
 
+/* Position badge (#100 r7): browser-tab numbering — press 1-9 to switch.
+   Mirrors the visual order, so the label IS the shortcut. */
+.clip-entries .clip-entry-num {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.clip-entries .clip-entry--active .clip-entry-num {
+  background: var(--color-primary);
+  color: #fff;
+}
+
 .clip-entries .clip-entry-thumb {
   display: block;
   width: 72px;

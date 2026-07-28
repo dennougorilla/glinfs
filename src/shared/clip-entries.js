@@ -33,6 +33,23 @@ function formatCapturedTime(capturedAt) {
   });
 }
 
+/**
+ * The one ordering used everywhere clips are listed or addressed by
+ * position (#100 round 7, plan A): newest capture first, active in place.
+ * The number badges AND the 1-9 shortcuts both index into THIS array, so
+ * "press what you see" always holds.
+ *
+ * @param {import('./app-store.js').ClipPayload|null} activeClip
+ * @param {import('./app-store.js').ClipQueueEntry[]} queue
+ * @returns {{ clip: any, active: boolean }[]}
+ */
+export function getOrderedClipRows(activeClip, queue) {
+  return [
+    ...(activeClip ? [{ clip: activeClip, active: true }] : []),
+    ...queue.map((entry) => ({ clip: entry, active: false })),
+  ].sort((a, b) => (b.clip.capturedAt ?? 0) - (a.clip.capturedAt ?? 0));
+}
+
 /** Skim playback rate for hover previews (#100 v3) */
 const SKIM_INTERVAL_MS = 120;
 
@@ -165,6 +182,17 @@ function buildEntry(clip, options, cleanups) {
     'data-clip-status': status,
   });
 
+  // Position badge (browser-tab model, #100 r7): the number IS the list
+  // position, so it matches the 1-9 switch/delete shortcuts by
+  // construction. Entries past 9 have no key — badge shows position only.
+  if (typeof options.position === 'number') {
+    entry.appendChild(
+      createElement('span', { className: 'clip-entry-num', 'aria-hidden': 'true' }, [
+        options.position <= 9 ? String(options.position) : '\u00b7',
+      ]),
+    );
+  }
+
   const info = createElement('div', { className: 'clip-entry-info', title: fullDetail }, [
     createElement('div', { className: 'clip-entry-meta' }, [
       metaLabel,
@@ -279,16 +307,17 @@ export function renderClipEntries(container, options = {}) {
   // active clip is highlighted IN PLACE — hoisting it to the top made the
   // list reshuffle on every promote, which reads as the bin "jumping
   // around" (a Premiere-style media bin never reorders on selection).
-  const rows = [
-    ...(activeClip ? [{ clip: activeClip, active: true }] : []),
-    ...queue.map((entry) => ({ clip: entry, active: false })),
-  ].sort((a, b) => (b.clip.capturedAt ?? 0) - (a.clip.capturedAt ?? 0));
+  const rows = getOrderedClipRows(activeClip, queue);
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     list.appendChild(
-      buildEntry(row.clip, { active: row.active, onPromote, onDelete, onDeleteActive }, cleanups),
+      buildEntry(
+        row.clip,
+        { active: row.active, position: index + 1, onPromote, onDelete, onDeleteActive },
+        cleanups,
+      ),
     );
-  }
+  });
 
   if (rows.length === 0) {
     list.appendChild(
