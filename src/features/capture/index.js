@@ -11,7 +11,7 @@ import {
   setScreenCaptureState,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
-import { updateSetting } from '../../shared/user-settings.js';
+import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
@@ -82,6 +82,24 @@ export function initCapture(settings) {
       };
       captureTrack.addEventListener('ended', handleStreamEnded);
       streamEndedCleanup = () => captureTrack.removeEventListener('ended', handleStreamEnded);
+    }
+
+    // Adopt any Scene Detection change made elsewhere (the Settings screen)
+    // while this capture session was suspended. The restored store predates
+    // that change, so without this the toggle would show — and "Create Clip"
+    // would act on — a stale value, making the setting look broken whenever a
+    // screen was already being shared.
+    //
+    // Only this flag is re-read: fps and bufferDuration configure the capture
+    // worker that is about to be restarted below, so they must keep describing
+    // the session that is actually running and take effect on the next one.
+    if (store) {
+      const persistedSceneDetection = loadSettings().capture.sceneDetection;
+      if (store.getState().settings.sceneDetection !== persistedSceneDetection) {
+        store.setState((state) =>
+          updateSettings(state, { sceneDetection: persistedSceneDetection }),
+        );
+      }
     }
 
     // Restart worker capture if we have a worker manager

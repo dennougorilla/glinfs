@@ -1,16 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeGif } from '../../../src/features/export/api.js';
-import {
-  computeResultFingerprint,
-  getExportState,
-  initExport,
-} from '../../../src/features/export/index.js';
+import { getExportState, initExport } from '../../../src/features/export/index.js';
 import {
   getExportResult,
   resetAppStore,
   setClipPayload,
   setEditorPayload,
-  setExportResult,
 } from '../../../src/shared/app-store.js';
 
 vi.mock('../../../src/features/export/api.js', async (importOriginal) => {
@@ -138,66 +133,61 @@ describe('Export regressions', () => {
     }
   });
 
-  it('restores a retained GIF as a completed job on Export revisit', () => {
+  it('opens a revisit on the settings panel instead of the previous GIF', async () => {
     injectEditorPayload();
-    // First visit establishes the settings the fingerprint is computed from
-    exportCleanup = initExport();
-    const fingerprint = computeResultFingerprint(
-      { start: 0, end: 3 },
-      null,
-      4,
-      30,
-      getExportState().settings,
-    );
-    exportCleanup();
-
     const blob = new Blob(['gif89a'], { type: 'image/gif' });
-    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now(), fingerprint });
+    vi.mocked(encodeGif).mockResolvedValueOnce(blob);
 
     exportCleanup = initExport();
-
-    expect(getExportState()?.job).toMatchObject({
-      status: 'complete',
-      progress: 100,
-      totalFrames: 4,
-      encoder: 'gifenc-js',
-      result: blob,
+    document.querySelector('.btn-export-main')?.dispatchEvent(new MouseEvent('click'));
+    await vi.waitFor(() => {
+      expect(document.querySelector('.export-complete-v2')).not.toBeNull();
     });
-    expect(document.querySelector('.export-complete-v2')).not.toBeNull();
-    expect(getExportResult()?.blob).toBe(blob);
+
+    // Leave via the toolbar's "← Editor" (the path that used to keep the GIF)
+    exportCleanup();
+    exportCleanup = null;
+    expect(getExportResult()).toBeNull();
+
+    // Same clip, same selection, same settings: nothing distinguishes this
+    // visit from the previous one, and it must still be a fresh export
+    injectEditorPayload();
+    exportCleanup = initExport();
+
+    expect(getExportState()?.job).toBeNull();
+    expect(document.querySelector('.export-complete-v2')).toBeNull();
+    expect(document.querySelector('.export-settings-panel')).not.toBeNull();
+    expect(document.querySelector('.btn-export-main')).not.toBeNull();
   });
 
-  it('retains the result across route cleanup and releases its object URL', () => {
+  it('releases the preview object URL and the result when leaving the screen', async () => {
     injectEditorPayload();
-    exportCleanup = initExport();
-    const fingerprint = computeResultFingerprint(
-      { start: 0, end: 3 },
-      null,
-      4,
-      30,
-      getExportState().settings,
-    );
-    exportCleanup();
+    vi.mocked(encodeGif).mockResolvedValueOnce(new Blob(['gif89a'], { type: 'image/gif' }));
 
-    const blob = new Blob(['gif89a'], { type: 'image/gif' });
-    setExportResult({ blob, filename: 'saved.gif', completedAt: Date.now(), fingerprint });
     exportCleanup = initExport();
+    document.querySelector('.btn-export-main')?.dispatchEvent(new MouseEvent('click'));
+    await vi.waitFor(() => {
+      expect(document.querySelector('.export-complete-v2')).not.toBeNull();
+    });
 
     exportCleanup();
     exportCleanup = null;
 
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test-export');
-    expect(getExportResult()?.blob).toBe(blob);
+    expect(getExportResult()).toBeNull();
   });
 
-  it('clears the retained result when Adjust & Re-export is chosen', () => {
+  it('clears the retained result when Adjust & Re-export is chosen', async () => {
     injectEditorPayload();
-    setExportResult({
-      blob: new Blob(['gif89a'], { type: 'image/gif' }),
-      filename: 'saved.gif',
-      completedAt: Date.now(),
-    });
+    const blob = new Blob(['gif89a'], { type: 'image/gif' });
+    vi.mocked(encodeGif).mockResolvedValueOnce(blob);
+
     exportCleanup = initExport();
+    document.querySelector('.btn-export-main')?.dispatchEvent(new MouseEvent('click'));
+    await vi.waitFor(() => {
+      expect(document.querySelector('.export-complete-v2')).not.toBeNull();
+    });
+    expect(getExportResult()?.blob).toBe(blob);
 
     const adjustButton = [...document.querySelectorAll('button')].find((button) =>
       button.textContent?.includes('Adjust & Re-export'),

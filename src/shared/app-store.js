@@ -123,9 +123,9 @@ export function setClipPayload(payload) {
     closePayloadFrames(state.clipPayload);
     // Clear old editor state since frames are now different
     state.editorPayload = null;
-    // A completed export belongs to the previous clip; without this, a user
-    // who returns to Capture via the header/toolbar (never pressing "Create
-    // New GIF") would be offered the old clip's GIF on the next export visit
+    // A completed export belongs to the previous clip. The Export screen
+    // already drops it on unmount; clearing it here too means no path — not
+    // even a crash that skips cleanup — can carry it into the new clip.
     exportResult = null;
   }
   state.clipPayload = payload;
@@ -272,12 +272,17 @@ export function validateEditorPayload(payload) {
 // ============================================================
 
 /**
+ * Result of the export currently on screen.
+ *
+ * Scoped to a single visit to the Export screen: the feature clears it on
+ * unmount so a later visit can never present an already-encoded GIF as its
+ * own (see features/export/index.js). It exists so repeated downloads of the
+ * same GIF reuse one generated filename.
+ *
  * @typedef {Object} ExportResultPayload
  * @property {Blob} blob - The encoded GIF
  * @property {string} filename - Suggested filename
  * @property {number} completedAt - Timestamp when export completed
- * @property {string} [fingerprint] - Inputs that produced the blob; restore
- *   is refused when it does not match the current visit (see export/index.js)
  */
 
 /** @type {ExportResultPayload|null} */

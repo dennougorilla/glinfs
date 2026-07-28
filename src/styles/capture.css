@@ -332,19 +332,23 @@
   gap: var(--space-5);
 }
 
-.setting-row {
+/* Scoped to the capture sidebar: .setting-row / .setting-label / .setting-value
+   are also used by the export settings panel, which wants a different layout
+   (stacked rows). Unscoped, the two files fought over the same rows and each
+   screen ended up with half of the other's rules. */
+.capture-settings .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
-.setting-label {
+.capture-settings .setting-label {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-.setting-value {
+.capture-settings .setting-value {
   font-size: var(--font-size-sm);
   font-family: var(--font-mono);
   color: var(--color-primary);
@@ -352,13 +356,13 @@
 }
 
 /* Slider with value */
-.slider-row {
+.capture-settings .slider-row {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.slider-header {
+.capture-settings .slider-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -436,35 +440,6 @@
   font-weight: 500;
 }
 
-/* Toggle Button */
-.btn-toggle {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  min-width: 48px;
-}
-
-.btn-toggle:hover {
-  border-color: var(--color-text-muted);
-  color: var(--color-text);
-  background: var(--color-surface);
-}
-
-.btn-toggle--active {
-  background: var(--color-primary-muted);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.btn-toggle--disabled,
-.btn-toggle:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  pointer-events: none;
-}
+/* Toggle Button styles live in form-controls.css so the Capture sidebar
+   and the Settings screen render the same control (they used to ship
+   competing `.btn-toggle` rules). */

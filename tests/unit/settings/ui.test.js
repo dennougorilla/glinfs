@@ -25,15 +25,21 @@ describe('renderSettings', () => {
       renderSettings(container);
 
       const text = container.textContent;
-      expect(text).toContain('設定');
-      expect(text).toContain('← 戻る');
-      expect(text).toContain('すべてリセット');
-      expect(text).toContain('キャプチャ設定');
-      expect(text).toContain('エクスポート設定');
-      expect(text).toContain('フレームレート (FPS)');
-      expect(text).toContain('シーン自動検出');
-      expect(text).toContain('ディザリング');
-      expect(text).toContain('サムネイル品質');
+      expect(text).toContain('Settings');
+      expect(text).toContain('← Back');
+      expect(text).toContain('Reset All');
+      expect(text).toContain('Capture');
+      expect(text).toContain('Export');
+      expect(text).toContain('Frame Rate');
+      expect(text).toContain('Scene Detection');
+      expect(text).toContain('Dithering');
+      expect(text).toContain('Thumbnail Quality');
+    });
+
+    it('renders in English, matching the rest of the app', () => {
+      // The screen used to be the only Japanese surface in an English UI.
+      renderSettings(container);
+      expect(container.textContent).not.toMatch(/[ぁ-んァ-ヶ一-龠]/);
     });
 
     it('does not leave stray textcontent attributes', () => {
@@ -45,8 +51,18 @@ describe('renderSettings', () => {
       renderSettings(container);
       // First toggle is capture.sceneDetection (default: true)
       const toggle = container.querySelector('.btn-toggle');
-      expect(toggle.textContent).toBe('ON');
-      expect(toggle.classList.contains('active')).toBe(true);
+      expect(toggle.textContent).toBe('On');
+      expect(toggle.classList.contains('btn-toggle--active')).toBe(true);
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('uses the shared toggle classes so it matches the Capture sidebar', () => {
+      // settings.css used to ship a competing `.btn-toggle` rule; both
+      // screens now render the one defined in form-controls.css.
+      renderSettings(container);
+      const toggle = container.querySelector('.btn-toggle');
+      expect(toggle.classList.contains('btn')).toBe(true);
+      expect(toggle.getAttribute('type')).toBe('button');
     });
   });
 
@@ -62,11 +78,13 @@ describe('renderSettings', () => {
 
       toggle.click();
       expect(loadSettings().capture.sceneDetection).toBe(false);
-      expect(toggle.textContent).toBe('OFF');
+      expect(toggle.textContent).toBe('Off');
+      expect(toggle.getAttribute('aria-pressed')).toBe('false');
 
       toggle.click();
       expect(loadSettings().capture.sceneDetection).toBe(true);
-      expect(toggle.textContent).toBe('ON');
+      expect(toggle.textContent).toBe('On');
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
     });
   });
 

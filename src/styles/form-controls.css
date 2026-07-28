@@ -392,3 +392,43 @@ select:disabled {
   height: 20px;
   margin-left: -10px;
 }
+
+/* ========================================
+   TOGGLE BUTTON (shared)
+   ========================================
+   Single definition for the On/Off toggles used by both the Capture
+   sidebar and the Settings screen. Previously each screen shipped its
+   own `.btn-toggle` rule; because settings.css is loaded last, its
+   version silently restyled the Capture toggle (32px tall next to
+   36px controls). Keep this the only `.btn-toggle` in the codebase. */
+.btn-toggle {
+  min-width: 48px;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-toggle:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.btn-toggle--active {
+  background: var(--color-primary-muted);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.btn-toggle--disabled,
+.btn-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}

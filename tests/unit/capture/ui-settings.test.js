@@ -84,7 +84,7 @@ describe('renderCaptureScreen settings panel (issue #35)', () => {
       return { ...state, isSharing: true, stream: null };
     }
 
-    it('renders the settings controls disabled', () => {
+    it('disables the settings that reconfigure the running capture worker', () => {
       renderCaptureScreen(container, createSharingState(), createHandlers());
 
       const fpsSelect = /** @type {HTMLSelectElement} */ (
@@ -93,14 +93,28 @@ describe('renderCaptureScreen settings panel (issue #35)', () => {
       const rangeInput = /** @type {HTMLInputElement} */ (
         container.querySelector('.capture-settings input[type="range"]')
       );
+
+      expect(fpsSelect.disabled).toBe(true);
+      expect(rangeInput.disabled).toBe(true);
+    });
+
+    it('keeps Scene Detection togglable while a screen is being shared', () => {
+      // It only takes effect on the next "Create Clip", so locking it here
+      // left the Settings screen as the only place to change it.
+      const handlers = createHandlers({
+        getSettings: vi.fn(() => ({ ...initCaptureState().settings, sceneDetection: true })),
+      });
+      renderCaptureScreen(container, createSharingState(), handlers);
+
       const toggle = /** @type {HTMLButtonElement} */ (
         container.querySelector('[data-setting="sceneDetection"]')
       );
 
-      expect(fpsSelect.disabled).toBe(true);
-      expect(rangeInput.disabled).toBe(true);
-      expect(toggle.disabled).toBe(true);
-      expect(toggle.getAttribute('aria-disabled')).toBe('true');
+      expect(toggle.disabled).toBe(false);
+      expect(toggle.hasAttribute('aria-disabled')).toBe(false);
+
+      toggle.click();
+      expect(handlers.onSettingsChange).toHaveBeenCalledWith({ sceneDetection: false });
     });
 
     it('stays on Capture and re-enables Create Clip when no payload was created', async () => {

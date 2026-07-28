@@ -130,7 +130,8 @@ export function renderCaptureScreen(container, state, handlers) {
     createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)),
   );
   sidebar.appendChild(createControlSection('Buffer', renderStats(state.stats)));
-  // Disable settings when capture is active (sharing screen)
+  // Lock the settings that reconfigure the running capture worker while a
+  // screen is being shared (Scene Detection stays editable — see renderSettings)
   sidebar.appendChild(
     createControlSection(
       'Settings',
@@ -340,7 +341,9 @@ function renderStats(stats) {
  * @param {import('./types.js').CaptureSettings} settings
  * @param {CaptureUIHandlers} handlers
  * @param {(() => void)[]} cleanups
- * @param {boolean} disabled - Whether settings should be disabled (during capture)
+ * @param {boolean} disabled - Whether the capture-pipeline settings (Frame
+ *   Rate, Buffer) should be disabled because a screen is being shared.
+ *   Scene Detection is exempt; it only takes effect on the next clip.
  * @returns {HTMLElement}
  */
 function renderSettings(settings, handlers, cleanups, disabled = false) {
@@ -406,6 +409,13 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
   settingsEl.appendChild(durationRow);
 
   // Scene Detection toggle
+  //
+  // Deliberately NOT gated by `disabled`: unlike Frame Rate and Buffer,
+  // which reconfigure the running capture worker, this flag is only read
+  // when "Create Clip" is pressed. Locking it during sharing left the
+  // Settings screen as the only way to change it, which is exactly when
+  // a user wants to flip it (issue: "scene toggle only reachable from
+  // the settings screen").
   const sceneDetectionRow = createElement('div', { className: 'setting-row' });
   sceneDetectionRow.appendChild(
     createElement('div', { className: 'setting-header' }, [
@@ -416,27 +426,23 @@ function renderSettings(settings, handlers, cleanups, disabled = false) {
     createElement(
       'button',
       {
-        className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''} ${disabled ? 'btn-toggle--disabled' : ''}`,
+        className: `btn btn-toggle ${settings.sceneDetection ? 'btn-toggle--active' : ''}`,
         type: 'button',
         'data-setting': 'sceneDetection',
         'aria-pressed': String(settings.sceneDetection),
-        'aria-disabled': disabled ? 'true' : undefined,
-        disabled: disabled ? 'true' : undefined,
         title: 'Automatically detect scene changes when creating a clip',
       },
       [settings.sceneDetection ? 'On' : 'Off'],
     )
   );
-  if (!disabled) {
-    cleanups.push(
-      on(sceneDetectionToggle, 'click', () => {
-        // Get current settings to avoid stale closure reference
-        const currentSettings = handlers.getSettings();
-        const newValue = currentSettings ? !currentSettings.sceneDetection : true;
-        handlers.onSettingsChange({ sceneDetection: newValue });
-      }),
-    );
-  }
+  cleanups.push(
+    on(sceneDetectionToggle, 'click', () => {
+      // Get current settings to avoid stale closure reference
+      const currentSettings = handlers.getSettings();
+      const newValue = currentSettings ? !currentSettings.sceneDetection : true;
+      handlers.onSettingsChange({ sceneDetection: newValue });
+    }),
+  );
   sceneDetectionRow.appendChild(sceneDetectionToggle);
   settingsEl.appendChild(sceneDetectionRow);
 

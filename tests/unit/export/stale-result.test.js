@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  computeResultFingerprint,
-  getExportState,
-  initExport,
-} from '../../../src/features/export/index.js';
+import { getExportState, initExport } from '../../../src/features/export/index.js';
 import {
   getExportResult,
   resetAppStore,
@@ -54,18 +50,12 @@ function injectPayloads(frames, selectedRange) {
 }
 
 /**
- * Fingerprint matching what initExport computes for the given visit,
- * using the default settings a fresh store loads.
- * @param {{ start: number, end: number }} selectedRange
+ * Every visit to the Export screen starts a new export session. A GIF encoded
+ * on an earlier visit must never come back as this visit's "complete" state:
+ * that left the user staring at the previous GIF with no Export button unless
+ * they happened to return through "Adjust & Re-export".
  */
-function fingerprintFor(selectedRange) {
-  const frameCount = selectedRange.end - selectedRange.start + 1;
-  const settings = getExportState()?.settings;
-  if (!settings) throw new Error('export state not initialized');
-  return computeResultFingerprint(selectedRange, null, frameCount, 30, settings);
-}
-
-describe('Stale export result invalidation (re-review P1)', () => {
+describe('Export result is scoped to a single visit', () => {
   beforeEach(() => {
     resetAppStore();
     localStorage.clear();
@@ -82,56 +72,32 @@ describe('Stale export result invalidation (re-review P1)', () => {
     vi.restoreAllMocks();
   });
 
-  it('restores a saved result when the visit matches its fingerprint', () => {
-    const frames = createFrames(6);
-    const range = { start: 0, end: 5 };
-    injectPayloads(frames, range);
-
-    // First mount establishes the settings used for the fingerprint
-    exportCleanup = initExport();
-    const fingerprint = fingerprintFor(range);
-    exportCleanup();
-
-    const blob = new Blob(['gif-a'], { type: 'image/gif' });
-    setExportResult({ blob, filename: 'a.gif', completedAt: 1, fingerprint });
-
-    injectPayloads(frames, range);
-    exportCleanup = initExport();
-
-    const state = getExportState();
-    expect(state?.job?.status).toBe('complete');
-    expect(state?.job?.result).toBe(blob);
-  });
-
-  it('refuses to restore when the selection changed, and drops the stale result', () => {
+  it('drops the saved result when leaving the screen', () => {
     const frames = createFrames(6);
     injectPayloads(frames, { start: 0, end: 5 });
     exportCleanup = initExport();
-    const staleFingerprint = fingerprintFor({ start: 0, end: 5 });
-    exportCleanup();
 
     setExportResult({
       blob: new Blob(['gif-a'], { type: 'image/gif' }),
       filename: 'a.gif',
       completedAt: 1,
-      fingerprint: staleFingerprint,
     });
 
-    // Same clip, narrower selection — must re-encode, not resurrect
-    injectPayloads(frames, { start: 1, end: 3 });
-    exportCleanup = initExport();
+    exportCleanup();
+    exportCleanup = null;
 
-    const state = getExportState();
-    expect(state?.job).toBeNull();
     expect(getExportResult()).toBeNull();
   });
 
-  it('refuses to restore a result saved without a fingerprint', () => {
-    const frames = createFrames(4);
-    const range = { start: 0, end: 3 };
+  it('opens on the settings panel even when a result survived, and discards it', () => {
+    const frames = createFrames(6);
+    const range = { start: 0, end: 5 };
+
+    // Identical inputs to the previous export — the case that used to
+    // resurrect the old GIF because every encode input still matched
     setExportResult({
-      blob: new Blob(['legacy'], { type: 'image/gif' }),
-      filename: 'legacy.gif',
+      blob: new Blob(['gif-a'], { type: 'image/gif' }),
+      filename: 'a.gif',
       completedAt: 1,
     });
 
@@ -139,7 +105,27 @@ describe('Stale export result invalidation (re-review P1)', () => {
     exportCleanup = initExport();
 
     expect(getExportState()?.job).toBeNull();
-    expect(getExportResult()).toBeNull();
+    expect(document.querySelector('.export-settings-panel')).not.toBeNull();
+    expect(document.querySelector('.export-complete-v2')).toBeNull();
+  });
+
+  it('does not restore a result after the selection changed either', () => {
+    const frames = createFrames(6);
+    injectPayloads(frames, { start: 0, end: 5 });
+    exportCleanup = initExport();
+    exportCleanup();
+
+    setExportResult({
+      blob: new Blob(['gif-a'], { type: 'image/gif' }),
+      filename: 'a.gif',
+      completedAt: 1,
+    });
+
+    // Same clip, narrower selection — must re-encode, not resurrect
+    injectPayloads(frames, { start: 1, end: 3 });
+    exportCleanup = initExport();
+
+    expect(getExportState()?.job).toBeNull();
   });
 
   it('a new clip invalidates the previous export result at the store level', () => {
@@ -147,7 +133,6 @@ describe('Stale export result invalidation (re-review P1)', () => {
       blob: new Blob(['old-clip'], { type: 'image/gif' }),
       filename: 'old.gif',
       completedAt: 1,
-      fingerprint: 'anything',
     });
 
     // User goes back to Capture via the header (never pressing Create New

@@ -381,8 +381,15 @@ button {
   background: #dc2626;
 }
 
-/* Icon Button */
+/* Icon Button
+   Centres its own icon rather than relying on being combined with .btn:
+   the header gear is a bare <a class="btn-icon">, so without this the box
+   was 36px but the 20px glyph sat glued to its top-left corner, riding
+   ~8px above the logo and step indicator it sits next to. */
 .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--control-height-md);
   height: var(--control-height-md);
   padding: 0;
@@ -696,6 +703,15 @@ input[type="checkbox"] {
 
 [data-tooltip]:hover::after {
   opacity: 1;
+}
+
+/* Tooltips default to opening upward, which puts them off-screen for the
+   app header sitting at y=0 — and #app clips overflow, so the header gear's
+   tooltip was never visible at all. Open downward there instead. */
+.app-header [data-tooltip]::after {
+  bottom: auto;
+  top: 100%;
+  transform: translateX(-50%) translateY(8px);
 }
 
 /* ========================================

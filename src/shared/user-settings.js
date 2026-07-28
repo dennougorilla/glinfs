@@ -59,10 +59,10 @@ const DEFAULT_SETTINGS = {
  */
 export const SETTINGS_METADATA = {
   capture: {
-    label: 'キャプチャ設定',
+    label: 'Capture',
     settings: {
       fps: {
-        label: 'フレームレート (FPS)',
+        label: 'Frame Rate',
         type: 'select',
         options: [
           { value: 15, label: '15 FPS' },
@@ -71,23 +71,24 @@ export const SETTINGS_METADATA = {
         ],
       },
       bufferDuration: {
-        label: 'バッファサイズ (秒)',
+        label: 'Buffer Duration',
         type: 'range',
         min: 5,
         max: 60,
         step: 5,
+        format: (v) => `${v}s`,
       },
       sceneDetection: {
-        label: 'シーン自動検出',
+        label: 'Scene Detection',
         type: 'boolean',
       },
     },
   },
   export: {
-    label: 'エクスポート設定',
+    label: 'Export',
     settings: {
       quality: {
-        label: '品質',
+        label: 'Quality',
         type: 'range',
         min: 0.1,
         max: 1.0,
@@ -95,18 +96,18 @@ export const SETTINGS_METADATA = {
         format: (v) => `${Math.round(v * 100)}%`,
       },
       frameSkip: {
-        label: 'フレームスキップ',
+        label: 'Frame Skip',
         type: 'select',
         options: [
-          { value: 1, label: 'なし (1)' },
-          { value: 2, label: '2フレームごと' },
-          { value: 3, label: '3フレームごと' },
-          { value: 4, label: '4フレームごと' },
-          { value: 5, label: '5フレームごと' },
+          { value: 1, label: 'None (1)' },
+          { value: 2, label: 'Every 2nd frame' },
+          { value: 3, label: 'Every 3rd frame' },
+          { value: 4, label: 'Every 4th frame' },
+          { value: 5, label: 'Every 5th frame' },
         ],
       },
       playbackSpeed: {
-        label: '再生速度',
+        label: 'Playback Speed',
         type: 'range',
         min: 0.25,
         max: 4.0,
@@ -114,32 +115,32 @@ export const SETTINGS_METADATA = {
         format: (v) => `${v}x`,
       },
       dithering: {
-        label: 'ディザリング',
+        label: 'Dithering',
         type: 'boolean',
       },
       loopCount: {
-        label: 'ループ回数',
+        label: 'Loop Count',
         type: 'number',
         min: 0,
         max: 100,
         step: 1,
-        format: (v) => (v === 0 ? '無限' : `${v}回`),
+        format: (v) => (v === 0 ? 'Infinite' : `${v}x`),
       },
       openInNewTab: {
-        label: '新規タブで開く',
+        label: 'Open in New Tab',
         type: 'boolean',
       },
       encoderPreset: {
-        label: 'エンコーダープリセット',
+        label: 'Encoder Preset',
         type: 'select',
         options: [
-          { value: 'quality', label: '高品質' },
-          { value: 'balanced', label: 'バランス' },
-          { value: 'fast', label: '高速' },
+          { value: 'quality', label: 'Quality' },
+          { value: 'balanced', label: 'Balanced' },
+          { value: 'fast', label: 'Fast' },
         ],
       },
       encoderId: {
-        label: 'エンコーダー',
+        label: 'Encoder',
         type: 'select',
         options: [
           { value: 'gifenc-js', label: 'gifenc-js' },
@@ -149,14 +150,14 @@ export const SETTINGS_METADATA = {
     },
   },
   thumbnailQuality: {
-    label: 'サムネイル品質',
+    label: 'Thumbnail Quality',
     type: 'select',
     options: [
-      { value: 'auto', label: '自動' },
-      { value: 'low', label: '低' },
-      { value: 'standard', label: '標準' },
-      { value: 'high', label: '高' },
-      { value: 'ultra', label: '最高' },
+      { value: 'auto', label: 'Auto' },
+      { value: 'low', label: 'Low' },
+      { value: 'standard', label: 'Standard' },
+      { value: 'high', label: 'High' },
+      { value: 'ultra', label: 'Ultra' },
     ],
   },
 };
