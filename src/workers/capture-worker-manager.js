@@ -45,6 +45,11 @@ export class CaptureWorkerManager {
   /** @type {boolean} */
   #isInitialized = false;
 
+  /** @type {boolean} Mirrors the worker's own START/STOP state, kept on this side too so
+   * callers (e.g. the capture feature's restore path) can skip a redundant START message
+   * instead of relying solely on the worker's internal `isCapturing` guard. */
+  #isRunning = false;
+
   /**
    * Initialize the worker with a video element
    * @param {HTMLVideoElement} video - Video element to capture from
@@ -77,14 +82,20 @@ export class CaptureWorkerManager {
 
   /**
    * Start capturing frames
+   *
+   * Idempotent: a second call while already running is a no-op, so restoring
+   * a background capture session that was never paused doesn't re-issue a
+   * redundant START (the worker itself guards against a second interval, but
+   * skipping the message here avoids an unnecessary resizeBuffer() pass too).
    * @param {number} fps - Target frames per second
    * @param {number} maxFrames - Maximum frames to buffer
    */
   start(fps, maxFrames) {
-    if (!this.#isInitialized) {
+    if (!this.#isInitialized || this.#isRunning) {
       return;
     }
 
+    this.#isRunning = true;
     this.#worker?.postMessage({
       type: 'START',
       payload: { fps, maxFrames },
@@ -95,7 +106,16 @@ export class CaptureWorkerManager {
    * Stop capturing frames (preserves buffer)
    */
   stop() {
+    this.#isRunning = false;
     this.#worker?.postMessage({ type: 'STOP' });
+  }
+
+  /**
+   * Whether the capture loop is currently running (mirrors worker START/STOP)
+   * @returns {boolean}
+   */
+  get isRunning() {
+    return this.#isRunning;
   }
 
   /**
@@ -137,6 +157,7 @@ export class CaptureWorkerManager {
     this.#video = null;
     this.#onStatsUpdate = null;
     this.#isInitialized = false;
+    this.#isRunning = false;
 
     // Do not leave requestFrames() callers waiting forever when teardown wins
     // the race with a worker response.

@@ -3,6 +3,7 @@
  * @module features/export/ui
  */
 
+import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { createElement, createErrorScreen, on } from '../../shared/utils/dom.js';
 import {
   formatBytes,
@@ -64,7 +65,7 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   const cleanups = [];
 
   // Update step indicator
-  updateStepIndicator('export');
+  updateStepIndicator('export', { isCapturing: hasActiveScreenCapture() });
 
   // Main layout
   const screen = createElement('div', { className: 'export-screen screen' });

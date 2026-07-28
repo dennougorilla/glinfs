@@ -164,6 +164,42 @@ button:focus-visible,
   pointer-events: none;
 }
 
+/* Background capture indicator: capture is still recording on another route */
+.step--live {
+  position: relative;
+}
+
+.step--live::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-error);
+  box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6);
+  animation: step-live-pulse 1.6s ease-out infinite;
+}
+
+@keyframes step-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(229, 72, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step--live::after {
+    animation: none;
+  }
+}
+
 .step-number {
   width: 22px;
   height: 22px;

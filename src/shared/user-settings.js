@@ -17,6 +17,8 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {15|30|60} fps - Frames per second
  * @property {number} bufferDuration - Buffer duration in seconds (5-60)
  * @property {boolean} sceneDetection - Auto scene detection enabled
+ * @property {boolean} backgroundCapture - Keep the frame-grab loop running while
+ *   navigated away from /capture, instead of pausing it (default true)
  */
 
 /**
@@ -40,6 +42,7 @@ const DEFAULT_SETTINGS = {
     fps: 30,
     bufferDuration: 15,
     sceneDetection: true,
+    backgroundCapture: true,
   },
   export: {
     quality: 0.8,
@@ -80,6 +83,10 @@ export const SETTINGS_METADATA = {
       },
       sceneDetection: {
         label: 'Scene Detection',
+        type: 'boolean',
+      },
+      backgroundCapture: {
+        label: 'Keep recording while editing',
         type: 'boolean',
       },
     },

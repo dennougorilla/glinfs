@@ -3,6 +3,7 @@
  * @module features/editor/ui
  */
 
+import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { navigate } from '../../shared/router.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
@@ -57,7 +58,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const cleanups = [];
 
   // Update step indicator
-  updateStepIndicator('editor');
+  updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
 
   const frame = state.clip.frames[state.currentFrame];
   const dimensions = getOutputDimensions(state.cropArea, frame);

@@ -3,12 +3,73 @@
  * @module features/capture/api
  */
 
+import { getTestConfig, isTestMode } from '../../shared/test-mode.js';
+
+/** Canvas dimensions for the mock stream (kept small - it's only drawn to, never shown) */
+const MOCK_STREAM_WIDTH = 640;
+const MOCK_STREAM_HEIGHT = 480;
+
+/**
+ * Build a canvas.captureStream() MediaStream that draws an animated frame
+ * counter, standing in for getDisplayMedia() under test.
+ *
+ * Lets Playwright drive the entire live capture pipeline (start, background
+ * capture, "ended" handling) without a real screen-share permission prompt.
+ * The draw loop is stopped as soon as the track is stopped by any caller -
+ * handleStop(), stream.getTracks().forEach(t => t.stop()), or the browser -
+ * so the canvas/interval never outlives the stream.
+ *
+ * @returns {MediaStream}
+ */
+function createMockScreenStream() {
+  const canvas = document.createElement('canvas');
+  canvas.width = MOCK_STREAM_WIDTH;
+  canvas.height = MOCK_STREAM_HEIGHT;
+  const ctx = canvas.getContext('2d');
+
+  let frame = 0;
+  const drawFrame = () => {
+    frame += 1;
+    if (!ctx) return;
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#e94560';
+    ctx.font = '48px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(frame), canvas.width / 2, canvas.height / 2);
+  };
+  drawFrame();
+
+  const intervalId = setInterval(drawFrame, 1000 / 30);
+  const stream = canvas.captureStream(30);
+
+  // Stop the draw loop the moment the track stops, whoever stops it, so the
+  // mock never leaks a live setInterval past the end of its stream.
+  const [track] = stream.getVideoTracks();
+  const stopDrawing = () => clearInterval(intervalId);
+  track?.addEventListener('ended', stopDrawing);
+  const originalStop = track?.stop.bind(track);
+  if (track && originalStop) {
+    track.stop = () => {
+      stopDrawing();
+      originalStop();
+    };
+  }
+
+  return stream;
+}
+
 /**
  * Request screen capture permission and start MediaStream
  * @returns {Promise<MediaStream>}
  * @throws {Error} If permission denied or not supported
  */
 export async function startScreenCapture() {
+  if (isTestMode() && getTestConfig().mockStream) {
+    return createMockScreenStream();
+  }
+
   if (!navigator.mediaDevices?.getDisplayMedia) {
     const error = new Error('Screen capture not supported');
     error.code = 'NOT_SUPPORTED';

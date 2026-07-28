@@ -3,6 +3,7 @@
  * @module features/loading/ui
  */
 
+import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { createElement } from '../../shared/utils/dom.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
@@ -43,7 +44,7 @@ function createSpinnerIcon() {
  */
 export function renderLoadingScreen(container) {
   // Update step indicator to show Edit step as current
-  updateStepIndicator('editor', { hasFrames: true });
+  updateStepIndicator('editor', { hasFrames: true, isCapturing: hasActiveScreenCapture() });
 
   const screen = createElement('div', { className: 'loading-screen screen' });
 

@@ -11,6 +11,7 @@ import {
   setScreenCaptureState,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
+import { announce } from '../../shared/live-region.js';
 import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -73,13 +74,10 @@ export function initCapture(settings) {
     captureTrack = savedCapture.captureTrack;
     workerManager = savedCapture.workerManager;
 
-    // Re-attach stream ended listener
-    if (captureTrack) {
-      const handleStreamEnded = () => {
-        handleStop();
-        clearScreenCaptureState(false); // Stream already ended
-        emit('capture:stopped', {});
-      };
+    // Re-attach the stream-ended listener only if it isn't already attached.
+    // cleanup() (below) leaves it attached across navigation, so this only
+    // ever fires for saved state that predates that behavior.
+    if (captureTrack && !streamEndedCleanup) {
       captureTrack.addEventListener('ended', handleStreamEnded);
       streamEndedCleanup = () => captureTrack.removeEventListener('ended', handleStreamEnded);
     }
@@ -102,8 +100,11 @@ export function initCapture(settings) {
       }
     }
 
-    // Restart worker capture if we have a worker manager
-    if (workerManager && store) {
+    // Restart worker capture only if it isn't already running. With
+    // capture.backgroundCapture enabled, cleanup() never paused the worker
+    // loop in the first place, so state.isCapturing is still true here -
+    // calling start() again would be a redundant (if harmless) START message.
+    if (workerManager && store && !store.getState().isCapturing) {
       const state = store.getState();
       const maxFrames = calculateMaxFrames(state.settings);
       workerManager.start(state.settings.fps, maxFrames);
@@ -194,12 +195,10 @@ async function handleStart() {
     // Create video element for capture and preview
     videoElement = await createVideoElement(stream);
 
-    // Listen for stream end
-    const handleStreamEnded = () => {
-      handleStop();
-      clearScreenCaptureState(false); // Stream already ended
-      emit('capture:stopped', {});
-    };
+    // Listen for stream end. This listener stays attached across navigation
+    // (cleanup() below does not remove it) so a share stopped from the
+    // browser UI is caught whether the user is on /capture or elsewhere -
+    // see handleStreamEnded's own comment for how it behaves in each case.
     videoTrack.addEventListener('ended', handleStreamEnded);
     streamEndedCleanup = () => videoTrack.removeEventListener('ended', handleStreamEnded);
 
@@ -251,6 +250,36 @@ async function handleStart() {
     render(container);
     throw err;
   }
+}
+
+/**
+ * Route-independent handler for the capture track's "ended" event (i.e. the
+ * user stopped sharing from the browser's own UI, not from ours).
+ *
+ * Registered once per capture session (in handleStart) and left attached
+ * across navigation - cleanup() never removes it - so this fires whether the
+ * user is on /capture or has navigated away:
+ * - Mounted (`store` set): defers to handleStop() for the normal UI-aware
+ *   teardown (updates the store, re-renders, keeps the buffer available).
+ * - Backgrounded (`store` is null, module vars already handed to app-store
+ *   by cleanup()): there's no UI to update, so this only releases the
+ *   worker/video resources stashed there via clearScreenCaptureState(false).
+ */
+function handleStreamEnded() {
+  if (store) {
+    // handleStop() already updates the store, re-renders, and emits
+    // 'capture:stopped' - don't duplicate that here.
+    handleStop();
+  } else {
+    // Backgrounded: no UI to update. clearScreenCaptureState delegates the
+    // actual teardown (worker termination, video element release) to the
+    // cleanup function main.js registers at startup - see
+    // registerScreenCaptureCleanup in main.js / cleanupScreenCaptureResources
+    // in api.js. `false` = don't stop the stream again, it already ended.
+    clearScreenCaptureState(false);
+    emit('capture:stopped', {});
+  }
+  announce('Screen sharing ended');
 }
 
 /**
@@ -461,20 +490,29 @@ function cleanup() {
 
   if (hasActiveCapture) {
     // Preserve screen capture state for restoration
-    // Stop the worker capture loop but keep the stream alive
-    if (workerManager) {
-      workerManager.stop();
+    const { backgroundCapture } = loadSettings().capture;
+
+    if (backgroundCapture) {
+      // Leave the worker's frame-grab loop running on any route - only the
+      // UI unmounts. isCapturing/isSharing stay true, which is what lets
+      // the restore path above skip a redundant workerManager.start().
+    } else {
+      // Old pause-and-resume behavior: stop the worker capture loop but
+      // keep the stream alive.
+      if (workerManager) {
+        workerManager.stop();
+      }
+
+      // Record that the worker loop is paused so isCapturing/isPaused stay
+      // truthful for anyone reading the stashed store during navigation
+      store.setState(pauseCapture);
     }
 
-    // Record that the worker loop is paused so isCapturing/isPaused stay
-    // truthful for anyone reading the stashed store during navigation
-    store.setState(pauseCapture);
-
-    // Remove stream ended listener (will be re-attached on restore)
-    if (streamEndedCleanup) {
-      streamEndedCleanup();
-      streamEndedCleanup = null;
-    }
+    // The stream-ended listener (attached in handleStart) is deliberately
+    // left attached here regardless of backgroundCapture: it's what lets a
+    // share stopped from the browser UI while navigated away be noticed at
+    // all (see handleStreamEnded), whether or not the frame-grab loop
+    // itself is still running.
 
     // Store capture state for later restoration
     setScreenCaptureState({

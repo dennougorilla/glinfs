@@ -17,6 +17,7 @@ import {
   setClipPayload,
   setEditorPayload,
 } from './shared/app-store.js';
+import { announce } from './shared/live-region.js';
 import { initRouter } from './shared/router.js';
 import {
   getDefaultMockOptions,
@@ -267,9 +268,4 @@ document.addEventListener('DOMContentLoaded', () => {
  * Announce message to screen readers
  * @param {string} message - Message to announce
  */
-export function announce(message) {
-  const liveRegion = document.getElementById('live-region');
-  if (liveRegion) {
-    liveRegion.textContent = message;
-  }
-}
+export { announce };
