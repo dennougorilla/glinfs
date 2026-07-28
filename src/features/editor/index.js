@@ -268,6 +268,18 @@ export function initEditor() {
   // Initial render
   render(container);
 
+  // Draw the current frame SYNCHRONOUSLY before the browser can paint —
+  // the canvas otherwise stays black until the first (throttled)
+  // subscription tick, which reads as a dark flash on every mount/reinit
+  // (promote, active-delete succession) (#100 round 6).
+  {
+    const st = store.getState();
+    const firstFrame = st.clip?.frames[st.currentFrame];
+    if (baseCanvas && firstFrame) {
+      updateBaseCanvas(baseCanvas, firstFrame);
+    }
+  }
+
   // Dock the live source monitor into the sidebar slot (#100). Mounted
   // after render so the slot exists; owns its own bus subscriptions and
   // visibility.
@@ -937,18 +949,34 @@ function handleUndoDelete() {
  * show the select screen, none redirects to Capture.
  */
 function handleDeleteActiveClip() {
+  const successor = getClipQueue()[0] ?? null;
+  const successorNeedsDecode = successor !== null && successor.status !== 'raw';
+
   if (!deleteActiveClip()) return;
-  cleanup();
   showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
-  if (getClipQueue().length === 0) {
+
+  if (!successor) {
     // Nothing left to edit — leaving to Capture is the natural next step;
     // re-initing here would land on the "Invalid Clip Data" ERROR screen
     // for what was a perfectly deliberate action (#100 round 5)
+    cleanup();
     announce('Last clip deleted');
     navigate('/capture');
     return;
   }
+
   announce('Clip deleted');
+  if (successorNeedsDecode) {
+    // Keep the current editor ON SCREEN while the compressed successor
+    // decodes (#100 round 6) — the deleted clip's frames live in the undo
+    // hold, so the canvas stays valid; tearing down to an "Opening clip…"
+    // screen here is exactly the dark flash the user reported. The entry
+    // shows its 'decoding' state in the panel; promoteWhenDecoded swaps in
+    // the new clip the moment its frames arrive.
+    void promoteWhenDecoded(successor.id);
+    return;
+  }
+  cleanup();
   initEditor();
 }
 

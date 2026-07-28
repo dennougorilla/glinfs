@@ -407,7 +407,9 @@ export function deleteActiveClip() {
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
-  resetThumbnailCache();
+  // Deliberately NOT resetting the thumbnail cache: the successor clip's
+  // cached thumbnails must survive the swap or the filmstrip rebuilds dark
+  // (#100 round 6). Stale entries age out of the LRU on their own.
   emitQueueChanged('delete-active');
   return true;
 }
@@ -692,10 +694,12 @@ export function promoteQueuedClip(id, currentEditorState = null) {
     maybeCompressEntry(demoted);
   }
 
-  // The singleton thumbnail cache is active-clip-only; editorPayload and a
-  // completed export belong to the demoted clip and must not leak into the
-  // promoted one. None of this closes frames.
-  resetThumbnailCache();
+  // editorPayload and a completed export belong to the demoted clip and
+  // must not leak into the promoted one. The thumbnail cache is NOT reset:
+  // entries are keyed by frame id (collision-free across clips) and the
+  // promoted clip's cached thumbnails keep the filmstrip instant across
+  // swaps — resetting here was the dark-filmstrip flash on every promote
+  // (#100 round 6). None of this closes frames.
   state.editorPayload = null;
   exportResult = null;
 
