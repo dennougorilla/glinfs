@@ -39,21 +39,32 @@ export function renderSettings(container, handlers = {}) {
   function renderPass() {
     const settings = loadSettings();
 
-    container.className = 'settings-container';
     container.innerHTML = '';
+
+    // Screen shell — every other feature mounts its own `.screen` child
+    // instead of putting layout classes on #main-content itself.
+    const screen = createElement('div', { className: 'settings-screen screen' });
 
     // Header
     const header = createElement('div', { className: 'settings-header' });
 
-    const backBtn = createElement('button', { className: 'btn btn-ghost' }, ['← 戻る']);
+    const backBtn = createElement(
+      'button',
+      { className: 'btn btn-ghost settings-header-back', type: 'button' },
+      ['← Back'],
+    );
     cleanups.push(() => backBtn.removeEventListener('click', onBack));
     backBtn.addEventListener('click', onBack);
 
-    const title = createElement('h1', { className: 'settings-title' }, ['設定']);
+    const title = createElement('h1', { className: 'settings-title' }, ['Settings']);
 
-    const resetAllBtn = createElement('button', { className: 'btn btn-ghost' }, ['すべてリセット']);
+    const resetAllBtn = createElement(
+      'button',
+      { className: 'btn btn-ghost settings-header-reset', type: 'button' },
+      ['Reset All'],
+    );
     const handleResetAll = () => {
-      if (confirm('すべての設定をデフォルト値にリセットしますか?')) {
+      if (confirm('Reset all settings to their default values?')) {
         resetSettings();
         rerender();
       }
@@ -92,7 +103,8 @@ export function renderSettings(container, handlers = {}) {
     const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
     content.appendChild(thumbnailSection);
 
-    container.append(header, content);
+    screen.append(header, content);
+    container.appendChild(screen);
   }
 
   renderPass();
@@ -121,9 +133,11 @@ function renderSettingsCategory(category, label, values, metadata, cleanups, rer
   const header = createElement('div', { className: 'settings-section-header' });
   const titleEl = createElement('h2', { className: 'settings-section-title' }, [label]);
 
-  const resetBtn = createElement('button', { className: 'btn btn-ghost btn-sm' }, ['リセット']);
+  const resetBtn = createElement('button', { className: 'btn btn-ghost btn-sm', type: 'button' }, [
+    'Reset',
+  ]);
   const handleReset = () => {
-    if (confirm(`${label}をデフォルト値にリセットしますか?`)) {
+    if (confirm(`Reset ${label} to default values?`)) {
       resetCategory(category);
       rerender();
     }
@@ -155,7 +169,7 @@ function renderThumbnailQualitySetting(value, cleanups) {
   const section = createElement('div', { className: 'settings-section' });
 
   const header = createElement('div', { className: 'settings-section-header' });
-  const titleEl = createElement('h2', { className: 'settings-section-title' }, ['その他']);
+  const titleEl = createElement('h2', { className: 'settings-section-title' }, ['Other']);
   header.appendChild(titleEl);
 
   const list = createElement('div', { className: 'settings-list' });
@@ -252,14 +266,23 @@ function renderSettingControl(category, key, value, metadata, cleanups) {
 function renderBooleanControl(value, readCurrentValue, onChange, cleanups) {
   const control = createElement('div', { className: 'settings-control' });
 
-  const toggle = createElement('button', { className: `btn-toggle ${value ? 'active' : ''}` }, [
-    value ? 'ON' : 'OFF',
-  ]);
+  // Same classes as the Capture sidebar toggle (styled once in
+  // form-controls.css) so both screens render an identical control.
+  const toggle = createElement(
+    'button',
+    {
+      className: `btn btn-toggle ${value ? 'btn-toggle--active' : ''}`,
+      type: 'button',
+      'aria-pressed': String(value),
+    },
+    [value ? 'On' : 'Off'],
+  );
 
   const handleClick = () => {
     const newValue = !readCurrentValue();
-    toggle.className = `btn-toggle ${newValue ? 'active' : ''}`;
-    toggle.textContent = newValue ? 'ON' : 'OFF';
+    toggle.className = `btn btn-toggle ${newValue ? 'btn-toggle--active' : ''}`;
+    toggle.setAttribute('aria-pressed', String(newValue));
+    toggle.textContent = newValue ? 'On' : 'Off';
     onChange(newValue);
   };
 

@@ -163,7 +163,14 @@
   overflow: hidden;
 }
 
-.settings-header {
+/* Everything below is scoped to the export settings panel on purpose.
+   These generic names (.settings-header, .setting-row, …) are also used by
+   the Settings screen and the Capture sidebar, and export.css loads after
+   capture.css: unscoped, they silently restyled both. The Capture sidebar
+   was rendering its rows stacked (flex-direction: column) because of the
+   .setting-row rule below, and the Settings screen inherited this header's
+   uppercase treatment. */
+.export-settings-panel .settings-header {
   flex-shrink: 0;
   height: 40px;
   display: flex;
@@ -173,7 +180,7 @@
   border-bottom: 1px solid var(--color-border);
 }
 
-.settings-title {
+.export-settings-panel .settings-title {
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--color-text-muted);
@@ -181,7 +188,7 @@
   letter-spacing: 0.08em;
 }
 
-.settings-content {
+.export-settings-panel .settings-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -189,19 +196,19 @@
 }
 
 /* Settings Group */
-.settings-group {
+.export-settings-panel .settings-group {
   margin-bottom: var(--space-5);
   padding-bottom: var(--space-5);
   border-bottom: 1px solid var(--color-border);
 }
 
-.settings-group:last-child {
+.export-settings-panel .settings-group:last-child {
   margin-bottom: 0;
   padding-bottom: 0;
   border-bottom: none;
 }
 
-.settings-group-title {
+.export-settings-panel .settings-group-title {
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--color-text-muted);
@@ -211,29 +218,29 @@
 }
 
 /* Setting Row */
-.setting-row {
+.export-settings-panel .setting-row {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
 
-.setting-row:last-child {
+.export-settings-panel .setting-row:last-child {
   margin-bottom: 0;
 }
 
-.setting-header {
+.export-settings-panel .setting-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.setting-label {
+.export-settings-panel .setting-label {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-.setting-value {
+.export-settings-panel .setting-value {
   font-size: var(--font-size-sm);
   font-family: var(--font-mono);
   color: var(--color-primary);
@@ -286,7 +293,7 @@
 }
 
 /* Actions */
-.settings-actions {
+.export-settings-panel .settings-actions {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;

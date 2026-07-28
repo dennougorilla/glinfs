@@ -18,7 +18,10 @@ describe('initSettings', () => {
     expect(() => initSettings()).not.toThrow();
 
     const container = document.getElementById('main-content');
-    expect(container.classList.contains('settings-container')).toBe(true);
+    // Layout classes belong on the feature's own screen element, not on
+    // #main-content, which the router owns and resets between routes.
+    expect(container.querySelector('.settings-screen.screen')).not.toBeNull();
+    expect(container.className).toBe('');
     expect(container.children.length).toBeGreaterThan(0);
   });
 
