@@ -8,6 +8,49 @@
    (see form-controls.css header comment). Do not add bare helper classes.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Header live strip (#100 follow-up): tiny live view of the ongoing
+   capture, visible on every route while recording */
+.clip-now-group .header-live-thumb {
+  position: relative;
+  width: 48px;
+  height: 27px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: black;
+  border: 1px solid var(--color-recording);
+  flex-shrink: 0;
+}
+
+.clip-now-group .header-live-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.clip-now-group .header-live-dot {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-recording);
+  animation: header-live-pulse 1s infinite;
+}
+
+@keyframes header-live-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-now-group .header-live-dot {
+    animation: none;
+  }
+}
+
 .clip-now-group {
   position: relative;
   display: inline-flex;

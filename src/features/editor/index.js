@@ -273,8 +273,12 @@ export function initEditor() {
   // visibility.
   {
     const slot = container.querySelector('[data-live-monitor]');
+    const previewHost = container.querySelector('.editor-preview-wrapper');
     if (slot instanceof HTMLElement) {
-      liveMonitorCleanup = initLiveMonitor(slot);
+      liveMonitorCleanup = initLiveMonitor(
+        slot,
+        previewHost instanceof HTMLElement ? previewHost : null,
+      );
     }
   }
 

@@ -669,6 +669,7 @@ export function getLiveCaptureContext() {
         fps: state.settings.fps,
         sceneDetection: state.settings.sceneDetection,
         stats: state.stats,
+        stream: state.stream,
       };
     }
   }
@@ -683,6 +684,7 @@ export function getLiveCaptureContext() {
         fps: settings.fps,
         sceneDetection: settings.sceneDetection,
         stats: saved.store?.getState()?.stats ?? null,
+        stream: saved.stream ?? null,
       };
     }
   }

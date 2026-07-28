@@ -57,6 +57,26 @@ test('live monitor docks in the editor, Clip Now works, ordering is stable, tabs
   expect(idsAfter).toEqual(idsBefore);
   await expect(page.locator('.editor-canvas')).toBeVisible();
 
+  // Source-monitor Live view (#100 follow-up): clicking the dock viewport
+  // swaps the center preview to the live feed; x closes it
+  await monitor.locator('.live-monitor-viewport').click();
+  const overlay = page.locator('[data-testid="live-view-overlay"]');
+  await expect(overlay).toBeVisible();
+  await overlay.locator('[data-testid="live-view-clip-now"]').click();
+  await expect(page.locator('#clip-queue-badge')).toHaveText('3');
+  await overlay.locator('[data-testid="live-view-close"]').click();
+  await expect(overlay).toBeHidden();
+
+  // Header live strip: visible on non-editor routes while recording
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  await expect(page.locator('#header-live-thumb')).toBeVisible();
+  await page.evaluate(() => {
+    location.hash = '#/editor';
+  });
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+
   // Tabs: switching to SCENES hides the clips pane, and back
   await page.locator('[data-testid="tab-scenes"]').click();
   await expect(page.locator('.sidebar-pane[data-pane="clips"]')).toBeHidden();

@@ -146,3 +146,99 @@ describe('live source monitor dock (#100)', () => {
     expect(slot.innerHTML).toBe('');
   });
 });
+
+describe('source-monitor Live view overlay (#100 follow-up)', () => {
+  /** @type {HTMLElement} */
+  let host;
+
+  function mountWithHost() {
+    host = document.createElement('div');
+    host.className = 'editor-preview-wrapper';
+    document.body.appendChild(host);
+    return initLiveMonitor(slot, host);
+  }
+
+  /** @type {HTMLElement} */
+  let slot;
+  /** @type {(() => void) | null} */
+  let teardown = null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    captureState.active = false;
+    captureState.screenState = null;
+    document.body.innerHTML = '<div data-live-monitor></div>';
+    slot = /** @type {HTMLElement} */ (document.querySelector('[data-live-monitor]'));
+  });
+
+  afterEach(() => {
+    teardown?.();
+    teardown = null;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  function goLive() {
+    captureState.active = true;
+    captureState.screenState = {
+      stream: {},
+      store: { getState: () => ({ stats: {}, settings: {} }), subscribe: () => () => {} },
+    };
+  }
+
+  it('clicking the dock viewport opens the overlay in the preview host', () => {
+    goLive();
+    teardown = mountWithHost();
+
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+
+    const overlay = host.querySelector('[data-testid="live-view-overlay"]');
+    expect(overlay).not.toBeNull();
+    expect(/** @type {HTMLElement} */ (overlay).hidden).toBe(false);
+  });
+
+  it('close button and Escape both hide the overlay', () => {
+    goLive();
+    teardown = mountWithHost();
+    const viewport = /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport'));
+
+    viewport.click();
+    /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-close"]')).click();
+    expect(
+      /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-overlay"]')).hidden,
+    ).toBe(true);
+
+    viewport.click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(
+      /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-overlay"]')).hidden,
+    ).toBe(true);
+  });
+
+  it('overlay Clip Now calls the clip service', () => {
+    goLive();
+    teardown = mountWithHost();
+
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+    /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-clip-now"]')).click();
+
+    expect(clipNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('capture end closes the overlay along with the dock', () => {
+    goLive();
+    teardown = mountWithHost();
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+
+    captureState.active = false;
+    captureState.screenState = null;
+    emit('capture:stopped', {});
+    vi.advanceTimersByTime(2100);
+
+    expect(
+      /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-overlay"]')).hidden,
+    ).toBe(true);
+    expect(slot.hidden).toBe(true);
+  });
+});

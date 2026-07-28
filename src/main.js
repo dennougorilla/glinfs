@@ -5,7 +5,7 @@
 
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
 import { clipNow, handleClipNowHotkey, isCaptureLive } from './features/capture/clip-service.js';
-import { initCapture } from './features/capture/index.js';
+import { getLiveCaptureContext, initCapture } from './features/capture/index.js';
 import { initEditor, promoteClipFromQueue } from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
@@ -311,6 +311,8 @@ function setupClipQueueHeader() {
   const group = document.getElementById('clip-now-group');
   const clipNowBtn = document.getElementById('clip-now-btn');
   const badge = document.getElementById('clip-queue-badge');
+  const liveThumb = document.getElementById('header-live-thumb');
+  const liveThumbVideo = liveThumb?.querySelector('video') ?? null;
   if (!group || !clipNowBtn || !badge) return;
 
   /** @type {HTMLElement | null} */
@@ -417,6 +419,18 @@ function setupClipQueueHeader() {
     badge.hidden = count === 0;
     group.hidden = !live && count === 0;
     badge.textContent = String(count);
+
+    // Live strip thumbnail: a tiny always-on view of the ongoing capture so
+    // every route (Export, Settings, ...) can SEE that recording continues,
+    // not just infer it from the red dot (#100 follow-up, Layout B merge)
+    if (liveThumb && liveThumbVideo) {
+      const stream = live ? (getLiveCaptureContext()?.stream ?? null) : null;
+      liveThumb.hidden = !stream;
+      if (liveThumbVideo.srcObject !== stream) {
+        liveThumbVideo.srcObject = stream;
+        if (stream) liveThumbVideo.play?.()?.catch?.(() => {});
+      }
+    }
 
     if (count > lastCount) {
       // Restart the pulse animation on every increment
