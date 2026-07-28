@@ -69,8 +69,8 @@ beforeEach(() => {
 });
 
 describe('queue limit configuration', () => {
-  it('defaults to 3 and clamps corrupted values into 1-10', () => {
-    expect(getClipQueueLimit()).toBe(3);
+  it('defaults to 10 (#92 compressed queue) and clamps corrupted values into 1-30', () => {
+    expect(getClipQueueLimit()).toBe(10);
 
     updateSetting('capture', 'clipQueueLimit', 7);
     expect(getClipQueueLimit()).toBe(7);
@@ -79,10 +79,10 @@ describe('queue limit configuration', () => {
     expect(getClipQueueLimit()).toBe(1);
 
     updateSetting('capture', 'clipQueueLimit', 999);
-    expect(getClipQueueLimit()).toBe(10);
+    expect(getClipQueueLimit()).toBe(30);
 
     updateSetting('capture', 'clipQueueLimit', 'garbage');
-    expect(getClipQueueLimit()).toBe(3);
+    expect(getClipQueueLimit()).toBe(10);
   });
 });
 
@@ -101,7 +101,7 @@ describe('enqueueClip', () => {
     expect(queue[0].id).toBe(second.entry.id);
     expect(queue[1].id).toBe(first.entry.id);
     expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({ type: 'enqueue', queueLength: 2, limit: 3 });
+    expect(events[1]).toMatchObject({ type: 'enqueue', queueLength: 2, limit: 10 });
 
     unsubscribe();
   });

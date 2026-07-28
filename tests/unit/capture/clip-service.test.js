@@ -96,7 +96,7 @@ describe('clipNow', () => {
     expect(queue).toHaveLength(1);
     expect(queue[0].frames).toHaveLength(4);
     expect(queue[0].fps).toBe(30);
-    expect(queued).toEqual([expect.objectContaining({ queueLength: 1, limit: 3 })]);
+    expect(queued).toEqual([expect.objectContaining({ queueLength: 1, limit: 10 })]);
 
     unsubscribe();
   });

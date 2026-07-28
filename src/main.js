@@ -16,12 +16,15 @@ import {
   getClipPayload,
   getClipQueue,
   getEditorPayload,
+  isClipCompressionAvailable,
+  registerClipCodec,
   registerScreenCaptureCleanup,
   resetAppStore,
   setClipPayload,
   setEditorPayload,
 } from './shared/app-store.js';
 import { on as onBus } from './shared/bus.js';
+import { createClipCodecManager } from './shared/clip-codec.js';
 import { renderClipEntries } from './shared/clip-entries.js';
 import { announce } from './shared/live-region.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
@@ -258,6 +261,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // This ensures side effects are handled in capture/api.js, not app-store.js
   registerScreenCaptureCleanup(cleanupScreenCaptureResources);
 
+  // Clip codec (#92): queued clips compress through a WebCodecs worker.
+  // Probe support once, up front — until it resolves (or when unsupported)
+  // the queue gracefully keeps entries raw.
+  const clipCodec = createClipCodecManager();
+  registerClipCodec(clipCodec);
+  void clipCodec.probeSupport();
+  if (window.__TEST_HOOKS__) {
+    // Lets E2E specs log/branch on which queue path (compressed vs raw
+    // fallback) the test environment actually exercised
+    window.__TEST_HOOKS__.isClipCompressionAvailable = isClipCompressionAvailable;
+  }
+
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');
   liveRegion.setAttribute('role', 'status');
@@ -322,10 +337,14 @@ function setupClipQueueHeader() {
       onPromote: (id) => {
         closePopover();
         // When the editor is mounted this swaps in place; otherwise the clip
-        // just becomes active and we navigate to it
-        if (promoteClipFromQueue(id) && getCurrentRoute() !== '/editor') {
-          navigate('/editor');
-        }
+        // becomes active and we navigate to it. Async because compressed
+        // entries decode first (#92) — the queue badge stays visible as the
+        // progress surface in the meantime.
+        void promoteClipFromQueue(id).then((promoted) => {
+          if (promoted && getCurrentRoute() !== '/editor') {
+            navigate('/editor');
+          }
+        });
       },
       onDelete: (id) => {
         if (!confirm('Delete this clip? Its frames will be discarded.')) return;

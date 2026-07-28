@@ -9,7 +9,7 @@
  * - EditorPayload: editor -> export
  *
  * ============================================================
- * FRAME OWNERSHIP RULES (#95) — read before touching any of this
+ * FRAME OWNERSHIP RULES (#95, #92) — read before touching any of this
  * ============================================================
  * VideoFrames pin GPU/CPU memory until close()d, and drawing a closed frame
  * silently renders black. Every frame in this store therefore has exactly one
@@ -18,15 +18,40 @@
  *
  * - Frames are closed ONLY on:
  *   1. explicit queue-entry delete (deleteQueuedClip),
- *   2. releaseAllFramesAndReset (which also drains the queue).
+ *   2. releaseAllFramesAndReset (which also drains the queue),
+ *   3. inside the codec worker after a successful encode (#92) — at that
+ *      point the compressed bytes ARE the clip and the raw frames end.
  *   They are NEVER closed on promoteQueuedClip / demote / setClipPayload
  *   while a queue exists — those operations only MOVE ownership.
  * - The ACTIVE clip is structurally never evictable: it lives in
  *   clipPayload, not in the queue, so no queue-limit logic can reach it.
  * - Queue full => enqueue (and the demote inside setClipPayload) is REFUSED
  *   with a { ok: false, reason: 'queue-full' } result the UI must surface.
- *   Nothing is destroyed on refusal.
+ *   Nothing is destroyed on refusal. Refusals are decided BEFORE any
+ *   compression starts.
  * - Every queue mutation emits 'queue:changed' on the bus.
+ *
+ * Compressed queue entries (#92): when a clip codec is registered and
+ * available, ONLY the active clip holds raw VideoFrames — queue entries are
+ * transcoded to EncodedVideoChunk bytes in a worker. Entry lifecycle:
+ *
+ *   raw --> compressing --> compressed --> decoding --> raw (then promote)
+ *              |  (encode failure: back to raw, frames returned — a clip is
+ *              v   never lost to a codec error)
+ *             raw
+ *
+ * - 'compressing': the entry's VideoFrames were TRANSFERRED into the codec
+ *   worker (the wrappers in entry.frames are detached husks kept only for
+ *   their width/height accounting metadata). The entry cannot be promoted
+ *   until the encode settles.
+ * - 'compressed': entry.frames is null; entry.compressed holds plain
+ *   ArrayBuffer chunks under normal GC — the close() rules above apply to
+ *   raw frames only. Deleting a compressed entry just drops the buffers.
+ * - 'decoding': a promote is decoding this entry (double-promote is
+ *   refused). Deleting the entry mid-decode discards (closes) the decoded
+ *   frames when they arrive.
+ * - No codec registered / unsupported platform: entries stay 'raw' with
+ *   exactly the pre-#92 semantics.
  */
 
 import { emit } from './bus.js';
@@ -58,9 +83,31 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  */
 
 /**
+ * Entry lifecycle state (#92) — see the ownership rules diagram above.
+ * @typedef {'raw'|'compressing'|'compressed'|'decoding'} ClipQueueEntryStatus
+ */
+
+/**
+ * Compressed form of a queued clip (#92). Chunks and description are plain
+ * ArrayBuffers under normal GC. frameMeta preserves the original Frame
+ * wrapper identities so a decode round-trip rebuilds the same clip.
+ * @typedef {Object} CompressedClip
+ * @property {import('./clip-codec.js').SerializedChunk[]} chunks
+ * @property {import('./clip-codec.js').EncodedClipConfig} config
+ * @property {number} byteLength - Total compressed payload bytes
+ * @property {{id: string, timestamp: number, width: number, height: number}[]} frameMeta
+ */
+
+/**
  * @typedef {Object} ClipQueueEntry
  * @property {string} id - Unique clip identifier
- * @property {import('../features/capture/types.js').Frame[]} frames - Owned frames (closed only on delete/reset)
+ * @property {import('../features/capture/types.js').Frame[]|null} frames - Owned frames
+ *   (closed only on delete/reset). null while 'compressed'/'decoding';
+ *   detached husks while 'compressing' (kept for accounting metadata).
+ * @property {ClipQueueEntryStatus} status - Lifecycle state (#92)
+ * @property {number} frameCount - Frame count, stable across compression
+ * @property {CompressedClip|null} compressed - Compressed bytes ('compressed'/'decoding' only)
+ * @property {number} [byteLengthMB] - Compressed size in MB (set once compressed)
  * @property {15|30|60} fps - Capture FPS
  * @property {number} capturedAt - Timestamp when clip was created
  * @property {boolean} [sceneDetectionEnabled] - Scene detection flag carried with the clip
@@ -161,19 +208,82 @@ function closeEditorPayloadFrames(payload) {
   closeFrameList(payload?.clip?.frames);
 }
 
+/**
+ * Close bare VideoFrames handed back by the codec (#92) that no queue entry
+ * owns anymore (deleted/reset mid-job). Same guard convention as
+ * closeFrameList, but for unwrapped frames.
+ * @param {VideoFrame[]|undefined|null} videoFrames
+ */
+function closeVideoFrames(videoFrames) {
+  if (!videoFrames) return;
+  for (const vf of videoFrames) {
+    try {
+      if (!vf.closed) vf.close();
+    } catch {
+      // Ignore errors - frame may already be closed
+    }
+  }
+}
+
+// ============================================================
+// Clip Codec seam (#92)
+// ============================================================
+
+/**
+ * Minimal surface this store needs from shared/clip-codec.js. Injected (like
+ * registerScreenCaptureCleanup) so jsdom tests can drive the entry state
+ * machine with a mock codec and no WebCodecs.
+ * @typedef {Object} ClipCodecLike
+ * @property {() => boolean} isCompressionAvailable
+ * @property {(frames: VideoFrame[], options: {fps: number, width: number, height: number}) => Promise<import('./clip-codec.js').EncodeResult>} encode
+ * @property {(compressed: {chunks: import('./clip-codec.js').SerializedChunk[], config: import('./clip-codec.js').EncodedClipConfig}) => Promise<import('./clip-codec.js').DecodeResult>} decode
+ */
+
+/** @type {ClipCodecLike|null} */
+let clipCodec = null;
+
+/**
+ * Pending encode jobs by entry id, so a promote of a still-'compressing'
+ * entry can await the encode before decoding, and delete can let a stale
+ * result be discarded on arrival.
+ * @type {Map<string, Promise<void>>}
+ */
+const pendingEncodeJobs = new Map();
+
+/**
+ * Register the clip codec service (called once at app startup from main.js).
+ * Passing null unregisters (tests).
+ * @param {ClipCodecLike|null} codec
+ */
+export function registerClipCodec(codec) {
+  clipCodec = codec;
+}
+
+/**
+ * Whether queued clips are being WebCodecs-compressed (#92).
+ * False when no codec is registered or the platform probe failed.
+ * @returns {boolean}
+ */
+export function isClipCompressionAvailable() {
+  return clipCodec?.isCompressionAvailable() === true;
+}
+
 // ============================================================
 // Clip Queue (bounded, newest first)
 // ============================================================
 
 /**
- * Queue limit from user settings, clamped to the supported 1-10 range so a
+ * Queue limit from user settings, clamped to the supported 1-30 range so a
  * corrupted localStorage value can never make the queue unbounded (or zero).
+ * The 1-30 range (and the default of 10) assumes compressed entries (#92);
+ * in the raw fallback the memory-budget refusal is the effective bound long
+ * before the count limit.
  * @returns {number}
  */
 export function getClipQueueLimit() {
   const raw = Number(loadSettings().capture.clipQueueLimit);
-  if (!Number.isFinite(raw)) return 3;
-  return Math.min(10, Math.max(1, Math.round(raw)));
+  if (!Number.isFinite(raw)) return 10;
+  return Math.min(30, Math.max(1, Math.round(raw)));
 }
 
 /**
@@ -221,6 +331,9 @@ function activeToQueueEntry(active, editorState) {
   return {
     id: /** @type {string} */ (active.id),
     frames: active.frames,
+    status: /** @type {ClipQueueEntryStatus} */ ('raw'),
+    frameCount: active.frames?.length ?? 0,
+    compressed: null,
     fps: active.fps,
     capturedAt: active.capturedAt,
     sceneDetectionEnabled: active.sceneDetectionEnabled,
@@ -240,7 +353,7 @@ function activeToQueueEntry(active, editorState) {
 
 /**
  * Notify listeners that the queue changed
- * @param {'enqueue'|'promote'|'delete'|'demote'|'reset'} type
+ * @param {'enqueue'|'promote'|'delete'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'decode-start'|'decode'|'decode-error'} type
  */
 function emitQueueChanged(type) {
   emit('queue:changed', {
@@ -248,6 +361,198 @@ function emitQueueChanged(type) {
     queueLength: state.clipQueue.length,
     limit: getClipQueueLimit(),
   });
+}
+
+/**
+ * Is this entry immediately promotable (raw frames in hand)?
+ * @param {ClipQueueEntry} entry
+ * @returns {boolean}
+ */
+function isEntryPromotableNow(entry) {
+  return entry.status === 'raw' && (entry.frames?.length ?? 0) > 0;
+}
+
+/**
+ * Kick background compression for a raw entry that just entered the queue.
+ *
+ * Called AFTER the entry is in state.clipQueue and AFTER its thumbnail was
+ * rendered (ensureClipIdentity) — the VideoFrames are about to be
+ * transferred into the worker and become unusable on this thread. Callers
+ * emit their own 'enqueue'/'demote'/'promote' event right after, so the
+ * 'compressing' state rides that emission; completion emits its own.
+ *
+ * No codec / codec unavailable: no-op, the entry stays 'raw' (fallback).
+ *
+ * @param {ClipQueueEntry} entry
+ */
+function maybeCompressEntry(entry) {
+  const codec = clipCodec;
+  if (!codec?.isCompressionAvailable()) return;
+  if (entry.status !== 'raw' || !entry.frames || entry.frames.length === 0) return;
+
+  const wrappers = entry.frames;
+  // Identity metadata survives on this side; the VideoFrames themselves move
+  const frameMeta = wrappers.map((f) => ({
+    id: f.id,
+    timestamp: f.timestamp,
+    width: f.width,
+    height: f.height,
+  }));
+  const videoFrames = wrappers.map((f) => f.frame);
+
+  entry.status = 'compressing';
+
+  const job = codec
+    .encode(videoFrames, {
+      fps: entry.fps,
+      width: frameMeta[0].width,
+      height: frameMeta[0].height,
+    })
+    .then((result) => {
+      pendingEncodeJobs.delete(entry.id);
+      const live = state.clipQueue.includes(entry);
+
+      if (result.ok) {
+        if (!live) return; // Deleted while compressing: chunks are plain buffers, GC takes them
+        // The raw frames were closed inside the worker; the detached husks
+        // in entry.frames carried only accounting metadata
+        entry.frames = null;
+        entry.compressed = {
+          chunks: result.chunks,
+          config: result.config,
+          byteLength: result.byteLength,
+          frameMeta,
+        };
+        entry.byteLengthMB = result.byteLength / (1024 * 1024);
+        entry.status = 'compressed';
+        emitQueueChanged('compress');
+        return;
+      }
+
+      // Encode failure: the worker transferred the surviving VideoFrames
+      // back — rebuild the wrappers so the entry stays raw and the clip is
+      // never lost. If the entry was deleted meanwhile, the returned frames
+      // have no owner left: close them here (delete-path semantics).
+      if (!live) {
+        closeVideoFrames(result.frames);
+        return;
+      }
+      if (result.frames.length === frameMeta.length) {
+        entry.frames = result.frames.map((vf, i) => ({
+          id: frameMeta[i].id,
+          frame: vf,
+          timestamp: frameMeta[i].timestamp,
+          width: frameMeta[i].width,
+          height: frameMeta[i].height,
+        }));
+        entry.status = 'raw';
+        emitQueueChanged('compress-error');
+      } else {
+        // Worker crashed mid-job and the frames are gone with it. The entry
+        // has nothing usable left — remove it honestly instead of keeping a
+        // husk that would render black.
+        closeVideoFrames(result.frames);
+        const index = state.clipQueue.indexOf(entry);
+        if (index !== -1) {
+          state.clipQueue.splice(index, 1);
+          emitQueueChanged('delete');
+        }
+      }
+    });
+
+  pendingEncodeJobs.set(entry.id, job);
+}
+
+/**
+ * Make a queue entry promotable, decoding it first when it is compressed.
+ *
+ * Resolves { ok: true } once the entry holds raw frames again — the caller
+ * then runs the normal SYNCHRONOUS promoteQueuedClip swap (capturing the
+ * editor state at swap time, so the user keeps editing while we decode).
+ *
+ * Lifecycle handled here (#92):
+ * - 'raw': resolves immediately (also the no-codec fallback path)
+ * - 'compressing': awaits the pending encode, then falls through
+ * - 'compressed': flips to 'decoding' (visible via queue:changed), decodes
+ *   in the worker (decode jobs jump the codec queue), rebuilds the Frame
+ *   wrappers from frameMeta and returns the entry to 'raw'
+ * - 'decoding': REFUSED — the double-promote guard
+ * - deleted at any await point: refused with 'not-found', decoded frames
+ *   (if any arrived) are closed because the entry no longer owns anything
+ *
+ * @param {string} id - Queue entry id
+ * @returns {Promise<{ok: true} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed'}>}
+ */
+export async function prepareQueuedClipForPromote(id) {
+  let entry = state.clipQueue.find((e) => e.id === id);
+  if (!entry) return { ok: false, reason: 'not-found' };
+  if (entry.status === 'decoding') return { ok: false, reason: 'decoding' };
+
+  if (entry.status === 'compressing') {
+    await pendingEncodeJobs.get(id);
+    entry = state.clipQueue.find((e) => e.id === id);
+    if (!entry) return { ok: false, reason: 'not-found' };
+  }
+
+  if (isEntryPromotableNow(entry)) return { ok: true };
+  if (entry.status !== 'compressed' || !entry.compressed || !clipCodec) {
+    return { ok: false, reason: 'not-found' };
+  }
+
+  entry.status = 'decoding';
+  emitQueueChanged('decode-start');
+
+  const compressed = entry.compressed;
+  const result = await clipCodec.decode({
+    chunks: compressed.chunks,
+    config: compressed.config,
+  });
+  const live = state.clipQueue.includes(entry);
+
+  if (!result.ok) {
+    if (live) {
+      // The chunks were cloned into the worker, so the compressed bytes are
+      // intact — the entry simply returns to 'compressed'
+      entry.status = 'compressed';
+      emitQueueChanged('decode-error');
+    }
+    return { ok: false, reason: 'decode-failed' };
+  }
+
+  if (!live) {
+    // Deleted while decoding: the freshly decoded frames have no owner
+    closeVideoFrames(result.frames);
+    return { ok: false, reason: 'not-found' };
+  }
+
+  const meta = compressed.frameMeta;
+  entry.frames = result.frames.map((vf, i) => ({
+    id: meta[i]?.id ?? `${entry.id}-decoded-${i}`,
+    frame: vf,
+    timestamp: meta[i]?.timestamp ?? vf.timestamp ?? i,
+    width: meta[i]?.width ?? vf.codedWidth ?? 0,
+    height: meta[i]?.height ?? vf.codedHeight ?? 0,
+  }));
+  entry.compressed = null;
+  entry.byteLengthMB = undefined;
+  entry.status = 'raw';
+  emitQueueChanged('decode');
+  return { ok: true };
+}
+
+/**
+ * Re-kick compression for a raw entry sitting in the queue. Used when a
+ * decode-for-promote completed but the promote was abandoned (e.g. the
+ * editor unmounted while decoding) — the entry must not linger raw.
+ * @param {string} id
+ */
+export function compressQueuedClip(id) {
+  const entry = state.clipQueue.find((e) => e.id === id);
+  if (!entry) return;
+  maybeCompressEntry(entry);
+  if (entry.status === 'compressing') {
+    emitQueueChanged('compress-start');
+  }
 }
 
 /**
@@ -271,6 +576,9 @@ export function enqueueClip(payload) {
   const entry = {
     id: /** @type {string} */ (payload.id),
     frames: payload.frames,
+    status: 'raw',
+    frameCount: payload.frames?.length ?? 0,
+    compressed: null,
     fps: payload.fps,
     capturedAt: payload.capturedAt,
     sceneDetectionEnabled: payload.sceneDetectionEnabled,
@@ -279,6 +587,10 @@ export function enqueueClip(payload) {
     thumbnailDataUrl: payload.thumbnailDataUrl ?? null,
   };
   state.clipQueue.unshift(entry);
+  // Refusals above happen BEFORE this point — compression never starts for a
+  // clip the queue won't take (#92). The thumbnail was rendered by
+  // ensureClipIdentity while the frames were still usable on this thread.
+  maybeCompressEntry(entry);
   emitQueueChanged('enqueue');
   return { ok: true, entry, queueLength: state.clipQueue.length, limit };
 }
@@ -293,19 +605,29 @@ export function enqueueClip(payload) {
  * the queue length never grows past what it was (remove one, add at most
  * one), so the limit cannot be exceeded here.
  *
+ * Compressed entries (#92) cannot be promoted directly — this function
+ * refuses (returns null) unless the entry holds raw frames. Callers that may
+ * face a compressed entry must run prepareQueuedClipForPromote(id) first and
+ * call this only after it resolves ok.
+ *
  * @param {string} id - Queue entry id to promote
  * @param {(SavedEditorState & { scenes?: import('../features/scene-detection/types.js').Scene[] })|null} [currentEditorState] - State of the editor session being demoted
- * @returns {{ payload: ClipPayload, savedEditorState: SavedEditorState|null } | null} null if id not found
+ * @returns {{ payload: ClipPayload, savedEditorState: SavedEditorState|null } | null} null if id not found or the entry is not promotable yet
  */
 export function promoteQueuedClip(id, currentEditorState = null) {
   const index = state.clipQueue.findIndex((entry) => entry.id === id);
   if (index === -1) return null;
+  if (!isEntryPromotableNow(state.clipQueue[index])) return null;
 
   const [entry] = state.clipQueue.splice(index, 1);
 
-  // Demote the active clip into the queue front — ownership moves, no close
+  // Demote the active clip into the queue front — ownership moves, no close.
+  // The demoted entry then compresses in the background (#92): after the
+  // swap only the (new) active clip holds raw frames.
   if (state.clipPayload) {
-    state.clipQueue.unshift(activeToQueueEntry(state.clipPayload, currentEditorState));
+    const demoted = activeToQueueEntry(state.clipPayload, currentEditorState);
+    state.clipQueue.unshift(demoted);
+    maybeCompressEntry(demoted);
   }
 
   // The singleton thumbnail cache is active-clip-only; editorPayload and a
@@ -331,7 +653,12 @@ export function promoteQueuedClip(id, currentEditorState = null) {
 }
 
 /**
- * Delete a queued clip. One of only two paths that close frames.
+ * Delete a queued clip. One of only two explicit paths that close frames.
+ *
+ * Compression lifecycle (#92): a 'compressed' entry's chunks are plain
+ * buffers (GC). Deleting a 'compressing' or 'decoding' entry removes it
+ * immediately; when its in-flight codec job settles, the job handler sees
+ * the entry is gone and discards/closes the result (cancel-by-discard).
  * @param {string} id
  * @returns {boolean} true if an entry was removed
  */
@@ -346,14 +673,21 @@ export function deleteQueuedClip(id) {
 }
 
 /**
- * Conservative memory estimate (raw RGBA w*h*4) for the active clip plus
- * every queued clip. Exposed for the editor's memory footer.
+ * Memory estimate for the active clip plus every queued clip, exposed for
+ * the editor's memory footer. Raw frames count at conservative RGBA w*h*4;
+ * compressed entries count at their ACTUAL compressed byteLength (#92) —
+ * 'compressing' entries still count raw, since the real frames are alive in
+ * the codec worker until the encode finishes.
  * @returns {number} Estimated MB
  */
 export function getClipMemoryEstimateMB() {
   let total = estimateFramesMemoryMB(state.clipPayload?.frames ?? []);
   for (const entry of state.clipQueue) {
-    total += estimateFramesMemoryMB(entry.frames);
+    if (entry.status === 'compressed' || entry.status === 'decoding') {
+      total += (entry.compressed?.byteLength ?? 0) / (1024 * 1024);
+    } else {
+      total += estimateFramesMemoryMB(entry.frames ?? []);
+    }
   }
   return total;
 }
@@ -394,8 +728,11 @@ export function setClipPayload(payload) {
       if (state.clipQueue.length >= limit) {
         return { ok: false, reason: 'queue-full', limit };
       }
-      // Demote, never destroy: the old active clip's frames move to the queue
-      state.clipQueue.unshift(activeToQueueEntry(state.clipPayload, null));
+      // Demote, never destroy: the old active clip's frames move to the
+      // queue, then compress in the background (#92)
+      const demoted = activeToQueueEntry(state.clipPayload, null);
+      state.clipQueue.unshift(demoted);
+      maybeCompressEntry(demoted);
       emitQueueChanged('demote');
     }
     // Cached thumbnails are keyed by the previous clip's frame IDs; keeping

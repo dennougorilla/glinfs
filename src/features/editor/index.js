@@ -5,11 +5,13 @@
 
 import {
   clearEditorPayload,
+  compressQueuedClip,
   deleteQueuedClip,
   getClipPayload,
   getClipQueue,
   getEditorPayload,
   hasActiveScreenCapture,
+  prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
   validateClipPayload,
@@ -124,13 +126,17 @@ export function initEditor() {
   // instead of falling straight into the error screen.
   if (!hasValidEditorPayload && !validateClipPayload(clipPayload).valid) {
     const queue = getClipQueue();
-    if (queue.length === 1) {
+    if (queue.length === 1 && queue[0].status === 'raw') {
       // Exactly one candidate — promoting it guesses nothing away
       promoteQueuedClip(queue[0].id, null);
       clipPayload = getClipPayload();
-    } else if (queue.length >= 2) {
-      // Multiple candidates — never auto-pick; let the user choose
-      return renderClipSelectScreen(container);
+    } else if (queue.length >= 1) {
+      // Multiple candidates — never auto-pick; let the user choose. A single
+      // compressed/compressing candidate also lands here (it needs an async
+      // decode) but auto-starts its promote so no extra click is needed —
+      // the select screen doubles as its progress surface (#92).
+      const autoPromoteId = queue.length === 1 ? queue[0].id : null;
+      return renderClipSelectScreen(container, autoPromoteId);
     }
     // 0 queued: fall through to the existing invalid-payload screen
   }
@@ -795,15 +801,17 @@ function showQueueFullBanner(container, message) {
 }
 
 /**
- * Promote a queued clip into the editor: swap it with the active clip
- * (which demotes carrying the current selection/crop/speed/position, plus
- * scenes) and re-init the editor against the new active clip. No frames are
- * closed anywhere on this path — see the app-store ownership rules.
+ * Synchronously swap a READY (raw) queued clip with the active clip. The
+ * active clip demotes carrying the current selection/crop/speed/position
+ * (captured HERE, at swap time — so edits made while a compressed entry was
+ * decoding are what get saved), and the editor re-inits against the new
+ * active clip. No frames are closed anywhere on this path — see the
+ * app-store ownership rules.
  *
  * @param {string} id - Queue entry id
  * @returns {boolean} true if the swap happened
  */
-function handlePromoteClip(id) {
+function swapPromotedClip(id) {
   if (!store) return false;
 
   const state = store.getState();
@@ -824,6 +832,59 @@ function handlePromoteClip(id) {
 }
 
 /**
+ * Promote a queued clip into the editor. Raw entries swap synchronously;
+ * compressed (or still-compressing) entries decode first (#92) — the entry
+ * shows its 'decoding' state via queue:changed, the CURRENT clip stays fully
+ * editable until the frames arrive, and a second promote of the same entry
+ * is refused by the store while the decode is in flight.
+ *
+ * @param {string} id - Queue entry id
+ * @returns {boolean} true if the promote was started (async) or completed (sync)
+ */
+function handlePromoteClip(id) {
+  if (!store) return false;
+  const entry = getClipQueue().find((e) => e.id === id);
+  if (!entry) return false;
+
+  if (entry.status === 'raw') {
+    return swapPromotedClip(id);
+  }
+  void promoteWhenDecoded(id);
+  return true;
+}
+
+/**
+ * Async tail of a promote that needs the codec: waits for the entry's frames
+ * (encode-in-flight and/or decode), then runs the normal sync swap against
+ * whatever editor session is CURRENT by then.
+ *
+ * @param {string} id - Queue entry id
+ * @returns {Promise<boolean>} true if the clip became active
+ */
+async function promoteWhenDecoded(id) {
+  const prep = await prepareQueuedClipForPromote(id);
+  if (!prep.ok) {
+    // 'decoding' = double-promote, silently ignored (first click wins);
+    // 'not-found' = deleted meanwhile — the queue UI already reflects it
+    if (prep.reason === 'decode-failed') {
+      announce('Could not open clip — decoding failed');
+    }
+    return false;
+  }
+
+  if (store) {
+    return swapPromotedClip(id);
+  }
+
+  // The editor unmounted while we were decoding. Do not yank the user to a
+  // different clip from a background task — hand the (now raw) entry back to
+  // the queue and let it re-compress (#92 invariant: only the active clip
+  // holds raw frames).
+  compressQueuedClip(id);
+  return false;
+}
+
+/**
  * Delete a queued clip after user confirmation (confirm() is accepted v1 debt)
  * @param {string} id
  */
@@ -839,24 +900,44 @@ function handleDeleteClip(id) {
  * When the editor is mounted this is a full in-place swap+reinit; when it is
  * not, the clip just becomes the active payload and the caller navigates.
  *
+ * Async because compressed entries decode first (#92). For raw entries the
+ * promise resolves in the same microtask, so callers can still navigate
+ * without a visible delay.
+ *
  * @param {string} id - Queue entry id
- * @returns {boolean} true if the clip was promoted
+ * @returns {Promise<boolean>} true if the clip was promoted (or the promote
+ *   was completed by a mounted editor)
  */
-export function promoteClipFromQueue(id) {
+export async function promoteClipFromQueue(id) {
   if (store) {
     return handlePromoteClip(id);
+  }
+
+  const entry = getClipQueue().find((e) => e.id === id);
+  if (!entry) return false;
+
+  if (entry.status !== 'raw') {
+    const prep = await prepareQueuedClipForPromote(id);
+    if (!prep.ok) return false;
+    // The editor may have mounted while we decoded — finish the promote as
+    // an in-place swap there instead of silently replacing its clip
+    if (store) return swapPromotedClip(id);
   }
   return promoteQueuedClip(id, null) !== null;
 }
 
 /**
  * "Select a clip to edit" screen: shown when the editor mounts with no
- * active clip but two or more queued clips (never guess which one).
+ * active clip but queued clips it cannot instantly adopt — two or more
+ * candidates (never guess which one), or a single compressed/compressing
+ * one whose decode is async (#92; auto-started via autoPromoteId so the
+ * screen is just its progress surface).
  *
  * @param {HTMLElement} container
+ * @param {string|null} [autoPromoteId] - Entry to start promoting immediately
  * @returns {() => void} Route cleanup
  */
-function renderClipSelectScreen(container) {
+function renderClipSelectScreen(container, autoPromoteId = null) {
   updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
 
   /** @type {(() => void)[]} */
@@ -897,9 +978,11 @@ function renderClipSelectScreen(container) {
       queue: getClipQueue(),
       // promoteQueuedClip emits 'queue:changed' SYNCHRONOUSLY, which the
       // subscription below turns into the swap to the full editor. Calling
-      // initEditor here as well would double-init the feature.
+      // initEditor here as well would double-init the feature. Compressed
+      // entries go through promoteClipFromQueue (store is null here) whose
+      // decode completion triggers the same event.
       onPromote: (id) => {
-        promoteQueuedClip(id, null);
+        void promoteClipFromQueue(id);
       },
       onDelete: handleDeleteClip,
     });
@@ -921,6 +1004,12 @@ function renderClipSelectScreen(container) {
   container.innerHTML = '';
   container.appendChild(screenEl);
   renderList();
+
+  // Single async candidate (#92): start its promote now; the decode statuses
+  // re-render the list above and the final promote swaps in the editor
+  if (autoPromoteId) {
+    void promoteClipFromQueue(autoPromoteId);
+  }
 
   emit('editor:clip-select', { queueLength: getClipQueue().length });
 
@@ -1100,6 +1189,19 @@ function registerTestHooks() {
         ...currentState,
         ...stateOverrides,
       }));
+    };
+    window.__TEST_HOOKS__.getEditorState = () => {
+      const state = store?.getState();
+      if (!state) return null;
+      // Only serializable scalars — frames/VideoFrames must not cross
+      // page.evaluate boundaries
+      return {
+        selectedRange: state.selectedRange,
+        currentFrame: state.currentFrame,
+        playbackSpeed: state.playbackSpeed,
+        cropArea: state.cropArea,
+        frameCount: state.clip?.frames?.length ?? 0,
+      };
     };
   }
 }

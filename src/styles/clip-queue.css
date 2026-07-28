@@ -214,6 +214,42 @@
   font-weight: 600;
 }
 
+/* Codec lifecycle indicator (#92): shown while an entry is compressing
+   (background encode) or decoding (promote in flight) */
+.clip-entries .clip-entry-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.clip-entries .clip-entry-status-spinner {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  animation: clip-entry-status-spin 0.8s linear infinite;
+}
+
+@keyframes clip-entry-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-entries .clip-entry-status-spinner {
+    animation: none;
+  }
+}
+
+.clip-entries .clip-entry[data-clip-status="decoding"] button.clip-entry-main {
+  cursor: progress;
+}
+
 .clip-entries .clip-entry-delete {
   position: absolute;
   top: var(--space-1);

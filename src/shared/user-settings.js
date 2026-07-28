@@ -20,8 +20,12 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {boolean} backgroundCapture - Keep the frame-grab loop running while
  *   navigated away from /capture, instead of pausing it (default true)
  * @property {number} clipQueueLimit - Maximum clips held in the clip queue
- *   (1-10, default 3). The active clip is not counted — it lives outside the
- *   queue and can never be evicted by it.
+ *   (1-30, default 10). The active clip is not counted — it lives outside
+ *   the queue and can never be evicted by it. The default of 10 assumes
+ *   queued clips are WebCodecs-compressed (#92, ~50-100x smaller than raw);
+ *   when compression is unavailable entries stay raw and the memoryBudgetMB
+ *   refusal is the effective bound well before the count limit. Stored
+ *   values outside 1-30 are clamped for display and by getClipQueueLimit().
  * @property {number} captureResolutionLimit - Maximum long edge of captured
  *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
  *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
@@ -53,7 +57,7 @@ const DEFAULT_SETTINGS = {
     bufferDuration: 15,
     sceneDetection: true,
     backgroundCapture: true,
-    clipQueueLimit: 3,
+    clipQueueLimit: 10,
     captureResolutionLimit: 1920,
     memoryBudgetMB: 4000,
   },
@@ -106,7 +110,7 @@ export const SETTINGS_METADATA = {
         label: 'Clip Queue Limit',
         type: 'range',
         min: 1,
-        max: 10,
+        max: 30,
         step: 1,
         format: (v) => `${v} clip${v === 1 ? '' : 's'}`,
       },

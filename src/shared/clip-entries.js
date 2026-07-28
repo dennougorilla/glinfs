@@ -53,27 +53,46 @@ function buildThumbnail(thumbnailDataUrl) {
 }
 
 /**
+ * Codec lifecycle states that get a spinner + label on the entry (#92).
+ * 'raw' and 'compressed' are terminal/idle and render no busy indicator.
+ * @type {Record<string, string>}
+ */
+const BUSY_STATUS_LABELS = {
+  compressing: 'Compressing…',
+  decoding: 'Opening…',
+};
+
+/**
  * Build one clip entry row.
  * The row is a div (not a button) because it contains two interactive
  * controls — the promote surface and the delete button — and buttons must
  * not nest.
  *
- * @param {{ id?: string, frames: {length: number}[], fps: number, capturedAt: number, thumbnailDataUrl?: string|null }} clip
+ * @param {{ id?: string, frames?: {length: number}[]|null, frameCount?: number, status?: import('./app-store.js').ClipQueueEntryStatus, byteLengthMB?: number, fps: number, capturedAt: number, thumbnailDataUrl?: string|null }} clip
  * @param {{ active: boolean, onPromote?: (id: string) => void, onDelete?: (id: string) => void }} options
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
  */
 function buildEntry(clip, options, cleanups) {
-  const frameCount = clip.frames?.length ?? 0;
+  // Compressed entries carry no frames array — frameCount is the stable
+  // source (#92); the active clip has frames and no frameCount
+  const frameCount = clip.frameCount ?? clip.frames?.length ?? 0;
   const durationSec = clip.fps > 0 ? frameCount / clip.fps : 0;
   const timeLabel = formatCapturedTime(clip.capturedAt);
-  const metaLabel = `${durationSec.toFixed(1)}s · ${frameCount} frames`;
+  const status = options.active ? undefined : (clip.status ?? 'raw');
+  const sizeLabel =
+    status === 'compressed' && typeof clip.byteLengthMB === 'number'
+      ? ` · ${clip.byteLengthMB < 0.1 ? '<0.1' : clip.byteLengthMB.toFixed(1)} MB`
+      : '';
+  const metaLabel = `${durationSec.toFixed(1)}s · ${frameCount} frames${sizeLabel}`;
+  const busyLabel = status ? BUSY_STATUS_LABELS[status] : undefined;
 
   const entry = createElement('div', {
     className: `clip-entry ${options.active ? 'clip-entry--active' : ''}`,
     'data-testid': 'clip-entry',
     'data-clip-id': clip.id ?? '',
     'data-clip-active': options.active ? 'true' : undefined,
+    'data-clip-status': status,
   });
 
   const info = createElement('div', { className: 'clip-entry-info' }, [
@@ -84,6 +103,17 @@ function buildEntry(clip, options, cleanups) {
         ? [createElement('span', { className: 'clip-entry-editing-badge' }, ['Editing'])]
         : []),
     ]),
+    ...(busyLabel
+      ? [
+          createElement('div', { className: 'clip-entry-status', role: 'status' }, [
+            createElement('span', {
+              className: 'clip-entry-status-spinner',
+              'aria-hidden': 'true',
+            }),
+            busyLabel,
+          ]),
+        ]
+      : []),
   ]);
 
   if (options.active) {
