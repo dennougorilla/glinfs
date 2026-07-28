@@ -67,16 +67,6 @@ test('live monitor docks in the editor, Clip Now works, ordering is stable, tabs
   await overlay.locator('[data-testid="live-view-close"]').click();
   await expect(overlay).toBeHidden();
 
-  // Header live strip: visible on non-editor routes while recording
-  await page.evaluate(() => {
-    location.hash = '#/settings';
-  });
-  await expect(page.locator('#header-live-thumb')).toBeVisible();
-  await page.evaluate(() => {
-    location.hash = '#/editor';
-  });
-  await page.waitForSelector('.editor-canvas', { state: 'visible' });
-
   // Tabs: switching to SCENES hides the clips pane, and back
   await page.locator('[data-testid="tab-scenes"]').click();
   await expect(page.locator('.sidebar-pane[data-pane="clips"]')).toBeHidden();

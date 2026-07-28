@@ -58,6 +58,18 @@ export function renderLoadingScreen(container) {
   // Title
   content.appendChild(createElement('h2', { className: 'loading-title' }, ['Detecting Scenes...']));
 
+  // Live monitor slot (#100 v3): scene detection takes seconds — keep the
+  // ongoing capture visible and clippable instead of a dead wait screen.
+  // Populated by live-monitor.js when a session is live.
+  content.appendChild(
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+  );
+  content.appendChild(
+    createElement('div', { className: 'loading-live-note' }, [
+      'Recording continues \u2014 press Shift+C to clip',
+    ]),
+  );
+
   // Subtitle
   content.appendChild(
     createElement('p', { className: 'loading-subtitle' }, [

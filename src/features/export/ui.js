@@ -511,6 +511,13 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
 function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   const panel = createElement('div', { className: 'export-settings-panel' });
 
+  // Live source monitor slot (#100 v3): same top-of-right-panel spot as the
+  // editor, so "recording continues" stays visible while configuring the
+  // export. Populated by live-monitor.js; empty/invisible when not live.
+  panel.appendChild(
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+  );
+
   // Header
   panel.appendChild(
     createElement('div', { className: 'settings-header' }, [

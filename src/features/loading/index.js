@@ -11,6 +11,7 @@ import { getClipPayload, setClipPayload } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
 import { navigate } from '../../shared/router.js';
 import { qsRequired } from '../../shared/utils/dom.js';
+import { initLiveMonitor } from '../editor/live-monitor.js';
 import { createSceneDetectionManager } from '../scene-detection/manager.js';
 import { renderLoadingScreen, updateProgress } from './ui.js';
 
@@ -41,6 +42,17 @@ export function initLoading() {
   // Render loading screen
   const uiCleanup = renderLoadingScreen(container);
 
+  // Keep the ongoing capture visible and clippable while detection runs
+  // (#100 v3) — the slot stays empty/invisible when no session is live
+  /** @type {(() => void) | null} */
+  let liveMonitorCleanup = null;
+  {
+    const slot = container.querySelector('[data-live-monitor]');
+    if (slot instanceof HTMLElement) {
+      liveMonitorCleanup = initLiveMonitor(slot);
+    }
+  }
+
   /** @type {LoadingSession} */
   const session = {
     manager: createSceneDetectionManager(),
@@ -51,6 +63,7 @@ export function initLoading() {
   runSceneDetection(container, clipPayload, session);
 
   return () => {
+    liveMonitorCleanup?.();
     uiCleanup();
     session.cancelled = true;
     // Safe even after runSceneDetection's own dispose — dispose() is idempotent

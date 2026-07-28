@@ -114,6 +114,9 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {import('../features/scene-detection/types.js').Scene[]} [scenes] - Scenes carried with the clip
  * @property {SavedEditorState|null} [savedEditorState] - Editor state saved at demote time
  * @property {string|null} thumbnailDataUrl - ~160px dataURL rendered from frame[0] at enqueue
+ * @property {string[]|null} [previewFrames] - Pre-baked skim thumbnails for
+ *   hover preview (#100 v3); survives compression because they are plain
+ *   dataURLs baked from the raw frames at enqueue
  */
 
 /**
@@ -317,6 +320,37 @@ function ensureClipIdentity(payload) {
   if (payload.thumbnailDataUrl === undefined) {
     payload.thumbnailDataUrl = createFrameThumbnailDataUrl(payload.frames?.[0]);
   }
+  if (payload.previewFrames === undefined) {
+    payload.previewFrames = buildPreviewFrames(payload.frames);
+  }
+}
+
+/** Number of pre-baked skim thumbnails per clip (hover preview, #100 v3) */
+const PREVIEW_FRAME_COUNT = 10;
+
+/**
+ * Bake a small set of evenly-sampled thumbnails for hover-skim previews.
+ *
+ * Rendered from the RAW frames at the only moment they are guaranteed to
+ * exist on this thread (before #92 compression transfers them away).
+ * ~10 x 160px dataURLs ≈ 100 KB per clip — this is what makes "play the
+ * clip in the list" affordable: skimming pre-baked stills instead of
+ * decoding compressed chunks on hover.
+ *
+ * @param {import('../features/capture/types.js').Frame[]|null|undefined} frames
+ * @returns {string[]|null}
+ */
+function buildPreviewFrames(frames) {
+  if (!frames || frames.length < 2) return null;
+  const n = Math.min(PREVIEW_FRAME_COUNT, frames.length);
+  /** @type {string[]} */
+  const urls = [];
+  for (let k = 0; k < n; k++) {
+    const index = Math.round((k * (frames.length - 1)) / (n - 1));
+    const url = createFrameThumbnailDataUrl(frames[index]);
+    if (url) urls.push(url);
+  }
+  return urls.length > 1 ? urls : null;
 }
 
 /**
@@ -348,6 +382,7 @@ function activeToQueueEntry(active, editorState) {
         }
       : (active.savedEditorState ?? null),
     thumbnailDataUrl: active.thumbnailDataUrl ?? null,
+    previewFrames: active.previewFrames ?? null,
   };
 }
 
@@ -585,6 +620,7 @@ export function enqueueClip(payload) {
     scenes: payload.scenes,
     savedEditorState: payload.savedEditorState ?? null,
     thumbnailDataUrl: payload.thumbnailDataUrl ?? null,
+    previewFrames: payload.previewFrames ?? null,
   };
   state.clipQueue.unshift(entry);
   // Refusals above happen BEFORE this point — compression never starts for a

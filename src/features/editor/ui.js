@@ -246,12 +246,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const leftSidebar = createElement('div', { className: 'editor-sidebar-left' });
   const leftPanelContent = createElement('div', { className: 'panel-content' });
 
-  // Live source monitor dock slot; populated by live-monitor.js while a
-  // capture session is live, empty (and invisible) otherwise
-  leftPanelContent.appendChild(
-    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
-  );
-
   // Tab bar
   const clipsTab = createElement(
     'button',
@@ -383,6 +377,14 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Panel content (tabs removed - all controls shown together for simplicity)
   const panelContent = createElement('div', { className: 'panel-content' });
 
+  // Live source monitor slot (#100 layout v3 / plan 1): docked at the TOP of
+  // the right panel — the underused properties column cedes its prime space
+  // to a permanently visible monitor. Populated by live-monitor.js while a
+  // capture session is live, empty and invisible otherwise.
+  panelContent.appendChild(
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+  );
+
   // Speed control
   const speedGroup = createElement('div', { className: 'property-group' }, [
     createElement('div', { className: 'property-group-title' }, ['Playback']),
@@ -402,7 +404,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
   speedSelect.value = String(state.playbackSpeed);
   cleanups.push(on(speedSelect, 'change', () => handlers.onSpeedChange(Number(speedSelect.value))));
   speedGroup.querySelector('.property-row').appendChild(speedSelect);
-  panelContent.appendChild(speedGroup);
 
   // Crop/Aspect ratio controls
   const cropGroup = createElement('div', { className: 'property-group' }, [
@@ -443,83 +444,6 @@ export function renderEditorScreen(container, state, handlers, fps) {
   );
   cleanups.push(on(gridBtn, 'click', () => handlers.onToggleGrid()));
   gridGroup.querySelector('.property-row').appendChild(gridBtn);
-  panelContent.appendChild(gridGroup);
-
-  // Scenes section (shown when scene detection is active or completed)
-  if (state.sceneDetectionStatus !== 'idle') {
-    const scenesGroup = createElement(
-      'div',
-      { className: 'property-group', 'data-panel': 'scenes' },
-      [createElement('div', { className: 'property-group-title' }, ['Scenes'])],
-    );
-
-    if (state.sceneDetectionStatus === 'detecting') {
-      // Progress indicator
-      const progressContainer = createElement('div', { className: 'scene-detection-progress' });
-      const progressBar = createElement('div', { className: 'progress-bar' });
-      const progressFill = createElement('div', {
-        className: 'progress-fill',
-        style: `width: ${state.sceneDetectionProgress}%`,
-      });
-      progressBar.appendChild(progressFill);
-      progressContainer.appendChild(
-        createElement('div', { className: 'progress-label' }, [
-          `Detecting scenes... ${state.sceneDetectionProgress}%`,
-        ]),
-      );
-      progressContainer.appendChild(progressBar);
-      scenesGroup.appendChild(progressContainer);
-    } else if (state.sceneDetectionStatus === 'error') {
-      // Error state
-      scenesGroup.appendChild(
-        createElement('div', { className: 'scene-detection-error' }, [
-          createElement('span', { className: 'error-icon' }, ['\u26A0']),
-          state.sceneDetectionError || 'Detection failed',
-        ]),
-      );
-    } else if (state.sceneDetectionStatus === 'completed') {
-      if (state.scenes.length === 0) {
-        scenesGroup.appendChild(
-          createElement('div', { className: 'scenes-empty' }, ['No scene changes detected']),
-        );
-      } else {
-        // Scene list
-        const sceneList = createElement('div', { className: 'scene-list' });
-        state.scenes.forEach((scene, index) => {
-          const sceneItem = createElement(
-            'button',
-            {
-              className: 'scene-item',
-              type: 'button',
-              'data-scene-id': scene.id,
-              title: `Go to scene ${index + 1} (Frame ${scene.startFrame})`,
-            },
-            [
-              createElement('span', { className: 'scene-number' }, [`${index + 1}`]),
-              createElement('span', { className: 'scene-frames' }, [
-                `${scene.startFrame} - ${scene.endFrame}`,
-              ]),
-            ],
-          );
-          cleanups.push(
-            on(sceneItem, 'click', () => {
-              handlers.onFrameChange(scene.startFrame);
-              handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
-            }),
-          );
-          sceneList.appendChild(sceneItem);
-        });
-        scenesGroup.appendChild(sceneList);
-        scenesGroup.appendChild(
-          createElement('div', { className: 'scenes-count' }, [
-            `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-          ]),
-        );
-      }
-    }
-
-    panelContent.appendChild(scenesGroup);
-  }
 
   // Crop info panel (always visible)
   const cropValues = state.cropArea
@@ -552,12 +476,26 @@ export function renderEditorScreen(container, state, handlers, fps) {
       ]),
     ]),
   ]);
-  panelContent.appendChild(cropInfoGroup);
-
-  // Clear crop button (only when cropArea exists)
   if (state.cropArea) {
-    panelContent.appendChild(createClearCropButton());
+    cropInfoGroup.appendChild(createClearCropButton());
   }
+
+  // Low-frequency property groups fold into accordions (#100 v3): the user
+  // adjusts Aspect constantly (kept always-visible above) but touches
+  // Playback/Overlay/Crop rarely — the monitor gets their vertical space.
+  // Native <details> keeps this zero-JS; Crop opens itself while a crop
+  // exists so its values are never hidden mid-operation.
+  const makeAccordion = (label, node, open = false) => {
+    const details = createElement('details', { className: 'prop-accordion' }, [
+      createElement('summary', { className: 'prop-accordion-summary' }, [label]),
+      node,
+    ]);
+    if (open) details.setAttribute('open', '');
+    return details;
+  };
+  panelContent.appendChild(makeAccordion('Playback', speedGroup));
+  panelContent.appendChild(makeAccordion('Overlay', gridGroup));
+  panelContent.appendChild(makeAccordion('Crop Range', cropInfoGroup, Boolean(state.cropArea)));
 
   // Clear Crop clicks are handled via delegation so the listener survives
   // updateCropInfoPanel() re-creating the button on crop updates (issue #37)
@@ -1407,18 +1345,25 @@ export function updateCropInfoPanel(container, cropArea, _onCropChange) {
     el.textContent = values[i];
   });
 
-  // Handle Clear Crop button visibility
-  const sidebar = container.querySelector('.editor-sidebar .panel-content');
-  if (!sidebar) return cleanups;
+  // Handle Clear Crop button visibility (inside the Crop accordion) and
+  // pop the accordion open the moment a crop starts existing — its values
+  // must never update invisibly behind a collapsed summary
+  const cropGroupEl = container.querySelector('.crop-info-group');
+  if (!(cropGroupEl instanceof HTMLElement)) return cleanups;
 
-  const existingClearBtn = sidebar.querySelector('.btn-clear-crop');
+  const existingClearBtn = cropGroupEl.querySelector('.btn-clear-crop');
 
   if (cropArea && !existingClearBtn) {
     // Add Clear Crop button (clicks handled via delegation)
-    sidebar.appendChild(createClearCropButton());
+    cropGroupEl.appendChild(createClearCropButton());
   } else if (!cropArea && existingClearBtn) {
     // Remove Clear Crop button
     existingClearBtn.remove();
+  }
+
+  const cropAccordion = cropGroupEl.closest('details.prop-accordion');
+  if (cropArea && cropAccordion instanceof HTMLElement) {
+    cropAccordion.setAttribute('open', '');
   }
 
   return cleanups;

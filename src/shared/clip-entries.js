@@ -34,6 +34,49 @@ function formatCapturedTime(capturedAt) {
 /** Milliseconds the inline "Delete?" confirm state stays armed (#98) */
 const DELETE_CONFIRM_MS = 3000;
 
+/** Skim playback rate for hover previews (#100 v3) */
+const SKIM_INTERVAL_MS = 120;
+
+/**
+ * Wire hover-skim on an entry's thumbnail (#100 v3): while hovered, cycle
+ * the img through the entry's pre-baked preview frames (~10 stills sampled
+ * at enqueue) — YouTube-style hover playback at effectively zero cost. No
+ * decode happens: compressed entries keep skimming because the stills are
+ * plain dataURLs baked before compression.
+ *
+ * @param {HTMLElement} hoverSurface
+ * @param {HTMLImageElement} img
+ * @param {string[]} previewFrames
+ * @param {string} restingSrc
+ * @param {(() => void)[]} cleanups
+ */
+function wireHoverSkim(hoverSurface, img, previewFrames, restingSrc, cleanups) {
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let timer = null;
+  let index = 0;
+
+  const stop = () => {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    img.src = restingSrc;
+  };
+
+  cleanups.push(
+    on(hoverSurface, 'mouseenter', () => {
+      if (timer !== null) return;
+      index = 0;
+      timer = setInterval(() => {
+        index = (index + 1) % previewFrames.length;
+        img.src = previewFrames[index];
+      }, SKIM_INTERVAL_MS);
+    }),
+  );
+  cleanups.push(on(hoverSurface, 'mouseleave', stop));
+  cleanups.push(stop);
+}
+
 /**
  * Wire a delete button as an inline two-step control (#98): first click
  * arms it ("Delete?", danger styling); a second click within
@@ -186,6 +229,7 @@ function buildEntry(clip, options, cleanups) {
     return entry;
   }
 
+  const thumbEl = buildThumbnail(clip.thumbnailDataUrl);
   const main = createElement(
     'button',
     {
@@ -193,11 +237,19 @@ function buildEntry(clip, options, cleanups) {
       type: 'button',
       'aria-label': `Edit clip captured at ${timeLabel} (${metaLabel})`,
     },
-    [buildThumbnail(clip.thumbnailDataUrl), info],
+    [thumbEl, info],
   );
   if (options.onPromote && clip.id) {
     const id = clip.id;
     cleanups.push(on(main, 'click', () => options.onPromote?.(id)));
+  }
+  if (
+    thumbEl instanceof HTMLImageElement &&
+    Array.isArray(clip.previewFrames) &&
+    clip.previewFrames.length > 1 &&
+    clip.thumbnailDataUrl
+  ) {
+    wireHoverSkim(main, thumbEl, clip.previewFrames, clip.thumbnailDataUrl, cleanups);
   }
   entry.appendChild(main);
 
