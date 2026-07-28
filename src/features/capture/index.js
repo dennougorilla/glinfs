@@ -23,7 +23,11 @@ import { createVideoElement, startScreenCapture, stopScreenCapture } from './api
 // Circular with clip-service (it imports getLiveCaptureContext from here);
 // safe because both sides only call the other's hoisted function declarations
 // at event time, never during module evaluation.
-import { projectClipMemory } from './clip-service.js';
+import {
+  announceMemoryBudget,
+  buildMemoryBudgetMessage,
+  projectClipMemory,
+} from './clip-service.js';
 import { calculateEffectiveMaxFrames } from './core.js';
 import {
   createCaptureStore,
@@ -456,15 +460,9 @@ async function handleCreateClip() {
   // The user sees the same visible surfaces as a queue-full refusal.
   const projection = projectClipMemory(getLiveCaptureContext());
   if (projection.over) {
-    emit('clip:memory-budget', projection);
-    announce(
-      `Not enough memory budget for another clip (~${Math.round(projection.projectedMB)} MB needed, ` +
-        `${projection.budgetMB} MB budget) — delete a clip or raise the budget in Settings`,
-    );
+    announceMemoryBudget(projection);
     if (store) {
-      store.setState((state) =>
-        setError(state, 'Memory budget reached — delete a clip or raise the budget in Settings'),
-      );
+      store.setState((state) => setError(state, buildMemoryBudgetMessage(projection)));
       render(qsRequired('#main-content'));
     }
     return false;

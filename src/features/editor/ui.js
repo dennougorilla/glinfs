@@ -12,6 +12,7 @@ import {
 } from '../../shared/app-store.js';
 import { renderClipEntries } from '../../shared/clip-entries.js';
 import { navigate } from '../../shared/router.js';
+import { loadSettings } from '../../shared/user-settings.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
@@ -1246,13 +1247,20 @@ export function updateClipsPanel(container, handlers) {
     }),
   );
 
-  // Memory footer: conservative raw-RGBA estimate for active + queued frames
+  // Memory footer: conservative raw-RGBA estimate for active + queued frames,
+  // shown AGAINST the budget so the user sees the wall before hitting it
+  // (a bare "~1.2 GB estimated" gave no sense of remaining headroom)
   const footer = container.querySelector('[data-clips-footer]');
   if (footer instanceof HTMLElement) {
     const queueLength = getClipQueue().length;
     const limit = getClipQueueLimit();
-    footer.textContent = `~${formatMemory(getClipMemoryEstimateMB())} estimated \u00b7 ${queueLength}/${limit} queued`;
-    footer.classList.toggle('clips-sidebar-memory--warning', queueLength >= limit);
+    const usedMB = getClipMemoryEstimateMB();
+    const budgetMB = loadSettings().capture.memoryBudgetMB;
+    footer.textContent = `~${formatMemory(usedMB)} / ${formatMemory(budgetMB)} \u00b7 ${queueLength}/${limit} queued`;
+    footer.classList.toggle(
+      'clips-sidebar-memory--warning',
+      queueLength >= limit || (budgetMB > 0 && usedMB > budgetMB * 0.8),
+    );
   }
 
   return cleanups;

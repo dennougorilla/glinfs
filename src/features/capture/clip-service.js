@@ -12,6 +12,7 @@
 import {
   enqueueClip,
   getClipMemoryEstimateMB,
+  getClipQueue,
   getClipQueueLimit,
   isClipQueueFull,
 } from '../../shared/app-store.js';
@@ -42,18 +43,46 @@ export function projectClipMemory(context) {
   const budgetMB = loadSettings().capture.memoryBudgetMB;
   const dims = context?.workerManager?.getEffectiveFrameDimensions?.() ?? null;
   const frameCount = context?.stats?.frameCount ?? 0;
-  const bufferMB = dims ? (frameCount * dims.width * dims.height * 4) / (1024 * 1024) : 0;
-  const projectedMB = getClipMemoryEstimateMB() + bufferMB;
-  return { over: budgetMB > 0 && projectedMB > budgetMB, projectedMB, budgetMB };
+  const incomingMB = dims ? (frameCount * dims.width * dims.height * 4) / (1024 * 1024) : 0;
+  const heldMB = getClipMemoryEstimateMB();
+  const projectedMB = heldMB + incomingMB;
+  return {
+    over: budgetMB > 0 && projectedMB > budgetMB,
+    projectedMB,
+    budgetMB,
+    heldMB,
+    incomingMB,
+  };
+}
+
+/**
+ * Human-readable refusal for a memory-budget rejection.
+ *
+ * Names the numbers (what is held vs what the new clip would add vs the
+ * budget) and offers ONLY actions that are actually possible right now:
+ * "delete a clip" with an empty queue sent a real user hunting for a
+ * delete button that does not exist — the active clip is not deletable.
+ *
+ * @param {ReturnType<typeof projectClipMemory>} projection
+ * @returns {string}
+ */
+export function buildMemoryBudgetMessage(projection) {
+  const gb = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb)} MB`);
+  const summary =
+    `Clips in memory ~${gb(projection.heldMB)} + new clip ~${gb(projection.incomingMB)} ` +
+    `exceeds the ${gb(projection.budgetMB)} budget`;
+  const action =
+    getClipQueue().length > 0
+      ? 'delete a queued clip, or raise Memory Budget in Settings'
+      : 'raise Memory Budget in Settings, or shorten the buffer';
+  return `${summary} — ${action}`;
 }
 
 /** Surface a memory-budget refusal on every channel the UI listens to */
-function announceMemoryBudget(projection) {
-  emit('clip:memory-budget', projection);
-  announce(
-    `Not enough memory budget for another clip (~${Math.round(projection.projectedMB)} MB needed, ` +
-      `${projection.budgetMB} MB budget) — delete a clip or raise the budget in Settings`,
-  );
+export function announceMemoryBudget(projection) {
+  const message = buildMemoryBudgetMessage(projection);
+  emit('clip:memory-budget', { ...projection, message });
+  announce(message);
 }
 
 /**

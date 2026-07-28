@@ -263,10 +263,10 @@ export function initEditor() {
   clipsQueueUnsubs.push(
     onBus('queue:changed', () => refreshClipsPanel(container)),
     onBus('clip:queue-full', () => showQueueFullBanner(container)),
-    onBus('clip:memory-budget', () =>
+    onBus('clip:memory-budget', (projection) =>
       showQueueFullBanner(
         container,
-        'Memory budget reached — delete a clip or raise the budget in Settings',
+        projection?.message ?? 'Memory budget reached — raise Memory Budget in Settings',
       ),
     ),
   );

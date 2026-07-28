@@ -55,7 +55,7 @@ const DEFAULT_SETTINGS = {
     backgroundCapture: true,
     clipQueueLimit: 3,
     captureResolutionLimit: 1920,
-    memoryBudgetMB: 2000,
+    memoryBudgetMB: 4000,
   },
   export: {
     quality: 0.8,
@@ -124,7 +124,7 @@ export const SETTINGS_METADATA = {
         label: 'Memory Budget',
         type: 'range',
         min: 500,
-        max: 8000,
+        max: 16000,
         step: 500,
         format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} GB` : `${v} MB`),
       },
