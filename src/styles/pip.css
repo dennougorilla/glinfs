@@ -131,6 +131,11 @@
   padding: var(--space-2) var(--space-3) var(--space-3);
   opacity: 0;
   transform: translateY(2px);
+  /* While invisible the buttons must not be clickable: a click landing on
+     the not-yet-revealed bar (fast pointer entry from below) would hit
+     "Open Capture" and yank the user out of an editing session — the exact
+     failure the no-whole-card-click amendment was written to prevent */
+  pointer-events: none;
   transition:
     opacity var(--transition-fast),
     transform var(--transition-fast);
@@ -140,12 +145,14 @@
 .pip-card:focus-within .pip-actions {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 @media (pointer: coarse) {
   .pip-actions {
     opacity: 1;
     transform: none;
+    pointer-events: auto;
   }
 }
 

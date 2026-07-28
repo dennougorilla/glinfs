@@ -9,16 +9,52 @@
  * header camera button in main.js.
  */
 
-import { enqueueClip, getClipQueueLimit, isClipQueueFull } from '../../shared/app-store.js';
+import {
+  enqueueClip,
+  getClipMemoryEstimateMB,
+  getClipQueueLimit,
+  isClipQueueFull,
+} from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
 import { announce } from '../../shared/live-region.js';
+import { loadSettings } from '../../shared/user-settings.js';
 import { convertBitmapFramesToVideoFrames, getLiveCaptureContext } from './index.js';
 
 /**
  * @typedef {Object} ClipNowResult
  * @property {boolean} ok
- * @property {'no-capture'|'no-frames'|'queue-full'} [reason] - Present when refused
+ * @property {'no-capture'|'no-frames'|'queue-full'|'memory-budget'} [reason] - Present when refused
  */
+
+/**
+ * Would materializing the current buffer as a clip exceed the memory budget?
+ *
+ * Projected total = frames already held (active clip + queue) + the buffer
+ * snapshot about to become VideoFrames, all at conservative raw RGBA (#96).
+ * Checked BEFORE requestFrames(): draining the ring buffer only to refuse
+ * and close the result would destroy the user's buffered history for
+ * nothing.
+ *
+ * @param {ReturnType<typeof getLiveCaptureContext>} context
+ * @returns {{ over: boolean, projectedMB: number, budgetMB: number }}
+ */
+export function projectClipMemory(context) {
+  const budgetMB = loadSettings().capture.memoryBudgetMB;
+  const dims = context?.workerManager?.getEffectiveFrameDimensions?.() ?? null;
+  const frameCount = context?.stats?.frameCount ?? 0;
+  const bufferMB = dims ? (frameCount * dims.width * dims.height * 4) / (1024 * 1024) : 0;
+  const projectedMB = getClipMemoryEstimateMB() + bufferMB;
+  return { over: budgetMB > 0 && projectedMB > budgetMB, projectedMB, budgetMB };
+}
+
+/** Surface a memory-budget refusal on every channel the UI listens to */
+function announceMemoryBudget(projection) {
+  emit('clip:memory-budget', projection);
+  announce(
+    `Not enough memory budget for another clip (~${Math.round(projection.projectedMB)} MB needed, ` +
+      `${projection.budgetMB} MB budget) — delete a clip or raise the budget in Settings`,
+  );
+}
 
 /**
  * Whether a live capture session exists anywhere (mounted or backgrounded).
@@ -72,6 +108,12 @@ export async function clipNow() {
   if (isClipQueueFull()) {
     announceQueueFull();
     return { ok: false, reason: 'queue-full' };
+  }
+
+  const projection = projectClipMemory(context);
+  if (projection.over) {
+    announceMemoryBudget(projection);
+    return { ok: false, reason: 'memory-budget' };
   }
 
   const imageBitmapFrames = await context.workerManager.requestFrames();
@@ -136,6 +178,9 @@ export function handleClipNowHotkey(e) {
   }
 
   if (!isCaptureLive()) {
+    // The editor status bar advertises this shortcut; silence here would
+    // read as "broken" whenever the share has already ended (UX review)
+    announce('No live capture \u2014 start sharing to use Clip Now');
     return;
   }
 

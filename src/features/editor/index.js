@@ -263,6 +263,12 @@ export function initEditor() {
   clipsQueueUnsubs.push(
     onBus('queue:changed', () => refreshClipsPanel(container)),
     onBus('clip:queue-full', () => showQueueFullBanner(container)),
+    onBus('clip:memory-budget', () =>
+      showQueueFullBanner(
+        container,
+        'Memory budget reached — delete a clip or raise the budget in Settings',
+      ),
+    ),
   );
 
   // Start auto-playback if initial state is playing
@@ -775,12 +781,12 @@ function refreshClipsPanel(container) {
  * Show the transient queue-full banner (refusal surface, amendment 2)
  * @param {HTMLElement} container
  */
-function showQueueFullBanner(container) {
+function showQueueFullBanner(container, message) {
   if (bannerHideTimer !== null) {
     clearTimeout(bannerHideTimer);
     bannerHideTimer = null;
   }
-  const hide = showClipsQueueFullBanner(container);
+  const hide = showClipsQueueFullBanner(container, message);
   if (!hide) return;
   bannerHideTimer = window.setTimeout(() => {
     hide();

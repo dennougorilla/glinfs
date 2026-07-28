@@ -140,8 +140,12 @@
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  /* Horizontal row (~60px tall): the original stacked layout was ~150px per
+     entry, so at the default limit of 3 neither the sidebar (max-height
+     45%) nor the popover (60vh) could show its own contents (UX review) */
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-2);
   background: transparent;
   border: none;
@@ -161,14 +165,14 @@
 
 .clip-entries .clip-entry-thumb {
   display: block;
-  width: 100%;
-  max-width: 160px;
+  width: 72px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   background: var(--color-bg-tertiary);
 }
 
 .clip-entries .clip-entry-thumb--placeholder {
-  height: 60px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -22,6 +22,13 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {number} clipQueueLimit - Maximum clips held in the clip queue
  *   (1-10, default 3). The active clip is not counted — it lives outside the
  *   queue and can never be evicted by it.
+ * @property {number} captureResolutionLimit - Maximum long edge of captured
+ *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
+ *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
+ * @property {number} memoryBudgetMB - Total budget for frame memory
+ *   (ring buffer + active clip + queue), conservatively estimated at raw
+ *   RGBA w*h*4. The buffer is clamped to a share of it and clip creation is
+ *   refused beyond it (#96).
  */
 
 /**
@@ -47,6 +54,8 @@ const DEFAULT_SETTINGS = {
     sceneDetection: true,
     backgroundCapture: true,
     clipQueueLimit: 3,
+    captureResolutionLimit: 1920,
+    memoryBudgetMB: 2000,
   },
   export: {
     quality: 0.8,
@@ -100,6 +109,24 @@ export const SETTINGS_METADATA = {
         max: 10,
         step: 1,
         format: (v) => `${v} clip${v === 1 ? '' : 's'}`,
+      },
+      captureResolutionLimit: {
+        label: 'Capture Resolution Limit',
+        type: 'select',
+        options: [
+          { value: 1280, label: '1280px' },
+          { value: 1920, label: '1920px (recommended)' },
+          { value: 2560, label: '2560px' },
+          { value: 0, label: 'Native (no limit)' },
+        ],
+      },
+      memoryBudgetMB: {
+        label: 'Memory Budget',
+        type: 'range',
+        min: 500,
+        max: 8000,
+        step: 500,
+        format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} GB` : `${v} MB`),
       },
     },
   },

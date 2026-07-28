@@ -46,7 +46,13 @@ test('PiP appears on the editor, Clip Now works from it, and it explains itself 
   await expect(pipRoot).toBeVisible();
   await expect(pipRoot).toHaveAttribute('role', 'region');
 
-  // Clip Now from the PiP enqueues without leaving the editor
+  // On /editor the PiP defaults to the collapsed pill (UX review: the
+  // expanded card covered the Clips/Scenes sidebar); expanding is one click
+  await expect(pipRoot).toHaveClass(/pip-root--collapsed/);
+  await page.locator('.pip-pill').click();
+  await expect(pipRoot).not.toHaveClass(/pip-root--collapsed/);
+
+  // Clip Now from the (now expanded) PiP enqueues without leaving the editor
   await page.locator('[data-testid="pip-clip-now"]').click();
   await expect(page.locator('#clip-queue-badge')).toHaveText('1');
   await expect(page.locator('.editor-canvas')).toBeVisible();

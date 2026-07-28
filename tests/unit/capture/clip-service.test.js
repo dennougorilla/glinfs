@@ -152,6 +152,75 @@ describe('clipNow', () => {
   });
 });
 
+describe('memory budget refusal (#96)', () => {
+  /** Live capture whose buffer projects to frameCount x 100x100 RGBA */
+  function installLiveCaptureWithStats(frameCount, dims = { width: 100, height: 100 }) {
+    const workerManager = {
+      requestFrames: vi.fn().mockResolvedValue([{ i: 0 }]),
+      getEffectiveFrameDimensions: vi.fn(() => ({ ...dims, scaled: false })),
+    };
+    captureContext.current = {
+      workerManager,
+      fps: 30,
+      sceneDetection: false,
+      stats: { frameCount, fps: 30 },
+    };
+    return workerManager;
+  }
+
+  it('refuses BEFORE draining the buffer when the projection exceeds the budget', async () => {
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    // 20000 frames x 100*100*4 bytes = ~763 MB projected > 500 MB budget
+    const workerManager = installLiveCaptureWithStats(20000);
+
+    const events = [];
+    const unsubscribe = onBus('clip:memory-budget', (payload) => events.push(payload));
+
+    const result = await clipNow();
+
+    expect(result).toEqual({ ok: false, reason: 'memory-budget' });
+    expect(workerManager.requestFrames).not.toHaveBeenCalled();
+    expect(getClipQueue()).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].projectedMB).toBeGreaterThan(events[0].budgetMB);
+
+    unsubscribe();
+  });
+
+  it('counts frames already held (active + queue) against the budget', async () => {
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    // Held: 3000 frames x 200x200 RGBA = ~457 MB; incoming: 2000 x 100x100 = ~76 MB
+    enqueueClip({
+      frames: Array.from({ length: 3000 }, (_, i) => ({
+        id: String(i),
+        frame: { close: vi.fn(), closed: false },
+        timestamp: i,
+        width: 200,
+        height: 200,
+      })),
+      fps: 30,
+      capturedAt: Date.now(),
+    });
+    const workerManager = installLiveCaptureWithStats(2000);
+
+    const result = await clipNow();
+
+    expect(result).toEqual({ ok: false, reason: 'memory-budget' });
+    expect(workerManager.requestFrames).not.toHaveBeenCalled();
+  });
+
+  it('allows the clip when the projection fits the budget', async () => {
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    // 100 frames x 100x100 RGBA = ~3.8 MB, well under budget
+    installLiveCaptureWithStats(100);
+
+    const result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    expect(getClipQueue()).toHaveLength(1);
+  });
+});
+
 describe('handleClipNowHotkey (Shift+C guard)', () => {
   function keyEvent(overrides = {}) {
     return {

@@ -1251,7 +1251,7 @@ export function updateClipsPanel(container, handlers) {
   if (footer instanceof HTMLElement) {
     const queueLength = getClipQueue().length;
     const limit = getClipQueueLimit();
-    footer.textContent = `~${formatMemory(getClipMemoryEstimateMB())} estimated (${queueLength}/${limit} clips)`;
+    footer.textContent = `~${formatMemory(getClipMemoryEstimateMB())} estimated \u00b7 ${queueLength}/${limit} queued`;
     footer.classList.toggle('clips-sidebar-memory--warning', queueLength >= limit);
   }
 
@@ -1265,11 +1265,11 @@ export function updateClipsPanel(container, handlers) {
  * @param {HTMLElement} container - The editor screen container
  * @returns {(() => void) | null} Function that hides the banner, or null if no banner slot
  */
-export function showClipsQueueFullBanner(container) {
+export function showClipsQueueFullBanner(container, message) {
   const banner = container.querySelector('.clips-queue-banner');
   if (!(banner instanceof HTMLElement)) return null;
 
-  banner.textContent = 'Queue full — delete a clip or raise the limit in Settings';
+  banner.textContent = message ?? 'Queue full — delete a clip or raise the limit in Settings';
   banner.hidden = false;
 
   return () => {

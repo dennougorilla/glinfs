@@ -357,12 +357,20 @@ function setupClipQueueHeader() {
     popoverList = createElement('div', { className: 'clip-queue-popover-list' });
     popover = createElement(
       'div',
-      { className: 'clip-queue-popover', role: 'dialog', 'aria-label': 'Clip queue' },
+      {
+        className: 'clip-queue-popover',
+        role: 'dialog',
+        'aria-label': 'Clip queue',
+        tabindex: '-1',
+      },
       [createElement('div', { className: 'clip-queue-popover-title' }, ['Clips']), popoverList],
     );
     group.appendChild(popover);
     renderPopoverEntries();
     badge.setAttribute('aria-expanded', 'true');
+    // role=dialog implies focus management: move focus into the popover so
+    // screen readers announce the newly rendered list (Escape restores it)
+    popover.focus();
 
     // Escape closes and returns focus to the badge (keyboard reachability)
     const onKeyDown = (e) => {

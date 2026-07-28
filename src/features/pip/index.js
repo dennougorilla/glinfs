@@ -39,11 +39,16 @@ let bufferTextEl = null;
 let minimizeBtn = null;
 /** @type {HTMLElement | null} */
 let shutterEl = null;
+/** @type {HTMLButtonElement | null} */
+let pillEl = null;
 /** @type {HTMLElement | null} */
 let endedOverlayEl = null;
 
 /** Collapsed-to-pill state, remembered for the session (module state, not reset on hide) */
 let collapsed = false;
+
+/** True once the user explicitly toggled; stops route defaults from overriding their choice */
+let userToggled = false;
 
 /** True while showing the ~2s "Capture ended" terminal state, overriding normal visibility */
 let showingEnded = false;
@@ -150,9 +155,11 @@ function buildDom() {
       type: 'button',
       className: 'pip-pill',
       'aria-label': 'Expand live capture preview',
+      'aria-expanded': 'false',
     },
     ['● REC'],
   );
+  pillEl = /** @type {HTMLButtonElement} */ (pill);
 
   root = createElement(
     'div',
@@ -177,6 +184,15 @@ function buildDom() {
 /** @param {import('../../shared/router.js').Route} route */
 function handleRouteChange(route) {
   applyRouteClass(route);
+  // Default to the pill on /editor: the expanded 240px card is wider than
+  // the left sidebar and covered the queue entries and Scenes it shipped
+  // alongside (UX review). The pill keeps the REC signal; expanding is one
+  // click, and an explicit user toggle is never overridden. Applied before
+  // refresh() so the default is in place the moment the PiP becomes visible.
+  if (!userToggled) {
+    collapsed = route === '/editor';
+    syncCollapsedUi();
+  }
   refresh();
 }
 
@@ -188,6 +204,7 @@ function applyRouteClass(route) {
 
 function toggleCollapse() {
   collapsed = !collapsed;
+  userToggled = true;
   syncCollapsedUi();
 }
 
@@ -199,6 +216,9 @@ function syncCollapsedUi() {
     'aria-label',
     collapsed ? 'Expand live capture preview' : 'Minimize live capture preview',
   );
+  // The minimize button is display:none while collapsed, so the pill must
+  // carry the expanded/collapsed state for the a11y tree (UX review)
+  pillEl?.setAttribute('aria-expanded', String(!collapsed));
 }
 
 /** Whether the PiP should currently be shown */

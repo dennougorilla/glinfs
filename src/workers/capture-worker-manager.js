@@ -7,6 +7,8 @@
  * @module workers/capture-worker-manager
  */
 
+import { fitWithinLongEdge } from '../shared/utils/geometry.js';
+
 /**
  * @typedef {Object} CaptureStats
  * @property {number} frameCount - Current frame count in buffer
@@ -50,15 +52,23 @@ export class CaptureWorkerManager {
    * instead of relying solely on the worker's internal `isCapturing` guard. */
   #isRunning = false;
 
+  /** @type {number} Maximum long edge for grabbed frames; 0 = native (#96) */
+  #maxEdge = 0;
+
   /**
    * Initialize the worker with a video element
    * @param {HTMLVideoElement} video - Video element to capture from
    * @param {Object} [options]
    * @param {StatsCallback} [options.onStatsUpdate] - Callback for stats updates
+   * @param {number} [options.maxEdge] - Downscale grabbed frames so their
+   *   long edge does not exceed this; 0/omitted captures at native size.
+   *   Applied at createImageBitmap time so oversized (Retina) frames never
+   *   exist, rather than being shrunk after the memory was already spent.
    */
   init(video, options = {}) {
     this.#video = video;
     this.#onStatsUpdate = options.onStatsUpdate ?? null;
+    this.#maxEdge = options.maxEdge ?? 0;
 
     // Create worker if not already created
     if (!this.#worker) {
@@ -296,10 +306,31 @@ export class CaptureWorkerManager {
     try {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
-      const bitmap = await createImageBitmap(this.#video);
+      const target = this.getEffectiveFrameDimensions();
+      const bitmap = target?.scaled
+        ? await createImageBitmap(this.#video, {
+            resizeWidth: target.width,
+            resizeHeight: target.height,
+            resizeQuality: 'high',
+          })
+        : await createImageBitmap(this.#video);
       this.#sendFrameResponse(bitmap, timestamp);
     } catch {
       this.#sendFrameResponse(null, timestamp);
     }
+  }
+
+  /**
+   * Dimensions frames are actually captured at, after the resolution limit.
+   * Memory budgeting must use these, not the source's native size — the
+   * whole point of the limit is that native-sized frames never exist.
+   * @returns {{ width: number, height: number, scaled: boolean } | null}
+   *   null before init or before video metadata is available
+   */
+  getEffectiveFrameDimensions() {
+    const w = this.#video?.videoWidth ?? 0;
+    const h = this.#video?.videoHeight ?? 0;
+    if (!w || !h) return null;
+    return fitWithinLongEdge(w, h, this.#maxEdge);
   }
 }

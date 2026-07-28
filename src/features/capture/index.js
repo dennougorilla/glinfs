@@ -20,7 +20,11 @@ import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
-import { calculateMaxFrames } from './core.js';
+// Circular with clip-service (it imports getLiveCaptureContext from here);
+// safe because both sides only call the other's hoisted function declarations
+// at event time, never during module evaluation.
+import { projectClipMemory } from './clip-service.js';
+import { calculateEffectiveMaxFrames } from './core.js';
 import {
   createCaptureStore,
   pauseCapture,
@@ -109,8 +113,13 @@ export function initCapture(settings) {
     // calling start() again would be a redundant (if harmless) START message.
     if (workerManager && store && !store.getState().isCapturing) {
       const state = store.getState();
-      const maxFrames = calculateMaxFrames(state.settings);
-      workerManager.start(state.settings.fps, maxFrames);
+      const bufferLimit = calculateEffectiveMaxFrames(
+        state.settings,
+        workerManager.getEffectiveFrameDimensions(),
+        loadSettings().capture.memoryBudgetMB,
+      );
+      store.setState((s) => ({ ...s, bufferLimit }));
+      workerManager.start(state.settings.fps, bufferLimit.maxFrames);
       // Keep the store's flags aligned with the worker loop actually running
       store.setState(resumeCapture);
     }
@@ -217,8 +226,13 @@ async function handleStart() {
     // the user is on another route — writing them through the module variable
     // silently dropped them all, freezing the PiP's buffer-fullness readout.
     const sessionStore = store;
+    const memorySettings = loadSettings().capture;
     workerManager = new CaptureWorkerManager();
     workerManager.init(videoElement, {
+      // Downscale at grab time (#96): Retina fullscreen frames are ~24 MB
+      // each as raw RGBA; capping the long edge is the difference between a
+      // ~10 GB and a ~2 GB ring buffer at default settings.
+      maxEdge: memorySettings.captureResolutionLimit,
       onStatsUpdate: (stats) => {
         sessionStore.setState((state) => ({
           ...state,
@@ -231,10 +245,16 @@ async function handleStart() {
       },
     });
 
-    // Start worker capture
+    // Start worker capture with the budget-clamped buffer size, computed
+    // from the dimensions frames are ACTUALLY captured at (post-limit)
     const fps = store.getState().settings.fps;
-    const maxFrames = calculateMaxFrames(store.getState().settings);
-    workerManager.start(fps, maxFrames);
+    const bufferLimit = calculateEffectiveMaxFrames(
+      store.getState().settings,
+      workerManager.getEffectiveFrameDimensions(),
+      memorySettings.memoryBudgetMB,
+    );
+    store.setState((state) => ({ ...state, bufferLimit }));
+    workerManager.start(fps, bufferLimit.maxFrames);
 
     // Emitted only after the worker exists: listeners (the header Clip Now
     // button) probe getLiveCaptureContext(), which is null until then
@@ -428,6 +448,25 @@ async function handleCreateClip() {
   // while the ring buffer is still intact instead of after draining it
   if (getClipPayload() && isClipQueueFull()) {
     announceQueueFull();
+    return false;
+  }
+
+  // Same early-refusal for the memory budget (#96): materializing the
+  // buffer as VideoFrames must not push held-frame memory past the budget.
+  // The user sees the same visible surfaces as a queue-full refusal.
+  const projection = projectClipMemory(getLiveCaptureContext());
+  if (projection.over) {
+    emit('clip:memory-budget', projection);
+    announce(
+      `Not enough memory budget for another clip (~${Math.round(projection.projectedMB)} MB needed, ` +
+        `${projection.budgetMB} MB budget) — delete a clip or raise the budget in Settings`,
+    );
+    if (store) {
+      store.setState((state) =>
+        setError(state, 'Memory budget reached — delete a clip or raise the budget in Settings'),
+      );
+      render(qsRequired('#main-content'));
+    }
     return false;
   }
 
@@ -631,6 +670,7 @@ export function getLiveCaptureContext() {
         workerManager,
         fps: state.settings.fps,
         sceneDetection: state.settings.sceneDetection,
+        stats: state.stats,
       };
     }
   }
@@ -644,6 +684,7 @@ export function getLiveCaptureContext() {
         workerManager: saved.workerManager,
         fps: settings.fps,
         sceneDetection: settings.sceneDetection,
+        stats: saved.store?.getState()?.stats ?? null,
       };
     }
   }
