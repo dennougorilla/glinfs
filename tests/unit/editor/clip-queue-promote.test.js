@@ -128,27 +128,24 @@ describe('Clip queue in the editor (#95)', () => {
     expect(getClipQueue()).toHaveLength(0);
   });
 
-  it('shows "Select a clip to edit" on empty mount with two or more queued clips', () => {
+  it('auto-promotes the NEWEST queued clip on empty mount with several queued (#100 round 5)', () => {
     enqueueClip({ frames: createTestFrames(3, 'x'), fps: 30, capturedAt: Date.now() });
     const { entry: newest } = enqueueClip({
       frames: createTestFrames(3, 'y'),
       fps: 30,
-      capturedAt: Date.now(),
+      capturedAt: Date.now() + 1,
     });
 
     cleanup = initEditor();
 
-    // No clip was guessed into the editor
-    expect(getEditorState()).toBeNull();
-    const select = document.querySelector('.editor-clip-select');
-    expect(select).not.toBeNull();
-    expect(select?.textContent).toContain('Select a clip to edit');
-    expect(document.querySelectorAll('[data-testid="clip-entry"]')).toHaveLength(2);
-
-    // Picking one mounts the real editor against it
-    clickQueueEntry(newest.id);
-    expect(getEditorState()?.clip?.frames).toBe(newest.frames);
+    // The select screen is gone — the newest clip opens directly and the
+    // older one stays queued
     expect(document.querySelector('.editor-clip-select')).toBeNull();
+    expect(getClipPayload()?.id).toBe(newest.id);
+    expect(getClipQueue()).toHaveLength(1);
+    expect(getEditorState()?.clip?.frames?.map((f) => f.id)).toEqual(
+      newest.frames?.map((f) => f.id) ?? [],
+    );
   });
 
   describe('active clip deletion (#100 round 4)', () => {

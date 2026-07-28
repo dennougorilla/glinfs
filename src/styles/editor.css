@@ -1387,22 +1387,25 @@
   color: var(--color-warning);
 }
 
-/* "Select a clip to edit" screen (editor mounted with ≥2 queued clips) */
-.editor-clip-select {
+/* "Opening clip…" transient state (#100 round 5) while a compressed
+   queued clip decodes into the editor */
+.editor-clip-opening .editor-clip-opening-body {
+  flex: 1;
+  display: flex;
   align-items: center;
-  padding: var(--space-8) var(--space-4);
-  overflow-y: auto;
-}
-
-.editor-clip-select .editor-clip-select-hint {
-  margin: var(--space-4) 0;
-  font-size: var(--font-size-md);
+  justify-content: center;
+  gap: var(--space-3);
   color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
-.editor-clip-select .editor-clip-select-list {
-  width: 100%;
-  max-width: 360px;
+.editor-clip-opening .clip-entry-status-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  animation: clip-entry-status-spin 0.8s linear infinite;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -18,7 +18,6 @@ import {
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
-import { renderClipEntries } from '../../shared/clip-entries.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
@@ -128,21 +127,19 @@ export function initEditor() {
   // Get clip payload from capture via app store
   let clipPayload = getClipPayload();
 
-  // Empty mount with clips waiting in the queue (#95): adopt from the queue
-  // instead of falling straight into the error screen.
+  // Empty mount with clips waiting in the queue: ALWAYS adopt the newest
+  // one automatically (#100 round 5 — the select screen read as a dark
+  // broken state and forced a pointless choice; the queue is ordered
+  // newest-first, which is what the user just made and wants to see).
   if (!hasValidEditorPayload && !validateClipPayload(clipPayload).valid) {
     const queue = getClipQueue();
-    if (queue.length === 1 && queue[0].status === 'raw') {
-      // Exactly one candidate — promoting it guesses nothing away
+    if (queue.length >= 1 && queue[0].status === 'raw') {
       promoteQueuedClip(queue[0].id, null);
       clipPayload = getClipPayload();
     } else if (queue.length >= 1) {
-      // Multiple candidates — never auto-pick; let the user choose. A single
-      // compressed/compressing candidate also lands here (it needs an async
-      // decode) but auto-starts its promote so no extra click is needed —
-      // the select screen doubles as its progress surface (#92).
-      const autoPromoteId = queue.length === 1 ? queue[0].id : null;
-      return renderClipSelectScreen(container, autoPromoteId);
+      // Newest entry needs the codec (compressed / still compressing):
+      // show a lightweight opening state while it decodes, then re-init
+      return renderClipOpeningScreen(container, queue[0].id);
     }
     // 0 queued: fall through to the existing invalid-payload screen
   }
@@ -931,8 +928,16 @@ function handleDeleteClip(id) {
  */
 function handleDeleteActiveClip() {
   if (!deleteActiveClip()) return;
-  announce('Clip deleted');
   cleanup();
+  if (getClipQueue().length === 0) {
+    // Nothing left to edit — leaving to Capture is the natural next step;
+    // re-initing here would land on the "Invalid Clip Data" ERROR screen
+    // for what was a perfectly deliberate action (#100 round 5)
+    announce('Last clip deleted');
+    navigate('/capture');
+    return;
+  }
+  announce('Clip deleted');
   initEditor();
 }
 
@@ -985,94 +990,60 @@ export async function promoteClipFromQueue(id) {
 }
 
 /**
- * "Select a clip to edit" screen: shown when the editor mounts with no
- * active clip but queued clips it cannot instantly adopt — two or more
- * candidates (never guess which one), or a single compressed/compressing
- * one whose decode is async (#92; auto-started via autoPromoteId so the
- * screen is just its progress surface).
+ * Minimal "opening" surface while the newest queued clip decodes (#92):
+ * spinner + label, swapped for the real editor the moment the clip becomes
+ * active. Replaces the select screen (#100 round 5) — adoption is automatic,
+ * so the only state worth showing is "working on it".
  *
  * @param {HTMLElement} container
- * @param {string|null} [autoPromoteId] - Entry to start promoting immediately
+ * @param {string} entryId - Queue entry being opened
  * @returns {() => void} Route cleanup
  */
-function renderClipSelectScreen(container, autoPromoteId = null) {
+function renderClipOpeningScreen(container, entryId) {
   updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
-
-  /** @type {(() => void)[]} */
-  let entryCleanups = [];
   let disposed = false;
 
-  const listHost = createElement('div', { className: 'editor-clip-select-list' });
-  const screenEl = createElement(
-    'section',
-    {
-      className: 'screen editor-screen editor-clip-select',
-      'aria-labelledby': 'editor-title',
-    },
-    [
-      createElement('header', { className: 'screen-header' }, [
-        createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
-      ]),
-      createElement('p', { className: 'editor-clip-select-hint' }, ['Select a clip to edit']),
-      listHost,
-    ],
+  container.innerHTML = '';
+  container.appendChild(
+    createElement(
+      'section',
+      { className: 'screen editor-screen editor-clip-opening', 'aria-labelledby': 'editor-title' },
+      [
+        createElement('header', { className: 'screen-header' }, [
+          createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
+        ]),
+        createElement('div', { className: 'editor-clip-opening-body', role: 'status' }, [
+          createElement('span', { className: 'clip-entry-status-spinner', 'aria-hidden': 'true' }),
+          'Opening clip\u2026',
+        ]),
+      ],
+    ),
   );
 
-  const dispose = () => {
-    if (disposed) return;
-    disposed = true;
-    entryCleanups.forEach((fn) => {
-      fn();
-    });
-    entryCleanups = [];
-    unsubscribe();
-  };
-
-  const renderList = () => {
-    entryCleanups.forEach((fn) => {
-      fn();
-    });
-    entryCleanups = renderClipEntries(listHost, {
-      queue: getClipQueue(),
-      // promoteQueuedClip emits 'queue:changed' SYNCHRONOUSLY, which the
-      // subscription below turns into the swap to the full editor. Calling
-      // initEditor here as well would double-init the feature. Compressed
-      // entries go through promoteClipFromQueue (store is null here) whose
-      // decode completion triggers the same event.
-      onPromote: (id) => {
-        void promoteClipFromQueue(id);
-      },
-      onDelete: handleDeleteClip,
-    });
-  };
-
-  // The queue can still change under this screen (Clip Now, the header
-  // popover). A promote from the popover makes a clip active — swap this
-  // screen for the real editor; anything else just re-renders the list.
   const unsubscribe = onBus('queue:changed', () => {
     if (disposed) return;
     if (getClipPayload()) {
-      dispose();
+      disposed = true;
+      unsubscribe();
       initEditor();
-      return;
     }
-    renderList();
   });
 
-  container.innerHTML = '';
-  container.appendChild(screenEl);
-  renderList();
-
-  // Single async candidate (#92): start its promote now; the decode statuses
-  // re-render the list above and the final promote swaps in the editor
-  if (autoPromoteId) {
-    void promoteClipFromQueue(autoPromoteId);
-  }
-
-  emit('editor:clip-select', { queueLength: getClipQueue().length });
+  void promoteClipFromQueue(entryId).then((ok) => {
+    if (disposed) return;
+    if (!ok && !getClipPayload()) {
+      // Decode failed and nothing became active — don't strand the user on
+      // a spinner; Capture is the only sensible place left
+      disposed = true;
+      unsubscribe();
+      announce('Could not open clip');
+      navigate('/capture');
+    }
+  });
 
   return () => {
-    dispose();
+    disposed = true;
+    unsubscribe();
     cleanup();
   };
 }
