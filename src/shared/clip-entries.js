@@ -33,9 +33,6 @@ function formatCapturedTime(capturedAt) {
   });
 }
 
-/** Milliseconds the inline "Delete?" confirm state stays armed (#98) */
-const DELETE_CONFIRM_MS = 3000;
-
 /** Skim playback rate for hover previews (#100 v3) */
 const SKIM_INTERVAL_MS = 120;
 
@@ -79,53 +76,21 @@ function wireHoverSkim(hoverSurface, img, previewFrames, restingSrc, cleanups) {
   cleanups.push(stop);
 }
 
-/**
- * Wire a delete button as an inline two-step control (#98): first click
- * arms it ("Delete?", danger styling); a second click within
- * DELETE_CONFIRM_MS actually deletes; timeout or losing focus reverts.
- * Replaces window.confirm(), which blocked the main thread and looked
- * foreign next to the app's own UI.
- *
- * @param {HTMLButtonElement} btn
- * @param {string} armedLabel - aria-label while armed
- * @param {string} idleLabel - aria-label while idle
- * @param {() => void} onConfirmed
- * @param {(() => void)[]} cleanups
- */
-function wireTwoStepDelete(btn, armedLabel, idleLabel, onConfirmed, cleanups) {
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let revertTimer = null;
-  let armed = false;
-
-  const disarm = () => {
-    if (revertTimer !== null) {
-      clearTimeout(revertTimer);
-      revertTimer = null;
-    }
-    armed = false;
-    btn.classList.remove('clip-entry-delete--armed');
-    btn.textContent = '×';
-    btn.setAttribute('aria-label', idleLabel);
-    btn.title = 'Delete clip';
-  };
-
-  cleanups.push(
-    on(btn, 'click', () => {
-      if (armed) {
-        disarm();
-        onConfirmed();
-        return;
-      }
-      armed = true;
-      btn.classList.add('clip-entry-delete--armed');
-      btn.textContent = 'Delete?';
-      btn.setAttribute('aria-label', armedLabel);
-      btn.title = '';
-      revertTimer = setTimeout(disarm, DELETE_CONFIRM_MS);
-    }),
-  );
-  cleanups.push(on(btn, 'blur', disarm));
-  cleanups.push(disarm);
+/** Small trash-can SVG for delete buttons */
+function buildTrashIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML =
+    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>';
+  return svg;
 }
 
 /**
@@ -239,15 +204,9 @@ function buildEntry(clip, options, cleanups) {
           title: 'Delete clip',
           'data-testid': 'delete-active-clip',
         },
-        ['×'],
+        [buildTrashIcon()],
       );
-      wireTwoStepDelete(
-        /** @type {HTMLButtonElement} */ (activeDelete),
-        'Confirm delete of the clip being edited',
-        `Delete the clip being edited (captured at ${timeLabel})`,
-        () => options.onDeleteActive?.(),
-        cleanups,
-      );
+      cleanups.push(on(activeDelete, 'click', () => options.onDeleteActive?.()));
       entry.appendChild(activeDelete);
     }
     return entry;
@@ -277,6 +236,9 @@ function buildEntry(clip, options, cleanups) {
   }
   entry.appendChild(main);
 
+  // Single-click delete (#100 r5): safe because deletion is deferred with a
+  // 5s undo window (app-store hold + toast) — no confirm friction needed.
+  // Trash icon at the row's trailing edge, clear of the skimming thumbnail.
   const deleteBtn = createElement(
     'button',
     {
@@ -285,17 +247,11 @@ function buildEntry(clip, options, cleanups) {
       'aria-label': `Delete clip captured at ${timeLabel}`,
       title: 'Delete clip',
     },
-    ['×'],
+    [buildTrashIcon()],
   );
   if (options.onDelete && clip.id) {
     const id = clip.id;
-    wireTwoStepDelete(
-      /** @type {HTMLButtonElement} */ (deleteBtn),
-      `Confirm delete of clip captured at ${timeLabel}`,
-      `Delete clip captured at ${timeLabel}`,
-      () => options.onDelete?.(id),
-      cleanups,
-    );
+    cleanups.push(on(deleteBtn, 'click', () => options.onDelete?.(id)));
   }
   entry.appendChild(deleteBtn);
 

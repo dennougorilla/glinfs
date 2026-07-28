@@ -13,6 +13,7 @@ import {
   resetAppStore,
   setClipPayload,
   setEditorPayload,
+  undoDelete,
 } from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
@@ -322,7 +323,8 @@ describe('setClipPayload demote path', () => {
 });
 
 describe('deleteQueuedClip', () => {
-  it('closes the deleted entry frames exactly once and emits queue:changed', () => {
+  it('holds the deleted entry for undo, closing frames only after the grace window (#100 r5)', () => {
+    vi.useFakeTimers();
     const frames = createMockFrames(3);
     const { entry } = enqueueClip(clipPayloadOf(frames));
     const kept = enqueueClip(clipPayloadOf(createMockFrames(1)));
@@ -332,11 +334,56 @@ describe('deleteQueuedClip', () => {
 
     expect(deleteQueuedClip(entry.id)).toBe(true);
 
-    expectAllClosedOnce(frames);
+    // Deletion is deferred: nothing is closed while undo is possible
+    for (const frame of frames) {
+      expect(frame.frame.close).not.toHaveBeenCalled();
+    }
     expect(getClipQueue().map((e) => e.id)).toEqual([kept.entry.id]);
     expect(events).toEqual([expect.objectContaining({ type: 'delete', queueLength: 1 })]);
 
+    vi.advanceTimersByTime(5100);
+    expectAllClosedOnce(frames);
+
     unsubscribe();
+    vi.useRealTimers();
+  });
+
+  it('undoDelete restores the entry to its original position with frames intact', () => {
+    vi.useFakeTimers();
+    const framesA = createMockFrames(2);
+    const a = enqueueClip(clipPayloadOf(framesA));
+    const b = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    // Queue (newest first): [b, a] — delete a (index 1), undo restores there
+    expect(deleteQueuedClip(a.entry.id)).toBe(true);
+
+    expect(undoDelete()).toBe(true);
+
+    expect(getClipQueue().map((e) => e.id)).toEqual([b.entry.id, a.entry.id]);
+    for (const frame of framesA) {
+      expect(frame.frame.close).not.toHaveBeenCalled();
+    }
+    // Grace timer was cancelled — nothing closes later either
+    vi.advanceTimersByTime(10000);
+    for (const frame of framesA) {
+      expect(frame.frame.close).not.toHaveBeenCalled();
+    }
+    vi.useRealTimers();
+  });
+
+  it('a second delete finalizes the previous hold (single-undo model)', () => {
+    vi.useFakeTimers();
+    const framesA = createMockFrames(2);
+    const a = enqueueClip(clipPayloadOf(framesA));
+    const b = enqueueClip(clipPayloadOf(createMockFrames(2)));
+
+    deleteQueuedClip(a.entry.id);
+    deleteQueuedClip(b.entry.id);
+
+    // a's hold was superseded and released; only b remains undoable
+    expectAllClosedOnce(framesA);
+    expect(undoDelete()).toBe(true);
+    expect(getClipQueue().map((e) => e.id)).toEqual([b.entry.id]);
+    vi.useRealTimers();
   });
 
   it('returns false for an unknown id without closing anything', () => {

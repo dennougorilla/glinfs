@@ -250,11 +250,12 @@
   cursor: progress;
 }
 
+/* Trash button at the row's trailing edge (#100 r5): a flex sibling of the
+   promote surface — never over the thumbnail, which hover-skims. Revealed
+   on row hover/focus; single click deletes (undo toast covers safety). */
 .clip-entries .clip-entry-delete {
-  position: absolute;
-  top: var(--space-1);
-  right: var(--space-1);
-  /* 28px hit target (#100 round 4) — the old 20px x was fiddly to hit */
+  flex-shrink: 0;
+  align-self: center;
   width: 28px;
   height: 28px;
   display: flex;
@@ -262,19 +263,19 @@
   justify-content: center;
   border: none;
   border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.55);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-md);
-  line-height: 1;
+  background: transparent;
+  color: var(--color-text-muted);
   cursor: pointer;
+  opacity: 0;
   transition:
+    opacity var(--transition-fast),
     background-color var(--transition-fast),
-    transform var(--transition-fast);
+    color var(--transition-fast);
 }
 
-.clip-entries .clip-entry:hover .clip-entry-delete {
-  background: rgba(0, 0, 0, 0.75);
-  color: var(--color-text);
+.clip-entries .clip-entry:hover .clip-entry-delete,
+.clip-entries .clip-entry:focus-within .clip-entry-delete {
+  opacity: 1;
 }
 
 .clip-entries .clip-entry-delete:hover {
@@ -282,15 +283,10 @@
   color: white;
 }
 
-/* Inline two-step confirm (#98): first click arms the button into a
-   labeled danger state; the confirming click deletes, timeout reverts */
-.clip-entries .clip-entry-delete--armed {
-  width: auto;
-  padding: 0 var(--space-2);
-  background: var(--color-recording);
-  color: white;
-  font-size: var(--font-size-2xs);
-  font-weight: 600;
+@media (pointer: coarse) {
+  .clip-entries .clip-entry-delete {
+    opacity: 1;
+  }
 }
 
 .clip-entries .clip-entries-empty {

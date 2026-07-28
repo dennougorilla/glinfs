@@ -401,7 +401,9 @@ function activeToQueueEntry(active, editorState) {
  */
 export function deleteActiveClip() {
   if (!state.clipPayload) return false;
-  closeFrameList(state.clipPayload.frames);
+  // Hold for undo instead of closing (#100 round 5): the entry restores to
+  // the queue front if the user changes their mind within the grace window
+  holdForUndo(activeToQueueEntry(state.clipPayload, null), 0);
   state.clipPayload = null;
   state.editorPayload = null;
   exportResult = null;
@@ -727,8 +729,64 @@ export function deleteQueuedClip(id) {
   if (index === -1) return false;
 
   const [entry] = state.clipQueue.splice(index, 1);
-  closeFrameList(entry.frames);
+  holdForUndo(entry, index);
   emitQueueChanged('delete');
+  return true;
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ * Deferred deletion with undo (#100 round 5, plan A)
+ * ═══════════════════════════════════════════════════════════════════════
+ * Deletion is a single click, so it must be reversible: a deleted entry is
+ * HELD (frames untouched) for UNDO_GRACE_MS before its resources are truly
+ * released. One slot — a new delete finalizes the previous hold first,
+ * mirroring the single-undo toast the UI shows. releaseAllFramesAndReset
+ * finalizes the hold too, so a full reset never leaks held frames.
+ */
+const UNDO_GRACE_MS = 5000;
+
+/** @type {{ entry: ClipQueueEntry, index: number, timer: ReturnType<typeof setTimeout> } | null} */
+let pendingDeletion = null;
+
+/**
+ * @param {ClipQueueEntry} entry - Entry just removed from the queue (or the
+ *   demoted active clip); its frames are still owned by this hold
+ * @param {number} index - Queue position to restore to on undo
+ */
+function holdForUndo(entry, index) {
+  finalizePendingDeletion();
+  pendingDeletion = {
+    entry,
+    index,
+    timer: setTimeout(() => {
+      finalizePendingDeletion();
+    }, UNDO_GRACE_MS),
+  };
+}
+
+/** Actually release the held entry's resources (grace expired / superseded) */
+function finalizePendingDeletion() {
+  if (!pendingDeletion) return;
+  clearTimeout(pendingDeletion.timer);
+  closeFrameList(pendingDeletion.entry.frames);
+  pendingDeletion = null;
+}
+
+/**
+ * Restore the most recent deletion. Queue entries return to their original
+ * position; a deleted ACTIVE clip returns to the queue front (never
+ * re-activated — silently swapping the open editor would be worse than the
+ * deletion was).
+ * @returns {boolean} true if something was restored
+ */
+export function undoDelete() {
+  if (!pendingDeletion) return false;
+  const { entry, index, timer } = pendingDeletion;
+  clearTimeout(timer);
+  pendingDeletion = null;
+  state.clipQueue.splice(Math.min(index, state.clipQueue.length), 0, entry);
+  emitQueueChanged('enqueue');
   return true;
 }
 
@@ -856,6 +914,7 @@ export function clearEditorPayload() {
  * close frames. Called when starting a fresh capture session.
  */
 export function releaseAllFramesAndReset() {
+  finalizePendingDeletion();
   closeFrameList(state.clipPayload?.frames);
   closeEditorPayloadFrames(state.editorPayload);
   for (const entry of state.clipQueue) {

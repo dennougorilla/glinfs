@@ -25,6 +25,7 @@ import {
   resetAppStore,
   setClipPayload,
   setEditorPayload,
+  undoDelete,
 } from './shared/app-store.js';
 import { on as onBus } from './shared/bus.js';
 import { createClipCodecManager } from './shared/clip-codec.js';
@@ -38,6 +39,7 @@ import {
   isTestMode,
   updateTestConfig,
 } from './shared/test-mode.js';
+import { showToast } from './shared/toast.js';
 import { createElement } from './shared/utils/dom.js';
 import {
   createMockClipPayload,
@@ -351,6 +353,12 @@ function setupClipQueueHeader() {
       onDelete: (id) => {
         if (deleteQueuedClip(id)) {
           announce('Clip deleted from queue');
+          showToast('Clip deleted', {
+            actionLabel: 'Undo',
+            onAction: () => {
+              if (undoDelete()) announce('Clip restored');
+            },
+          });
         }
       },
       onDeleteActive: () => {

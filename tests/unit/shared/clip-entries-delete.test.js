@@ -2,21 +2,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderClipEntries } from '../../../src/shared/clip-entries.js';
 
 /**
- * #98: queue-entry deletion uses an inline two-step control instead of
- * window.confirm — first click arms ("Delete?"), a second click within 3s
- * deletes, timeout or blur reverts. These tests pin that contract.
+ * #100 round 5: deletion is a SINGLE click on the trailing trash button —
+ * safety comes from the app-store's deferred deletion + undo toast, not
+ * from a confirm step. These tests pin the one-click contract and the
+ * compact entry meta.
  */
-describe('clip-entries inline two-step delete (#98)', () => {
+describe('clip-entries single-click delete (#100 r5)', () => {
   /** @type {HTMLElement} */
   let container;
   /** @type {(() => void)[]} */
   let cleanups = [];
   /** @type {ReturnType<typeof vi.fn>} */
   let onDelete;
+  /** @type {ReturnType<typeof vi.fn>} */
+  let onDeleteActive;
 
-  function renderOneEntry() {
+  function renderEntries({ withActive = false } = {}) {
     onDelete = vi.fn();
+    onDeleteActive = vi.fn();
     cleanups = renderClipEntries(container, {
+      activeClip: withActive
+        ? {
+            id: 'active-1',
+            frames: [],
+            fps: 30,
+            capturedAt: Date.now() + 1000,
+            thumbnailDataUrl: null,
+          }
+        : null,
       queue: [
         {
           id: 'clip-1',
@@ -30,12 +43,11 @@ describe('clip-entries inline two-step delete (#98)', () => {
         },
       ],
       onDelete,
+      onDeleteActive,
     });
-    return /** @type {HTMLButtonElement} */ (container.querySelector('.clip-entry-delete'));
   }
 
   beforeEach(() => {
-    vi.useFakeTimers();
     document.body.innerHTML = '<div id="c"></div>';
     container = /** @type {HTMLElement} */ (document.getElementById('c'));
   });
@@ -44,63 +56,42 @@ describe('clip-entries inline two-step delete (#98)', () => {
     cleanups.forEach((fn) => {
       fn();
     });
-    vi.useRealTimers();
     document.body.innerHTML = '';
   });
 
-  it('first click arms instead of deleting', () => {
-    const btn = renderOneEntry();
+  it('a single click deletes a queued entry immediately (undo covers safety)', () => {
+    renderEntries();
+    const btn = /** @type {HTMLButtonElement} */ (container.querySelector('.clip-entry-delete'));
 
-    btn.click();
-
-    expect(onDelete).not.toHaveBeenCalled();
-    expect(btn.textContent).toBe('Delete?');
-    expect(btn.classList.contains('clip-entry-delete--armed')).toBe(true);
-    expect(btn.getAttribute('aria-label')).toMatch(/^Confirm delete/);
-  });
-
-  it('second click within the window deletes', () => {
-    const btn = renderOneEntry();
-
-    btn.click();
-    vi.advanceTimersByTime(1000);
     btn.click();
 
     expect(onDelete).toHaveBeenCalledExactlyOnceWith('clip-1');
   });
 
-  it('reverts to idle after the 3s window with no delete', () => {
-    const btn = renderOneEntry();
-
-    btn.click();
-    vi.advanceTimersByTime(3100);
-
-    expect(onDelete).not.toHaveBeenCalled();
-    expect(btn.textContent).toBe('×');
-    expect(btn.classList.contains('clip-entry-delete--armed')).toBe(false);
-
-    // A click after the revert arms again rather than deleting
-    btn.click();
-    expect(onDelete).not.toHaveBeenCalled();
+  it('the delete button is a trash icon, not text', () => {
+    renderEntries();
+    const btn = container.querySelector('.clip-entry-delete');
+    expect(btn?.querySelector('svg')).not.toBeNull();
+    expect(btn?.textContent).toBe('');
   });
 
-  it('losing focus disarms', () => {
-    const btn = renderOneEntry();
+  it('the active entry deletes with a single click through onDeleteActive', () => {
+    renderEntries({ withActive: true });
+    const btn = /** @type {HTMLButtonElement} */ (
+      container.querySelector('[data-testid="delete-active-clip"]')
+    );
 
     btn.click();
-    btn.dispatchEvent(new FocusEvent('blur'));
 
-    expect(btn.textContent).toBe('×');
-    btn.click();
+    expect(onDeleteActive).toHaveBeenCalledTimes(1);
     expect(onDelete).not.toHaveBeenCalled();
   });
 
   it('renders the compact single-line meta with the full detail as tooltip', () => {
-    renderOneEntry();
+    renderEntries();
     const meta = container.querySelector('.clip-entry-meta');
     const info = container.querySelector('.clip-entry-info');
 
-    // "1.0s · 30f · HH:MM" — one line, frame count abbreviated
     expect(meta?.textContent).toMatch(/^1\.0s · 30f · \d{2}:\d{2}/);
     expect(info?.getAttribute('title')).toContain('30 frames');
   });

@@ -15,11 +15,13 @@ import {
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
+  undoDelete,
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
+import { showToast } from '../../shared/toast.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -917,6 +919,14 @@ async function promoteWhenDecoded(id) {
 function handleDeleteClip(id) {
   if (deleteQueuedClip(id)) {
     announce('Clip deleted from queue');
+    showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
+  }
+}
+
+/** Restore the most recent deletion (toast action, #100 r5) */
+function handleUndoDelete() {
+  if (undoDelete()) {
+    announce('Clip restored');
   }
 }
 
@@ -929,6 +939,7 @@ function handleDeleteClip(id) {
 function handleDeleteActiveClip() {
   if (!deleteActiveClip()) return;
   cleanup();
+  showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
   if (getClipQueue().length === 0) {
     // Nothing left to edit — leaving to Capture is the natural next step;
     // re-initing here would land on the "Invalid Clip Data" ERROR screen
