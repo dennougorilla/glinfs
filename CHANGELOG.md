@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/dennougorilla/glinfs/compare/v0.4.0...v0.4.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **editor:** frame-grid focus retention on eviction; wire thumbnailQuality setting ([#86](https://github.com/dennougorilla/glinfs/issues/86)) ([ab83978](https://github.com/dennougorilla/glinfs/commit/ab83978a14ee7264b78e6ff1d8dad5a8020b2362))
+* **export,settings:** cancel stale throttled progress timer; restore correct settings back route ([#87](https://github.com/dennougorilla/glinfs/issues/87)) ([0fc7074](https://github.com/dennougorilla/glinfs/commit/0fc7074e903aece6017326eb7200a96d44ab1815))
+* **export:** abort worker encode session after a frame failure ([#45](https://github.com/dennougorilla/glinfs/issues/45)) ([#77](https://github.com/dennougorilla/glinfs/issues/77)) ([8ff8b55](https://github.com/dennougorilla/glinfs/commit/8ff8b55838e4fb731ae2372675b78f43b930aeeb))
+* **export:** only restore a saved result whose fingerprint matches the visit ([#85](https://github.com/dennougorilla/glinfs/issues/85)) ([4586809](https://github.com/dennougorilla/glinfs/commit/4586809be71d56634a49a7888c6094405eac61c3))
+* **export:** probe encoder availability with HEAD; honor loopCount via NETSCAPE patch ([#46](https://github.com/dennougorilla/glinfs/issues/46)) ([#82](https://github.com/dennougorilla/glinfs/issues/82)) ([2521683](https://github.com/dennougorilla/glinfs/commit/2521683af08c64659f18ed26831c1b9133464026))
+
+
+### Performance Improvements
+
+* **export:** reuse extraction canvas and throttle progress UI updates ([#81](https://github.com/dennougorilla/glinfs/issues/81)) ([7029858](https://github.com/dennougorilla/glinfs/commit/702985823831d12281ee15a620db609c0eb496d9))
+
 ## [0.4.0](https://github.com/dennougorilla/glinfs/compare/v0.3.1...v0.4.0) (2026-07-21)
 
 
