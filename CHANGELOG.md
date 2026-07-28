@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/dennougorilla/glinfs/compare/v0.4.1...v0.5.0) (2026-07-28)
+
+
+### Features
+
+* live capture across routes — background recording, PiP, Clip Now + bounded clip queue, memory safety ([#97](https://github.com/dennougorilla/glinfs/issues/97)) ([6b0f717](https://github.com/dennougorilla/glinfs/commit/6b0f717dada9a2c2914c2dae61bdd9b531ac8236))
+
+
+### Bug Fixes
+
+* **export,capture,ui:** scope export results to one visit, unlock scene toggle, resolve CSS collisions ([#89](https://github.com/dennougorilla/glinfs/issues/89)) ([153fc62](https://github.com/dennougorilla/glinfs/commit/153fc624ac7c7d3f9c532e6f88ea6732c5fd7d57))
+
 ## [0.4.1](https://github.com/dennougorilla/glinfs/compare/v0.4.0...v0.4.1) (2026-07-28)
 
 
