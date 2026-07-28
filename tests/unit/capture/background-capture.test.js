@@ -214,4 +214,25 @@ describe('Background capture (#91)', () => {
       unsubscribe();
     });
   });
+
+  describe('stats while backgrounded', () => {
+    it('keeps writing worker stats into the stashed store after navigating away', async () => {
+      // Regression: onStatsUpdate closed over the module-level `store`,
+      // which cleanup() nulls on every navigation — so while background
+      // capture kept recording, every stats update was dropped and the
+      // PiP's buffer-fullness readout froze at its last pre-navigation
+      // value. The callback must write through the session's own store,
+      // which survives in screenCaptureState.
+      const { cleanup, manager } = await startSharing();
+      const onStatsUpdate = manager.init.mock.calls[0][1].onStatsUpdate;
+
+      cleanup(); // navigate away; backgroundCapture (default) keeps recording
+
+      onStatsUpdate({ frameCount: 120, fps: 30 });
+
+      const { getScreenCaptureState } = await import('../../../src/shared/app-store.js');
+      const stashedStats = getScreenCaptureState()?.store?.getState().stats;
+      expect(stashedStats).toMatchObject({ frameCount: 120, fps: 30, duration: 4 });
+    });
+  });
 });

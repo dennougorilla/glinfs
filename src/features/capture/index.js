@@ -208,12 +208,19 @@ async function handleStart() {
     // Update state
     store.setState((state) => startCapture(state, stream));
 
-    // Initialize worker manager with video element
+    // Initialize worker manager with video element.
+    //
+    // The stats callback closes over THIS session's store, not the module
+    // variable: cleanup() nulls the module `store` on every navigation while
+    // the preserved session (and its store, stashed in screenCaptureState)
+    // lives on. With background capture the worker keeps posting stats while
+    // the user is on another route — writing them through the module variable
+    // silently dropped them all, freezing the PiP's buffer-fullness readout.
+    const sessionStore = store;
     workerManager = new CaptureWorkerManager();
     workerManager.init(videoElement, {
       onStatsUpdate: (stats) => {
-        if (!store) return;
-        store.setState((state) => ({
+        sessionStore.setState((state) => ({
           ...state,
           stats: {
             frameCount: stats.frameCount,
