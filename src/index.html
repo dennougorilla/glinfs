@@ -3,9 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- The bundled Emscripten encoder currently evaluates its generated loader.
-       Keep unsafe-eval scoped to scripts until that artifact can be rebuilt as
-       an ES module; all fetched code and workers remain same-origin only. -->
+  <!-- The bundled Emscripten encoder evaluates its generated loader, but that
+       happens inside the encoder worker, whose execution context takes its CSP
+       from the worker script's own response — not from this document policy.
+       So 'unsafe-eval' is deliberately NOT granted here (verified end-to-end by
+       tests/e2e/export-wasm.spec.js, which runs a real WASM export and asserts
+       zero CSP violations). All fetched code and workers stay same-origin. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; frame-src 'none'; form-action 'none'">
   <title>Glinfs - Screen Capture to GIF</title>
   <link rel="stylesheet" href="./styles/reset.css">
