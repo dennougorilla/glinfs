@@ -9,6 +9,7 @@ import { initCapture } from './features/capture/index.js';
 import { initEditor, promoteClipFromQueue } from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
+import { initPip } from './features/pip/index.js';
 import { initSettings } from './features/settings/index.js';
 import {
   deleteQueuedClip,
@@ -268,6 +269,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Clip Now header button, queue badge popover and global Shift+C (#95)
   setupClipQueueHeader();
+
+  // Persistent live-capture PiP (#94) — mounted once, reacts to route/bus
+  // events on its own; must be wired before initRouter() processes the
+  // initial hash so its onRouteChange listener sees that first navigation.
+  initPip();
 
   // Initialize router
   initRouter(routes);
