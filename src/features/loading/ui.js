@@ -3,6 +3,7 @@
  * @module features/loading/ui
  */
 
+import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { createElement } from '../../shared/utils/dom.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 
@@ -43,7 +44,7 @@ function createSpinnerIcon() {
  */
 export function renderLoadingScreen(container) {
   // Update step indicator to show Edit step as current
-  updateStepIndicator('editor', { hasFrames: true });
+  updateStepIndicator('editor', { hasFrames: true, isCapturing: hasActiveScreenCapture() });
 
   const screen = createElement('div', { className: 'loading-screen screen' });
 
@@ -56,6 +57,18 @@ export function renderLoadingScreen(container) {
 
   // Title
   content.appendChild(createElement('h2', { className: 'loading-title' }, ['Detecting Scenes...']));
+
+  // Live monitor slot (#100 v3): scene detection takes seconds — keep the
+  // ongoing capture visible and clippable instead of a dead wait screen.
+  // Populated by live-monitor.js when a session is live.
+  content.appendChild(
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+  );
+  content.appendChild(
+    createElement('div', { className: 'loading-live-note' }, [
+      'Recording continues \u2014 press Shift+C to clip',
+    ]),
+  );
 
   // Subtitle
   content.appendChild(

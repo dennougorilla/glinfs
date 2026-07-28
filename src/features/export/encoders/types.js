@@ -17,6 +17,11 @@
  * @property {string} description - User-facing description
  * @property {QuantizeFormat} format - Quantization format
  * @property {number} maxColorsMultiplier - Multiplier for quality-based maxColors
+ * @property {number} paletteInterval - How often quantize() rebuilds the
+ *   palette: 1 = every frame (best color fidelity), N>1 = every Nth frame
+ *   (reused between), 0 = once from the first frame (fastest). Palette
+ *   rebuilding dominates encode time (#99), so this is the preset's main
+ *   speed lever.
  */
 
 /**

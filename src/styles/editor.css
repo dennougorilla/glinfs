@@ -593,6 +593,11 @@
   min-height: 0;
   cursor: pointer;
   overflow: hidden;
+  /* Shared reference box: absolutely-positioned children (filmstrip,
+     selection layer, playhead) are offset from this padding edge, so
+     giving the padding to the track (not the filmstrip alone) keeps every
+     layer's 0-100% coordinate space identical (issue #99, fix 1). */
+  padding: 4px;
 }
 
 .tl--scrubbing .tl-track {
@@ -607,7 +612,6 @@
   inset: 0;
   display: flex;
   gap: 1px;
-  padding: 4px;
 }
 
 .tl-frame {
@@ -1156,12 +1160,276 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   LEFT SIDEBAR - CLIPS (queue, #95)
+   Entry rows themselves are styled in clip-queue.css (.clip-entries), shared
+   with the header popover; only the editor-specific chrome lives here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.editor-sidebar-left .clips-sidebar-header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-sidebar-left .clips-queue-banner {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-selection-bg);
+  color: var(--color-warning);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.editor-sidebar-left .clips-queue-banner[hidden] {
+  display: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Left sidebar Layout A (#100): live source monitor dock + CLIPS/SCENES tabs
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.editor-sidebar-left .panel-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Right-panel property accordions (#100 v3): Aspect stays always-visible;
+   Playback/Overlay/Crop fold so the live monitor keeps the prime space */
+.editor-sidebar .prop-accordion {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.editor-sidebar .prop-accordion-summary {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.editor-sidebar .prop-accordion-summary:hover {
+  color: var(--color-text);
+}
+
+/* The summary already names the group; hide the wrapped group's own title */
+.editor-sidebar .prop-accordion .property-group-title {
+  display: none;
+}
+
+/* Tab bar */
+.editor-sidebar-left .sidebar-tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-sidebar-left .sidebar-tab {
+  flex: 1;
+  padding: var(--space-2) 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+/* Tab count (#100 r7): shows how many items each pane holds; empty when 0 */
+.editor-sidebar-left .sidebar-tab-count {
+  margin-left: var(--space-1);
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.editor-sidebar-left .sidebar-tab-count:empty {
+  display: none;
+}
+
+.editor-sidebar-left .sidebar-tab--active .sidebar-tab-count {
+  color: var(--color-primary);
+}
+
+.editor-sidebar-left .sidebar-tab--active {
+  color: var(--color-text);
+  background: var(--color-panel-header);
+  box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+/* Panes fill the remaining sidebar height; each list scrolls internally */
+.editor-sidebar-left .sidebar-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-sidebar-left .sidebar-pane[hidden] {
+  display: none;
+}
+
+/* Source-monitor "Live view" overlay (#100 follow-up): full-size live feed
+   over the center preview, toggled from the dock's viewport */
+.editor-preview-wrapper .live-view-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+}
+
+.editor-preview-wrapper .live-view-overlay[hidden] {
+  display: none;
+}
+
+.editor-preview-wrapper .live-view-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.editor-preview-wrapper .live-view-badge {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-recording);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.editor-preview-wrapper .live-view-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  cursor: pointer;
+}
+
+.editor-preview-wrapper .live-view-close:hover {
+  background: var(--color-recording);
+  color: white;
+}
+
+.editor-preview-wrapper .live-view-bar {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.editor-preview-wrapper .live-view-clip-btn {
+  padding: var(--space-2) var(--space-5);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--color-primary);
+  color: white;
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
+}
+
+.editor-preview-wrapper .live-view-clip-btn:hover {
+  background: var(--color-primary-hover);
+}
+
+.editor-sidebar-left .live-monitor-viewport--clickable {
+  cursor: pointer;
+}
+
+.editor-sidebar-left .live-monitor-viewport--clickable:hover::after {
+  content: "\26F6  Expand";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+}
+
+/* One-line quiet hint for empty scenes (#98) */
+.editor-sidebar-left .scenes-sidebar-hint {
+  padding: var(--space-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.editor-sidebar-left .clips-sidebar-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  /* Bottom fade as a scroll cue (#98): macOS overlay scrollbars are
+     invisible at rest, so a cut-off list read as "only 2 clips exist" */
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 16px), transparent);
+}
+
+.editor-sidebar-left .clips-sidebar-memory {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-sidebar-left .clips-sidebar-memory--warning {
+  color: var(--color-warning);
+}
+
+/* "Opening clip…" transient state (#100 round 5) while a compressed
+   queued clip decodes into the editor */
+.editor-clip-opening .editor-clip-opening-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.editor-clip-opening .clip-entry-status-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  animation: clip-entry-status-spin 0.8s linear infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    LEFT SIDEBAR - SCENES WITH THUMBNAILS
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .editor-sidebar-left {
   flex-shrink: 0;
-  width: 200px;
+  width: 240px;
   display: flex;
   flex-direction: column;
   background: var(--color-panel);

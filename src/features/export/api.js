@@ -113,10 +113,28 @@ export async function getFrameRGBA(frame, crop) {
     return { data: imageData.data, width: sourceWidth, height: sourceHeight };
   }
 
-  // Cropped extraction: use OffscreenCanvas for GPU-accelerated crop
+  // Cropped extraction
   const outputWidth = crop.width;
   const outputHeight = crop.height;
 
+  // Use copyTo() with a crop rect for GPU-accelerated extraction when
+  // available (issue #99, fix 4) - the previous implementation always fell
+  // through to a sync drawImage + getImageData readback for crops even
+  // when the GPU path (already used for the uncropped case above) was
+  // available.
+  if (typeof videoFrame.copyTo === 'function') {
+    const byteLength = outputWidth * outputHeight * 4;
+    const buffer = new Uint8ClampedArray(byteLength);
+
+    await videoFrame.copyTo(buffer, {
+      rect: { x: crop.x, y: crop.y, width: outputWidth, height: outputHeight },
+      format: 'RGBA',
+    });
+
+    return { data: buffer, width: outputWidth, height: outputHeight };
+  }
+
+  // Fallback: use OffscreenCanvas (for environments without copyTo)
   const { ctx } = getExtractionCanvas(outputWidth, outputHeight);
 
   // Draw cropped region from VideoFrame
@@ -249,6 +267,7 @@ export async function encodeGif(params, signal) {
       frameDelayMs,
       loopCount: settings.loopCount,
       quantizeFormat: preset.format,
+      paletteInterval: preset.paletteInterval,
     });
 
     // Setup progress callback (also releases backpressure window slots)

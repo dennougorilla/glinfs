@@ -52,12 +52,6 @@ export class SceneDetectionManager {
 
     /** @type {boolean} */
     this.#isCancelled = false;
-
-    /** @type {OffscreenCanvas | null} */
-    this.#canvas = null;
-
-    /** @type {OffscreenCanvasRenderingContext2D | null} */
-    this.#ctx = null;
   }
 
   /** @type {Worker | null} */
@@ -77,12 +71,6 @@ export class SceneDetectionManager {
 
   /** @type {boolean} */
   #isCancelled;
-
-  /** @type {OffscreenCanvas | null} */
-  #canvas;
-
-  /** @type {OffscreenCanvasRenderingContext2D | null} */
-  #ctx;
 
   /**
    * Rejects a pending init() promise. Held so dispose() can settle the
@@ -282,10 +270,11 @@ export class SceneDetectionManager {
         this.#resolveDetect = resolve;
         this.#rejectDetect = reject;
 
-        // Transfer ImageData buffers to worker
+        // Transfer the ImageBitmaps to the worker - the pixel readback
+        // (drawImage + getImageData) happens over there, off this thread.
         const transferables = frameData
-          .filter((f) => f.imageData)
-          .map((f) => /** @type {ImageData} */ (f.imageData).data.buffer);
+          .filter((f) => f.imageBitmap)
+          .map((f) => /** @type {ImageBitmap} */ (f.imageBitmap));
 
         this.#worker?.postMessage(
           {
@@ -308,7 +297,16 @@ export class SceneDetectionManager {
   }
 
   /**
-   * Extract lightweight data from frames for detection
+   * Extract lightweight data from frames for detection.
+   *
+   * Off the main thread by design (issue #99, fix 3): this used to
+   * drawImage a full-res frame onto a canvas and call getImageData
+   * synchronously on THIS thread, for every sampled frame - a sync
+   * GPU->CPU flush per frame. Instead we hand each frame to
+   * `createImageBitmap` with a resize target, which downscales without a
+   * synchronous main-thread readback, and transfer the resulting
+   * ImageBitmaps to the worker. The actual pixel readback (drawImage +
+   * getImageData) happens there, on an OffscreenCanvas owned by the worker.
    * @param {Frame[]} frames - Source frames
    * @param {number} sampleInterval - Sampling interval
    * @returns {Promise<FrameData[]>}
@@ -317,17 +315,7 @@ export class SceneDetectionManager {
     /** @type {FrameData[]} */
     const frameData = [];
 
-    // Initialize canvas for thumbnail extraction
     const thumbnailSize = DEFAULT_THUMBNAIL_SIZE;
-    if (!this.#canvas) {
-      this.#canvas = new OffscreenCanvas(thumbnailSize, thumbnailSize);
-      this.#ctx = this.#canvas.getContext('2d', { willReadFrequently: true });
-    }
-
-    const ctx = this.#ctx;
-    if (!ctx) {
-      throw new Error('Failed to get canvas context');
-    }
 
     // Process frames with sampling
     for (let i = 0; i < frames.length; i += sampleInterval) {
@@ -347,11 +335,13 @@ export class SceneDetectionManager {
       const data = {
         index: i,
         timestamp: frame.timestamp,
-        imageData: null,
+        imageBitmap: null,
+        width: 0,
+        height: 0,
         histogram: null,
       };
 
-      // Extract thumbnail ImageData from VideoFrame
+      // Extract a downscaled ImageBitmap from the VideoFrame
       if (frame.frame && !frame.frame.closed) {
         try {
           // Calculate aspect-aware thumbnail dimensions
@@ -365,15 +355,16 @@ export class SceneDetectionManager {
             drawWidth = Math.round(thumbnailSize * aspectRatio);
           }
 
-          // Clear and draw scaled frame (supports mock frames)
-          ctx.clearRect(0, 0, thumbnailSize, thumbnailSize);
           const source = getDrawableSource(frame);
           if (source) {
-            ctx.drawImage(source, 0, 0, drawWidth, drawHeight);
+            data.imageBitmap = await createImageBitmap(source, {
+              resizeWidth: drawWidth,
+              resizeHeight: drawHeight,
+              resizeQuality: 'low',
+            });
+            data.width = drawWidth;
+            data.height = drawHeight;
           }
-
-          // Extract ImageData
-          data.imageData = ctx.getImageData(0, 0, drawWidth, drawHeight);
         } catch (error) {
           // Frame may be closed or invalid, skip it
           console.warn(`Failed to extract frame ${i}:`, error);
@@ -437,8 +428,6 @@ export class SceneDetectionManager {
       this.#worker = null;
     }
 
-    this.#canvas = null;
-    this.#ctx = null;
     this.#isInitialized = false;
     this.#onProgress = null;
   }

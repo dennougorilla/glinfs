@@ -20,6 +20,8 @@ vi.mock('../../../src/workers/capture-worker-manager.js', () => {
       this.clear = vi.fn();
       this.terminate = vi.fn();
       this.requestFrames = vi.fn().mockResolvedValue([]);
+      // null = video metadata unknown -> budget clamp is skipped (#96)
+      this.getEffectiveFrameDimensions = vi.fn(() => null);
       /** Number of managers that existed when terminateWithCleanup was called */
       this.instanceCountAtCleanup = -1;
       this.terminateWithCleanup = vi.fn(() => {

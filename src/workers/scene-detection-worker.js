@@ -26,6 +26,38 @@ let algorithmId = 'histogram';
 /** @type {boolean} */
 let isCancelled = false;
 
+// Reused OffscreenCanvas for the per-frame pixel readback (issue #99, fix
+// 3). The manager sends downscaled ImageBitmaps (produced off-thread via
+// createImageBitmap, no sync readback on the main thread) - the
+// drawImage + getImageData pair that used to run on the main thread now
+// runs here instead, one buffer reused across the whole detection run.
+/** @type {OffscreenCanvas | null} */
+let readbackCanvas = null;
+
+/** @type {OffscreenCanvasRenderingContext2D | null} */
+let readbackCtx = null;
+
+/**
+ * Get (creating/resizing as needed) the shared OffscreenCanvas 2D context
+ * used to read pixels back from a transferred ImageBitmap.
+ * @param {number} width
+ * @param {number} height
+ * @returns {OffscreenCanvasRenderingContext2D}
+ */
+function getReadbackContext(width, height) {
+  if (!readbackCanvas) {
+    readbackCanvas = new OffscreenCanvas(width, height);
+    readbackCtx = readbackCanvas.getContext('2d', { willReadFrequently: true });
+  } else if (readbackCanvas.width !== width || readbackCanvas.height !== height) {
+    readbackCanvas.width = width;
+    readbackCanvas.height = height;
+  }
+  if (!readbackCtx) {
+    throw new Error('Failed to get OffscreenCanvas context');
+  }
+  return readbackCtx;
+}
+
 /**
  * Send message back to main thread
  * @param {'READY' | 'PROGRESS' | 'COMPLETE' | 'ERROR'} type
@@ -91,10 +123,19 @@ async function detectScenes(frameData, options) {
       stage: 'analyzing',
     });
 
-    // Compute histogram from ImageData
+    // Read the transferred ImageBitmap back into pixels HERE (worker
+    // thread), not on main - and compute the histogram from it.
     let histogram = null;
-    if (data.imageData) {
-      histogram = computeHistogram(data.imageData);
+    if (data.imageBitmap) {
+      try {
+        const ctx = getReadbackContext(data.width, data.height);
+        ctx.clearRect(0, 0, data.width, data.height);
+        ctx.drawImage(data.imageBitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, data.width, data.height);
+        histogram = computeHistogram(imageData);
+      } finally {
+        data.imageBitmap.close();
+      }
     }
 
     // Compare with previous frame

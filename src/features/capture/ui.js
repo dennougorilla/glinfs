@@ -129,7 +129,9 @@ export function renderCaptureScreen(container, state, handlers) {
   sidebar.appendChild(
     createControlSection('Capture', renderCaptureActions(state, handlers, cleanups)),
   );
-  sidebar.appendChild(createControlSection('Buffer', renderStats(state.stats)));
+  sidebar.appendChild(
+    createControlSection('Buffer', renderStats(state.stats, state.bufferLimit ?? null)),
+  );
   // Lock the settings that reconfigure the running capture worker while a
   // screen is being shared (Scene Detection stays editable — see renderSettings)
   sidebar.appendChild(
@@ -328,12 +330,24 @@ function createStatItem(label, value) {
  * @param {import('./types.js').BufferStats} stats
  * @returns {HTMLElement}
  */
-function renderStats(stats) {
-  return createElement('div', { className: 'capture-stats' }, [
+function renderStats(stats, bufferLimit = null) {
+  const el = createElement('div', { className: 'capture-stats' }, [
     createStatItem('Frames', String(stats.frameCount)),
     createStatItem('Duration', formatDuration(stats.duration)),
     createStatItem('FPS', String(stats.fps)),
   ]);
+
+  // The ring buffer was clamped below fps x bufferDuration by the memory
+  // budget (#96) — say so, or the Buffer slider reads as silently broken
+  if (bufferLimit?.clamped) {
+    el.appendChild(
+      createElement('div', { className: 'capture-stats-limit-note', role: 'note' }, [
+        `Buffer limited to ~${Math.round(bufferLimit.effectiveDuration)}s by the memory budget`,
+      ]),
+    );
+  }
+
+  return el;
 }
 
 /**

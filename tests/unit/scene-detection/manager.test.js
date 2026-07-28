@@ -310,3 +310,82 @@ describe('SceneDetectionManager dispose', () => {
     expect(mockWorker.terminated).toBe(true);
   });
 });
+
+describe('SceneDetectionManager frame extraction (issue #99, fix 3)', () => {
+  const OriginalCreateImageBitmap = globalThis.createImageBitmap;
+
+  afterEach(() => {
+    globalThis.createImageBitmap = OriginalCreateImageBitmap;
+  });
+
+  /**
+   * Build a mock Frame carrying a fake (non-closed) VideoFrame, so
+   * getDrawableSource() returns it.
+   */
+  function makeMockFrame(id, timestamp, width = 100, height = 50) {
+    return {
+      id,
+      timestamp,
+      width,
+      height,
+      frame: { closed: false },
+    };
+  }
+
+  it('extracts via createImageBitmap (downscaled, off-thread) instead of a synchronous canvas readback', async () => {
+    const createImageBitmapMock = vi.fn(async (_source, options) => ({
+      close: vi.fn(),
+      __options: options,
+    }));
+    globalThis.createImageBitmap = createImageBitmapMock;
+
+    const manager = await createInitializedManager();
+    const frames = [makeMockFrame('f0', 0), makeMockFrame('f1', 33)];
+
+    const detectPromise = manager.detect(frames);
+    // Let the async extraction loop run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(2);
+    // Resize options passed - proves this is a resize/downscale call, not a
+    // no-op bitmap grab of the full-resolution frame.
+    const [, options] = createImageBitmapMock.mock.calls[0];
+    expect(options).toMatchObject({
+      resizeWidth: expect.any(Number),
+      resizeHeight: expect.any(Number),
+    });
+
+    // The DETECT message posted to the worker carries imageBitmap entries,
+    // not imageData - the readback moved to the worker.
+    const detectMessage = mockWorker.messages.find((m) => m.type === 'DETECT');
+    expect(detectMessage).toBeDefined();
+    expect(detectMessage.payload.frameData).toHaveLength(2);
+    detectMessage.payload.frameData.forEach((f) => {
+      expect(f.imageBitmap).toBeTruthy();
+      expect(f.imageData).toBeUndefined();
+    });
+
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
+  });
+
+  it('skips extraction gracefully when createImageBitmap rejects for a frame', async () => {
+    globalThis.createImageBitmap = vi.fn(async () => {
+      throw new Error('boom');
+    });
+
+    const manager = await createInitializedManager();
+    const frames = [makeMockFrame('f0', 0)];
+
+    const detectPromise = manager.detect(frames);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const detectMessage = mockWorker.messages.find((m) => m.type === 'DETECT');
+    expect(detectMessage.payload.frameData[0].imageBitmap).toBeNull();
+
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
+  });
+});

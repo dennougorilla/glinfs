@@ -11,6 +11,9 @@
 /**
  * @typedef {Object} StepContext
  * @property {boolean} [hasFrames] - Whether captured frames exist (for capture screen)
+ * @property {boolean} [isCapturing] - Whether a screen capture session is running in the
+ *   background (i.e. active but on a route other than /capture). Surfaced as a pulsing
+ *   dot on the Capture step so background recording isn't invisible while editing/exporting.
  */
 
 /**
@@ -25,14 +28,21 @@
  * @param {StepContext} [context={}] - Optional context for conditional states
  */
 export function updateStepIndicator(currentStep, context = {}) {
-  const { hasFrames = false } = context;
+  const { hasFrames = false, isCapturing = false } = context;
 
   const steps = document.querySelectorAll('.step-indicator .step');
   const connectors = document.querySelectorAll('.step-indicator .step-connector');
 
   steps.forEach((step) => {
     const stepName = step.getAttribute('data-step');
-    step.classList.remove('step--active', 'step--completed', 'step--disabled');
+    step.classList.remove('step--active', 'step--completed', 'step--disabled', 'step--live');
+
+    // Background recording indicator: only meaningful for the Capture step,
+    // and only while we're actually away from it (on /capture the recording
+    // UI itself already shows this).
+    if (stepName === 'capture' && isCapturing && currentStep !== 'capture') {
+      step.classList.add('step--live');
+    }
 
     if (stepName === currentStep) {
       step.classList.add('step--active');

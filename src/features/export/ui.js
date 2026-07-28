@@ -3,6 +3,7 @@
  * @module features/export/ui
  */
 
+import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { createElement, createErrorScreen, on } from '../../shared/utils/dom.js';
 import {
   formatBytes,
@@ -64,7 +65,7 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   const cleanups = [];
 
   // Update step indicator
-  updateStepIndicator('export');
+  updateStepIndicator('export', { isCapturing: hasActiveScreenCapture() });
 
   // Main layout
   const screen = createElement('div', { className: 'export-screen screen' });
@@ -122,6 +123,16 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   // Settings Panel (only show when not encoding/complete/error)
   if (!state.job || state.job.status === 'idle') {
     content.appendChild(renderSettingsPanel(state, handlers, clipInfo, cleanups));
+  } else {
+    // Encoding/complete/error views replace the settings panel, but the
+    // live monitor must not vanish mid-recording ("not visible while the
+    // GIF is being created"). A slim column keeps the slot mounted across
+    // every job state; :has() collapses it when no capture is live.
+    content.appendChild(
+      createElement('div', { className: 'export-live-column' }, [
+        createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+      ]),
+    );
   }
 
   screen.appendChild(content);
@@ -509,6 +520,13 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
  */
 function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   const panel = createElement('div', { className: 'export-settings-panel' });
+
+  // Live source monitor slot (#100 v3): same top-of-right-panel spot as the
+  // editor, so "recording continues" stays visible while configuring the
+  // export. Populated by live-monitor.js; empty/invisible when not live.
+  panel.appendChild(
+    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+  );
 
   // Header
   panel.appendChild(

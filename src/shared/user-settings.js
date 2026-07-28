@@ -17,6 +17,22 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {15|30|60} fps - Frames per second
  * @property {number} bufferDuration - Buffer duration in seconds (5-60)
  * @property {boolean} sceneDetection - Auto scene detection enabled
+ * @property {boolean} backgroundCapture - Keep the frame-grab loop running while
+ *   navigated away from /capture, instead of pausing it (default true)
+ * @property {number} clipQueueLimit - Maximum clips held in the clip queue
+ *   (1-30, default 10). The active clip is not counted — it lives outside
+ *   the queue and can never be evicted by it. The default of 10 assumes
+ *   queued clips are WebCodecs-compressed (#92, ~50-100x smaller than raw);
+ *   when compression is unavailable entries stay raw and the memoryBudgetMB
+ *   refusal is the effective bound well before the count limit. Stored
+ *   values outside 1-30 are clamped for display and by getClipQueueLimit().
+ * @property {number} captureResolutionLimit - Maximum long edge of captured
+ *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
+ *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
+ * @property {number} memoryBudgetMB - Total budget for frame memory
+ *   (ring buffer + active clip + queue), conservatively estimated at raw
+ *   RGBA w*h*4. The buffer is clamped to a share of it and clip creation is
+ *   refused beyond it (#96).
  */
 
 /**
@@ -40,6 +56,10 @@ const DEFAULT_SETTINGS = {
     fps: 30,
     bufferDuration: 15,
     sceneDetection: true,
+    backgroundCapture: true,
+    clipQueueLimit: 10,
+    captureResolutionLimit: 1920,
+    memoryBudgetMB: 4000,
   },
   export: {
     quality: 0.8,
@@ -81,6 +101,36 @@ export const SETTINGS_METADATA = {
       sceneDetection: {
         label: 'Scene Detection',
         type: 'boolean',
+      },
+      backgroundCapture: {
+        label: 'Keep recording while editing',
+        type: 'boolean',
+      },
+      clipQueueLimit: {
+        label: 'Clip Queue Limit',
+        type: 'range',
+        min: 1,
+        max: 30,
+        step: 1,
+        format: (v) => `${v} clip${v === 1 ? '' : 's'}`,
+      },
+      captureResolutionLimit: {
+        label: 'Capture Resolution Limit',
+        type: 'select',
+        options: [
+          { value: 1280, label: '1280px' },
+          { value: 1920, label: '1920px (recommended)' },
+          { value: 2560, label: '2560px' },
+          { value: 0, label: 'Native (no limit)' },
+        ],
+      },
+      memoryBudgetMB: {
+        label: 'Memory Budget',
+        type: 'range',
+        min: 500,
+        max: 16000,
+        step: 500,
+        format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} GB` : `${v} MB`),
       },
     },
   },

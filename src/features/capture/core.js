@@ -81,3 +81,51 @@ export function createDefaultSettings() {
 export function calculateMaxFrames(settings) {
   return settings.fps * settings.bufferDuration;
 }
+
+/**
+ * Share of the memory budget the ring buffer may occupy. The rest is
+ * headroom for the active clip, the queue, and the transient
+ * ImageBitmap->VideoFrame double-hold during clip creation (#96).
+ */
+const BUFFER_BUDGET_SHARE = 0.6;
+
+/**
+ * Max frames the ring buffer may hold, clamped by the memory budget.
+ *
+ * The requested fps x bufferDuration is honored only while it fits in the
+ * buffer's share of the budget at the ACTUAL captured frame size (after the
+ * resolution limit). A Retina fullscreen at native size can push the naive
+ * figure past 10 GB — the clamp is what keeps "defaults on a big screen"
+ * from taking the machine down (#96).
+ *
+ * @param {import('./types.js').CaptureSettings} settings - fps / bufferDuration
+ * @param {{ width: number, height: number } | null} frameDims - Actual
+ *   captured frame dimensions; null (metadata not ready) skips the clamp
+ * @param {number} memoryBudgetMB - Total frame-memory budget
+ * @returns {{ maxFrames: number, requestedFrames: number, clamped: boolean,
+ *   effectiveDuration: number }}
+ */
+export function calculateEffectiveMaxFrames(settings, frameDims, memoryBudgetMB) {
+  const requestedFrames = calculateMaxFrames(settings);
+
+  if (!frameDims?.width || !frameDims?.height || !memoryBudgetMB) {
+    return {
+      maxFrames: requestedFrames,
+      requestedFrames,
+      clamped: false,
+      effectiveDuration: settings.bufferDuration,
+    };
+  }
+
+  const bytesPerFrame = frameDims.width * frameDims.height * 4;
+  const budgetBytes = memoryBudgetMB * BUFFER_BUDGET_SHARE * 1024 * 1024;
+  const budgetFrames = Math.max(1, Math.floor(budgetBytes / bytesPerFrame));
+  const maxFrames = Math.min(requestedFrames, budgetFrames);
+
+  return {
+    maxFrames,
+    requestedFrames,
+    clamped: maxFrames < requestedFrames,
+    effectiveDuration: maxFrames / settings.fps,
+  };
+}

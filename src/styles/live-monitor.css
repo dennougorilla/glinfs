@@ -1,0 +1,133 @@
+/**
+ * Live Source Monitor (#100 v3) — shared component styles.
+ * Mounted into a .live-monitor-slot on the editor's RIGHT panel, the export
+ * settings panel, and the loading screen. Everything is scoped under
+ * .live-monitor-slot (this repo has been bitten by cross-feature CSS
+ * collisions; see form-controls.css).
+ */
+
+.live-monitor-slot {
+  flex-shrink: 0;
+}
+
+.live-monitor-slot .live-monitor {
+  margin: var(--space-3);
+  border: 1px solid var(--color-recording);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: black;
+}
+
+.live-monitor-slot .live-monitor-viewport {
+  position: relative;
+  aspect-ratio: 16 / 9;
+}
+
+.live-monitor-slot .live-monitor-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.live-monitor-slot .live-monitor-rec {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-recording);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 700;
+}
+
+.live-monitor-slot .live-monitor-rec-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: white;
+  animation: live-monitor-pulse 1s infinite;
+}
+
+@keyframes live-monitor-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-monitor-slot .live-monitor-rec-dot {
+    animation: none;
+  }
+}
+
+.live-monitor-slot .live-monitor-shutter {
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.live-monitor-slot .live-monitor-shutter--flash {
+  animation: live-monitor-flash 0.28s ease-out;
+}
+
+@keyframes live-monitor-flash {
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.live-monitor-slot .live-monitor-ended {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.live-monitor-slot .live-monitor--ended .live-monitor-ended {
+  display: flex;
+}
+
+.live-monitor-slot .live-monitor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-panel-header);
+}
+
+.live-monitor-slot .live-monitor-buffer {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.live-monitor-slot .live-monitor-clip-btn {
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: white;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.live-monitor-slot .live-monitor-clip-btn:hover {
+  background: var(--color-primary-hover);
+}

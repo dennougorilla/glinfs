@@ -1,0 +1,320 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLIP QUEUE (#95) — header Clip Now button, count badge, popover, and the
+   shared clip entry list (used by the editor sidebar AND the header popover).
+
+   Every selector here is scoped under a clip-queue-specific root class
+   (.clip-now-group / .clip-queue-popover / .clip-entries) — this repo has
+   been bitten by generic class names colliding across feature stylesheets
+   (see form-controls.css header comment). Do not add bare helper classes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.clip-now-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.clip-now-group[hidden] {
+  display: none;
+}
+
+/* Count badge — primary color, deliberately NOT red (red is reserved for
+   the recording indicator) */
+.clip-queue-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: white;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.clip-queue-badge[hidden] {
+  display: none;
+}
+
+.clip-queue-badge:hover {
+  background: var(--color-primary-hover);
+}
+
+.clip-queue-badge--pulse {
+  animation: clip-queue-badge-pulse 0.5s ease-out;
+}
+
+.clip-queue-badge--shake {
+  animation: clip-queue-badge-shake 0.4s ease-in-out;
+}
+
+@keyframes clip-queue-badge-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-primary-glow);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@keyframes clip-queue-badge-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-queue-badge--pulse,
+  .clip-queue-badge--shake {
+    animation: none;
+  }
+}
+
+/* Compact popover under the badge — the only queue surface below 900px
+   where the editor's left sidebar is hidden */
+.clip-queue-popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: var(--z-popover);
+}
+
+.clip-queue-popover-title {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Shared clip entry list (renderClipEntries in shared/clip-entries.js)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.clip-entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.clip-entries .clip-entry {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+.clip-entries .clip-entry--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
+
+.clip-entries .clip-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  /* Horizontal row (~60px tall): the original stacked layout was ~150px per
+     entry, so at the default limit of 3 neither the sidebar (max-height
+     45%) nor the popover (60vh) could show its own contents (UX review) */
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.clip-entries button.clip-entry-main {
+  cursor: pointer;
+}
+
+.clip-entries button.clip-entry-main:hover {
+  background: var(--color-surface);
+}
+
+/* Position badge (#100 r7): browser-tab numbering — press 1-9 to switch.
+   Mirrors the visual order, so the label IS the shortcut. */
+.clip-entries .clip-entry-num {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.clip-entries .clip-entry--active .clip-entry-num {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.clip-entries .clip-entry-thumb {
+  display: block;
+  width: 72px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+}
+
+.clip-entries .clip-entry-thumb--placeholder {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-lg);
+  opacity: 0.6;
+}
+
+.clip-entries .clip-entry-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clip-entries .clip-entry-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip-entries .clip-entry-time {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.clip-entries .clip-entry-editing-badge {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-family);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+}
+
+/* Codec lifecycle indicator (#92): shown while an entry is compressing
+   (background encode) or decoding (promote in flight) */
+.clip-entries .clip-entry-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.clip-entries .clip-entry-status-spinner {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  animation: clip-entry-status-spin 0.8s linear infinite;
+}
+
+@keyframes clip-entry-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-entries .clip-entry-status-spinner {
+    animation: none;
+  }
+}
+
+.clip-entries .clip-entry[data-clip-status="decoding"] button.clip-entry-main {
+  cursor: progress;
+}
+
+/* Trash button at the row's trailing edge (#100 r5): a flex sibling of the
+   promote surface — never over the thumbnail, which hover-skims. Revealed
+   on row hover/focus; single click deletes (undo toast covers safety). */
+.clip-entries .clip-entry-delete {
+  flex-shrink: 0;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--transition-fast),
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.clip-entries .clip-entry:hover .clip-entry-delete,
+.clip-entries .clip-entry:focus-within .clip-entry-delete {
+  opacity: 1;
+}
+
+.clip-entries .clip-entry-delete:hover {
+  background: var(--color-recording);
+  color: white;
+}
+
+@media (pointer: coarse) {
+  .clip-entries .clip-entry-delete {
+    opacity: 1;
+  }
+}
+
+.clip-entries .clip-entries-empty {
+  padding: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}

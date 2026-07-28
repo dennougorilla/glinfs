@@ -282,6 +282,12 @@
 }
 
 /* Stats Display */
+.capture-stats-limit-note {
+  grid-column: 1 / -1;
+  font-size: var(--font-size-xs);
+  color: var(--color-warning, #f59e0b);
+}
+
 .capture-stats {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

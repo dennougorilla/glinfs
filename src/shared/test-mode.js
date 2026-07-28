@@ -33,6 +33,9 @@
  * @property {number} defaultWidth - Default frame width
  * @property {number} defaultHeight - Default frame height
  * @property {'gradient' | 'checkerboard' | 'numbered'} defaultPattern - Default visual pattern
+ * @property {boolean} mockStream - Return a canvas.captureStream() MediaStream from
+ *   startScreenCapture() instead of calling getDisplayMedia(), so Playwright can drive
+ *   the live capture pipeline without a permission prompt
  */
 
 /** @type {TestModeConfig} */
@@ -44,6 +47,7 @@ let config = {
   defaultWidth: 640,
   defaultHeight: 480,
   defaultPattern: 'numbered',
+  mockStream: false,
 };
 
 /** @type {boolean} */

@@ -228,6 +228,8 @@ test.describe('US4: Professional Form Controls', () => {
       location.hash = '#/editor';
     });
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    // Playback (the speed select) folds into an accordion since #100 v3
+    await page.locator('.prop-accordion-summary', { hasText: 'Playback' }).click();
     await expect(page.locator('.editor-sidebar select').first()).toBeVisible();
     await expect(page).toHaveScreenshot('us4-form-editor.png', { fullPage: true });
 

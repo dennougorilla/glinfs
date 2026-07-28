@@ -22,6 +22,8 @@ vi.mock('../../../src/workers/capture-worker-manager.js', () => {
       this.terminate = vi.fn();
       this.terminateWithCleanup = vi.fn(() => Promise.resolve());
       this.requestFrames = vi.fn().mockResolvedValue([]);
+      // null = video metadata unknown -> budget clamp is skipped (#96)
+      this.getEffectiveFrameDimensions = vi.fn(() => null);
     }
   }
   return { CaptureWorkerManager: FakeCaptureWorkerManager };

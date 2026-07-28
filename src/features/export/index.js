@@ -22,6 +22,7 @@ import {
 } from '../../shared/utils/canvas.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
 import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
 import {
@@ -46,6 +47,9 @@ let storeUnsubscribe = null;
 
 /** @type {(() => void) | null} */
 let uiCleanup = null;
+
+/** @type {(() => void) | null} Live monitor teardown for the current render (#100 v3) */
+let liveMonitorCleanup = null;
 
 /** @type {import('../capture/types.js').Frame[]} */
 let frames = [];
@@ -251,6 +255,19 @@ function render(container) {
 
   uiCleanup = cleanup;
   previewCanvas = canvas;
+
+  // (Re)mount the live monitor into this render's slot — renderExportScreen
+  // rebuilds the panel, so the previous mount's DOM is gone
+  if (liveMonitorCleanup) {
+    liveMonitorCleanup();
+    liveMonitorCleanup = null;
+  }
+  {
+    const slot = container.querySelector('[data-live-monitor]');
+    if (slot instanceof HTMLElement) {
+      liveMonitorCleanup = initLiveMonitor(slot);
+    }
+  }
 
   // Restart playback if we have a canvas and state says we should be playing
   if (previewCanvas && state.preview.isPlaying) {
@@ -591,6 +608,11 @@ function handleTogglePlay() {
 function cleanup() {
   // Stop playback loop
   stopPlaybackLoop();
+
+  if (liveMonitorCleanup) {
+    liveMonitorCleanup();
+    liveMonitorCleanup = null;
+  }
 
   // Leaving the screen ends this export session. Dropping the result here is
   // what guarantees the next visit opens on the settings panel instead of a

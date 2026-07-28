@@ -84,6 +84,27 @@ export function estimateBufferMemory(frameCount, width, height) {
 }
 
 /**
+ * Conservative raw-RGBA memory estimate for VideoFrames held on the main
+ * thread (active clip + clip queue).
+ *
+ * Unlike estimateBufferMemory above — which models the capture worker's
+ * ImageBitmap ring buffer with a /10 CPU-side heuristic — clip frames must
+ * be budgeted at full w*h*4: they are long-lived, per-clip, and the queue
+ * multiplies them, so an optimistic estimate would hide real memory
+ * pressure until the tab dies.
+ *
+ * @param {Array<{width?: number, height?: number}>} frames - Frames with pixel dimensions
+ * @returns {number} - Estimated MB
+ */
+export function estimateFramesMemoryMB(frames) {
+  let bytes = 0;
+  for (const frame of frames) {
+    bytes += (frame?.width ?? 0) * (frame?.height ?? 0) * 4;
+  }
+  return bytes / (1024 * 1024);
+}
+
+/**
  * Format memory usage
  * @param {number} mb - Memory (MB)
  * @returns {string}
