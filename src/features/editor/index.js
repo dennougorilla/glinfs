@@ -5,16 +5,23 @@
 
 import {
   clearEditorPayload,
+  deleteQueuedClip,
   getClipPayload,
+  getClipQueue,
   getEditorPayload,
+  hasActiveScreenCapture,
+  promoteQueuedClip,
   setEditorPayload,
   validateClipPayload,
 } from '../../shared/app-store.js';
-import { emit } from '../../shared/bus.js';
+import { emit, on as onBus } from '../../shared/bus.js';
+import { renderClipEntries } from '../../shared/clip-entries.js';
+import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
   centerCropAfterConstraint,
@@ -42,7 +49,9 @@ import {
 import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './timeline.js';
 import {
   renderEditorScreen,
+  showClipsQueueFullBanner,
   updateBaseCanvas,
+  updateClipsPanel,
   updateCropInfoPanel,
   updateOverlayCanvas,
   updateScenesPanel,
@@ -82,6 +91,15 @@ let scenePanelCleanups = [];
 /** @type {(() => void)[]} */
 let cropInfoPanelCleanups = [];
 
+/** @type {(() => void)[]} Clip entry listeners from the last clips-panel render */
+let clipsPanelCleanups = [];
+
+/** @type {(() => void)[]} Bus unsubscribers for queue events */
+let clipsQueueUnsubs = [];
+
+/** @type {number | null} Timer hiding the transient queue-full banner */
+let bannerHideTimer = null;
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
 
@@ -100,7 +118,22 @@ export function initEditor() {
   const hasValidEditorPayload = editorPayload?.clip?.frames?.length > 0;
 
   // Get clip payload from capture via app store
-  const clipPayload = getClipPayload();
+  let clipPayload = getClipPayload();
+
+  // Empty mount with clips waiting in the queue (#95): adopt from the queue
+  // instead of falling straight into the error screen.
+  if (!hasValidEditorPayload && !validateClipPayload(clipPayload).valid) {
+    const queue = getClipQueue();
+    if (queue.length === 1) {
+      // Exactly one candidate — promoting it guesses nothing away
+      promoteQueuedClip(queue[0].id, null);
+      clipPayload = getClipPayload();
+    } else if (queue.length >= 2) {
+      // Multiple candidates — never auto-pick; let the user choose
+      return renderClipSelectScreen(container);
+    }
+    // 0 queued: fall through to the existing invalid-payload screen
+  }
 
   // Validate payload structure ONLY if not returning from Export
   // When returning from Export, EditorPayload contains all needed data
@@ -211,10 +244,26 @@ export function initEditor() {
   } else {
     // Create fresh store from ClipPayload
     store = createEditorStore(frames, fps);
+
+    // Restore editor state saved when this clip was demoted (#95). Consumed
+    // here — a later mount must not clobber newer edits with this snapshot.
+    const saved = clipPayload?.savedEditorState;
+    if (saved) {
+      clipPayload.savedEditorState = null;
+      restoreSavedEditorState(saved, frames.length);
+    }
   }
 
   // Initial render
   render(container);
+
+  // Keep the Clips section (and memory footer) live: Clip Now, deletes and
+  // promotes from the header popover all mutate the queue from outside this
+  // feature. The queue-full banner is the visible surface for refusals.
+  clipsQueueUnsubs.push(
+    onBus('queue:changed', () => refreshClipsPanel(container)),
+    onBus('clip:queue-full', () => showQueueFullBanner(container)),
+  );
 
   // Start auto-playback if initial state is playing
   if (store.getState().isPlaying) {
@@ -449,6 +498,8 @@ function render(container) {
       onAspectRatioChange: handleAspectRatioChange,
       onSpeedChange: handleSpeedChange,
       onExport: handleExport,
+      onPromoteClip: handlePromoteClip,
+      onDeleteClip: handleDeleteClip,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -669,6 +720,211 @@ function handleExport() {
 }
 
 // ============================================================
+// Clip Queue (#95)
+// ============================================================
+
+/**
+ * Apply the editor state a clip carried through its demote/promote
+ * round-trip. Ranges and frame indices are clamped defensively — they came
+ * from this same clip, but a stale snapshot must never crash the editor.
+ *
+ * @param {import('../../shared/app-store.js').SavedEditorState} saved
+ * @param {number} frameCount
+ */
+function restoreSavedEditorState(saved, frameCount) {
+  if (!store || frameCount === 0) return;
+
+  store.setState((state) => {
+    let newState = state;
+    if (saved.selectedRange) {
+      const start = Math.max(0, Math.min(saved.selectedRange.start, frameCount - 1));
+      const end = Math.max(start, Math.min(saved.selectedRange.end, frameCount - 1));
+      newState = updateRange(newState, { start, end });
+    }
+    if (saved.cropArea) {
+      newState = updateCrop(newState, saved.cropArea);
+    }
+    if (typeof saved.playbackSpeed === 'number') {
+      newState = setPlaybackSpeed(newState, saved.playbackSpeed);
+    }
+    if (typeof saved.currentFrame === 'number') {
+      newState = goToFrame(newState, saved.currentFrame);
+    }
+    return newState;
+  });
+}
+
+/**
+ * Re-render the Clips section after any queue mutation
+ * @param {HTMLElement} container
+ */
+function refreshClipsPanel(container) {
+  clipsPanelCleanups.forEach((fn) => {
+    fn();
+  });
+  clipsPanelCleanups = updateClipsPanel(
+    container,
+    /** @type {import('./ui.js').EditorUIHandlers} */ ({
+      onPromoteClip: handlePromoteClip,
+      onDeleteClip: handleDeleteClip,
+    }),
+  );
+}
+
+/**
+ * Show the transient queue-full banner (refusal surface, amendment 2)
+ * @param {HTMLElement} container
+ */
+function showQueueFullBanner(container) {
+  if (bannerHideTimer !== null) {
+    clearTimeout(bannerHideTimer);
+    bannerHideTimer = null;
+  }
+  const hide = showClipsQueueFullBanner(container);
+  if (!hide) return;
+  bannerHideTimer = window.setTimeout(() => {
+    hide();
+    bannerHideTimer = null;
+  }, 4000);
+}
+
+/**
+ * Promote a queued clip into the editor: swap it with the active clip
+ * (which demotes carrying the current selection/crop/speed/position, plus
+ * scenes) and re-init the editor against the new active clip. No frames are
+ * closed anywhere on this path — see the app-store ownership rules.
+ *
+ * @param {string} id - Queue entry id
+ * @returns {boolean} true if the swap happened
+ */
+function handlePromoteClip(id) {
+  if (!store) return false;
+
+  const state = store.getState();
+  const result = promoteQueuedClip(id, {
+    selectedRange: state.selectedRange,
+    cropArea: state.cropArea,
+    playbackSpeed: state.playbackSpeed,
+    currentFrame: state.currentFrame,
+    scenes: state.scenes,
+  });
+  if (!result) return false;
+
+  // Internal reinit: full cleanup + re-init restores the promoted clip's
+  // saved state via the savedEditorState consume in initEditor.
+  cleanup();
+  initEditor();
+  return true;
+}
+
+/**
+ * Delete a queued clip after user confirmation (confirm() is accepted v1 debt)
+ * @param {string} id
+ */
+function handleDeleteClip(id) {
+  if (!confirm('Delete this clip? Its frames will be discarded.')) return;
+  if (deleteQueuedClip(id)) {
+    announce('Clip deleted from queue');
+  }
+}
+
+/**
+ * Promote a queued clip from OUTSIDE the editor (header popover in main.js).
+ * When the editor is mounted this is a full in-place swap+reinit; when it is
+ * not, the clip just becomes the active payload and the caller navigates.
+ *
+ * @param {string} id - Queue entry id
+ * @returns {boolean} true if the clip was promoted
+ */
+export function promoteClipFromQueue(id) {
+  if (store) {
+    return handlePromoteClip(id);
+  }
+  return promoteQueuedClip(id, null) !== null;
+}
+
+/**
+ * "Select a clip to edit" screen: shown when the editor mounts with no
+ * active clip but two or more queued clips (never guess which one).
+ *
+ * @param {HTMLElement} container
+ * @returns {() => void} Route cleanup
+ */
+function renderClipSelectScreen(container) {
+  updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
+
+  /** @type {(() => void)[]} */
+  let entryCleanups = [];
+  let disposed = false;
+
+  const listHost = createElement('div', { className: 'editor-clip-select-list' });
+  const screenEl = createElement(
+    'section',
+    {
+      className: 'screen editor-screen editor-clip-select',
+      'aria-labelledby': 'editor-title',
+    },
+    [
+      createElement('header', { className: 'screen-header' }, [
+        createElement('h1', { id: 'editor-title', className: 'screen-title' }, ['Clip Editor']),
+      ]),
+      createElement('p', { className: 'editor-clip-select-hint' }, ['Select a clip to edit']),
+      listHost,
+    ],
+  );
+
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    entryCleanups.forEach((fn) => {
+      fn();
+    });
+    entryCleanups = [];
+    unsubscribe();
+  };
+
+  const renderList = () => {
+    entryCleanups.forEach((fn) => {
+      fn();
+    });
+    entryCleanups = renderClipEntries(listHost, {
+      queue: getClipQueue(),
+      // promoteQueuedClip emits 'queue:changed' SYNCHRONOUSLY, which the
+      // subscription below turns into the swap to the full editor. Calling
+      // initEditor here as well would double-init the feature.
+      onPromote: (id) => {
+        promoteQueuedClip(id, null);
+      },
+      onDelete: handleDeleteClip,
+    });
+  };
+
+  // The queue can still change under this screen (Clip Now, the header
+  // popover). A promote from the popover makes a clip active — swap this
+  // screen for the real editor; anything else just re-renders the list.
+  const unsubscribe = onBus('queue:changed', () => {
+    if (disposed) return;
+    if (getClipPayload()) {
+      dispose();
+      initEditor();
+      return;
+    }
+    renderList();
+  });
+
+  container.innerHTML = '';
+  container.appendChild(screenEl);
+  renderList();
+
+  emit('editor:clip-select', { queueLength: getClipQueue().length });
+
+  return () => {
+    dispose();
+    cleanup();
+  };
+}
+
+// ============================================================
 // Scene Detection
 // ============================================================
 
@@ -794,6 +1050,20 @@ function cleanup() {
     fn();
   });
   cropInfoPanelCleanups = [];
+
+  // Clip queue: drop bus subscriptions, entry listeners and banner timer
+  clipsQueueUnsubs.forEach((fn) => {
+    fn();
+  });
+  clipsQueueUnsubs = [];
+  clipsPanelCleanups.forEach((fn) => {
+    fn();
+  });
+  clipsPanelCleanups = [];
+  if (bannerHideTimer !== null) {
+    clearTimeout(bannerHideTimer);
+    bannerHideTimer = null;
+  }
 
   baseCanvas = null;
   overlayCanvas = null;

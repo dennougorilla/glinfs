@@ -3,10 +3,18 @@
  * @module features/editor/ui
  */
 
-import { hasActiveScreenCapture } from '../../shared/app-store.js';
+import {
+  getClipMemoryEstimateMB,
+  getClipPayload,
+  getClipQueue,
+  getClipQueueLimit,
+  hasActiveScreenCapture,
+} from '../../shared/app-store.js';
+import { renderClipEntries } from '../../shared/clip-entries.js';
 import { navigate } from '../../shared/router.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
+import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import {
   createThumbnailCanvas,
@@ -36,6 +44,8 @@ import { renderFrameGridModal } from './frame-grid.js';
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
  * @property {() => void} onExport - Export clicked
+ * @property {(id: string) => void} [onPromoteClip] - Queue clip entry clicked (promote to active)
+ * @property {(id: string) => void} [onDeleteClip] - Queue clip delete clicked
  * @property {() => import('./types.js').EditorState} [getState] - Get current state
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
  */
@@ -228,9 +238,34 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Content area (left sidebar + preview + right sidebar)
   const content = createElement('div', { className: 'editor-content' });
 
-  // Left Sidebar - Scenes with Thumbnails
+  // Left Sidebar - Clips (queue) above Scenes
   const leftSidebar = createElement('div', { className: 'editor-sidebar-left' });
   const leftPanelContent = createElement('div', { className: 'panel-content' });
+
+  // Clips section: active clip + queue entries, memory footer (#95)
+  leftPanelContent.appendChild(
+    createElement('div', { className: 'clips-sidebar-header' }, [
+      createElement('div', { className: 'property-group-title' }, ['Clips']),
+      // Queue-full banner slot; shown transiently via showClipsQueueFullBanner
+      createElement('div', {
+        className: 'clips-queue-banner',
+        role: 'status',
+        hidden: true,
+      }),
+    ]),
+  );
+  leftPanelContent.appendChild(
+    createElement('div', {
+      className: 'clips-sidebar-content',
+      'data-clips-container': 'true',
+    }),
+  );
+  leftPanelContent.appendChild(
+    createElement('div', {
+      className: 'clips-sidebar-memory',
+      'data-clips-footer': 'true',
+    }),
+  );
 
   // Scenes sidebar header
   const scenesHeader = createElement('div', { className: 'scenes-sidebar-header' }, [
@@ -569,6 +604,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
             createElement('span', { className: 'kbd' }, ['G']),
             ' Grid',
           ]),
+          createElement('span', { className: 'shortcut' }, [
+            createElement('span', { className: 'kbd' }, ['Shift+C']),
+            ' Clip Now',
+          ]),
         ]),
       ]),
       createElement('div', { className: 'status-section' }, [
@@ -587,6 +626,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
 
   // Populate scenes sidebar with thumbnails
   cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
+
+  // Populate clips section (active clip + queue). Re-rendered on
+  // 'queue:changed' by editor/index.js via updateClipsPanel.
+  cleanups.push(...updateClipsPanel(container, handlers));
 
   // Setup keyboard shortcuts. The frame-grid modal owns keyboard input
   // while it is open — without the guard, Escape would close the modal AND
@@ -1177,6 +1220,61 @@ function createClearCropButton() {
     },
     ['Clear Crop'],
   );
+}
+
+/**
+ * Render the Clips section (active clip + queue entries + memory footer)
+ * in the left sidebar without a full editor re-render.
+ *
+ * @param {HTMLElement} container - The editor screen container
+ * @param {EditorUIHandlers} handlers - UI handlers (onPromoteClip/onDeleteClip)
+ * @returns {(() => void)[]} Cleanup functions for event listeners
+ */
+export function updateClipsPanel(container, handlers) {
+  /** @type {(() => void)[]} */
+  const cleanups = [];
+
+  const clipsContainer = container.querySelector('[data-clips-container]');
+  if (!(clipsContainer instanceof HTMLElement)) return cleanups;
+
+  cleanups.push(
+    ...renderClipEntries(clipsContainer, {
+      activeClip: getClipPayload(),
+      queue: getClipQueue(),
+      onPromote: handlers.onPromoteClip,
+      onDelete: handlers.onDeleteClip,
+    }),
+  );
+
+  // Memory footer: conservative raw-RGBA estimate for active + queued frames
+  const footer = container.querySelector('[data-clips-footer]');
+  if (footer instanceof HTMLElement) {
+    const queueLength = getClipQueue().length;
+    const limit = getClipQueueLimit();
+    footer.textContent = `~${formatMemory(getClipMemoryEstimateMB())} estimated (${queueLength}/${limit} clips)`;
+    footer.classList.toggle('clips-sidebar-memory--warning', queueLength >= limit);
+  }
+
+  return cleanups;
+}
+
+/**
+ * Show the transient "queue full" banner in the Clips section header.
+ * Returns the hide function so the caller can manage/cancel the timer.
+ *
+ * @param {HTMLElement} container - The editor screen container
+ * @returns {(() => void) | null} Function that hides the banner, or null if no banner slot
+ */
+export function showClipsQueueFullBanner(container) {
+  const banner = container.querySelector('.clips-queue-banner');
+  if (!(banner instanceof HTMLElement)) return null;
+
+  banner.textContent = 'Queue full — delete a clip or raise the limit in Settings';
+  banner.hidden = false;
+
+  return () => {
+    banner.hidden = true;
+  };
 }
 
 /**

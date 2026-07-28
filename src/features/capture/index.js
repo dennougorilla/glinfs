@@ -5,8 +5,11 @@
 
 import {
   clearScreenCaptureState,
+  getClipPayload,
+  getClipQueueLimit,
   getScreenCaptureState,
   hasActiveScreenCapture,
+  isClipQueueFull,
   setClipPayload,
   setScreenCaptureState,
 } from '../../shared/app-store.js';
@@ -204,7 +207,6 @@ async function handleStart() {
 
     // Update state
     store.setState((state) => startCapture(state, stream));
-    emit('capture:started', { stream });
 
     // Initialize worker manager with video element
     workerManager = new CaptureWorkerManager();
@@ -226,6 +228,10 @@ async function handleStart() {
     const fps = store.getState().settings.fps;
     const maxFrames = calculateMaxFrames(store.getState().settings);
     workerManager.start(fps, maxFrames);
+
+    // Emitted only after the worker exists: listeners (the header Clip Now
+    // button) probe getLiveCaptureContext(), which is null until then
+    emit('capture:started', { stream });
 
     // Re-render with video preview
     const container = qsRequired('#main-content');
@@ -384,13 +390,25 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
 }
 
 /**
+ * Announce a queue-full refusal on every channel the UI listens to.
+ * Nothing was destroyed — the store refused before touching any frames.
+ */
+function announceQueueFull() {
+  emit('clip:queue-full', { limit: getClipQueueLimit() });
+  announce('Clip queue full — delete a clip or raise the limit in Settings');
+}
+
+/**
  * Handle create clip
  *
- * SIMPLIFIED MODEL:
+ * QUEUE MODEL (#95):
  * - Gets ImageBitmaps from worker and converts to VideoFrames
- * - Stores frames in clipPayload (single source of truth)
- * - Old frames are closed automatically by setClipPayload
- * - No ownership tracking needed
+ * - Stores frames in clipPayload (single source of truth); a previous
+ *   active clip DEMOTES into the clip queue — setClipPayload never closes
+ *   frames while a queue exists (see app-store ownership rules)
+ * - A full queue REFUSES the demote, so this checks up front — before
+ *   draining the worker's ring buffer for frames that would have nowhere
+ *   to go
  * - Scene detection runs in Loading screen (if enabled)
  *
  * @returns {Promise<boolean>} true if a clip payload was stored — the UI
@@ -398,6 +416,13 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
  */
 async function handleCreateClip() {
   if (!store || !workerManager) return false;
+
+  // A new active clip demotes the current one into the queue; refuse early
+  // while the ring buffer is still intact instead of after draining it
+  if (getClipPayload() && isClipQueueFull()) {
+    announceQueueFull();
+    return false;
+  }
 
   // Request frames from worker (transfers ImageBitmap ownership to main thread)
   const imageBitmapFrames = await workerManager.requestFrames();
@@ -415,15 +440,31 @@ async function handleCreateClip() {
 
   const settings = store.getState().settings;
 
-  // Store clip payload (old frames closed automatically by setClipPayload)
-  // Scene detection will run in Loading screen if sceneDetectionEnabled is true
-  setClipPayload({
+  // Store clip payload; the previous active clip (if any) demotes into the
+  // clip queue. Scene detection will run in Loading screen if enabled.
+  const stored = setClipPayload({
     frames: videoFrames,
     fps: settings.fps,
     capturedAt: Date.now(),
     sceneDetectionEnabled: settings.sceneDetection,
     // scenes not set here - Loading screen will compute them
   });
+
+  if (!stored.ok) {
+    // Queue filled between the early check and here (e.g. a Clip Now racing
+    // this handler). The refused frames never entered the store, so they are
+    // still this function's to release — the store's ownership rules only
+    // protect frames it owns.
+    for (const frame of videoFrames) {
+      try {
+        if (!frame.frame.closed) frame.frame.close();
+      } catch {
+        // Already closed
+      }
+    }
+    announceQueueFull();
+    return false;
+  }
 
   emit('capture:clip-created', {
     frameCount: videoFrames.length,
@@ -556,6 +597,51 @@ function cleanup() {
  */
 export function getCaptureState() {
   return store?.getState() ?? null;
+}
+
+/**
+ * @typedef {Object} LiveCaptureContext
+ * @property {CaptureWorkerManager} workerManager - Worker holding the live ring buffer
+ * @property {15|30|60} fps - Capture FPS of the running session
+ * @property {boolean} sceneDetection - Scene detection flag for clips made now
+ */
+
+/**
+ * Resolve the live capture session regardless of where its resources
+ * currently live: while /capture is mounted they are module-locals here;
+ * on any other route cleanup() has stashed them in app-store. Clip Now
+ * (clip-service) works "from anywhere" only because of this dual lookup —
+ * hasActiveScreenCapture() alone is false while /capture is mounted.
+ *
+ * @returns {LiveCaptureContext | null} null when no live capture session exists
+ */
+export function getLiveCaptureContext() {
+  // Mounted on /capture: resources are module-local, app-store has nothing
+  if (store && workerManager && captureTrack?.readyState === 'live') {
+    const state = store.getState();
+    if (state.isSharing) {
+      return {
+        workerManager,
+        fps: state.settings.fps,
+        sceneDetection: state.settings.sceneDetection,
+      };
+    }
+  }
+
+  // Backgrounded: cleanup() handed everything to app-store
+  const saved = getScreenCaptureState();
+  if (saved?.workerManager && hasActiveScreenCapture()) {
+    const settings = saved.store?.getState()?.settings ?? saved.settings;
+    if (settings) {
+      return {
+        workerManager: saved.workerManager,
+        fps: settings.fps,
+        sceneDetection: settings.sceneDetection,
+      };
+    }
+  }
+
+  return null;
 }
 
 // ============================================================

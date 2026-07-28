@@ -137,6 +137,8 @@
   --z-overlay: 300;
   --z-modal: 400;
   --z-tooltip: 500;
+  /* Header clip-queue popover: above sticky chrome, below modals */
+  --z-popover: 350;
 
   /* Timeline-specific z-index layers */
   --z-timeline-handle: 10;

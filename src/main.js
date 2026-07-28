@@ -4,21 +4,26 @@
  */
 
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
+import { clipNow, handleClipNowHotkey, isCaptureLive } from './features/capture/clip-service.js';
 import { initCapture } from './features/capture/index.js';
-import { initEditor } from './features/editor/index.js';
+import { initEditor, promoteClipFromQueue } from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
 import { initSettings } from './features/settings/index.js';
 import {
+  deleteQueuedClip,
   getClipPayload,
+  getClipQueue,
   getEditorPayload,
   registerScreenCaptureCleanup,
   resetAppStore,
   setClipPayload,
   setEditorPayload,
 } from './shared/app-store.js';
+import { on as onBus } from './shared/bus.js';
+import { renderClipEntries } from './shared/clip-entries.js';
 import { announce } from './shared/live-region.js';
-import { initRouter } from './shared/router.js';
+import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import {
   getDefaultMockOptions,
   getTestConfig,
@@ -26,6 +31,7 @@ import {
   isTestMode,
   updateTestConfig,
 } from './shared/test-mode.js';
+import { createElement } from './shared/utils/dom.js';
 import {
   createMockClipPayload,
   createMockEditorPayload,
@@ -260,9 +266,188 @@ document.addEventListener('DOMContentLoaded', () => {
   liveRegion.id = 'live-region';
   document.body.appendChild(liveRegion);
 
+  // Clip Now header button, queue badge popover and global Shift+C (#95)
+  setupClipQueueHeader();
+
   // Initialize router
   initRouter(routes);
 });
+
+// ============================================================
+// Clip Queue Header (#95)
+// ============================================================
+
+/**
+ * Wire the header camera button (Clip Now), the queue count badge with its
+ * compact popover, and the global Shift+C hotkey.
+ *
+ * Visibility rules:
+ * - camera button: only while a live capture session exists (mounted or
+ *   backgrounded); hides on the stream-ended terminal state
+ * - badge: whenever the queue is non-empty — it stays reachable even after
+ *   capture ends, and it is the ONLY queue surface below 900px where the
+ *   editor's left sidebar is display:none
+ */
+function setupClipQueueHeader() {
+  const group = document.getElementById('clip-now-group');
+  const clipNowBtn = document.getElementById('clip-now-btn');
+  const badge = document.getElementById('clip-queue-badge');
+  if (!group || !clipNowBtn || !badge) return;
+
+  /** @type {HTMLElement | null} */
+  let popover = null;
+  /** @type {HTMLElement | null} */
+  let popoverList = null;
+  /** @type {(() => void)[]} */
+  let popoverCleanups = [];
+  /** @type {(() => void)[]} */
+  let popoverEntryCleanups = [];
+  let lastCount = 0;
+
+  /** Re-render popover entries from the current queue state */
+  const renderPopoverEntries = () => {
+    if (!popoverList) return;
+    popoverEntryCleanups.forEach((fn) => {
+      fn();
+    });
+    popoverEntryCleanups = renderClipEntries(popoverList, {
+      activeClip: getClipPayload(),
+      queue: getClipQueue(),
+      onPromote: (id) => {
+        closePopover();
+        // When the editor is mounted this swaps in place; otherwise the clip
+        // just becomes active and we navigate to it
+        if (promoteClipFromQueue(id) && getCurrentRoute() !== '/editor') {
+          navigate('/editor');
+        }
+      },
+      onDelete: (id) => {
+        if (!confirm('Delete this clip? Its frames will be discarded.')) return;
+        if (deleteQueuedClip(id)) {
+          announce('Clip deleted from queue');
+        }
+      },
+    });
+  };
+
+  const closePopover = () => {
+    if (!popover) return;
+    popoverEntryCleanups.forEach((fn) => {
+      fn();
+    });
+    popoverEntryCleanups = [];
+    popoverCleanups.forEach((fn) => {
+      fn();
+    });
+    popoverCleanups = [];
+    popover.remove();
+    popover = null;
+    popoverList = null;
+    badge.setAttribute('aria-expanded', 'false');
+  };
+
+  const openPopover = () => {
+    if (popover) return;
+    popoverList = createElement('div', { className: 'clip-queue-popover-list' });
+    popover = createElement(
+      'div',
+      { className: 'clip-queue-popover', role: 'dialog', 'aria-label': 'Clip queue' },
+      [createElement('div', { className: 'clip-queue-popover-title' }, ['Clips']), popoverList],
+    );
+    group.appendChild(popover);
+    renderPopoverEntries();
+    badge.setAttribute('aria-expanded', 'true');
+
+    // Escape closes and returns focus to the badge (keyboard reachability)
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        closePopover();
+        badge.focus();
+      }
+    };
+    // Click outside (badge itself toggles via its own handler)
+    const onPointerDown = (e) => {
+      const target = /** @type {Node | null} */ (e.target);
+      if (target instanceof Node && !popover?.contains(target) && target !== badge) {
+        closePopover();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown));
+    popoverCleanups.push(() => document.removeEventListener('pointerdown', onPointerDown));
+  };
+
+  /** Sync button/badge visibility and count with capture + queue state */
+  const refresh = () => {
+    const live = isCaptureLive();
+    const count = getClipQueue().length;
+
+    clipNowBtn.hidden = !live;
+    badge.hidden = count === 0;
+    group.hidden = !live && count === 0;
+    badge.textContent = String(count);
+
+    if (count > lastCount) {
+      // Restart the pulse animation on every increment
+      badge.classList.remove('clip-queue-badge--pulse');
+      void badge.offsetWidth;
+      badge.classList.add('clip-queue-badge--pulse');
+    }
+    lastCount = count;
+
+    if (popover) {
+      if (count === 0 && !getClipPayload()) {
+        closePopover();
+      } else {
+        renderPopoverEntries();
+      }
+    }
+  };
+
+  clipNowBtn.addEventListener('click', () => {
+    void clipNow();
+  });
+
+  badge.addEventListener('click', () => {
+    if (popover) {
+      closePopover();
+    } else {
+      openPopover();
+    }
+  });
+
+  // Global hotkey — guards (form focus, no live capture) live in clip-service
+  document.addEventListener('keydown', handleClipNowHotkey);
+
+  onBus('queue:changed', refresh);
+  onBus('capture:started', refresh);
+  onBus('capture:restored', refresh);
+  onBus('capture:stopped', () => {
+    // Terminal state (amendment 5): stream ended, possibly while away from
+    // /capture — hide the camera button and clear the pulsing live dot that
+    // only per-screen renders would otherwise refresh.
+    refresh();
+    document.querySelectorAll('.step--live').forEach((el) => {
+      el.classList.remove('step--live');
+    });
+  });
+  onBus('clip:queue-full', () => {
+    // Shake the badge so the refusal is visible even when the Clips section
+    // banner is off-screen
+    badge.classList.remove('clip-queue-badge--shake');
+    void badge.offsetWidth;
+    badge.classList.add('clip-queue-badge--shake');
+  });
+
+  // The live session's location (mounted vs stashed) changes on navigation
+  onRouteChange(() => {
+    closePopover();
+    refresh();
+  });
+
+  refresh();
+}
 
 /**
  * Announce message to screen readers

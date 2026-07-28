@@ -61,7 +61,9 @@ test('the header gear icon is centred in the header, like its neighbours', async
       const r = el.getBoundingClientRect();
       return (r.left + r.right) / 2;
     };
-    const gear = document.querySelector('.header-actions .btn-icon');
+    // The Clip Now camera button (#95) is also a .btn-icon and sits before
+    // the gear — select the gear by its accessible name, not by class
+    const gear = document.querySelector('.header-actions [aria-label="Settings"]');
     const svg = gear.querySelector('svg');
     return {
       logoY: midY(document.querySelector('.app-logo')),

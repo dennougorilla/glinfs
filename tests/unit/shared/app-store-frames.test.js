@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearClipPayload,
   getClipPayload,
+  getClipQueue,
   getEditorPayload,
   getExportResult,
   releaseAllFramesAndReset,
@@ -35,7 +36,7 @@ describe('setClipPayload frame lifecycle', () => {
     resetAppStore();
   });
 
-  it('closes the previous payload frames when a different frames array is set', () => {
+  it('demotes the previous payload into the clip queue WITHOUT closing its frames (#95)', () => {
     // Arrange
     const oldFrames = createMockFrames(2);
     setClipPayload({ frames: oldFrames, fps: 30, capturedAt: Date.now() });
@@ -44,13 +45,17 @@ describe('setClipPayload frame lifecycle', () => {
     // Act
     setClipPayload({ frames: newFrames, fps: 30, capturedAt: Date.now() });
 
-    // Assert
+    // Assert - ownership MOVED to the queue; nothing was destroyed
     for (const f of oldFrames) {
-      expect(f.frame.close).toHaveBeenCalledOnce();
+      expect(f.frame.close).not.toHaveBeenCalled();
     }
     for (const f of newFrames) {
       expect(f.frame.close).not.toHaveBeenCalled();
     }
+    const queue = getClipQueue();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].frames).toBe(oldFrames);
+    expect(getClipPayload()?.frames).toBe(newFrames);
   });
 
   it('does NOT close frames when the same frames array reference is passed again', () => {
@@ -213,7 +218,7 @@ describe('frames already marked closed', () => {
     resetAppStore();
   });
 
-  it('does not call close() again on frames already marked closed:true (setClipPayload)', () => {
+  it('never touches close() on replacement — old frames demote to the queue intact (#95)', () => {
     // Arrange
     const oldFrames = [createMockFrame('a', true), createMockFrame('b', false)];
     setClipPayload({ frames: oldFrames, fps: 30, capturedAt: Date.now() });
@@ -221,9 +226,10 @@ describe('frames already marked closed', () => {
     // Act
     setClipPayload({ frames: createMockFrames(1), fps: 30, capturedAt: Date.now() });
 
-    // Assert
+    // Assert - demote moves ownership; no close call on any frame
     expect(oldFrames[0].frame.close).not.toHaveBeenCalled();
-    expect(oldFrames[1].frame.close).toHaveBeenCalledOnce();
+    expect(oldFrames[1].frame.close).not.toHaveBeenCalled();
+    expect(getClipQueue()[0].frames).toBe(oldFrames);
   });
 
   it('does not call close() again on frames already marked closed:true (clearClipPayload)', () => {

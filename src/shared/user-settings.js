@@ -19,6 +19,9 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {boolean} sceneDetection - Auto scene detection enabled
  * @property {boolean} backgroundCapture - Keep the frame-grab loop running while
  *   navigated away from /capture, instead of pausing it (default true)
+ * @property {number} clipQueueLimit - Maximum clips held in the clip queue
+ *   (1-10, default 3). The active clip is not counted — it lives outside the
+ *   queue and can never be evicted by it.
  */
 
 /**
@@ -43,6 +46,7 @@ const DEFAULT_SETTINGS = {
     bufferDuration: 15,
     sceneDetection: true,
     backgroundCapture: true,
+    clipQueueLimit: 3,
   },
   export: {
     quality: 0.8,
@@ -88,6 +92,14 @@ export const SETTINGS_METADATA = {
       backgroundCapture: {
         label: 'Keep recording while editing',
         type: 'boolean',
+      },
+      clipQueueLimit: {
+        label: 'Clip Queue Limit',
+        type: 'range',
+        min: 1,
+        max: 10,
+        step: 1,
+        format: (v) => `${v} clip${v === 1 ? '' : 's'}`,
       },
     },
   },

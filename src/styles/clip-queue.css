@@ -1,0 +1,241 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLIP QUEUE (#95) — header Clip Now button, count badge, popover, and the
+   shared clip entry list (used by the editor sidebar AND the header popover).
+
+   Every selector here is scoped under a clip-queue-specific root class
+   (.clip-now-group / .clip-queue-popover / .clip-entries) — this repo has
+   been bitten by generic class names colliding across feature stylesheets
+   (see form-controls.css header comment). Do not add bare helper classes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.clip-now-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.clip-now-group[hidden] {
+  display: none;
+}
+
+/* Count badge — primary color, deliberately NOT red (red is reserved for
+   the recording indicator) */
+.clip-queue-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: white;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.clip-queue-badge[hidden] {
+  display: none;
+}
+
+.clip-queue-badge:hover {
+  background: var(--color-primary-hover);
+}
+
+.clip-queue-badge--pulse {
+  animation: clip-queue-badge-pulse 0.5s ease-out;
+}
+
+.clip-queue-badge--shake {
+  animation: clip-queue-badge-shake 0.4s ease-in-out;
+}
+
+@keyframes clip-queue-badge-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-primary-glow);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@keyframes clip-queue-badge-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-queue-badge--pulse,
+  .clip-queue-badge--shake {
+    animation: none;
+  }
+}
+
+/* Compact popover under the badge — the only queue surface below 900px
+   where the editor's left sidebar is hidden */
+.clip-queue-popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: var(--z-popover);
+}
+
+.clip-queue-popover-title {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Shared clip entry list (renderClipEntries in shared/clip-entries.js)
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.clip-entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.clip-entries .clip-entry {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+.clip-entries .clip-entry--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
+
+.clip-entries .clip-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.clip-entries button.clip-entry-main {
+  cursor: pointer;
+}
+
+.clip-entries button.clip-entry-main:hover {
+  background: var(--color-surface);
+}
+
+.clip-entries .clip-entry-thumb {
+  display: block;
+  width: 100%;
+  max-width: 160px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+}
+
+.clip-entries .clip-entry-thumb--placeholder {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-lg);
+  opacity: 0.6;
+}
+
+.clip-entries .clip-entry-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clip-entries .clip-entry-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip-entries .clip-entry-time {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.clip-entries .clip-entry-editing-badge {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-family);
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+}
+
+.clip-entries .clip-entry-delete {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-base);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.clip-entries .clip-entry-delete:hover {
+  background: var(--color-recording);
+  color: white;
+}
+
+.clip-entries .clip-entries-empty {
+  padding: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}

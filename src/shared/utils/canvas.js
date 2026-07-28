@@ -176,3 +176,43 @@ export function renderFramePlaceholder(ctx, width, height, options = {}) {
     ctx.fillText(opts.message, width / 2, height / 2);
   }
 }
+
+// ============================================================================
+// Thumbnail Data URLs
+// ============================================================================
+
+/**
+ * Render a small dataURL thumbnail from a Frame.
+ *
+ * Used by the clip queue: a dataURL keeps a pixel snapshot alive without
+ * retaining the VideoFrame (or a canvas per clip), so queue entry previews
+ * survive independently of the singleton ThumbnailCache, which stays scoped
+ * to the active clip only.
+ *
+ * Never throws: environments without a 2D canvas (jsdom) and closed/invalid
+ * frames both yield null, and callers render a placeholder instead.
+ *
+ * @param {import('../../features/capture/types.js').Frame | null | undefined} frame
+ * @param {number} [maxDimension=160] - Longest edge of the thumbnail
+ * @returns {string | null} dataURL, or null if the frame cannot be drawn
+ */
+export function createFrameThumbnailDataUrl(frame, maxDimension = 160) {
+  try {
+    if (!frame?.width || !frame?.height) return null;
+    const source = getDrawableSource(frame);
+    if (!source) return null;
+
+    const scale = Math.min(1, maxDimension / Math.max(frame.width, frame.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(frame.width * scale));
+    canvas.height = Math.max(1, Math.round(frame.height * scale));
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.7);
+  } catch {
+    return null;
+  }
+}
