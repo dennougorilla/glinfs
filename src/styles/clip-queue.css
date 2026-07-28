@@ -254,8 +254,9 @@
   position: absolute;
   top: var(--space-1);
   right: var(--space-1);
-  width: 20px;
-  height: 20px;
+  /* 28px hit target (#100 round 4) — the old 20px x was fiddly to hit */
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -263,9 +264,17 @@
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.55);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-md);
   line-height: 1;
   cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.clip-entries .clip-entry:hover .clip-entry-delete {
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--color-text);
 }
 
 .clip-entries .clip-entry-delete:hover {

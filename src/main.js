@@ -6,7 +6,11 @@
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
 import { clipNow, handleClipNowHotkey, isCaptureLive } from './features/capture/clip-service.js';
 import { initCapture } from './features/capture/index.js';
-import { initEditor, promoteClipFromQueue } from './features/editor/index.js';
+import {
+  deleteActiveClipFromAnywhere,
+  initEditor,
+  promoteClipFromQueue,
+} from './features/editor/index.js';
 import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
 import { initSettings } from './features/settings/index.js';
@@ -348,6 +352,9 @@ function setupClipQueueHeader() {
         if (deleteQueuedClip(id)) {
           announce('Clip deleted from queue');
         }
+      },
+      onDeleteActive: () => {
+        deleteActiveClipFromAnywhere();
       },
     });
   };

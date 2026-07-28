@@ -20,7 +20,8 @@
  *   1. explicit queue-entry delete (deleteQueuedClip),
  *   2. releaseAllFramesAndReset (which also drains the queue),
  *   3. inside the codec worker after a successful encode (#92) — at that
- *      point the compressed bytes ARE the clip and the raw frames end.
+ *      point the compressed bytes ARE the clip and the raw frames end,
+ *   4. explicit ACTIVE-clip delete (deleteActiveClip — user-confirmed).
  *   They are NEVER closed on promoteQueuedClip / demote / setClipPayload
  *   while a queue exists — those operations only MOVE ownership.
  * - The ACTIVE clip is structurally never evictable: it lives in
@@ -387,8 +388,31 @@ function activeToQueueEntry(active, editorState) {
 }
 
 /**
+ * Delete the ACTIVE clip on explicit user request (#100 round 4).
+ *
+ * The active clip is never evictable by queue mechanics, but the user may
+ * delete it deliberately (two-step confirm in the UI). Closes its frames,
+ * clears the payloads that referenced them (editorPayload aliases the same
+ * frame objects — nulled, not double-closed) and the per-visit export
+ * result. The queue is untouched; the caller decides the succession
+ * (auto-promote / select screen / redirect).
+ *
+ * @returns {boolean} true if there was an active clip to delete
+ */
+export function deleteActiveClip() {
+  if (!state.clipPayload) return false;
+  closeFrameList(state.clipPayload.frames);
+  state.clipPayload = null;
+  state.editorPayload = null;
+  exportResult = null;
+  resetThumbnailCache();
+  emitQueueChanged('delete-active');
+  return true;
+}
+
+/**
  * Notify listeners that the queue changed
- * @param {'enqueue'|'promote'|'delete'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'decode-start'|'decode'|'decode-error'} type
+ * @param {'enqueue'|'promote'|'delete'|'delete-active'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'decode-start'|'decode'|'decode-error'} type
  */
 function emitQueueChanged(type) {
   emit('queue:changed', {

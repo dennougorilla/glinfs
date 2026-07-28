@@ -48,6 +48,7 @@ import { renderFrameGridModal } from './frame-grid.js';
  * @property {() => void} onExport - Export clicked
  * @property {(id: string) => void} [onPromoteClip] - Queue clip entry clicked (promote to active)
  * @property {(id: string) => void} [onDeleteClip] - Queue clip delete clicked
+ * @property {() => void} [onDeleteActiveClip] - Active clip delete confirmed (#100 round 4)
  * @property {() => import('./types.js').EditorState} [getState] - Get current state
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
  */
@@ -1273,6 +1274,7 @@ export function updateClipsPanel(container, handlers) {
       queue: getClipQueue(),
       onPromote: handlers.onPromoteClip,
       onDelete: handlers.onDeleteClip,
+      onDeleteActive: handlers.onDeleteActiveClip,
     }),
   );
 

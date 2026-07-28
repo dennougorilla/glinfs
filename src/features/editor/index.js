@@ -6,6 +6,7 @@
 import {
   clearEditorPayload,
   compressQueuedClip,
+  deleteActiveClip,
   deleteQueuedClip,
   getClipPayload,
   getClipQueue,
@@ -536,6 +537,7 @@ function render(container) {
       onExport: handleExport,
       onPromoteClip: handlePromoteClip,
       onDeleteClip: handleDeleteClip,
+      onDeleteActiveClip: handleDeleteActiveClip,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -803,6 +805,7 @@ function refreshClipsPanel(container) {
     /** @type {import('./ui.js').EditorUIHandlers} */ ({
       onPromoteClip: handlePromoteClip,
       onDeleteClip: handleDeleteClip,
+      onDeleteActiveClip: handleDeleteActiveClip,
     }),
   );
 }
@@ -918,6 +921,36 @@ function handleDeleteClip(id) {
   if (deleteQueuedClip(id)) {
     announce('Clip deleted from queue');
   }
+}
+
+/**
+ * Delete the ACTIVE clip (two-step confirmed in the entry UI, #100 round 4)
+ * and hand the editor to the succession logic: a full reinit re-runs
+ * initEditor's empty-mount path — one raw queued clip auto-promotes, several
+ * show the select screen, none redirects to Capture.
+ */
+function handleDeleteActiveClip() {
+  if (!deleteActiveClip()) return;
+  announce('Clip deleted');
+  cleanup();
+  initEditor();
+}
+
+/**
+ * Delete the ACTIVE clip from OUTSIDE the editor (header popover in
+ * main.js). When the editor is mounted this routes through its own handler
+ * so the succession reinit runs; otherwise the store-level delete suffices
+ * (whatever screen is up doesn't render the active clip's frames).
+ * @returns {boolean} true if a clip was deleted
+ */
+export function deleteActiveClipFromAnywhere() {
+  if (store) {
+    handleDeleteActiveClip();
+    return true;
+  }
+  const deleted = deleteActiveClip();
+  if (deleted) announce('Clip deleted');
+  return deleted;
 }
 
 /**

@@ -69,8 +69,10 @@ describe('Clip queue in the editor (#95)', () => {
     expect(entries).toHaveLength(2);
     expect(entries[0].hasAttribute('data-clip-active')).toBe(true);
     expect(entries[1].hasAttribute('data-clip-active')).toBe(false);
-    // Active entry offers no promote/delete controls
-    expect(entries[0].querySelector('button')).toBeNull();
+    // Active entry offers no promote control (it is already open) but IS
+    // deletable on explicit two-step confirm (#100 round 4)
+    expect(entries[0].querySelector('button.clip-entry-main')).toBeNull();
+    expect(entries[0].querySelector('[data-testid="delete-active-clip"]')).not.toBeNull();
   });
 
   it('promote A->B->A round-trips selection, crop, speed and current frame', () => {
@@ -147,5 +149,39 @@ describe('Clip queue in the editor (#95)', () => {
     clickQueueEntry(newest.id);
     expect(getEditorState()?.clip?.frames).toBe(newest.frames);
     expect(document.querySelector('.editor-clip-select')).toBeNull();
+  });
+
+  describe('active clip deletion (#100 round 4)', () => {
+    it('deleting the active clip with one raw queued clip auto-promotes it', async () => {
+      const framesB = createTestFrames(5, 'b');
+      setClipPayload({ frames: createTestFrames(5, 'a'), fps: 30, capturedAt: Date.now() });
+      enqueueClip({ frames: framesB, fps: 30, capturedAt: Date.now() + 1 });
+      cleanup = initEditor();
+
+      const deleteBtn = /** @type {HTMLButtonElement} */ (
+        document.querySelector('[data-testid="delete-active-clip"]')
+      );
+      deleteBtn.click(); // arm
+      deleteBtn.click(); // confirm
+
+      // Succession: the single raw queued clip becomes active. Frame identity
+      // is compared by id — a registered codec may round-trip the array.
+      expect(getClipPayload()?.frames?.map((f) => f.id)).toEqual(framesB.map((f) => f.id));
+      expect(getClipQueue()).toHaveLength(0);
+    });
+
+    it('deleting the active clip with no queue shows no zombie session', () => {
+      const frames = createTestFrames(5, 'a');
+      setClipPayload({ frames, fps: 30, capturedAt: Date.now() });
+      cleanup = initEditor();
+
+      const deleteBtn = /** @type {HTMLButtonElement} */ (
+        document.querySelector('[data-testid="delete-active-clip"]')
+      );
+      deleteBtn.click();
+      deleteBtn.click();
+
+      expect(getClipPayload()).toBeNull();
+    });
   });
 });

@@ -123,6 +123,16 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   // Settings Panel (only show when not encoding/complete/error)
   if (!state.job || state.job.status === 'idle') {
     content.appendChild(renderSettingsPanel(state, handlers, clipInfo, cleanups));
+  } else {
+    // Encoding/complete/error views replace the settings panel, but the
+    // live monitor must not vanish mid-recording ("not visible while the
+    // GIF is being created"). A slim column keeps the slot mounted across
+    // every job state; :has() collapses it when no capture is live.
+    content.appendChild(
+      createElement('div', { className: 'export-live-column' }, [
+        createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
+      ]),
+    );
   }
 
   screen.appendChild(content);

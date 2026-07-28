@@ -16,6 +16,8 @@ import { createElement, on } from './utils/dom.js';
  * @property {import('./app-store.js').ClipQueueEntry[]} [queue] - Queue entries, newest first
  * @property {(id: string) => void} [onPromote] - Queue entry clicked (promote to editor)
  * @property {(id: string) => void} [onDelete] - Delete button clicked (caller confirms)
+ * @property {() => void} [onDeleteActive] - Delete confirmed on the ACTIVE
+ *   entry (#100 round 4); the caller owns the succession (promote/redirect)
  */
 
 /**
@@ -219,13 +221,35 @@ function buildEntry(clip, options, cleanups) {
   ]);
 
   if (options.active) {
-    // The active clip is what's already open — nothing to promote to
+    // The active clip is what's already open — nothing to promote to,
+    // but it IS deletable on explicit request (#100 round 4)
     entry.appendChild(
       createElement('div', { className: 'clip-entry-main' }, [
         buildThumbnail(clip.thumbnailDataUrl),
         info,
       ]),
     );
+    if (options.onDeleteActive) {
+      const activeDelete = createElement(
+        'button',
+        {
+          className: 'clip-entry-delete',
+          type: 'button',
+          'aria-label': `Delete the clip being edited (captured at ${timeLabel})`,
+          title: 'Delete clip',
+          'data-testid': 'delete-active-clip',
+        },
+        ['×'],
+      );
+      wireTwoStepDelete(
+        /** @type {HTMLButtonElement} */ (activeDelete),
+        'Confirm delete of the clip being edited',
+        `Delete the clip being edited (captured at ${timeLabel})`,
+        () => options.onDeleteActive?.(),
+        cleanups,
+      );
+      entry.appendChild(activeDelete);
+    }
     return entry;
   }
 
@@ -290,7 +314,7 @@ function buildEntry(clip, options, cleanups) {
 export function renderClipEntries(container, options = {}) {
   /** @type {(() => void)[]} */
   const cleanups = [];
-  const { activeClip = null, queue = [], onPromote, onDelete } = options;
+  const { activeClip = null, queue = [], onPromote, onDelete, onDeleteActive } = options;
 
   container.innerHTML = '';
   const list = createElement('div', { className: 'clip-entries' });
@@ -305,7 +329,9 @@ export function renderClipEntries(container, options = {}) {
   ].sort((a, b) => (b.clip.capturedAt ?? 0) - (a.clip.capturedAt ?? 0));
 
   for (const row of rows) {
-    list.appendChild(buildEntry(row.clip, { active: row.active, onPromote, onDelete }, cleanups));
+    list.appendChild(
+      buildEntry(row.clip, { active: row.active, onPromote, onDelete, onDeleteActive }, cleanups),
+    );
   }
 
   if (rows.length === 0) {
