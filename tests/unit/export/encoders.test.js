@@ -213,3 +213,50 @@ describe('gifenc Encoder', () => {
     });
   });
 });
+
+describe('palette scheduling (#99)', () => {
+  it('quantizes every frame on the quality preset (interval 1)', async () => {
+    const { shouldQuantize } = await import(
+      '../../../src/features/export/encoders/gifenc-encoder.js'
+    );
+    for (const i of [0, 1, 2, 7, 449]) {
+      expect(shouldQuantize(i, 1, true)).toBe(true);
+    }
+  });
+
+  it('quantizes on frames 0, N, 2N... on the balanced preset (interval 10)', async () => {
+    const { shouldQuantize } = await import(
+      '../../../src/features/export/encoders/gifenc-encoder.js'
+    );
+    expect(shouldQuantize(0, 10, false)).toBe(true); // no palette yet
+    expect(shouldQuantize(1, 10, true)).toBe(false);
+    expect(shouldQuantize(9, 10, true)).toBe(false);
+    expect(shouldQuantize(10, 10, true)).toBe(true);
+    expect(shouldQuantize(15, 10, true)).toBe(false);
+    expect(shouldQuantize(20, 10, true)).toBe(true);
+  });
+
+  it('quantizes only once on the fast preset (interval 0)', async () => {
+    const { shouldQuantize } = await import(
+      '../../../src/features/export/encoders/gifenc-encoder.js'
+    );
+    expect(shouldQuantize(0, 0, false)).toBe(true);
+    for (const i of [1, 10, 100, 449]) {
+      expect(shouldQuantize(i, 0, true)).toBe(false);
+    }
+  });
+
+  it('always quantizes when no palette exists regardless of interval', async () => {
+    const { shouldQuantize } = await import(
+      '../../../src/features/export/encoders/gifenc-encoder.js'
+    );
+    expect(shouldQuantize(5, 0, false)).toBe(true);
+    expect(shouldQuantize(5, 10, false)).toBe(true);
+  });
+
+  it('presets carry the intended intervals', async () => {
+    const { ENCODER_PRESETS } = await import('../../../src/features/export/core.js');
+    const byId = Object.fromEntries(ENCODER_PRESETS.map((p) => [p.id, p.paletteInterval]));
+    expect(byId).toEqual({ quality: 1, balanced: 10, fast: 0 });
+  });
+});

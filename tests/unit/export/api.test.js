@@ -97,9 +97,31 @@ describe('getFrameRGBA', () => {
     expect(result.data.length).toBe(200 * 150 * 4);
   });
 
-  it('should use OffscreenCanvas for cropped extraction', async () => {
+  it('should use copyTo with a crop rect for cropped extraction when available (issue #99, fix 4)', async () => {
     // Arrange
     const frame = createMockFrame(200, 150);
+    const crop = { x: 10, y: 20, width: 50, height: 40 };
+
+    // Act
+    const result = await getFrameRGBA(frame, crop);
+
+    // Assert - the GPU copyTo path is used, not a drawImage+getImageData
+    // sync readback, and it maps the crop rect directly (no separate
+    // OffscreenCanvas draw step).
+    expect(frame.frame.copyTo).toHaveBeenCalledWith(expect.any(Uint8ClampedArray), {
+      rect: { x: 10, y: 20, width: 50, height: 40 },
+      format: 'RGBA',
+    });
+    expect(result.width).toBe(50);
+    expect(result.height).toBe(40);
+    expect(result.data).toBeInstanceOf(Uint8ClampedArray);
+    expect(result.data.length).toBe(50 * 40 * 4);
+  });
+
+  it('should fall back to OffscreenCanvas for cropped extraction when copyTo is unavailable', async () => {
+    // Arrange
+    const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = undefined;
     const crop = { x: 10, y: 20, width: 50, height: 40 };
 
     const mockImageData = {
@@ -136,9 +158,10 @@ describe('getFrameRGBA', () => {
     expect(result.data).toBe(mockImageData.data);
   });
 
-  it('should throw when OffscreenCanvas context fails', async () => {
+  it('should throw when OffscreenCanvas context fails and copyTo is unavailable', async () => {
     // Arrange
     const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = undefined;
     const crop = { x: 10, y: 20, width: 50, height: 40 };
 
     // Mock OffscreenCanvas with null context as a class
@@ -158,9 +181,10 @@ describe('getFrameRGBA', () => {
     );
   });
 
-  it('should reuse a single OffscreenCanvas across consecutive same-size calls', async () => {
+  it('should reuse a single OffscreenCanvas across consecutive same-size calls (copyTo unavailable)', async () => {
     // Arrange
     const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = undefined;
     const crop = { x: 0, y: 0, width: 50, height: 40 };
 
     const mockCtx = {
@@ -188,9 +212,10 @@ describe('getFrameRGBA', () => {
     expect(OffscreenCanvasSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('should resize (not recreate) the cached canvas when dimensions change', async () => {
+  it('should resize (not recreate) the cached canvas when dimensions change (copyTo unavailable)', async () => {
     // Arrange
     const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = undefined;
     const smallCrop = { x: 0, y: 0, width: 50, height: 40 };
     const bigCrop = { x: 0, y: 0, width: 80, height: 60 };
 

@@ -593,6 +593,11 @@
   min-height: 0;
   cursor: pointer;
   overflow: hidden;
+  /* Shared reference box: absolutely-positioned children (filmstrip,
+     selection layer, playhead) are offset from this padding edge, so
+     giving the padding to the track (not the filmstrip alone) keeps every
+     layer's 0-100% coordinate space identical (issue #99, fix 1). */
+  padding: 4px;
 }
 
 .tl--scrubbing .tl-track {
@@ -607,7 +612,6 @@
   inset: 0;
   display: flex;
   gap: 1px;
-  padding: 4px;
 }
 
 .tl-frame {

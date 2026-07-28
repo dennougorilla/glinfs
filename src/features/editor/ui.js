@@ -17,6 +17,7 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import {
   createThumbnailCanvas,
   getCursorForHandle,
@@ -1082,6 +1083,9 @@ function renderScenesSidebar(container, state, handlers) {
     });
   }
 
+  const sceneThumbnailSize = 160;
+  const thumbnailCache = getThumbnailCache();
+
   state.scenes.forEach((scene, index) => {
     const isSelected =
       state.selectedRange.start === scene.startFrame && state.selectedRange.end === scene.endFrame;
@@ -1090,16 +1094,38 @@ function renderScenesSidebar(container, state, handlers) {
       className: `scene-thumbnail-card ${isSelected ? 'is-selected' : ''}`,
       type: 'button',
       'data-scene-id': scene.id,
+      // Range bounds are duplicated on the DOM node so a pure range-change
+      // tick can toggle selection (updateScenesSelection) without needing
+      // to re-walk `state.scenes` or rebuild anything (issue #99, fix 2).
+      'data-scene-start': String(scene.startFrame),
+      'data-scene-end': String(scene.endFrame),
       title: `Scene ${index + 1}: Frames ${scene.startFrame}-${scene.endFrame}`,
     });
 
-    // Create thumbnail from first frame of scene
+    // Create thumbnail from first frame of scene - routed through the
+    // shared ThumbnailCache so repeated renders of the same scene list
+    // (e.g. after this panel is rebuilt for an unrelated reason) reuse the
+    // already-drawn canvas instead of paying drawImage/getImageData again.
     const thumbnailContainer = createElement('div', { className: 'scene-thumbnail' });
-    if (state.clip?.frames[scene.startFrame]) {
+    const sceneFrame = state.clip?.frames[scene.startFrame];
+    if (sceneFrame) {
       try {
-        const canvas = createThumbnailCanvas(state.clip.frames[scene.startFrame], 160);
-        canvas.className = 'scene-thumbnail-canvas';
-        thumbnailContainer.appendChild(canvas);
+        let canvas = thumbnailCache.get(sceneFrame.id, sceneThumbnailSize);
+        if (!canvas) {
+          canvas = createThumbnailCanvas(sceneFrame, sceneThumbnailSize);
+          thumbnailCache.addCanvas(sceneFrame.id, sceneThumbnailSize, canvas);
+        }
+        // Clone the pixel content (cloneNode alone doesn't copy canvas bitmap data),
+        // so the cached canvas can be reused by other consumers untouched.
+        const canvasClone = document.createElement('canvas');
+        canvasClone.width = canvas.width;
+        canvasClone.height = canvas.height;
+        const cloneCtx = canvasClone.getContext('2d');
+        if (cloneCtx) {
+          cloneCtx.drawImage(canvas, 0, 0);
+        }
+        canvasClone.className = 'scene-thumbnail-canvas';
+        thumbnailContainer.appendChild(canvasClone);
       } catch (e) {
         console.warn('[Editor] Failed to create scene thumbnail:', e);
         thumbnailContainer.appendChild(
@@ -1167,6 +1193,29 @@ export function updateScenesPanel(container, state, handlers) {
   cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
 
   return cleanups;
+}
+
+/**
+ * Update ONLY the `is-selected` class on already-rendered scene cards, in
+ * response to a rangeChanged-only tick (selection/status/scenes list all
+ * otherwise unchanged). Does not touch the DOM tree or thumbnails - no
+ * innerHTML clear, no createThumbnailCanvas calls. Existing card event
+ * listeners (attached by renderScenesSidebar) remain valid since the nodes
+ * are untouched (issue #99, fix 2).
+ * @param {HTMLElement} container - The editor screen container
+ * @param {import('./types.js').EditorState} state - Current editor state
+ */
+export function updateScenesSelection(container, state) {
+  const scenesContainer = container.querySelector('[data-scenes-container]');
+  if (!scenesContainer) return;
+
+  const cards = scenesContainer.querySelectorAll('.scene-thumbnail-card');
+  cards.forEach((card) => {
+    const start = Number(/** @type {HTMLElement} */ (card).dataset.sceneStart);
+    const end = Number(/** @type {HTMLElement} */ (card).dataset.sceneEnd);
+    const isSelected = state.selectedRange.start === start && state.selectedRange.end === end;
+    card.classList.toggle('is-selected', isSelected);
+  });
 }
 
 /**

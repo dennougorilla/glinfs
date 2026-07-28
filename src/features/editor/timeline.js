@@ -11,6 +11,12 @@ import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
 import { getClipFps } from './core.js';
+import {
+  DEFAULT_THUMBNAIL_COUNT,
+  frameToPercent,
+  getThumbnailFrameIndices,
+  percentToFrame,
+} from './timeline-mapping.js';
 
 /**
  * @typedef {Object} TimelineHandlers
@@ -18,7 +24,7 @@ import { getClipFps } from './core.js';
  */
 
 /** Number of thumbnail samples to show */
-const MAX_THUMBNAILS = 30;
+const MAX_THUMBNAILS = DEFAULT_THUMBNAIL_COUNT;
 
 /** Minimum selection width in frames */
 const MIN_SELECTION_FRAMES = 2;
@@ -93,10 +99,10 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
   // Filmstrip background (thumbnails) - uses ThumbnailCache for performance
   const filmstrip = createElement('div', { className: 'tl-filmstrip' });
-  const sampleStep = Math.max(1, Math.floor(totalFrames / MAX_THUMBNAILS));
   const thumbnailCache = getThumbnailCache();
+  const thumbnailFrameIndices = getThumbnailFrameIndices(totalFrames, MAX_THUMBNAILS);
 
-  for (let i = 0; i < totalFrames; i += sampleStep) {
+  for (const i of thumbnailFrameIndices) {
     const thumb = createElement('div', {
       className: 'tl-frame',
       'data-frame': String(i),
@@ -207,7 +213,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     <div class="tl-playhead-line"></div>
   `;
   // Set initial position
-  const initialPercent = (currentFrame / Math.max(1, totalFrames - 1)) * 100;
+  const initialPercent = frameToPercent(currentFrame, totalFrames);
   playhead.style.left = `${initialPercent}%`;
   track.appendChild(playhead);
 
@@ -226,12 +232,12 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   const getFrameFromEvent = (e) => {
     const rect = track.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const progress = clamp(x / rect.width, 0, 1);
-    return Math.round(progress * (totalFrames - 1));
+    const progress = clamp(x / rect.width, 0, 1) * 100;
+    return percentToFrame(progress, totalFrames);
   };
 
   const getPercentFromFrame = (frame) => {
-    return (frame / Math.max(1, totalFrames - 1)) * 100;
+    return frameToPercent(frame, totalFrames);
   };
 
   // ═══════════════════════════════════════════════════════════
@@ -493,9 +499,8 @@ function calculateTickInterval(duration) {
  * Update selection and dim positions
  */
 function updateSelectionPositions(dimLeft, dimRight, selectionBox, range, totalFrames) {
-  const divisor = Math.max(1, totalFrames - 1);
-  const startPercent = (range.start / divisor) * 100;
-  const endPercent = (range.end / divisor) * 100;
+  const startPercent = frameToPercent(range.start, totalFrames);
+  const endPercent = frameToPercent(range.end, totalFrames);
 
   dimLeft.style.width = `${startPercent}%`;
   dimRight.style.left = `${endPercent}%`;
@@ -534,6 +539,6 @@ export function updatePlayheadPosition(container, currentFrame, totalFrames) {
   const playhead = container.querySelector('.tl-playhead');
   if (!playhead) return;
 
-  const percent = (currentFrame / Math.max(1, totalFrames - 1)) * 100;
+  const percent = frameToPercent(currentFrame, totalFrames);
   /** @type {HTMLElement} */ (playhead).style.left = `${percent}%`;
 }

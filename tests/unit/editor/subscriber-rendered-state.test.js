@@ -109,7 +109,7 @@ describe('editor subscriber diffs against last-rendered state (issue #50)', () =
     expect(timelineContainer?.querySelector('.tl-selection')).not.toBeNull();
   });
 
-  it('only rebuilds the scenes panel when scene-relevant state actually changes, even under rapid drag-like updates', () => {
+  it('never rebuilds the scenes panel for a pure range change - only status/progress/scenes changes rebuild (issue #99, fix 2)', () => {
     setClipPayload({
       frames: createTestFrames(30),
       fps: 30,
@@ -117,38 +117,82 @@ describe('editor subscriber diffs against last-rendered state (issue #50)', () =
     });
 
     const updateScenesPanelSpy = vi.spyOn(ui, 'updateScenesPanel');
+    const updateScenesSelectionSpy = vi.spyOn(ui, 'updateScenesSelection');
 
     cleanup = initEditor();
     updateScenesPanelSpy.mockClear();
+    updateScenesSelectionSpy.mockClear();
 
-    // Simulate a drag: many rapid range updates, one per throttle window,
-    // each one genuinely changing the selection -> panel must rebuild once
-    // per distinct range.
+    // Simulate a drag: many rapid range updates, one per throttle window.
+    // A pure range change must take the cheap selection-only path, NEVER
+    // the full renderScenesSidebar rebuild (updateScenesPanel).
     for (let i = 0; i < 5; i++) {
       window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: i, end: 20 + i } });
       vi.advanceTimersByTime(20);
     }
-    expect(updateScenesPanelSpy).toHaveBeenCalledTimes(5);
+    expect(updateScenesPanelSpy).not.toHaveBeenCalled();
+    expect(updateScenesSelectionSpy).toHaveBeenCalledTimes(5);
 
     updateScenesPanelSpy.mockClear();
+    updateScenesSelectionSpy.mockClear();
 
     // Now drive updates that do NOT touch scenes/sceneDetection/selectedRange
-    // (only playback state and frame position) - the panel must not rebuild.
+    // (only playback state and frame position) - neither path should run.
     for (let i = 0; i < 5; i++) {
       window.__TEST_HOOKS__.setEditorState({ currentFrame: 10 + i });
       vi.advanceTimersByTime(20);
     }
     expect(updateScenesPanelSpy).not.toHaveBeenCalled();
+    expect(updateScenesSelectionSpy).not.toHaveBeenCalled();
 
     updateScenesPanelSpy.mockClear();
+    updateScenesSelectionSpy.mockClear();
 
     // Re-setting the SAME range repeatedly (e.g. a drag that pauses on one
-    // frame while still emitting ticks) must not cause redundant rebuilds.
+    // frame while still emitting ticks) must not cause redundant work.
     for (let i = 0; i < 3; i++) {
       window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 4, end: 24 } });
       vi.advanceTimersByTime(20);
     }
     expect(updateScenesPanelSpy).not.toHaveBeenCalled();
+    expect(updateScenesSelectionSpy).not.toHaveBeenCalled();
+  });
+
+  it('a range change never rebuilds the scenes DOM even when scenes are present - card nodes are preserved by identity (issue #99, fix 2)', () => {
+    setClipPayload({
+      frames: createTestFrames(30),
+      fps: 30,
+      capturedAt: Date.now(),
+      scenes: [
+        { id: 'scene-0', startFrame: 0, endFrame: 9 },
+        { id: 'scene-1', startFrame: 10, endFrame: 19 },
+        { id: 'scene-2', startFrame: 20, endFrame: 29 },
+      ],
+      sceneDetectionEnabled: true,
+    });
+
+    cleanup = initEditor();
+    vi.advanceTimersByTime(20);
+
+    const scenesContainer = container.querySelector('[data-scenes-container]');
+    const cardsBefore = Array.from(scenesContainer.querySelectorAll('.scene-thumbnail-card'));
+    expect(cardsBefore.length).toBe(3);
+
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 10, end: 19 } });
+    vi.advanceTimersByTime(20);
+
+    const cardsAfter = Array.from(scenesContainer.querySelectorAll('.scene-thumbnail-card'));
+    expect(cardsAfter.length).toBe(3);
+    // Same DOM nodes, not rebuilt ones - identity comparison proves no
+    // innerHTML clear / re-render happened.
+    cardsBefore.forEach((card, i) => {
+      expect(cardsAfter[i]).toBe(card);
+    });
+
+    // Selection classes still reflect the new range.
+    expect(cardsAfter[1].classList.contains('is-selected')).toBe(true);
+    expect(cardsAfter[0].classList.contains('is-selected')).toBe(false);
+    expect(cardsAfter[2].classList.contains('is-selected')).toBe(false);
   });
 
   it('looks up the timeline container once per subscriber tick instead of twice', () => {
@@ -199,6 +243,8 @@ describe('editor subscriber diffs against last-rendered state (issue #50)', () =
     expect(container.querySelector('.time-display .total')?.textContent).toBe(
       frameToTimecode(10, 30),
     );
-    expect(updateScenesPanelSpy).toHaveBeenCalledTimes(1);
+    // This is a pure range change (no scenes/status/progress change), so the
+    // cheap selection-only path runs instead of a full rebuild (fix 2).
+    expect(updateScenesPanelSpy).not.toHaveBeenCalled();
   });
 });

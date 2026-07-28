@@ -44,6 +44,7 @@ export const ENCODER_PRESETS = /** @type {const} */ ([
     description: 'Best visual quality, larger file size',
     format: 'rgb565',
     maxColorsMultiplier: 1.0,
+    paletteInterval: 1,
   },
   {
     id: 'balanced',
@@ -51,6 +52,7 @@ export const ENCODER_PRESETS = /** @type {const} */ ([
     description: 'Good balance of quality and file size',
     format: 'rgb565',
     maxColorsMultiplier: 0.5,
+    paletteInterval: 10,
   },
   {
     id: 'fast',
@@ -58,6 +60,7 @@ export const ENCODER_PRESETS = /** @type {const} */ ([
     description: 'Fastest encoding, smallest files',
     format: 'rgb444',
     maxColorsMultiplier: 0.25,
+    paletteInterval: 0,
   },
 ]);
 

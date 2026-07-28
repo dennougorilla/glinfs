@@ -57,6 +57,7 @@ import {
   updateCropInfoPanel,
   updateOverlayCanvas,
   updateScenesPanel,
+  updateScenesSelection,
   updateTimelineHeader,
 } from './ui.js';
 
@@ -424,13 +425,15 @@ export function initEditor() {
       lastRendered.showGrid = state.showGrid;
     }
 
-    // Update scenes panel when scene detection state or selected range changes
-    if (
+    // Full rebuild only when the scene list/status actually changes - a
+    // rangeChanged-only tick (e.g. every 16ms during a drag) must NOT tear
+    // down and recreate the whole scenes sidebar (issue #99, fix 2).
+    const scenesStructureChanged =
       state.sceneDetectionStatus !== lastRendered.sceneDetectionStatus ||
       state.sceneDetectionProgress !== lastRendered.sceneDetectionProgress ||
-      state.scenes !== lastRendered.scenes ||
-      rangeChanged
-    ) {
+      state.scenes !== lastRendered.scenes;
+
+    if (scenesStructureChanged) {
       // Clean up previous scene panel event listeners
       scenePanelCleanups.forEach((fn) => {
         fn();
@@ -449,6 +452,9 @@ export function initEditor() {
       lastRendered.sceneDetectionStatus = state.sceneDetectionStatus;
       lastRendered.sceneDetectionProgress = state.sceneDetectionProgress;
       lastRendered.scenes = state.scenes;
+    } else if (rangeChanged) {
+      // Cheap path: just flip is-selected on existing cards, no DOM churn.
+      updateScenesSelection(container, state);
     }
 
     // Committed after both the header and the scenes-panel checks above, since
