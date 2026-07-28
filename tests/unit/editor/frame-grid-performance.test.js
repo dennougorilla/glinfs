@@ -199,6 +199,30 @@ describe('Frame Grid bounded rendering (issue #47)', () => {
     expect(lastItem.classList.contains('is-end')).toBe(true);
   });
 
+  it('relocates focus to the grid container instead of leaking it to <body> when the focused item is evicted', () => {
+    renderModal(3600);
+
+    const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
+    const body = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-body'));
+    const modal = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-modal'));
+
+    const focusedItem = /** @type {HTMLElement} */ (document.activeElement);
+    expect(focusedItem.dataset.index).toBe('0');
+    expect(focusedItem.closest('.frame-grid-container')).toBe(grid);
+
+    // Scroll far enough that the previously-focused item (index 0) is evicted.
+    body.scrollTop = Number.parseFloat(grid.style.height) - 500;
+    body.dispatchEvent(new Event('scroll'));
+
+    expect(focusedItem.isConnected).toBe(false);
+    // Focus must stay inside the modal (on the grid container, a valid
+    // programmatic-focus target) rather than falling back to <body>, which
+    // would silently escape the modal's Tab-trap.
+    expect(document.activeElement).toBe(grid);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(modal.contains(document.activeElement)).toBe(true);
+  });
+
   it('keeps focus and canvas eviction working while keyboard navigation crosses virtual windows', () => {
     renderModal(3600, { initialRange: { start: 1500, end: 1550 } });
 
