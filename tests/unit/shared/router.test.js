@@ -261,6 +261,51 @@ describe('Router', () => {
       main.remove();
       errorSpy.mockRestore();
     });
+
+    it('tells the user why they were sent back to Capture', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const liveRegion = document.createElement('div');
+      liveRegion.id = 'live-region';
+      document.body.appendChild(liveRegion);
+
+      initRouter({
+        '/capture': vi.fn(),
+        '/editor': () => {
+          throw new Error('handler boom');
+        },
+      });
+
+      navigate('/editor');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Previously the only trace of the redirect was a console.error —
+      // the user saw the Capture screen appear with no explanation
+      expect(liveRegion.textContent).toBe('Could not open the Editor screen. Returned to Capture.');
+
+      liveRegion.remove();
+      errorSpy.mockRestore();
+    });
+
+    it('announces the reload advice when /capture itself fails', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const liveRegion = document.createElement('div');
+      liveRegion.id = 'live-region';
+      document.body.appendChild(liveRegion);
+
+      initRouter({
+        '/capture': () => {
+          throw new Error('capture boom');
+        },
+      });
+
+      expect(liveRegion.textContent).toBe(
+        'Could not open the Capture screen. Please reload the page.',
+      );
+
+      liveRegion.remove();
+      errorSpy.mockRestore();
+    });
   });
 
   describe('container class reset', () => {

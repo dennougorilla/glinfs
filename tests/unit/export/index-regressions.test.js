@@ -381,4 +381,65 @@ describe('Export regressions', () => {
     expect(button.classList.contains('playing')).toBe(true);
     expect(button.textContent).toBe('\u23F8');
   });
+
+  describe('empty state (#93)', () => {
+    let originalHash;
+
+    beforeEach(() => {
+      originalHash = window.location.hash;
+      window.location.hash = '';
+    });
+
+    afterEach(() => {
+      window.location.hash = originalHash;
+    });
+
+    it('routes "Back to Editor" through a real listener, not an inline onclick', () => {
+      // No payload at all → validation error empty state
+      exportCleanup = initExport();
+
+      const main = document.getElementById('main-content');
+      const empty = main?.querySelector('.export-empty.export-error');
+      const button = empty?.querySelector('button');
+      expect(empty).not.toBeNull();
+      expect(button?.textContent).toBe('Back to Editor');
+
+      // The document CSP has no 'unsafe-inline' for scripts, so an inline
+      // onclick attribute never fires in the browser — the old markup
+      // shipped a dead button. jsdom does not enforce CSP; guard the markup.
+      expect(main?.querySelector('[onclick]')).toBeNull();
+
+      button?.click();
+      expect(window.location.hash).toBe('#/editor');
+    });
+
+    it('routes "Back to Capture" when the selected range yields no frames', () => {
+      const frames = createFrames(4);
+      setClipPayload({ frames, fps: 30, capturedAt: Date.now() });
+      // start > end → frames.slice() is empty
+      setEditorPayload({ selectedRange: { start: 3, end: 1 }, cropArea: null, fps: 30 });
+
+      exportCleanup = initExport();
+
+      const main = document.getElementById('main-content');
+      const button = main?.querySelector('.export-empty button');
+      expect(main?.querySelector('.export-empty.export-error')).toBeNull();
+      expect(button?.textContent).toBe('Back to Capture');
+      expect(main?.querySelector('[onclick]')).toBeNull();
+
+      button?.click();
+      expect(window.location.hash).toBe('#/capture');
+    });
+
+    it('unhooks the empty-state button on cleanup', () => {
+      exportCleanup = initExport();
+      const button = document.querySelector('.export-empty button');
+
+      exportCleanup?.();
+      exportCleanup = null;
+
+      button?.click();
+      expect(window.location.hash).toBe('');
+    });
+  });
 });

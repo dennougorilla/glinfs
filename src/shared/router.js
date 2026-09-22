@@ -3,6 +3,8 @@
  * @module shared/router
  */
 
+import { announce } from './live-region.js';
+
 /**
  * @typedef {'/capture' | '/editor' | '/export' | '/loading' | '/settings'} Route
  */
@@ -141,11 +143,17 @@ function handleHashChange() {
 
         // Recover to the known entry screen. If that screen itself fails,
         // render a stable message instead of creating a redirect loop.
+        // Either way, tell the user why they were moved — a silent redirect
+        // reads as the app ignoring their click.
         if (route !== '/capture') {
+          announce(
+            `Could not open the ${routeLabel(route)} screen. Returned to ${routeLabel('/capture')}.`,
+          );
           navigate('/capture');
           return;
         }
 
+        announce(`Could not open the ${routeLabel(route)} screen. Please reload the page.`);
         if (main) {
           main.textContent = 'Unable to load the application. Please reload the page.';
         }
@@ -166,6 +174,16 @@ function handleHashChange() {
     // Fallback to capture
     navigate('/capture');
   }
+}
+
+/**
+ * Human-readable screen name for user-facing messages ('/capture' → 'Capture').
+ * @param {string} route
+ * @returns {string}
+ */
+function routeLabel(route) {
+  const name = route.replace(/^\//, '');
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : route;
 }
 
 /**

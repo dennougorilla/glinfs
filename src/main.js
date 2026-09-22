@@ -290,10 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Clip Now header button, queue badge popover and global Shift+C (#95)
   setupClipQueueHeader();
 
-  // Persistent live-capture PiP (#94) — mounted once, reacts to route/bus
-  // events on its own; must be wired before initRouter() processes the
-  // initial hash so its onRouteChange listener sees that first navigation.
-
   // Initialize router
   initRouter(routes);
 });

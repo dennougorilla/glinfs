@@ -20,7 +20,7 @@ import {
   renderFramePlaceholder,
   syncCanvasSize,
 } from '../../shared/utils/canvas.js';
-import { qsRequired } from '../../shared/utils/dom.js';
+import { createElement, on, qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
@@ -97,6 +97,37 @@ let lastFrameTime = 0;
 const DEFAULT_FPS = 30;
 
 /**
+ * Render the "nothing to export" screen with a real click listener.
+ *
+ * The document CSP is `script-src 'self' 'wasm-unsafe-eval'` (no
+ * 'unsafe-inline'), so an inline `onclick` attribute never runs in the
+ * browser — the previous innerHTML markup shipped a dead button. The
+ * listener is registered through uiCleanup so leaving the route unhooks it.
+ *
+ * @param {HTMLElement} container - Route container (#main-content)
+ * @param {{ className: string, message: string, buttonLabel: string, route: import('../../shared/router.js').Route }} options
+ */
+function renderEmptyState(container, { className, message, buttonLabel, route }) {
+  const button = createElement('button', { className: 'btn btn-primary', type: 'button' }, [
+    buttonLabel,
+  ]);
+  const screen = createElement(
+    'section',
+    { className: 'screen export-screen', 'aria-labelledby': 'export-title' },
+    [
+      createElement('header', { className: 'screen-header' }, [
+        createElement('h1', { id: 'export-title', className: 'screen-title' }, ['Export GIF']),
+      ]),
+      createElement('div', { className }, [createElement('p', {}, [message]), button]),
+    ],
+  );
+
+  container.innerHTML = '';
+  container.appendChild(screen);
+  uiCleanup = on(button, 'click', () => navigate(route));
+}
+
+/**
  * Initialize export feature
  *
  * SIMPLIFIED MODEL:
@@ -116,9 +147,12 @@ export function initExport() {
 
   // Validate we have the required data
   if (!editorPayload?.selectedRange || !clipPayload?.frames?.length) {
-    // Static error message - safe HTML
-    container.innerHTML =
-      '<section class="screen export-screen" aria-labelledby="export-title"><header class="screen-header"><h1 id="export-title" class="screen-title">Export GIF</h1></header><div class="export-empty export-error"><p>No clip data available. Please capture and edit a clip first.</p><button class="btn btn-primary" onclick="location.hash = \'#/editor\'">Back to Editor</button></div></section>';
+    renderEmptyState(container, {
+      className: 'export-empty export-error',
+      message: 'No clip data available. Please capture and edit a clip first.',
+      buttonLabel: 'Back to Editor',
+      route: '/editor',
+    });
     emit('export:validation-error', { errors: ['No clip data available'] });
     return cleanup;
   }
@@ -130,19 +164,12 @@ export function initExport() {
   const fps = editorPayload?.fps || DEFAULT_FPS;
 
   if (frames.length === 0) {
-    container.innerHTML = `
-      <section class="screen export-screen" aria-labelledby="export-title">
-        <header class="screen-header">
-          <h1 id="export-title" class="screen-title">Export GIF</h1>
-        </header>
-        <div class="export-empty">
-          <p>No frames to export. Please create a clip first.</p>
-          <button class="btn btn-primary" onclick="location.hash = '#/capture'">
-            Back to Capture
-          </button>
-        </div>
-      </section>
-    `;
+    renderEmptyState(container, {
+      className: 'export-empty',
+      message: 'No frames to export. Please create a clip first.',
+      buttonLabel: 'Back to Capture',
+      route: '/capture',
+    });
     return cleanup;
   }
 
