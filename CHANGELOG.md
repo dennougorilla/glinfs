@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3](https://github.com/dennougorilla/glinfs/compare/v0.5.2...v0.5.3) (2026-09-23)
+
+
+### Bug Fixes
+
+* **editor:** keep crop when Escape closes the clip-queue popover ([#109](https://github.com/dennougorilla/glinfs/issues/109)) ([4326797](https://github.com/dennougorilla/glinfs/commit/432679727a6593774ce9df5ac48dde08574072f3))
+* **scene-detection:** close ImageBitmaps on cancel and error paths ([#111](https://github.com/dennougorilla/glinfs/issues/111)) ([aa766a5](https://github.com/dennougorilla/glinfs/commit/aa766a50bc0c6d97efc5d2d0f5736d885022f39a))
+
+
+### Performance Improvements
+
+* **editor:** drive playback from elapsed time with requestAnimationFrame ([#110](https://github.com/dennougorilla/glinfs/issues/110)) ([e5604cc](https://github.com/dennougorilla/glinfs/commit/e5604cc7eee258fb3c390efb7a8aa9509dc2fe9f))
+* **export:** build fast-preset palette from frames sampled across the clip ([#112](https://github.com/dennougorilla/glinfs/issues/112)) ([314399b](https://github.com/dennougorilla/glinfs/commit/314399b28124497e056ffc504cf9fbbeea00164d))
+
 ## [0.5.2](https://github.com/dennougorilla/glinfs/compare/v0.5.1...v0.5.2) (2026-09-23)
 
 
