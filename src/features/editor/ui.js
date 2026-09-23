@@ -11,6 +11,7 @@ import {
   hasActiveScreenCapture,
 } from '../../shared/app-store.js';
 import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries.js';
+import { registerHotkey } from '../../shared/hotkeys.js';
 import { navigate } from '../../shared/router.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { createElement, on } from '../../shared/utils/dom.js';
@@ -664,15 +665,11 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // 'queue:changed' by editor/index.js via updateClipsPanel.
   cleanups.push(...updateClipsPanel(container, handlers));
 
-  // Setup keyboard shortcuts. The frame-grid modal owns keyboard input
-  // while it is open — without the guard, Escape would close the modal AND
-  // clear the crop, Space would select a grid frame AND toggle playback.
-  cleanups.push(
-    setupKeyboardShortcuts(handlers, state, {
-      onOpenFrameGrid: handleOpenFrameGrid,
-      isFrameGridOpen: () => frameGridCleanup !== null,
-    }),
-  );
+  // Route-scope keyboard shortcuts. While the frame-grid modal is open
+  // (aria-modal) the dispatcher yields route hotkeys to the grid's own
+  // keydown handler — otherwise Escape would close the modal AND clear the
+  // crop, Space would select a grid frame AND toggle playback.
+  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
 
   return {
     cleanup: () =>
@@ -685,50 +682,48 @@ export function renderEditorScreen(container, state, handlers, fps) {
 }
 
 /**
- * Setup keyboard shortcuts
+ * Setup keyboard shortcuts (route scope of the app hotkey dispatcher)
  * @param {EditorUIHandlers} handlers
  * @param {import('./types.js').EditorState} state
- * @param {{ onOpenFrameGrid?: () => void, isFrameGridOpen?: () => boolean }} [options]
- * @returns {() => void} Cleanup function
+ * @param {{ onOpenFrameGrid?: () => void }} [options]
+ * @returns {() => void} Cleanup function (unregisters every shortcut)
  */
 function setupKeyboardShortcuts(handlers, state, options = {}) {
   // Read live state via handlers to avoid stale closures (render runs once)
   const getCurrentState = () => handlers.getState?.() ?? state;
 
-  const onKeyDown = (e) => {
-    // The frame-grid modal registers its own document-level handler for
-    // the same keys; while it is open it has exclusive keyboard ownership
-    if (options.isFrameGridOpen?.()) {
-      return;
-    }
+  /**
+   * Plain-key shortcut: Shift is ignored (Shift+G, Shift+Arrow behave like
+   * the bare key) but Cmd/Ctrl/Alt combos stay with the browser.
+   * @param {string} key
+   * @param {() => void} action
+   */
+  const plain = (key, action) =>
+    registerHotkey({
+      key,
+      modifiers: { shift: 'any' },
+      scope: 'route',
+      handler: (e) => {
+        e.preventDefault();
+        action();
+      },
+    });
 
-    // An open overlay (e.g. the header clip-queue popover) that consumed
-    // Escape marks it handled; don't also clear the crop (#102). Scoped to
-    // Escape: timeline/live-monitor handlers preventDefault keys the editor
-    // shortcuts still act on.
-    if (e.key === 'Escape' && e.defaultPrevented) {
-      return;
-    }
-
-    // Don't handle if focused on an editable element
-    const active = document.activeElement;
-    if (
-      active instanceof HTMLInputElement ||
-      active instanceof HTMLSelectElement ||
-      active instanceof HTMLTextAreaElement ||
-      (active instanceof HTMLElement && active.isContentEditable)
-    ) {
-      return;
-    }
-
-    // 1-9 address clips by their LIST POSITION (browser-tab model, #100
-    // r7): plain digit switches, Shift+digit deletes. e.code is used so
-    // Shift+1 works on every keyboard layout (e.key would be '!' on US).
-    // Cmd/Ctrl/Alt+digit stays with the browser (tab switching).
-    if (/^Digit[1-9]$/.test(e.code) && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const rows = getOrderedClipRows(getClipPayload(), getClipQueue());
-      const row = rows[Number(e.code.slice(5)) - 1];
-      if (row) {
+  /**
+   * 1-9 address clips by their LIST POSITION (browser-tab model, #100 r7):
+   * plain digit switches, Shift+digit deletes. e.code is used so Shift+1
+   * works on every keyboard layout (e.key would be '!' on US).
+   * @param {number} position - 1-based
+   */
+  const clipPosition = (position) =>
+    registerHotkey({
+      code: `Digit${position}`,
+      modifiers: { shift: 'any' },
+      scope: 'route',
+      handler: (e) => {
+        const rows = getOrderedClipRows(getClipPayload(), getClipQueue());
+        const row = rows[position - 1];
+        if (!row) return false;
         e.preventDefault();
         if (e.shiftKey) {
           if (row.active) {
@@ -739,63 +734,42 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
         } else if (!row.active) {
           handlers.onPromoteClip?.(row.clip.id);
         }
-      }
-      return;
-    }
+      },
+    });
 
-    switch (e.key) {
-      case ' ':
+  const exportShortcut = (/** @type {{ ctrl?: boolean, meta?: boolean }} */ modifiers) =>
+    registerHotkey({
+      key: 'e',
+      modifiers,
+      scope: 'route',
+      handler: (e) => {
         e.preventDefault();
-        handlers.onTogglePlay();
-        break;
-      case 'ArrowLeft':
-        e.preventDefault();
-        handlers.onFrameChange(getCurrentState().currentFrame - 1);
-        break;
-      case 'ArrowRight':
-        e.preventDefault();
-        handlers.onFrameChange(getCurrentState().currentFrame + 1);
-        break;
-      case 'Home':
-        e.preventDefault();
-        handlers.onFrameChange(getCurrentState().selectedRange.start);
-        break;
-      case 'End':
-        e.preventDefault();
-        handlers.onFrameChange(getCurrentState().selectedRange.end);
-        break;
-      case 'g':
-      case 'G':
-        e.preventDefault();
-        handlers.onToggleGrid();
-        break;
-      case 'Escape':
-        e.preventDefault();
-        handlers.onCropChange(null);
-        break;
-      case 'f':
-      case 'F':
-        e.preventDefault();
-        options.onOpenFrameGrid?.();
-        break;
-      case 'Delete':
-      case 'Backspace':
-        // Delete the clip being edited (undo toast covers safety, #100 r7)
-        e.preventDefault();
-        handlers.onDeleteActiveClip?.();
-        break;
-      case 'e':
-        if (e.ctrlKey || e.metaKey) {
-          e.preventDefault();
-          handlers.onExport();
-          navigate('/export');
-        }
-        break;
-    }
-  };
+        handlers.onExport();
+        navigate('/export');
+      },
+    });
 
-  document.addEventListener('keydown', onKeyDown);
-  return () => document.removeEventListener('keydown', onKeyDown);
+  const unsubscribers = [
+    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(clipPosition),
+    plain(' ', () => handlers.onTogglePlay()),
+    plain('ArrowLeft', () => handlers.onFrameChange(getCurrentState().currentFrame - 1)),
+    plain('ArrowRight', () => handlers.onFrameChange(getCurrentState().currentFrame + 1)),
+    plain('Home', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
+    plain('End', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
+    plain('g', () => handlers.onToggleGrid()),
+    plain('Escape', () => handlers.onCropChange(null)),
+    plain('f', () => options.onOpenFrameGrid?.()),
+    // Delete the clip being edited (undo toast covers safety, #100 r7)
+    plain('Delete', () => handlers.onDeleteActiveClip?.()),
+    plain('Backspace', () => handlers.onDeleteActiveClip?.()),
+    exportShortcut({ ctrl: true }),
+    exportShortcut({ meta: true }),
+  ];
+
+  return () =>
+    unsubscribers.forEach((fn) => {
+      fn();
+    });
 }
 
 /**

@@ -4,7 +4,7 @@
  */
 
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
-import { clipNow, handleClipNowHotkey, isCaptureLive } from './features/capture/clip-service.js';
+import { clipNow, isCaptureLive, registerClipNowHotkey } from './features/capture/clip-service.js';
 import { initCapture } from './features/capture/index.js';
 import {
   deleteActiveClipFromAnywhere,
@@ -31,6 +31,7 @@ import { on as onBus } from './shared/bus.js';
 import { crashNextEncodeForTest, createClipCodecManager } from './shared/clip-codec.js';
 import { renderClipEntries } from './shared/clip-entries.js';
 import { setupClipLossNotice } from './shared/clip-loss-notice.js';
+import { registerHotkey } from './shared/hotkeys.js';
 import { announce } from './shared/live-region.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import {
@@ -412,20 +413,26 @@ function setupClipQueueHeader() {
     popover.focus();
 
     // Escape closes and returns focus to the badge (keyboard reachability).
-    // Registered in the capture phase and consumed there: the editor's
-    // document-level Escape (clear crop) would otherwise also fire (#102).
-    // A modal opened on top of the popover (e.g. the frame grid via F) is
-    // the foreground overlay and owns Escape, so yield to it.
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        const modal = document.querySelector('[aria-modal="true"]');
-        if (modal && popover && !modal.contains(popover)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        closePopover();
-        badge.focus();
-      }
-    };
+    // Overlay scope outranks the editor's route-scope Escape (clear crop),
+    // and the dispatcher yields it to a modal opened on top (e.g. the frame
+    // grid via F), which is then the foreground overlay (#102).
+    // stopImmediatePropagation keeps the Escape from also reaching later
+    // document listeners (the live-view overlay's), as the capture-phase
+    // listener this replaced did.
+    popoverCleanups.push(
+      registerHotkey({
+        key: 'Escape',
+        modifiers: { shift: 'any' },
+        scope: 'overlay',
+        allowInEditable: true,
+        handler: (e) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          closePopover();
+          badge.focus();
+        },
+      }),
+    );
     // Click outside (badge itself toggles via its own handler)
     const onPointerDown = (e) => {
       const target = /** @type {Node | null} */ (e.target);
@@ -433,9 +440,7 @@ function setupClipQueueHeader() {
         closePopover();
       }
     };
-    document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('pointerdown', onPointerDown);
-    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown, true));
     popoverCleanups.push(() => document.removeEventListener('pointerdown', onPointerDown));
   };
 
@@ -478,8 +483,8 @@ function setupClipQueueHeader() {
     }
   });
 
-  // Global hotkey — guards (form focus, no live capture) live in clip-service
-  document.addEventListener('keydown', handleClipNowHotkey);
+  // Global Shift+C — registered for the app's lifetime (never unsubscribed)
+  registerClipNowHotkey();
 
   onBus('queue:changed', refresh);
   onBus('capture:started', refresh);
