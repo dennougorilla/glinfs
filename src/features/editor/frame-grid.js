@@ -13,10 +13,10 @@ import { isFrameInRange, normalizeSelectionRange } from './core.js';
 /**
  * Copy a rendered thumbnail's pixel content into a brand-new canvas.
  *
- * Cached canvases must never be the same object that gets inserted into a
- * grid item, because evicted rows zero their canvas's width/height to force
- * immediate backing-store release (see `releaseThumbnail`). Cloning keeps
- * the cache entry alive and intact after the DOM copy is evicted.
+ * An evicted row zeroes its canvas's width/height to force immediate
+ * backing-store release (see `releaseThumbnail`), so the row's thumbnail is
+ * cloned into the cache first. A cache hit `take()`s the entry out, so a
+ * canvas is never held by both the cache and the DOM.
  * @param {HTMLCanvasElement} source
  * @returns {HTMLCanvasElement}
  */
@@ -1091,10 +1091,8 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     item.querySelector('.frame-grid-thumbnail-error')?.remove();
 
     try {
-      const cached = thumbnailCache.get(frame.id, renderSize);
-      const canvas = cached
-        ? cloneThumbnailCanvas(cached)
-        : createThumbnailCanvas(frame, renderSize);
+      const canvas =
+        thumbnailCache.take(frame.id, renderSize) ?? createThumbnailCanvas(frame, renderSize);
       canvas.dataset.renderSize = String(renderSize);
       item.insertBefore(canvas, item.firstChild);
     } catch {

@@ -78,3 +78,70 @@ describe('ThumbnailCache byte budget', () => {
     expect(Number.isFinite(first.maxBytes)).toBe(true);
   });
 });
+
+describe('ThumbnailCache disposal', () => {
+  it('zeroes evicted and replaced canvases when disposeOnEvict is set', () => {
+    const cache = new ThumbnailCache(2, { disposeOnEvict: true });
+    const a = canvasOf(5, 5);
+    const b = canvasOf(5, 5);
+    const replacement = canvasOf(5, 5);
+    cache.addCanvas('a', 10, a);
+    cache.addCanvas('b', 10, b);
+
+    cache.get('a', 10); // 'b' is now the oldest
+    cache.addCanvas('c', 10, canvasOf(5, 5));
+    expect(b.width).toBe(0);
+    expect(b.height).toBe(0);
+    expect(a.width).toBe(5);
+
+    cache.addCanvas('a', 10, replacement);
+    expect(a.width).toBe(0);
+    expect(replacement.width).toBe(5);
+
+    // Re-adding the same canvas must not dispose it.
+    cache.addCanvas('a', 10, replacement);
+    expect(replacement.width).toBe(5);
+    expect(cache.get('a', 10)).toBe(replacement);
+  });
+
+  it('never zeroes evicted or replaced canvases by default (shared cache)', () => {
+    const cache = new ThumbnailCache(2);
+    const a = canvasOf(5, 5);
+    const b = canvasOf(5, 5);
+    cache.addCanvas('a', 10, a);
+    cache.addCanvas('b', 10, b);
+    cache.addCanvas('c', 10, canvasOf(5, 5)); // evicts 'a'
+    cache.addCanvas('b', 10, canvasOf(5, 5)); // replaces 'b'
+
+    expect(cache.has('a', 10)).toBe(false);
+    expect(a.width).toBe(5);
+    expect(a.height).toBe(5);
+    expect(b.width).toBe(5);
+    expect(b.height).toBe(5);
+  });
+
+  it('disposes grid cache entries evicted by the byte budget', () => {
+    const cache = createGridThumbnailCache();
+    // 4096 * 4096 * 4 = 64 MiB, so the second entry evicts the first.
+    const first = canvasOf(4096, 4096);
+    cache.addCanvas('a', 10, first);
+    cache.addCanvas('b', 10, canvasOf(4096, 4096));
+
+    expect(cache.has('a', 10)).toBe(false);
+    expect(first.width).toBe(0);
+    expect(first.height).toBe(0);
+  });
+
+  it('take() removes the entry without disposing it', () => {
+    const cache = new ThumbnailCache(10, { disposeOnEvict: true });
+    const canvas = canvasOf(5, 5);
+    cache.addCanvas('a', 10, canvas);
+
+    expect(cache.take('a', 10)).toBe(canvas);
+    expect(canvas.width).toBe(5);
+    expect(canvas.height).toBe(5);
+    expect(cache.has('a', 10)).toBe(false);
+    expect(cache.bytes).toBe(0);
+    expect(cache.take('a', 10)).toBeNull();
+  });
+});

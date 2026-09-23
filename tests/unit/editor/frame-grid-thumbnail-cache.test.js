@@ -230,17 +230,23 @@ describe('Frame Grid thumbnail caching (issue #76)', () => {
     body.dispatchEvent(new Event('scroll'));
 
     const rematerialized = rowZeroCanvas();
-    expect(rematerialized).not.toBeNull();
-    // The DOM gets a clone, never the cache entry itself.
-    expect(rematerialized).not.toBe(cached);
-    expect(rematerialized.width).toBe(cached.width);
+    // A hit takes the entry out of the cache and displays it directly, so the
+    // thumbnail is never held twice (once cached, once on screen).
+    expect(rematerialized).toBe(cached);
+    expect(cache.has('0', renderSize)).toBe(false);
+    expect(rematerialized.width).toBeGreaterThan(0);
+    expect(rematerialized.height).toBeGreaterThan(0);
     // The thumbnail pixels came from the cache, not another decode/draw.
     expect(renderCallCountFor('0')).toBe(callsAfterMount);
 
-    // Evicting the clone again must not zero the cache entry.
+    // Evicting it again zeroes the displayed canvas but caches a fresh copy.
     scrollRowZeroOut();
-    expect(cache.get('0', renderSize)).toBe(cached);
-    expect(cached.width).toBeGreaterThan(0);
+    const recached = cache.get('0', renderSize);
+    expect(recached).not.toBeNull();
+    expect(recached).not.toBe(cached);
+    expect(cached.width).toBe(0);
+    expect(recached.width).toBeGreaterThan(0);
+    expect(renderCallCountFor('0')).toBe(callsAfterMount);
   });
 
   it('releases every cached thumbnail when the modal closes', () => {

@@ -31,10 +31,15 @@ function getDefaultThumbnailSize() {
 export class ThumbnailCache {
   /**
    * @param {number} [maxSize=300] - Maximum cache entries
-   * @param {{ maxBytes?: number }} [options] - Optional total pixel-memory
-   *   budget, estimated as width * height * 4 per entry (unbounded by default)
+   * @param {{ maxBytes?: number, disposeOnEvict?: boolean }} [options]
+   *   `maxBytes`: optional total pixel-memory budget, estimated as
+   *   width * height * 4 per entry (unbounded by default).
+   *   `disposeOnEvict`: zero a canvas's backing store when it is evicted,
+   *   replaced or invalidated. Only for caches that exclusively own their
+   *   canvases (the frame grid's); the shared cache hands cached canvases to
+   *   the DOM, so disposing them there would blank live thumbnails.
    */
-  constructor(maxSize = DEFAULT_CACHE_SIZE, { maxBytes = Infinity } = {}) {
+  constructor(maxSize = DEFAULT_CACHE_SIZE, { maxBytes = Infinity, disposeOnEvict = false } = {}) {
     /** @type {Map<string, HTMLCanvasElement>} */
     this.cache = new Map();
 
@@ -43,6 +48,9 @@ export class ThumbnailCache {
 
     /** @type {number} */
     this.maxBytes = maxBytes;
+
+    /** @type {boolean} */
+    this.disposeOnEvict = disposeOnEvict;
 
     /**
      * Byte estimate per key, recorded at insert time. Kept separately from
@@ -85,6 +93,21 @@ export class ThumbnailCache {
       return cached;
     }
     return null;
+  }
+
+  /**
+   * Remove a thumbnail from the cache and hand it to the caller, who then
+   * owns it. Never disposes the canvas, even with `disposeOnEvict`.
+   * @param {string} frameId - Frame ID
+   * @param {number} maxDimension - Maximum size this thumbnail was generated at
+   * @returns {HTMLCanvasElement | null}
+   */
+  take(frameId, maxDimension) {
+    const key = this._key(frameId, maxDimension);
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    this._delete(key, cached);
+    return cached;
   }
 
   /**
@@ -197,7 +220,7 @@ export class ThumbnailCache {
   _addToCache(frameId, canvas, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
     const bytes = canvas.width * canvas.height * 4;
-    this._delete(key);
+    this._delete(key, canvas);
     // LRU: Remove oldest entries while over the entry or byte budget. An
     // entry larger than the whole byte budget is still stored on its own.
     while (
@@ -212,14 +235,22 @@ export class ThumbnailCache {
   }
 
   /**
-   * Remove one entry and its byte accounting.
+   * Remove one entry and its byte accounting, disposing its canvas when
+   * `disposeOnEvict` is set.
    * @param {string} key
+   * @param {HTMLCanvasElement} [keep] - Canvas the caller still uses (a
+   *   re-added or taken canvas); never disposed
    * @private
    */
-  _delete(key) {
+  _delete(key, keep) {
+    const canvas = this.cache.get(key);
     this.cache.delete(key);
     this._bytes -= this._entryBytes.get(key) ?? 0;
     this._entryBytes.delete(key);
+    if (this.disposeOnEvict && canvas && canvas !== keep) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   }
 
   /**
@@ -262,9 +293,10 @@ export class ThumbnailCache {
   /**
    * Zero every cached canvas's backing store, then clear the cache.
    *
-   * Only for caches whose canvases never enter the DOM (e.g. the frame
-   * grid's, which inserts clones). The shared cache's `generate()` hands out
-   * the cached canvas itself, so releasing it would blank live thumbnails.
+   * Only for caches that exclusively own their canvases (e.g. the frame
+   * grid's, which `take()`s an entry out before displaying it). The shared
+   * cache's `generate()` hands out the cached canvas itself, so releasing it
+   * would blank live thumbnails.
    */
   release() {
     this.cache.forEach((canvas) => {
@@ -328,7 +360,10 @@ const GRID_CACHE_MAX_BYTES = 64 * 1024 * 1024;
  * @returns {ThumbnailCache}
  */
 export function createGridThumbnailCache() {
-  return new ThumbnailCache(GRID_CACHE_SIZE, { maxBytes: GRID_CACHE_MAX_BYTES });
+  return new ThumbnailCache(GRID_CACHE_SIZE, {
+    maxBytes: GRID_CACHE_MAX_BYTES,
+    disposeOnEvict: true,
+  });
 }
 
 /**
