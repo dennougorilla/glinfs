@@ -145,6 +145,37 @@ export function getPlaybackIntervalMs(fps, playbackSpeed = 1) {
 }
 
 /**
+ * Compute the playback frame from elapsed wall-clock time
+ *
+ * Frame = anchor + floor(elapsed * fps * speed), wrapped to loop within the
+ * selected range. Advances multiple frames at once when ticks are late, so
+ * playback holds real-time speed instead of slowing down. Matches stepping
+ * one frame at a time with "past range.end wraps to range.start": an anchor
+ * before the range plays forward into it, one after it wraps on the first step.
+ * @param {Object} params
+ * @param {number} params.anchorFrame - Frame shown when the clock was anchored
+ * @param {number} params.elapsedMs - Wall-clock time since the anchor
+ * @param {number} params.fps - Clip frames per second
+ * @param {number} [params.playbackSpeed] - Playback speed multiplier (default: 1)
+ * @param {import('./types.js').FrameRange} params.range - Loop range (inclusive)
+ * @returns {number} Frame index to display
+ */
+export function getPlaybackFrame({ anchorFrame, elapsedMs, fps, playbackSpeed = 1, range }) {
+  const length = range.end - range.start + 1;
+  if (length <= 0) return range.start;
+
+  // rAF timestamps can precede the anchor by a few ms; never step backward.
+  // The epsilon keeps exact frame boundaries (e.g. 1000ms at 30fps) from
+  // flooring one frame short due to float error.
+  const advanced = Math.floor((Math.max(0, elapsedMs) * fps * playbackSpeed) / 1000 + 1e-6);
+  if (advanced === 0) return anchorFrame;
+
+  const target = Math.min(anchorFrame, range.end) + advanced;
+  if (target <= range.end) return target;
+  return range.start + ((target - range.end - 1) % length);
+}
+
+/**
  * Update frame range selection
  * @param {import('./types.js').Clip} clip
  * @param {import('./types.js').FrameRange} range
