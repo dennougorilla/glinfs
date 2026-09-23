@@ -95,6 +95,18 @@ export class SceneDetectionManager {
   /** @type {boolean} */
   #detectInFlight = false;
 
+  /** @type {number} */
+  #requestSeq = 0;
+
+  /**
+   * Id sent with the DETECT whose replies may settle the pending detect().
+   * Cleared on cancel and on the matching COMPLETE/ERROR, so a superseded
+   * request's PROGRESS/COMPLETE/ERROR - including ones the worker had already
+   * queued before it saw the cancel - can never reach a newer detect().
+   * @type {number | null}
+   */
+  #activeRequestId = null;
+
   /**
    * Set when the worker fired a fatal error event after init; cleared on a
    * successful re-init. While set, detect() fails fast instead of posting
@@ -190,6 +202,12 @@ export class SceneDetectionManager {
       /** @type {WorkerOutMessage} */
       const data = event.data;
 
+      // Drop replies from any request other than the pending one. This must
+      // happen before the resolvers below are touched.
+      if (data.requestId !== this.#activeRequestId) {
+        return;
+      }
+
       switch (data.type) {
         case 'PROGRESS':
           this.#onProgress?.(/** @type {DetectionProgress} */ (data.payload));
@@ -199,12 +217,14 @@ export class SceneDetectionManager {
           this.#resolveDetect?.(/** @type {SceneDetectionResult} */ (data.payload));
           this.#resolveDetect = null;
           this.#rejectDetect = null;
+          this.#activeRequestId = null;
           break;
 
         case 'ERROR':
           this.#rejectDetect?.(new Error(/** @type {{message: string}} */ (data.payload).message));
           this.#resolveDetect = null;
           this.#rejectDetect = null;
+          this.#activeRequestId = null;
           break;
       }
     });
@@ -224,6 +244,7 @@ export class SceneDetectionManager {
       this.#worker?.terminate();
       this.#worker = null;
 
+      this.#activeRequestId = null;
       if (this.#rejectDetect) {
         this.#rejectDetect(error);
         this.#resolveDetect = null;
@@ -301,9 +322,11 @@ export class SceneDetectionManager {
           .filter((f) => f.imageBitmap)
           .map((f) => /** @type {ImageBitmap} */ (f.imageBitmap));
 
+        const requestId = ++this.#requestSeq;
         worker.postMessage(
           {
             type: 'DETECT',
+            requestId,
             payload: {
               frameData,
               options: {
@@ -319,6 +342,7 @@ export class SceneDetectionManager {
         // completion, cancel and error
         transferred = true;
 
+        this.#activeRequestId = requestId;
         this.#resolveDetect = resolve;
         this.#rejectDetect = reject;
       });
@@ -421,6 +445,7 @@ export class SceneDetectionManager {
    */
   cancel() {
     this.#isCancelled = true;
+    this.#activeRequestId = null;
 
     if (this.#worker && this.#isInitialized) {
       this.#worker.postMessage({ type: 'CANCEL' });

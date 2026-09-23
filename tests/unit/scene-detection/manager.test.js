@@ -84,6 +84,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * Reply to the most recent DETECT the manager posted, echoing its request id
+ * as the real worker does.
+ * @param {'PROGRESS' | 'COMPLETE' | 'ERROR'} type
+ * @param {any} payload
+ */
+function replyToDetect(type, payload) {
+  const detect = mockWorker.messages.findLast((m) => m.type === 'DETECT');
+  mockWorker._simulateMessage({ type, requestId: detect?.requestId, payload });
+}
+
 /** Initialize a manager against the mock worker (responds READY) */
 async function createInitializedManager() {
   const manager = new SceneDetectionManager();
@@ -157,7 +168,7 @@ describe('SceneDetectionManager detect', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const result = { scenes: [{ startFrame: 0, endFrame: 5 }], processingTimeMs: 12 };
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: result });
+    replyToDetect('COMPLETE', result);
 
     await expect(detectPromise).resolves.toEqual(result);
   });
@@ -167,7 +178,7 @@ describe('SceneDetectionManager detect', () => {
     const detectPromise = manager.detect([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    mockWorker._simulateMessage({ type: 'ERROR', payload: { message: 'detect boom' } });
+    replyToDetect('ERROR', { message: 'detect boom' });
 
     await expect(detectPromise).rejects.toThrow('detect boom');
   });
@@ -191,7 +202,7 @@ describe('SceneDetectionManager detect', () => {
     await expect(manager.detect([])).rejects.toThrow('Detection already in progress');
 
     // First detect still settles normally
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(first).resolves.toEqual({ scenes: [] });
   });
 
@@ -199,12 +210,12 @@ describe('SceneDetectionManager detect', () => {
     const manager = await createInitializedManager();
     const first = manager.detect([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await first;
 
     const second = manager.detect([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
 
     await expect(second).resolves.toEqual({ scenes: [] });
   });
@@ -236,16 +247,146 @@ describe('SceneDetectionManager detect', () => {
     const detectPromise = manager.detect([], { onProgress });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    mockWorker._simulateMessage({
-      type: 'PROGRESS',
-      payload: { percent: 50, currentFrame: 5, totalFrames: 10, stage: 'detecting' },
+    replyToDetect('PROGRESS', {
+      percent: 50,
+      currentFrame: 5,
+      totalFrames: 10,
+      stage: 'detecting',
     });
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await detectPromise;
 
     expect(onProgress).toHaveBeenCalledWith(
       expect.objectContaining({ percent: 50, stage: 'detecting' }),
     );
+  });
+});
+
+describe('SceneDetectionManager request correlation (issue #99, item c)', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function lastDetectRequestId() {
+    return mockWorker.messages.findLast((m) => m.type === 'DETECT').requestId;
+  }
+
+  /** Start a detect, cancel it, and return the superseded request's id */
+  async function startAndCancel(manager) {
+    const first = manager.detect([]);
+    await tick();
+    const staleId = lastDetectRequestId();
+    manager.cancel();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    return staleId;
+  }
+
+  /** @param {Promise<unknown>} promise */
+  function trackSettled(promise) {
+    const state = { settled: false };
+    promise.then(
+      () => {
+        state.settled = true;
+      },
+      () => {
+        state.settled = true;
+      },
+    );
+    return state;
+  }
+
+  it('sends a distinct requestId with every DETECT', async () => {
+    const manager = await createInitializedManager();
+    const staleId = await startAndCancel(manager);
+
+    const second = manager.detect([]);
+    await tick();
+    const freshId = lastDetectRequestId();
+    replyToDetect('COMPLETE', { scenes: [] });
+    await second;
+
+    expect(staleId).toEqual(expect.any(Number));
+    expect(freshId).toEqual(expect.any(Number));
+    expect(freshId).not.toBe(staleId);
+  });
+
+  it("does not resolve a restarted detect with the cancelled request's queued COMPLETE", async () => {
+    const manager = await createInitializedManager();
+    const staleId = await startAndCancel(manager);
+
+    const second = manager.detect([]);
+    await tick();
+    const state = trackSettled(second);
+
+    // Already in flight from the worker before it saw the cancel
+    mockWorker._simulateMessage({
+      type: 'COMPLETE',
+      requestId: staleId,
+      payload: { scenes: [], totalFrames: 1 },
+    });
+    await tick();
+
+    expect(state.settled).toBe(false);
+    expect(manager.isDetecting()).toBe(true);
+
+    replyToDetect('COMPLETE', { scenes: [], totalFrames: 3 });
+    await expect(second).resolves.toEqual({ scenes: [], totalFrames: 3 });
+  });
+
+  it("does not reject a restarted detect with the cancelled request's ERROR", async () => {
+    const manager = await createInitializedManager();
+    const staleId = await startAndCancel(manager);
+
+    const second = manager.detect([]);
+    await tick();
+    const state = trackSettled(second);
+
+    mockWorker._simulateMessage({
+      type: 'ERROR',
+      requestId: staleId,
+      payload: { message: 'stale boom' },
+    });
+    await tick();
+
+    expect(state.settled).toBe(false);
+    replyToDetect('COMPLETE', { scenes: [] });
+    await expect(second).resolves.toEqual({ scenes: [] });
+  });
+
+  it("does not forward the cancelled request's PROGRESS to the new onProgress", async () => {
+    const manager = await createInitializedManager();
+    const staleId = await startAndCancel(manager);
+
+    const onProgress = vi.fn();
+    const second = manager.detect([], { onProgress });
+    await tick();
+    onProgress.mockClear();
+
+    mockWorker._simulateMessage({
+      type: 'PROGRESS',
+      requestId: staleId,
+      payload: { percent: 100, currentFrame: 1, totalFrames: 1, stage: 'complete' },
+    });
+    expect(onProgress).not.toHaveBeenCalled();
+
+    replyToDetect('PROGRESS', { percent: 50, currentFrame: 1, totalFrames: 3, stage: 'analyzing' });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ totalFrames: 3 }));
+
+    replyToDetect('COMPLETE', { scenes: [] });
+    await second;
+  });
+
+  it('ignores replies that carry no requestId', async () => {
+    const manager = await createInitializedManager();
+    const detectPromise = manager.detect([]);
+    await tick();
+    const state = trackSettled(detectPromise);
+
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await tick();
+    expect(state.settled).toBe(false);
+
+    replyToDetect('COMPLETE', { scenes: [] });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
   });
 });
 
@@ -278,7 +419,7 @@ describe('SceneDetectionManager after worker crash', () => {
 
     const second = manager.detect([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(second).resolves.toEqual({ scenes: [] });
   });
 });
@@ -296,7 +437,7 @@ describe('SceneDetectionManager sampleInterval validation', () => {
 
     const detectPromise = manager.detect([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
   });
 });
@@ -366,7 +507,7 @@ describe('SceneDetectionManager frame extraction (issue #99, fix 3)', () => {
       expect(f.imageData).toBeUndefined();
     });
 
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
   });
 
@@ -385,7 +526,7 @@ describe('SceneDetectionManager frame extraction (issue #99, fix 3)', () => {
     const detectMessage = mockWorker.messages.find((m) => m.type === 'DETECT');
     expect(detectMessage.payload.frameData[0].imageBitmap).toBeNull();
 
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
   });
 });
@@ -442,7 +583,7 @@ describe('SceneDetectionManager ImageBitmap ownership (issue #99, item c)', () =
       { timeout: 5000 },
     );
 
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
 
     expect(createdBitmaps).toHaveLength(3);
@@ -524,7 +665,7 @@ describe('SceneDetectionManager ImageBitmap ownership (issue #99, item c)', () =
       },
       { timeout: 5000 },
     );
-    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    replyToDetect('COMPLETE', { scenes: [] });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
     for (const bitmap of createdBitmaps) {
       expect(bitmap.close).not.toHaveBeenCalled();
