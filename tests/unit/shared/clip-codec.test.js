@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createClipCodecManager } from '../../../src/shared/clip-codec.js';
+import { crashNextEncodeForTest, createClipCodecManager } from '../../../src/shared/clip-codec.js';
 
 /**
  * Tests for #92: the ClipCodecManager job pipeline.
@@ -234,10 +234,10 @@ describe('worker crash', () => {
   });
 });
 
-describe('crashNextEncodeForTest (E2E hook)', () => {
+describe('crashNextEncodeForTest (E2E hook, dev builds only)', () => {
   it('flags exactly the next encode job for a forced worker crash', async () => {
     const { manager, worker } = await createProbedManager();
-    manager.crashNextEncodeForTest();
+    crashNextEncodeForTest(manager);
     void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
     expect(worker.posted[0].message.payload.crashForTest).toBe(true);
 
@@ -245,7 +245,7 @@ describe('crashNextEncodeForTest (E2E hook)', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     worker.crash('forced');
     void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
-    expect(worker.posted[1].message.payload.crashForTest).toBe(false);
+    expect(worker.posted[1].message.payload).not.toHaveProperty('crashForTest');
     spy.mockRestore();
   });
 });

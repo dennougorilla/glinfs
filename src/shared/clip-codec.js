@@ -59,6 +59,25 @@ const CODEC_CANDIDATES = ['vp09.00.10.08', 'vp8'];
  * @typedef {{ ok: true, frames: VideoFrame[] } | { ok: false, error: string }} DecodeResult
  */
 
+/** Managers whose NEXT encode job is armed to crash the worker (E2E only) */
+const crashArmedForTest = new WeakSet();
+
+/**
+ * E2E test hook (exposed via __TEST_HOOKS__ only): the worker throws an
+ * uncaught error as soon as it receives the manager's NEXT encode job —
+ * after its frames were transferred — driving the real onerror crash path.
+ *
+ * Dev/test builds only: every use is behind import.meta.env.DEV (true under
+ * `vite` dev — which Playwright runs — and vitest; false in `vite build`), so
+ * production bundles contain neither this hook nor the worker's crash
+ * branch. A module function rather than a method, so it tree-shakes away.
+ *
+ * @param {ClipCodecManager} manager
+ */
+export function crashNextEncodeForTest(manager) {
+  if (import.meta.env.DEV) crashArmedForTest.add(manager);
+}
+
 /**
  * Manager for the clip codec worker
  */
@@ -89,9 +108,6 @@ export class ClipCodecManager {
 
   /** @type {Promise<boolean> | null} */
   #probePromise = null;
-
-  /** @type {boolean} Test hook: crash the worker on the next encode job */
-  #crashNextEncode = false;
 
   /**
    * @param {Object} [options]
@@ -170,17 +186,18 @@ export class ClipCodecManager {
       return Promise.resolve({ ok: false, error: 'compression-unavailable', frames });
     }
     const jobId = this.#nextJobId++;
-    const crashForTest = this.#crashNextEncode;
-    this.#crashNextEncode = false;
+    /** @type {Record<string, unknown>} */
+    const payload = { jobId, frames, codec: this.#codec, fps, width, height };
+    // Test hook, compiled out of production builds (see crashNextEncodeForTest)
+    if (import.meta.env.DEV && crashArmedForTest.delete(this)) {
+      payload.crashForTest = true;
+    }
     return new Promise((resolve) => {
       this.#jobs.set(jobId, { kind: 'encode', resolve });
       this.#pending.push({
         jobId,
         kind: 'encode',
-        message: {
-          type: 'ENCODE',
-          payload: { jobId, frames, codec: this.#codec, fps, width, height, crashForTest },
-        },
+        message: { type: 'ENCODE', payload },
         transfer: frames,
       });
       this.#pump();
@@ -217,15 +234,6 @@ export class ClipCodecManager {
       }
       this.#pump();
     });
-  }
-
-  /**
-   * E2E test hook (exposed via __TEST_HOOKS__ only): the worker throws an
-   * uncaught error as soon as it receives the NEXT encode job — after its
-   * frames were transferred — driving the real onerror crash path.
-   */
-  crashNextEncodeForTest() {
-    this.#crashNextEncode = true;
   }
 
   /**

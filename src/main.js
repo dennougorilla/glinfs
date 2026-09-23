@@ -28,7 +28,7 @@ import {
   undoDelete,
 } from './shared/app-store.js';
 import { on as onBus } from './shared/bus.js';
-import { createClipCodecManager } from './shared/clip-codec.js';
+import { crashNextEncodeForTest, createClipCodecManager } from './shared/clip-codec.js';
 import { renderClipEntries } from './shared/clip-entries.js';
 import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { announce } from './shared/live-region.js';
@@ -278,8 +278,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // fallback) the test environment actually exercised
     window.__TEST_HOOKS__.isClipCompressionAvailable = isClipCompressionAvailable;
     // Arms a REAL worker crash on the next encode job, so E2E can drive the
-    // #92 failure contract (lost entry removed + notice, worker recycled)
-    window.__TEST_HOOKS__.crashClipCodecOnNextEncode = () => clipCodec.crashNextEncodeForTest();
+    // #92 failure contract (lost entry removed + notice, worker recycled).
+    // Destructive, so dev builds only (E2E runs on `vite` dev): unlike the
+    // runtime-gated hooks above it is absent from production bundles.
+    if (import.meta.env.DEV) {
+      window.__TEST_HOOKS__.crashClipCodecOnNextEncode = () => crashNextEncodeForTest(clipCodec);
+    }
   }
 
   // #92 failure contract: tell the user when a codec-worker crash loses a

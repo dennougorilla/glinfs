@@ -39,11 +39,11 @@ self.onmessage = (e) => {
   const { type, payload } = e.data;
   switch (type) {
     case 'ENCODE':
-      if (payload.crashForTest) {
-        // Test hook (ClipCodecManager.crashNextEncodeForTest): an uncaught
-        // error in a timer escapes to the Worker's onerror on the main
-        // thread, exactly like a real crash — the frames just transferred in
-        // are lost with this worker.
+      if (import.meta.env.DEV && payload.crashForTest) {
+        // Test hook (clip-codec.js crashNextEncodeForTest; compiled out of
+        // production builds): an uncaught error in a timer escapes to the
+        // Worker's onerror on the main thread, exactly like a real crash —
+        // the frames just transferred in are lost with this worker.
         setTimeout(() => {
           throw new Error('clip-codec-worker: forced crash (test hook)');
         }, 0);
