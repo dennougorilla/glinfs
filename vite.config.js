@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
-import { computeEncoderJsSha256Hex } from './scripts/compute-encoder-hash.js';
+import {
+  computeEncoderJsSha256Hex,
+  encoderHashRestartPlugin,
+} from './scripts/compute-encoder-hash.js';
 
 // Read version from package.json
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
@@ -11,9 +14,12 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
     // SHA-256 of public/encoder/encoder.js, computed fresh from the file on
     // every config load (dev server start and build) so it can never drift
-    // out of sync with the shipped glue. See gifsicle-encoder.js.
+    // out of sync with the shipped glue. In dev, encoderHashRestartPlugin
+    // restarts the server when the file changes so this is re-evaluated.
+    // See gifsicle-encoder.js.
     __ENCODER_JS_SHA256__: JSON.stringify(computeEncoderJsSha256Hex()),
   },
+  plugins: [encoderHashRestartPlugin()],
   root: 'src',
   publicDir: '../public',
   build: {
