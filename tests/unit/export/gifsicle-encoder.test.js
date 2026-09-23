@@ -1,4 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { computeEncoderJsSha256Hex } from '../../../scripts/compute-encoder-hash.js';
+
+/**
+ * Convert a lowercase hex string into an ArrayBuffer, matching the shape
+ * crypto.subtle.digest() resolves with.
+ * @param {string} hex
+ * @returns {ArrayBuffer}
+ */
+function hexToArrayBuffer(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes.buffer;
+}
 
 /**
  * Build a minimal GIF-like byte array containing a NETSCAPE2.0 application
@@ -121,5 +136,65 @@ describe('isGifsicleAvailable (issue #46: no main-thread WASM load)', () => {
 
     const mod = await import('../../../src/features/export/encoders/gifsicle-encoder.js');
     await expect(mod.isGifsicleAvailable()).resolves.toBe(false);
+  });
+});
+
+describe('encoder.js integrity check (issue #50: SRI-style hash before new Function())', () => {
+  const FAKE_JS_CODE =
+    'self.__encoderExecuted = true;\n' +
+    'Module._encoder_new = function () { return 1; };\n' +
+    'Module.onRuntimeInitialized();\n';
+  const EXPECTED_HASH = computeEncoderJsSha256Hex();
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    // @ts-expect-error test cleanup
+    delete globalThis.__encoderExecuted;
+    // @ts-expect-error test cleanup
+    delete globalThis.Module;
+  });
+
+  /** Stub fetch to serve FAKE_JS_CODE for encoder.js and empty bytes for encoder.wasm */
+  function stubFetch() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (/** @type {string} */ url) => {
+        if (String(url).endsWith('.wasm')) {
+          return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+        }
+        return { ok: true, text: async () => FAKE_JS_CODE };
+      }),
+    );
+  }
+
+  it('executes the glue when the computed hash matches the expected hash', async () => {
+    stubFetch();
+    vi.spyOn(crypto.subtle, 'digest').mockResolvedValue(hexToArrayBuffer(EXPECTED_HASH));
+
+    const mod = await import('../../../src/features/export/encoders/gifsicle-encoder.js');
+    const encoder = mod.createGifsicleEncoder();
+
+    await expect(
+      encoder.init({ width: 10, height: 10, frameDelayMs: 100, loopCount: 0 }),
+    ).resolves.toBeUndefined();
+
+    expect(globalThis.__encoderExecuted).toBe(true);
+  });
+
+  it('rejects and never executes the glue when the computed hash mismatches', async () => {
+    stubFetch();
+    // A digest that (overwhelmingly) will not equal the real expected hash.
+    vi.spyOn(crypto.subtle, 'digest').mockResolvedValue(new Uint8Array(32).fill(0xaa).buffer);
+
+    const mod = await import('../../../src/features/export/encoders/gifsicle-encoder.js');
+    const encoder = mod.createGifsicleEncoder();
+
+    await expect(
+      encoder.init({ width: 10, height: 10, frameDelayMs: 100, loopCount: 0 }),
+    ).rejects.toThrow(/integrity/i);
+
+    expect(globalThis.__encoderExecuted).toBeUndefined();
   });
 });

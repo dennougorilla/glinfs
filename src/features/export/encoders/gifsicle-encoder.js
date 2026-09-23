@@ -51,13 +51,60 @@ let wasmLoadPromise = null;
  */
 const ENCODER_BASE_PATH = `${import.meta.env?.BASE_URL ?? '/'}encoder`;
 
+/* global __ENCODER_JS_SHA256__ */
+/**
+ * Expected SHA-256 (hex) of public/encoder/encoder.js, injected via Vite's
+ * `define` (see vite.config.js / vitest.config.js, both backed by
+ * scripts/compute-encoder-hash.js). It is computed from the actual glue
+ * file at config-evaluation time, never hand-maintained, so the expected
+ * hash can never silently drift from the shipped asset.
+ * @type {string | undefined}
+ */
+const EXPECTED_ENCODER_JS_SHA256 =
+  typeof __ENCODER_JS_SHA256__ !== 'undefined' ? __ENCODER_JS_SHA256__ : undefined;
+
+/**
+ * Compute the SHA-256 hex digest of a string via the Web Crypto API.
+ * @param {string} text
+ * @returns {Promise<string>} lowercase hex-encoded digest
+ */
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Verify that fetched Emscripten glue JS matches the build-time expected
+ * hash before it is allowed to run. Throws (and never returns) on any
+ * mismatch or missing expected hash, so a corrupted/tampered asset is never
+ * executed.
+ * @param {string} jsCode - fetched encoder.js source text
+ * @returns {Promise<void>}
+ */
+async function verifyEncoderIntegrity(jsCode) {
+  const actualHash = await sha256Hex(jsCode);
+  if (!EXPECTED_ENCODER_JS_SHA256 || actualHash !== EXPECTED_ENCODER_JS_SHA256) {
+    throw new Error(
+      `Encoder integrity check failed: expected sha256 ${EXPECTED_ENCODER_JS_SHA256 ?? '(unset)'}, got ${actualHash}. Refusing to execute encoder.js.`,
+    );
+  }
+}
+
 /**
  * Load WASM module using fetch and dynamic execution
  * Works in ES module workers where importScripts is not available
  *
  * Security note: new Function() is used here to execute Emscripten-generated
  * code fetched from same-origin static files. This is necessary because
- * ES module workers don't support importScripts().
+ * ES module workers don't support importScripts(). Before execution, the
+ * fetched text's SHA-256 is verified against a build-time-computed expected
+ * hash (see EXPECTED_ENCODER_JS_SHA256 above) — an SRI-style integrity
+ * check that new Function() itself cannot provide, since it takes a raw
+ * string rather than a resource with a browser-enforced integrity
+ * attribute. A hash mismatch throws and the code is never executed.
  *
  * @returns {Promise<WasmModule>}
  */
@@ -87,6 +134,10 @@ async function loadWasmModule() {
 
       const jsCode = await jsResponse.text();
       const wasmBinary = await wasmResponse.arrayBuffer();
+
+      // Verify integrity before doing anything else with the fetched code.
+      // Throws on mismatch, so nothing below executes an unverified glue file.
+      await verifyEncoderIntegrity(jsCode);
 
       // Create Module configuration before executing Emscripten code
       // Provide wasmBinary to skip the fetch in Emscripten's loader
