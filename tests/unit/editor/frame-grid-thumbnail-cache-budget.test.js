@@ -1,17 +1,23 @@
 /**
- * Regression test for issue #76: the frame grid's dedicated ThumbnailCache
- * instance must stay bounded. This substitutes a tiny-capacity cache in
- * place of the real one to make LRU eviction deterministic without
- * rendering an unreasonable number of frames.
+ * Regression test for issue #76: the frame grid's per-mount ThumbnailCache
+ * must stay bounded by bytes. The test lowers the real cache's byte budget
+ * to two thumbnails to make eviction deterministic without rendering an
+ * unreasonable number of frames.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** Every grid cache created by a mount, in creation order. */
+const gridCaches = vi.hoisted(() => []);
+
 vi.mock('../../../src/shared/utils/thumbnail-cache.js', async (importOriginal) => {
   const actual = await importOriginal();
-  const boundedCache = new actual.ThumbnailCache(2);
   return {
     ...actual,
-    getGridThumbnailCache: () => boundedCache,
+    createGridThumbnailCache: vi.fn(() => {
+      const cache = actual.createGridThumbnailCache();
+      gridCaches.push(cache);
+      return cache;
+    }),
   };
 });
 
@@ -25,7 +31,6 @@ vi.mock('../../../src/features/editor/api.js', async (importOriginal) => {
 
 const { createThumbnailCanvas } = await import('../../../src/features/editor/api.js');
 const { renderFrameGridModal } = await import('../../../src/features/editor/frame-grid.js');
-const { getGridThumbnailCache } = await import('../../../src/shared/utils/thumbnail-cache.js');
 
 const layoutProperties = ['clientWidth', 'clientHeight', 'offsetWidth', 'offsetHeight'];
 const originalLayoutDescriptors = Object.fromEntries(
@@ -61,7 +66,7 @@ describe('Frame Grid thumbnail cache budget (issue #76)', () => {
   let cleanup = () => {};
 
   beforeEach(() => {
-    getGridThumbnailCache().clear();
+    gridCaches.length = 0;
     createThumbnailCanvas.mockClear();
     document.body.innerHTML = '<div id="container"></div>';
 
@@ -158,7 +163,7 @@ describe('Frame Grid thumbnail cache budget (issue #76)', () => {
     document.body.innerHTML = '';
   });
 
-  it('never grows the cache past its configured budget and evicts the oldest entries first', () => {
+  it('never grows the cache past its byte budget and evicts the oldest entries first', () => {
     // Just above VIRTUALIZATION_THRESHOLD (200) — enough to exercise the
     // virtualized path without the runtime cost of thousands of frames.
     const frameCount = 600;
@@ -176,26 +181,33 @@ describe('Frame Grid thumbnail cache budget (issue #76)', () => {
     const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
     const body = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-body'));
     const totalHeight = Number.parseFloat(grid.style.height);
-    const cache = getGridThumbnailCache();
+    const cache = gridCaches[0];
 
-    // Row 0's thumbnail is decoded on the initial render (mount does an
-    // initial-estimate render plus one auto-fit re-render at the settled
-    // size — both are legitimate first renders of row 0, not re-decodes).
+    // Every thumbnail has the same size, so this budget holds exactly two.
+    const canvas = /** @type {HTMLCanvasElement} */ (
+      document.querySelector('[data-index="0"] canvas')
+    );
+    const entryBytes = canvas.width * canvas.height * 4;
+    expect(entryBytes).toBeGreaterThan(0);
+    expect(cache.size).toBe(0);
+    cache.maxBytes = entryBytes * 2;
+
     const callsAfterMount = renderCallCountFor('0');
     expect(callsAfterMount).toBeGreaterThan(0);
-    expect(cache.size).toBeLessThanOrEqual(2);
 
     // Scroll in a few steps, each landing on a distinct virtual window, so
-    // far more than 2 distinct rows get cached — the bounded cache must
-    // never grow past its budget.
+    // far more than 2 rows get evicted and cached — the cache must never
+    // grow past its byte budget.
     for (let step = 1; step <= 4; step++) {
       body.scrollTop = (totalHeight / 4) * step;
       body.dispatchEvent(new Event('scroll'));
+      expect(cache.size).toBeGreaterThan(0);
+      expect(cache.bytes).toBeLessThanOrEqual(entryBytes * 2);
       expect(cache.size).toBeLessThanOrEqual(2);
     }
 
-    // Row 0 was evicted from the cache long ago (LRU budget of 2). Scrolling
-    // back to it must be a cache miss, re-triggering a real render.
+    // Row 0 was evicted from the cache long ago. Scrolling back to it must be
+    // a cache miss, re-triggering a real render.
     body.scrollTop = 0;
     body.dispatchEvent(new Event('scroll'));
 

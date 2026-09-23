@@ -6,7 +6,7 @@
 
 import { createElement, on } from '../../shared/utils/dom.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
-import { getGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
+import { createGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
 import { isFrameInRange, normalizeSelectionRange } from './core.js';
 
@@ -1007,6 +1007,10 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   /** @type {(HTMLElement | undefined)[]} */
   const gridItems = [];
   const materializedIndices = new Set();
+  // Thumbnails of evicted virtual rows, so scrolling back reuses them instead
+  // of re-rendering from the source frame (issue #76). Owned by this mount
+  // and released in cleanup(), so closing the modal frees it (#72).
+  const thumbnailCache = createGridThumbnailCache();
   /** @type {number | null} */
   let virtualRenderFrame = null;
   /** @type {number | null} */
@@ -1087,26 +1091,12 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     item.querySelector('.frame-grid-thumbnail-error')?.remove();
 
     try {
-      // Route through the grid's dedicated ThumbnailCache instance so a row
-      // that scrolls out of view and re-materializes later reuses its
-      // already-decoded thumbnail instead of re-rendering from the source
-      // frame (issue #76). A dedicated instance (rather than the shared
-      // timeline/scene-panel singleton) avoids the grid's much larger,
-      // denser set of thumbnails evicting theirs. It is still bounded (LRU)
-      // and cleared by resetThumbnailCache() whenever the active clip's
-      // frames change, so entries can never outlive their clip.
-      const thumbnailCache = getGridThumbnailCache();
       const cached = thumbnailCache.get(frame.id, renderSize);
       const canvas = cached
         ? cloneThumbnailCanvas(cached)
         : createThumbnailCanvas(frame, renderSize);
       canvas.dataset.renderSize = String(renderSize);
       item.insertBefore(canvas, item.firstChild);
-      if (!cached) {
-        // Store an independent copy — this item's canvas gets its width/height
-        // zeroed on eviction, which would otherwise corrupt the cache entry.
-        thumbnailCache.addCanvas(frame.id, renderSize, cloneThumbnailCanvas(canvas));
-      }
     } catch {
       const errorPlaceholder = createElement(
         'div',
@@ -1218,6 +1208,17 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     // first so it stays inside the modal.
     if (item.contains(document.activeElement)) {
       gridContainer.focus();
+    }
+    // Cache a copy before the row's canvas is zeroed. Caching only here (not
+    // on every render) skips the pre-auto-fit size pass and never holds a
+    // second copy of a thumbnail that is still on screen.
+    const canvas = /** @type {HTMLCanvasElement | null} */ (item.querySelector('canvas'));
+    const frame = frames[index];
+    if (canvas && canvas.width > 0 && frame) {
+      const renderSize = Number.parseInt(canvas.dataset.renderSize, 10);
+      if (!thumbnailCache.has(frame.id, renderSize)) {
+        thumbnailCache.addCanvas(frame.id, renderSize, cloneThumbnailCanvas(canvas));
+      }
     }
     releaseThumbnail(item);
     item.remove();
@@ -1886,6 +1887,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       canvas.width = 0;
       canvas.height = 0;
     });
+    thumbnailCache.release();
     backdrop.remove();
   }
 

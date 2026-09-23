@@ -31,13 +31,28 @@ function getDefaultThumbnailSize() {
 export class ThumbnailCache {
   /**
    * @param {number} [maxSize=300] - Maximum cache entries
+   * @param {{ maxBytes?: number }} [options] - Optional total pixel-memory
+   *   budget, estimated as width * height * 4 per entry (unbounded by default)
    */
-  constructor(maxSize = DEFAULT_CACHE_SIZE) {
+  constructor(maxSize = DEFAULT_CACHE_SIZE, { maxBytes = Infinity } = {}) {
     /** @type {Map<string, HTMLCanvasElement>} */
     this.cache = new Map();
 
     /** @type {number} */
     this.maxSize = maxSize;
+
+    /** @type {number} */
+    this.maxBytes = maxBytes;
+
+    /**
+     * Byte estimate per key, recorded at insert time. Kept separately from
+     * the canvas because a released canvas reads back as 0x0.
+     * @type {Map<string, number>}
+     */
+    this._entryBytes = new Map();
+
+    /** @type {number} */
+    this._bytes = 0;
   }
 
   /**
@@ -181,14 +196,30 @@ export class ThumbnailCache {
    */
   _addToCache(frameId, canvas, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
-    // LRU: Remove oldest entry when over capacity
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey) {
-        this.cache.delete(firstKey);
-      }
+    const bytes = canvas.width * canvas.height * 4;
+    this._delete(key);
+    // LRU: Remove oldest entries while over the entry or byte budget. An
+    // entry larger than the whole byte budget is still stored on its own.
+    while (
+      this.cache.size > 0 &&
+      (this.cache.size >= this.maxSize || this._bytes + bytes > this.maxBytes)
+    ) {
+      this._delete(this.cache.keys().next().value);
     }
     this.cache.set(key, canvas);
+    this._entryBytes.set(key, bytes);
+    this._bytes += bytes;
+  }
+
+  /**
+   * Remove one entry and its byte accounting.
+   * @param {string} key
+   * @private
+   */
+  _delete(key) {
+    this.cache.delete(key);
+    this._bytes -= this._entryBytes.get(key) ?? 0;
+    this._entryBytes.delete(key);
   }
 
   /**
@@ -214,7 +245,7 @@ export class ThumbnailCache {
     const prefix = `${frameId}@`;
     for (const key of this.cache.keys()) {
       if (key.startsWith(prefix)) {
-        this.cache.delete(key);
+        this._delete(key);
       }
     }
   }
@@ -224,6 +255,23 @@ export class ThumbnailCache {
    */
   clear() {
     this.cache.clear();
+    this._entryBytes.clear();
+    this._bytes = 0;
+  }
+
+  /**
+   * Zero every cached canvas's backing store, then clear the cache.
+   *
+   * Only for caches whose canvases never enter the DOM (e.g. the frame
+   * grid's, which inserts clones). The shared cache's `generate()` hands out
+   * the cached canvas itself, so releasing it would blank live thumbnails.
+   */
+  release() {
+    this.cache.forEach((canvas) => {
+      canvas.width = 0;
+      canvas.height = 0;
+    });
+    this.clear();
   }
 
   /**
@@ -232,6 +280,14 @@ export class ThumbnailCache {
    */
   get size() {
     return this.cache.size;
+  }
+
+  /**
+   * Estimated pixel memory held by the cache (width * height * 4 per entry)
+   * @returns {number}
+   */
+  get bytes() {
+    return this._bytes;
   }
 }
 
@@ -250,60 +306,39 @@ export function getThumbnailCache() {
 }
 
 /**
- * Entry budget for the frame grid's dedicated cache (see
- * `getGridThumbnailCache`).
+ * Budgets for a frame grid mount's cache (see `createGridThumbnailCache`).
  *
- * A single modal open materializes its virtual window twice — once at an
- * initial size estimate, once more after the auto-fit pass settles on the
- * final grid density — and a dense, wide viewport can materialize on the
- * order of 150-200 visible+overscan items per pass. Sizing the budget at
- * roughly 2-3x that (rather than the shared timeline/scene-panel cache's
- * 300) keeps the *current* mount's thumbnails resident and leaves headroom
- * for scrolling back through recent rows, at the cost of a larger memory
- * ceiling than the shared cache.
- *
- * Worst case memory (quality preset 'ultra', 400px max dimension, 16:9
- * thumbnails): 600 * 400*225*4 bytes ≈ 205 MB. Standard/high presets
- * (<=320px) stay under ~145 MB. 'ultra' is only auto-selected on devices
- * reporting >=8GB memory, and this cache exists only while a clip with an
- * open (or previously opened) frame grid is loaded, so this is an accepted
- * trade-off rather than a tuned-to-the-byte figure — revisit alongside the
- * frame-grid virtualization work in #74 if it proves too large in practice.
+ * The byte cap is what actually bounds memory: at the 'ultra' preset (400px
+ * longest side) a 1:1 thumbnail is 400*400*4 = 640 KB, so 64 MB holds ~100
+ * of them (~180 at 16:9). Smaller presets and denser grids hit the entry cap
+ * first. 'ultra' can be forced from settings on any device, so the cap does
+ * not assume a large-memory device.
  */
 const GRID_CACHE_SIZE = 600;
-
-/** @type {ThumbnailCache | null} */
-let gridInstance = null;
+const GRID_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
- * Get the frame grid's dedicated cache instance.
+ * Create a cache for one frame grid modal mount.
  *
- * A separate instance (rather than reusing `getThumbnailCache()`) keeps the
- * grid's much larger, denser set of thumbnails from evicting the timeline
- * filmstrip's and scene panel's entries out of the shared 300-entry budget
- * whenever the frame grid modal is open.
+ * Each mount owns its cache and calls `release()` on it when the modal
+ * closes, so no grid thumbnail outlives the modal (or its clip), and memory
+ * after close returns to what it was before the grid opened (#72). A
+ * separate instance also keeps the grid's denser thumbnails from evicting
+ * the timeline filmstrip's and scene panel's entries in the shared cache.
  * @returns {ThumbnailCache}
  */
-export function getGridThumbnailCache() {
-  if (!gridInstance) {
-    gridInstance = new ThumbnailCache(GRID_CACHE_SIZE);
-  }
-  return gridInstance;
+export function createGridThumbnailCache() {
+  return new ThumbnailCache(GRID_CACHE_SIZE, { maxBytes: GRID_CACHE_MAX_BYTES });
 }
 
 /**
- * Reset both singleton instances. Called by the app store whenever the
- * clip's frames change or are cleared — cached canvases are keyed by the
- * previous clip's frame IDs and can never be reused afterwards. Also used
- * by tests.
+ * Reset the singleton instance. Called by the app store whenever the clip's
+ * frames change or are cleared — cached canvases are keyed by the previous
+ * clip's frame IDs and can never be reused afterwards. Also used by tests.
  */
 export function resetThumbnailCache() {
   if (instance) {
     instance.clear();
     instance = null;
-  }
-  if (gridInstance) {
-    gridInstance.clear();
-    gridInstance = null;
   }
 }
