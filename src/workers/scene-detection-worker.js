@@ -23,8 +23,15 @@ import { DEFAULT_DETECTOR_OPTIONS } from '../features/scene-detection/types.js';
 /** @type {string} */
 let algorithmId = 'histogram';
 
-/** @type {boolean} */
-let isCancelled = false;
+/**
+ * Id of the detection run that is allowed to proceed. CANCEL and every new
+ * DETECT bump it, so a run cancelled mid-batch stays cancelled even if the
+ * next DETECT arrives before its loop observes the cancel (a single boolean
+ * would be reset by that DETECT and the stale run would finish, posting its
+ * COMPLETE for the new request).
+ * @type {number}
+ */
+let activeRunId = 0;
 
 // Reused OffscreenCanvas for the per-frame pixel readback (issue #99, fix
 // 3). The manager sends downscaled ImageBitmaps (produced off-thread via
@@ -59,6 +66,18 @@ function getReadbackContext(width, height) {
 }
 
 /**
+ * Close every not-yet-closed ImageBitmap in `frameData`, exactly once.
+ * The reference is nulled after closing so a repeated call is a no-op.
+ * @param {FrameData[]} frameData
+ */
+function closeFrameBitmaps(frameData) {
+  for (const data of frameData) {
+    data.imageBitmap?.close();
+    data.imageBitmap = null;
+  }
+}
+
+/**
  * Send message back to main thread
  * @param {'READY' | 'PROGRESS' | 'COMPLETE' | 'ERROR'} type
  * @param {Object} [payload]
@@ -77,11 +96,29 @@ function generateSceneId() {
 
 /**
  * Detect scenes using histogram comparison
+ * The worker owns every ImageBitmap in `frameData` once it has been
+ * transferred here: each is closed right after its readback, and any left
+ * unprocessed when the run is cancelled or throws are closed on the way out.
  * @param {FrameData[]} frameData
  * @param {DetectorOptions} options
+ * @param {number} runId - This run's id; the run aborts once it is stale
  * @returns {Promise<SceneDetectionResult>}
  */
-async function detectScenes(frameData, options) {
+async function detectScenes(frameData, options, runId) {
+  try {
+    return await runDetection(frameData, options, runId);
+  } finally {
+    closeFrameBitmaps(frameData);
+  }
+}
+
+/**
+ * @param {FrameData[]} frameData
+ * @param {DetectorOptions} options
+ * @param {number} runId
+ * @returns {Promise<SceneDetectionResult>}
+ */
+async function runDetection(frameData, options, runId) {
   const startTime = performance.now();
   const opts = { ...DEFAULT_DETECTOR_OPTIONS, ...options };
 
@@ -109,7 +146,7 @@ async function detectScenes(frameData, options) {
 
   // Process frames
   for (let i = 0; i < frameData.length; i++) {
-    if (isCancelled) {
+    if (runId !== activeRunId) {
       throw new DOMException('Detection cancelled', 'AbortError');
     }
 
@@ -135,6 +172,7 @@ async function detectScenes(frameData, options) {
         histogram = computeHistogram(imageData);
       } finally {
         data.imageBitmap.close();
+        data.imageBitmap = null;
       }
     }
 
@@ -206,14 +244,13 @@ async function handleMessage(event) {
   switch (type) {
     case 'INIT':
       algorithmId = payload?.algorithmId || 'histogram';
-      isCancelled = false;
       postResult('READY', { algorithmId });
       break;
 
     case 'DETECT':
       try {
-        isCancelled = false;
-        const result = await detectScenes(payload.frameData, payload.options);
+        activeRunId++;
+        const result = await detectScenes(payload.frameData, payload.options, activeRunId);
         postResult('COMPLETE', result);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
@@ -225,7 +262,7 @@ async function handleMessage(event) {
       break;
 
     case 'CANCEL':
-      isCancelled = true;
+      activeRunId++;
       break;
   }
 }

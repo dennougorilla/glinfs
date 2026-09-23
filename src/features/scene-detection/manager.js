@@ -30,6 +30,18 @@ const DEFAULT_THUMBNAIL_SIZE = 64;
 const INIT_TIMEOUT_MS = 5000;
 
 /**
+ * Close every not-yet-closed ImageBitmap in `frameData`, exactly once.
+ * The reference is nulled after closing so a repeated call is a no-op.
+ * @param {FrameData[]} frameData
+ */
+function closeFrameBitmaps(frameData) {
+  for (const data of frameData) {
+    data.imageBitmap?.close();
+    data.imageBitmap = null;
+  }
+}
+
+/**
  * Scene Detection Manager
  * Handles worker lifecycle and frame data extraction
  */
@@ -249,6 +261,14 @@ export class SceneDetectionManager {
     this.#isCancelled = false;
     this.#onProgress = options.onProgress ?? null;
 
+    // ImageBitmaps created during extraction are owned by this call until
+    // they are transferred to the worker (issue #99, item c). Every path
+    // that exits before the transfer - cancel, crash, postMessage failure -
+    // must close them here, or their GPU/pixel memory is held until GC.
+    /** @type {FrameData[]} */
+    const frameData = [];
+    let transferred = false;
+
     try {
       // Report initial progress
       this.#onProgress?.({
@@ -259,24 +279,29 @@ export class SceneDetectionManager {
       });
 
       // Extract frame data in batches to avoid blocking
-      const frameData = await this.#extractFrameData(frames, sampleInterval);
+      await this.#extractFrameData(frames, sampleInterval, frameData);
 
       if (this.#isCancelled) {
         throw new DOMException('Detection cancelled', 'AbortError');
       }
+      if (this.#workerCrashError || !this.#worker) {
+        // The worker crashed during extraction - no one would ever settle
+        // the promise below
+        throw new Error(
+          `Scene detection worker crashed: ${this.#workerCrashError?.message ?? 'worker unavailable'}`,
+        );
+      }
+      const worker = this.#worker;
 
       // Send to worker for detection
       return await new Promise((resolve, reject) => {
-        this.#resolveDetect = resolve;
-        this.#rejectDetect = reject;
-
         // Transfer the ImageBitmaps to the worker - the pixel readback
         // (drawImage + getImageData) happens over there, off this thread.
         const transferables = frameData
           .filter((f) => f.imageBitmap)
           .map((f) => /** @type {ImageBitmap} */ (f.imageBitmap));
 
-        this.#worker?.postMessage(
+        worker.postMessage(
           {
             type: 'DETECT',
             payload: {
@@ -290,8 +315,17 @@ export class SceneDetectionManager {
           },
           transferables,
         );
+        // Ownership moved to the worker, which closes every bitmap on
+        // completion, cancel and error
+        transferred = true;
+
+        this.#resolveDetect = resolve;
+        this.#rejectDetect = reject;
       });
     } finally {
+      if (!transferred) {
+        closeFrameBitmaps(frameData);
+      }
       this.#detectInFlight = false;
     }
   }
@@ -307,14 +341,16 @@ export class SceneDetectionManager {
    * synchronous main-thread readback, and transfer the resulting
    * ImageBitmaps to the worker. The actual pixel readback (drawImage +
    * getImageData) happens there, on an OffscreenCanvas owned by the worker.
+   *
+   * Results are pushed into the caller-owned `frameData` array as they are
+   * produced, so the caller can close every created ImageBitmap even if
+   * extraction is cancelled or throws partway through.
    * @param {Frame[]} frames - Source frames
    * @param {number} sampleInterval - Sampling interval
-   * @returns {Promise<FrameData[]>}
+   * @param {FrameData[]} frameData - Output array (caller owns the bitmaps)
+   * @returns {Promise<void>}
    */
-  async #extractFrameData(frames, sampleInterval) {
-    /** @type {FrameData[]} */
-    const frameData = [];
-
+  async #extractFrameData(frames, sampleInterval, frameData) {
     const thumbnailSize = DEFAULT_THUMBNAIL_SIZE;
 
     // Process frames with sampling
@@ -378,8 +414,6 @@ export class SceneDetectionManager {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
-
-    return frameData;
   }
 
   /**

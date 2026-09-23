@@ -389,3 +389,139 @@ describe('SceneDetectionManager frame extraction (issue #99, fix 3)', () => {
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
   });
 });
+
+describe('SceneDetectionManager ImageBitmap ownership (issue #99, item c)', () => {
+  const OriginalCreateImageBitmap = globalThis.createImageBitmap;
+
+  /** @type {Array<{ close: ReturnType<typeof vi.fn> }>} */
+  let createdBitmaps;
+
+  /** @type {(() => void) | null} */
+  let onCreate;
+
+  beforeEach(() => {
+    createdBitmaps = [];
+    onCreate = null;
+    globalThis.createImageBitmap = vi.fn(async () => {
+      const bitmap = { close: vi.fn() };
+      createdBitmaps.push(bitmap);
+      onCreate?.();
+      return bitmap;
+    });
+  });
+
+  afterEach(() => {
+    globalThis.createImageBitmap = OriginalCreateImageBitmap;
+  });
+
+  /** @param {number} count */
+  function makeFrames(count) {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `f${i}`,
+      timestamp: i * 33,
+      width: 100,
+      height: 50,
+      frame: { closed: false },
+    }));
+  }
+
+  function expectEachClosedOnce() {
+    expect(createdBitmaps.length).toBeGreaterThan(0);
+    for (const bitmap of createdBitmaps) {
+      expect(bitmap.close).toHaveBeenCalledTimes(1);
+    }
+  }
+
+  it('does not close transferred bitmaps on normal completion (the worker owns them)', async () => {
+    const manager = await createInitializedManager();
+    const detectPromise = manager.detect(makeFrames(3));
+    await vi.waitFor(() => {
+      expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
+    });
+
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
+
+    expect(createdBitmaps).toHaveLength(3);
+    for (const bitmap of createdBitmaps) {
+      expect(bitmap.close).not.toHaveBeenCalled();
+    }
+  });
+
+  it('closes every extracted bitmap exactly once when cancelled after extraction', async () => {
+    const manager = await createInitializedManager();
+    const frames = makeFrames(3);
+    // Cancel as the last bitmap resolves: extraction finishes, transfer must not happen
+    onCreate = () => {
+      if (createdBitmaps.length === frames.length) manager.cancel();
+    };
+
+    await expect(manager.detect(frames)).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(createdBitmaps).toHaveLength(3);
+    expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(false);
+    expectEachClosedOnce();
+  });
+
+  it('closes the bitmaps accumulated so far when cancelled mid-extraction', async () => {
+    const manager = await createInitializedManager();
+    const frames = makeFrames(20);
+    onCreate = () => {
+      if (createdBitmaps.length === 7) manager.cancel();
+    };
+
+    await expect(manager.detect(frames)).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(createdBitmaps.length).toBeLessThan(frames.length);
+    expectEachClosedOnce();
+  });
+
+  it('closes every bitmap when the worker crashes during extraction', async () => {
+    const manager = await createInitializedManager();
+    const frames = makeFrames(3);
+    onCreate = () => {
+      if (createdBitmaps.length === 2) mockWorker._simulateError('worker crashed');
+    };
+
+    // Previously this posted to a null worker and never settled
+    await expect(manager.detect(frames)).rejects.toThrow('worker crashed');
+    expectEachClosedOnce();
+  });
+
+  it('closes every bitmap when the transfer itself fails', async () => {
+    const manager = await createInitializedManager();
+    mockWorker.postMessage = () => {
+      throw new DOMException('could not clone', 'DataCloneError');
+    };
+
+    await expect(manager.detect(makeFrames(3))).rejects.toMatchObject({
+      name: 'DataCloneError',
+    });
+    expectEachClosedOnce();
+    // The manager stays usable
+    expect(manager.isDetecting()).toBe(false);
+  });
+
+  it('survives repeated start/cancel cycles and then completes', async () => {
+    const manager = await createInitializedManager();
+    const frames = makeFrames(8);
+
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const detectPromise = manager.detect(frames);
+      manager.cancel();
+      await expect(detectPromise).rejects.toMatchObject({ name: 'AbortError' });
+    }
+    expectEachClosedOnce();
+
+    createdBitmaps = [];
+    const detectPromise = manager.detect(frames);
+    await vi.waitFor(() => {
+      expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
+    });
+    mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
+    await expect(detectPromise).resolves.toEqual({ scenes: [] });
+    for (const bitmap of createdBitmaps) {
+      expect(bitmap.close).not.toHaveBeenCalled();
+    }
+  });
+});
