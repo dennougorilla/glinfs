@@ -53,8 +53,10 @@
  *   The entry is REMOVED from the queue and 'queue:changed' fires with
  *   type 'compress-lost' (+ id, error); the app shell shows a non-blocking
  *   notice (no Undo — there is nothing to restore). Only the clip whose job
- *   was running is lost: queued jobs had not transferred their frames yet
- *   and run on a freshly created worker.
+ *   was running is lost: queued jobs had not transferred their frames yet.
+ *   After a crash they run on a freshly created worker; after an explicit
+ *   codec terminate() (teardown) they fail with every frame handed back,
+ *   i.e. the recoverable path above (entry returns to 'raw').
  * - Decode failures never lose a clip: chunks are cloned into the worker,
  *   so the entry simply returns to 'compressed'.
  * - The ACTIVE clip is never handed to the codec, so it is never at risk.

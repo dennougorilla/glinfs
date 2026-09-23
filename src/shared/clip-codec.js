@@ -21,8 +21,10 @@
  *   the worker could not transfer every frame back): `frames` is [] (or
  *   short). Frames transferred into a dead worker cannot be recovered — the
  *   caller must drop the clip and tell the user (app-store: 'compress-lost').
- *   Only the job RUNNING at crash time is affected: pending jobs have not
- *   transferred anything yet and dispatch to a freshly created worker.
+ *   Only the job RUNNING at that moment is affected: pending jobs have not
+ *   transferred anything yet. After a crash they dispatch to a freshly
+ *   created worker; after an explicit terminate() (teardown) they are
+ *   failed instead, handing their untransferred frames back (RECOVERABLE).
  * Decode never loses data: its input chunks are cloned, not transferred.
  *
  * Feature detection runs ONCE via VideoEncoder.isConfigSupported (vp09
@@ -237,27 +239,47 @@ export class ClipCodecManager {
   }
 
   /**
-   * Terminate the worker and fail every in-flight/pending job.
-   * Encode jobs whose frames were already transferred cannot get them back
-   * (LOST per the failure contract above: resolved with frames: []). Not
-   * terminal: the next encode/decode lazily creates a fresh worker.
+   * Teardown: terminate the worker and fail every job instead of requeueing
+   * (unlike the crash path, which keeps pending jobs for a fresh worker).
+   * - The RUNNING encode already transferred its frames into the worker:
+   *   LOST per the failure contract above (resolved with frames: []).
+   * - PENDING encodes never transferred theirs: resolved with the exact
+   *   array that was submitted (RECOVERABLE), so ownership returns to the
+   *   caller, which keeps or closes them — nothing leaks.
+   * Not terminal: the next encode/decode lazily creates a fresh worker.
    */
   terminate() {
     if (this.#worker) {
       this.#worker.terminate();
       this.#worker = null;
     }
+    const pending = this.#pending;
     this.#pending = [];
     this.#activeJobId = null;
-    const jobs = [...this.#jobs.values()];
-    this.#jobs.clear();
-    for (const job of jobs) {
-      job.resolve(
+    /** @type {[(result: any) => void, EncodeResult|DecodeResult][]} */
+    const settled = [];
+    for (const p of pending) {
+      const job = this.#jobs.get(p.jobId);
+      this.#jobs.delete(p.jobId);
+      if (!job) continue;
+      settled.push([
+        job.resolve,
+        p.kind === 'encode'
+          ? { ok: false, error: 'terminated', frames: /** @type {VideoFrame[]} */ (p.transfer) }
+          : { ok: false, error: 'terminated' },
+      ]);
+    }
+    // Whatever is left was dispatched (the running job)
+    for (const job of this.#jobs.values()) {
+      settled.push([
+        job.resolve,
         job.kind === 'encode'
           ? { ok: false, error: 'terminated', frames: [] }
           : { ok: false, error: 'terminated' },
-      );
+      ]);
     }
+    this.#jobs.clear();
+    for (const [resolve, result] of settled) resolve(result);
   }
 
   /** Dispatch the next pending job if the worker is idle */
@@ -276,10 +298,12 @@ export class ClipCodecManager {
     try {
       this.#worker.postMessage(next.message, next.transfer);
     } catch (err) {
+      // A throwing postMessage transfers nothing: the frames are still ours
+      // to hand back (RECOVERABLE), not lost
       this.#settle(next.jobId, {
         ok: false,
         error: err instanceof Error ? err.message : 'postMessage failed',
-        ...(next.kind === 'encode' ? { frames: [] } : {}),
+        ...(next.kind === 'encode' ? { frames: next.transfer } : {}),
       });
     }
   }
