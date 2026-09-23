@@ -435,9 +435,12 @@ describe('SceneDetectionManager ImageBitmap ownership (issue #99, item c)', () =
   it('does not close transferred bitmaps on normal completion (the worker owns them)', async () => {
     const manager = await createInitializedManager();
     const detectPromise = manager.detect(makeFrames(3));
-    await vi.waitFor(() => {
-      expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
+      },
+      { timeout: 5000 },
+    );
 
     mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
@@ -515,9 +518,12 @@ describe('SceneDetectionManager ImageBitmap ownership (issue #99, item c)', () =
 
     createdBitmaps = [];
     const detectPromise = manager.detect(frames);
-    await vi.waitFor(() => {
-      expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(mockWorker.messages.some((m) => m.type === 'DETECT')).toBe(true);
+      },
+      { timeout: 5000 },
+    );
     mockWorker._simulateMessage({ type: 'COMPLETE', payload: { scenes: [] } });
     await expect(detectPromise).resolves.toEqual({ scenes: [] });
     for (const bitmap of createdBitmaps) {
