@@ -4,6 +4,7 @@
  */
 
 import { loadSettings } from '../../shared/user-settings.js';
+import { stratifiedPixelIndices } from './pixel-sampling.js';
 
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const VALID_FRAME_SKIPS = /** @type {const} */ ([1, 2, 3, 4, 5]);
@@ -97,10 +98,11 @@ export function calculateMaxColors(quality, presetId) {
  *
  * The palette is quantized once from pixels gathered across the whole clip
  * instead of from the first frame alone, so later scenes with different
- * colors still map well. Both limits bound the pre-pass cost independently
- * of clip length and resolution. Measured at 1280x720 in Chromium on a
- * 6-scene clip: palette error flattens from 8 frames on and is flat across
- * 32K-1M sampled pixels, so the cost is mostly the ~2ms extraction per
+ * colors still map well. Both limits bound the retained sample independently
+ * of clip length and resolution; each sample frame is still one full-frame
+ * readback, so the pre-pass time scales with resolution. Measured at
+ * 1280x720 in Chromium on a 6-scene clip: palette error flattens from 8
+ * frames on and is flat across 32K-1M sampled pixels, so the cost is mostly the ~2ms extraction per
  * sample frame (~30ms total for 16; one full-frame quantize is ~8ms).
  */
 export const PALETTE_SAMPLE = /** @type {const} */ ({
@@ -125,7 +127,7 @@ export function selectPaletteSampleIndices(totalFrames, maxSamples = PALETTE_SAM
 }
 
 /**
- * Grid step so that sampling every step-th column of every step-th row of
+ * Cell size so that sampling one pixel per step x step cell of
  * `frameCount` frames stays within `maxPixels`.
  * @param {number} width
  * @param {number} height
@@ -152,7 +154,7 @@ export function computePaletteSampleStep(
 }
 
 /**
- * Number of pixels samplePixelGrid takes from one frame.
+ * Number of pixels sampleFramePixels takes from one frame (one per cell).
  * @param {number} width
  * @param {number} height
  * @param {number} step
@@ -163,27 +165,28 @@ export function sampledPixelCount(width, height, step) {
 }
 
 /**
- * Copy every step-th pixel of every step-th row of an RGBA frame into `out`.
+ * Copy one jittered pixel from each step x step cell of an RGBA frame into
+ * `out` (stratified sampling). A fixed grid would alias: content repeating
+ * with the grid's period (e.g. 4 black / 4 white rows at step 8) would be
+ * sampled on one phase only and lose a whole color.
  * @param {Uint8ClampedArray} rgba - Source frame
  * @param {number} width
  * @param {number} height
  * @param {number} step
  * @param {Uint8ClampedArray} out - Destination sample buffer
  * @param {number} offset - Byte offset in `out` to start writing at
+ * @param {number} seed - PRNG seed for the jitter (same seed, same pixels)
  * @returns {number} Byte offset after the last written pixel
  */
-export function samplePixelGrid(rgba, width, height, step, out, offset) {
+export function sampleFramePixels(rgba, width, height, step, out, offset, seed) {
   let o = offset;
-  for (let y = 0; y < height; y += step) {
-    const row = y * width * 4;
-    for (let x = 0; x < width; x += step) {
-      const p = row + x * 4;
-      out[o] = rgba[p];
-      out[o + 1] = rgba[p + 1];
-      out[o + 2] = rgba[p + 2];
-      out[o + 3] = rgba[p + 3];
-      o += 4;
-    }
+  for (const pixel of stratifiedPixelIndices(width, height, step, seed)) {
+    const p = pixel * 4;
+    out[o] = rgba[p];
+    out[o + 1] = rgba[p + 1];
+    out[o + 2] = rgba[p + 2];
+    out[o + 3] = rgba[p + 3];
+    o += 4;
   }
   return o;
 }

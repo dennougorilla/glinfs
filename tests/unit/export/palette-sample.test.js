@@ -19,12 +19,13 @@ vi.mock('../../../src/workers/worker-manager.js', () => ({
   },
 }));
 
+import { applyPalette, quantize } from 'gifenc';
 import { buildPaletteSample, encodeGif } from '../../../src/features/export/api.js';
 import {
   computePaletteSampleStep,
   PALETTE_SAMPLE,
   sampledPixelCount,
-  samplePixelGrid,
+  sampleFramePixels,
   selectPaletteSampleIndices,
 } from '../../../src/features/export/core.js';
 
@@ -67,6 +68,30 @@ function sampledFrameIndices(sample) {
   const seen = new Set();
   for (let p = 0; p < sample.length; p += 4) seen.add(sample[p]);
   return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * RGBA frame of 4 black rows then 4 white rows, repeated
+ * @param {number} w
+ * @param {number} h
+ */
+function stripeFrame(w, h) {
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  const pixels = new Uint32Array(rgba.buffer);
+  for (let y = 0; y < h; y++) {
+    // 0xffffffff = opaque white, 0xff000000 = opaque black (little-endian RGBA)
+    pixels.fill(y % 8 < 4 ? 0xff000000 : 0xffffffff, y * w, (y + 1) * w);
+  }
+  return rgba;
+}
+
+/** @param {Uint8ClampedArray} rgba - Square frame to copy out */
+function createStripeFrame(rgba) {
+  const frame = createTaggedFrame(0, Math.sqrt(rgba.length / 4));
+  frame.frame.copyTo = vi.fn(async (/** @type {Uint8ClampedArray} */ buffer) => {
+    buffer.set(rgba);
+  });
+  return frame;
 }
 
 describe('selectPaletteSampleIndices', () => {
@@ -133,8 +158,8 @@ describe('computePaletteSampleStep', () => {
   });
 });
 
-describe('samplePixelGrid', () => {
-  it('copies every step-th pixel of every step-th row, in order', () => {
+describe('sampleFramePixels', () => {
+  it('takes one in-bounds pixel from each step x step cell, in cell order', () => {
     // 5x3 frame; pixel (x, y) has red = y * 10 + x
     const w = 5;
     const h = 3;
@@ -143,13 +168,54 @@ describe('samplePixelGrid', () => {
       for (let x = 0; x < w; x++) rgba.set([y * 10 + x, 1, 2, 255], (y * w + x) * 4);
     }
     const out = new Uint8ClampedArray(sampledPixelCount(w, h, 2) * 4 + 4);
-    const end = samplePixelGrid(rgba, w, h, 2, out, 4);
+    const end = sampleFramePixels(rgba, w, h, 2, out, 4, 7);
 
     expect(end).toBe(out.length);
-    const reds = [];
-    for (let p = 4; p < end; p += 4) reds.push(out[p]);
-    expect(reds).toEqual([0, 2, 4, 20, 22, 24]);
-    expect([...out.subarray(4, 8)]).toEqual([0, 1, 2, 255]);
+    const cells = [];
+    for (let p = 4; p < end; p += 4) {
+      const red = out[p];
+      cells.push([Math.floor((red % 10) / 2), Math.floor(Math.floor(red / 10) / 2)]);
+      expect([...out.subarray(p + 1, p + 4)]).toEqual([1, 2, 255]);
+    }
+    // Row-major over the 3x2 cells, including the partial edge cells
+    expect(cells).toEqual([
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [0, 1],
+      [1, 1],
+      [2, 1],
+    ]);
+  });
+
+  it('is deterministic per seed and varies the jitter between seeds', () => {
+    const w = 64;
+    const h = 64;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let p = 0; p < w * h; p++) rgba.set([p & 255, p >> 8, 0, 255], p * 4);
+    const sample = (/** @type {number} */ seed) => {
+      const out = new Uint8ClampedArray(sampledPixelCount(w, h, 8) * 4);
+      sampleFramePixels(rgba, w, h, 8, out, 0, seed);
+      return out;
+    };
+
+    expect(sample(3)).toEqual(sample(3));
+    expect(sample(3)).not.toEqual(sample(4));
+  });
+
+  it('does not alias with rows repeating at the cell size', () => {
+    // 4 black rows then 4 white rows: a fixed step-8 grid only sees black
+    const w = 512;
+    const h = 512;
+    const rgba = stripeFrame(w, h);
+    const out = new Uint8ClampedArray(sampledPixelCount(w, h, 8) * 4);
+    sampleFramePixels(rgba, w, h, 8, out, 0, 0);
+
+    let white = 0;
+    for (let p = 0; p < out.length; p += 4) if (out[p] === 255) white++;
+    const share = white / (out.length / 4);
+    expect(share).toBeGreaterThan(0.4);
+    expect(share).toBeLessThan(0.6);
   });
 });
 
@@ -172,6 +238,44 @@ describe('buildPaletteSample', () => {
 
     expect(sample.length / 4).toBeLessThanOrEqual(PALETTE_SAMPLE.maxPixels);
     expect(sample.length / 4).toBeGreaterThan(0);
+  });
+
+  it('keeps both colors of a periodic stripe pattern (no aliasing)', async () => {
+    // 16 frames of 512x512 give step 8, the stripe period
+    const stripes = stripeFrame(512, 512);
+    const frames = Array.from({ length: 16 }, () => createStripeFrame(stripes));
+    const sample = await buildPaletteSample(frames, null);
+    expect(computePaletteSampleStep(512, 512, 16)).toBe(8);
+
+    const palette = quantize(sample, 16, { format: 'rgb444' });
+    expect(palette).toContainEqual([0, 0, 0]);
+    expect(palette).toContainEqual([255, 255, 255]);
+    // The exported frame keeps the stripes instead of coming out solid
+    const index = applyPalette(stripes, palette, 'rgb444');
+    expect(new Set(index).size).toBe(2);
+  });
+
+  it('is reproducible: the same clip gives the same sample', async () => {
+    const make = () =>
+      Array.from({ length: 20 }, (_, i) => {
+        // 128x128 x 16 sample frames exceeds the budget, so cells are jittered
+        const frame = createTaggedFrame(i, 128);
+        frame.frame.copyTo = vi.fn(async (/** @type {Uint8ClampedArray} */ buffer) => {
+          for (let p = 0; p < buffer.length; p += 4) {
+            buffer[p] = p >> 2;
+            buffer[p + 1] = i;
+            buffer[p + 2] = p >> 10;
+            buffer[p + 3] = 255;
+          }
+        });
+        return frame;
+      });
+
+    const first = await buildPaletteSample(make(), null);
+    const second = await buildPaletteSample(make(), null);
+    expect(second.length).toBe(first.length);
+    // Byte-wise; toEqual's element diff is very slow on a 256KB array
+    expect(Buffer.compare(Buffer.from(first), Buffer.from(second))).toBe(0);
   });
 
   it('throws AbortError between extractions once aborted', async () => {

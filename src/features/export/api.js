@@ -11,7 +11,7 @@ import {
   computePaletteSampleStep,
   getEncoderPreset,
   sampledPixelCount,
-  samplePixelGrid,
+  sampleFramePixels,
   selectPaletteSampleIndices,
 } from './core.js';
 
@@ -162,8 +162,9 @@ export async function getFrameRGBA(frame, crop) {
  * Gather a bounded pixel sample from frames spread across the whole clip,
  * for quantizing one global palette up front (#99, paletteInterval 0).
  *
- * Frames are extracted one at a time and reduced to a strided grid right
- * away, so peak memory is one full frame plus the (bounded) sample.
+ * Frames are extracted one at a time and reduced to a stratified jittered
+ * subsample right away, so peak memory is one full frame plus the (bounded)
+ * sample. The jitter is seeded by frame index, so output is reproducible.
  *
  * @param {import('../capture/types.js').Frame[]} frames - Frames to encode (after frame skip)
  * @param {import('../editor/types.js').CropArea | null} crop
@@ -187,7 +188,7 @@ export async function buildPaletteSample(frames, crop, signal) {
       step = computePaletteSampleStep(width, height, indices.length);
       sample = new Uint8ClampedArray(sampledPixelCount(width, height, step) * 4 * indices.length);
     }
-    offset = samplePixelGrid(data, width, height, step, sample, offset);
+    offset = sampleFramePixels(data, width, height, step, sample, offset, index);
   }
 
   return sample ? sample.subarray(0, offset) : new Uint8ClampedArray(0);
