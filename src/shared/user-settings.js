@@ -5,14 +5,6 @@
 
 const STORAGE_KEY = 'glinfs_user_settings';
 
-/**
- * Persisted schema version. Stored alongside the settings (never returned by
- * loadSettings) so migrations run exactly once per stored blob.
- * - 1 (absent): up to v0.5.3
- * - 2: capture.clipQueueLimit null means "auto" (#92 raw-fallback default)
- */
-const SCHEMA_VERSION = 2;
-
 /** Effective clip queue limit when unset and queued clips are compressed (#92) */
 export const CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED = 10;
 
@@ -20,8 +12,9 @@ export const CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED = 10;
 export const CLIP_QUEUE_LIMIT_DEFAULT_RAW = 3;
 
 /**
- * The only clipQueueLimit default ever shipped before schema 2 (v0.5.0-0.5.3)
- * @see migrateStoredSettings
+ * The only clipQueueLimit default ever shipped by v0.5.0-0.5.3 — and the
+ * number still STORED for "auto", so those builds keep reading 10
+ * @see decodeStoredCapture
  */
 const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
 
@@ -47,7 +40,8 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  *   compressed (~50-100x smaller than raw), CLIP_QUEUE_LIMIT_DEFAULT_RAW when
  *   they fall back to raw frames (~3.5 GiB per default 1080p clip). A number
  *   is an explicit user choice and is never overridden. Resolved (and stored
- *   values outside 1-30 clamped) by app-store's getClipQueueLimit().
+ *   values outside 1-30 clamped) by app-store's getClipQueueLimit(). Stored
+ *   in a form older builds can read (see decodeStoredCapture).
  * @property {number} captureResolutionLimit - Maximum long edge of captured
  *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
  *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
@@ -251,30 +245,65 @@ function cloneDefaults() {
   };
 }
 
+/*
+ * Stored form of the "auto" clip queue limit (#92). In memory, auto is
+ * clipQueueLimit: null. On disk it must stay readable by OLDER builds that
+ * share this localStorage key (a tab opened before a deploy, or a rollback):
+ * v0.5.x reads Number(clipQueueLimit) clamped to 1-30, so a stored null would
+ * silently become a 1-clip queue there. Therefore:
+ *
+ *   auto      -> { clipQueueLimit: 10, clipQueueLimitMode: 'auto' }
+ *   explicit  -> { clipQueueLimit: n,  clipQueueLimitMode: 'explicit' }
+ *
+ * Old builds see exactly the 10 they always defaulted to. The mode lives
+ * INSIDE capture because old builds round-trip unknown capture keys (they
+ * spread parsed.capture) but drop unknown top-level keys.
+ *
+ * Reading: only 'explicit' makes a stored 10 explicit. A 10 with mode 'auto'
+ * or with no mode at all is auto:
+ * - no mode = written by v0.5.0-0.5.3, which could not tell a deliberate 10
+ *   from its default (saveSettings persists the WHOLE merged object, so
+ *   changing any other setting materialized clipQueueLimit: 10). Treating it
+ *   as explicit would pin raw-fallback platforms at 10 raw clips (~35 GiB at
+ *   1080p); as auto it resolves to 10 where clips compress and 3 where they
+ *   stay raw. Anyone who really wants 10 re-selects it (then 'explicit').
+ * - an old build that resets the capture category drops the mode and writes
+ *   its default 10 — correctly read back as auto.
+ * Any other number is a user choice, whatever the mode says (e.g. an older
+ * tab changed the limit to 5 under a stale 'auto' mode).
+ */
+
 /**
- * Bring a stored settings blob up to SCHEMA_VERSION (pure; the migrated form
- * is persisted by the next saveSettings, and re-running it on an unsaved
- * legacy blob gives the same result).
- *
- * Schema 1 -> 2: a stored clipQueueLimit equal to the old default (10)
- * becomes null ("auto"). Schema 1 had no way to tell a deliberate 10 from the
- * default — saveSettings persists the WHOLE merged object, so changing any
- * other setting materialized clipQueueLimit: 10 — and treating it as
- * explicit would pin raw-fallback platforms at 10 raw clips (~35 GiB at
- * 1080p). Demoting it to auto is safe in both directions: compressed
- * platforms still resolve to 10, raw ones drop to 3, and anyone who really
- * wants 10 re-selects it (stored as explicit from then on). Any other stored
- * value was necessarily a user choice and is kept.
- *
- * @param {any} parsed - JSON-parsed stored settings
+ * Decode stored capture prefs into the in-memory shape (pure: re-running it
+ * on an unsaved legacy blob gives the same result; the new stored form is
+ * written by the next saveSettings).
+ * @param {any} capture - JSON-parsed stored capture prefs
  * @returns {any}
  */
-function migrateStoredSettings(parsed) {
-  const version = Number(parsed?.schemaVersion) || 1;
-  if (version < 2 && parsed?.capture?.clipQueueLimit === LEGACY_CLIP_QUEUE_LIMIT_DEFAULT) {
-    return { ...parsed, capture: { ...parsed.capture, clipQueueLimit: null } };
+function decodeStoredCapture(capture) {
+  if (!capture || typeof capture !== 'object') return capture;
+  const { clipQueueLimitMode, ...prefs } = capture;
+  if (
+    clipQueueLimitMode !== 'explicit' &&
+    prefs.clipQueueLimit === LEGACY_CLIP_QUEUE_LIMIT_DEFAULT
+  ) {
+    prefs.clipQueueLimit = null;
   }
-  return parsed;
+  return prefs;
+}
+
+/**
+ * Encode in-memory capture prefs into their stored form (see above)
+ * @param {CaptureSettingsPrefs} capture
+ * @returns {Object}
+ */
+function encodeCaptureForStorage(capture) {
+  const auto = capture?.clipQueueLimit === null || capture?.clipQueueLimit === undefined;
+  return {
+    ...capture,
+    clipQueueLimit: auto ? LEGACY_CLIP_QUEUE_LIMIT_DEFAULT : capture.clipQueueLimit,
+    clipQueueLimitMode: auto ? 'auto' : 'explicit',
+  };
 }
 
 /**
@@ -288,11 +317,11 @@ export function loadSettings() {
       return cloneDefaults();
     }
 
-    const parsed = migrateStoredSettings(JSON.parse(stored));
+    const parsed = JSON.parse(stored);
 
     // Merge with defaults to handle new settings added in updates
     return {
-      capture: { ...DEFAULT_SETTINGS.capture, ...parsed.capture },
+      capture: { ...DEFAULT_SETTINGS.capture, ...decodeStoredCapture(parsed.capture) },
       export: { ...DEFAULT_SETTINGS.export, ...parsed.export },
       thumbnailQuality: parsed.thumbnailQuality || DEFAULT_SETTINGS.thumbnailQuality,
     };
@@ -310,7 +339,7 @@ export function saveSettings(settings) {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ ...settings, schemaVersion: SCHEMA_VERSION }),
+      JSON.stringify({ ...settings, capture: encodeCaptureForStorage(settings.capture) }),
     );
   } catch (error) {
     console.error('Failed to save user settings:', error);

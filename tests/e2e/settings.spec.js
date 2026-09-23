@@ -146,6 +146,27 @@ test.describe('clip queue limit auto default (#92)', () => {
     await expect(row.locator('input[type="range"]')).toHaveValue('3');
   });
 
+  test('auto stays readable by older builds after an unrelated settings save', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (globalThis.VideoEncoder) {
+        globalThis.VideoEncoder.isConfigSupported = async () => ({ supported: false });
+      }
+    });
+    await openSettings(page);
+    await page.locator('.settings-content .btn-toggle').first().click();
+
+    // An open v0.5.x tab reads Number(clipQueueLimit): it must stay 10, not
+    // null (which that reader clamps to a 1-clip queue)
+    const stored = await page.evaluate(
+      () => JSON.parse(localStorage.getItem('glinfs_user_settings') ?? 'null')?.capture,
+    );
+    expect(stored).toMatchObject({ clipQueueLimit: 10, clipQueueLimitMode: 'auto' });
+
+    await page.reload();
+    await expect(page.locator('#main-content .settings-screen.screen')).toBeVisible();
+    await expect(clipQueueRow(page).locator('.settings-range-value')).toHaveText('3 clips (auto)');
+  });
+
   test('an explicit choice is kept and shown without (auto)', async ({ page }) => {
     await page.addInitScript(() => {
       if (globalThis.VideoEncoder) {
