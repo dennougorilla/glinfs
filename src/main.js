@@ -399,9 +399,13 @@ function setupClipQueueHeader() {
     // screen readers announce the newly rendered list (Escape restores it)
     popover.focus();
 
-    // Escape closes and returns focus to the badge (keyboard reachability)
+    // Escape closes and returns focus to the badge (keyboard reachability).
+    // Registered in the capture phase and consumed there: the editor's
+    // document-level Escape (clear crop) would otherwise also fire (#102).
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         closePopover();
         badge.focus();
       }
@@ -413,9 +417,9 @@ function setupClipQueueHeader() {
         closePopover();
       }
     };
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('pointerdown', onPointerDown);
-    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown));
+    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown, true));
     popoverCleanups.push(() => document.removeEventListener('pointerdown', onPointerDown));
   };
 
