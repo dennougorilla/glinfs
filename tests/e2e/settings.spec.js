@@ -102,3 +102,64 @@ test('the Settings title is centred on the screen, not between the buttons', asy
 
   expect(offset).toBeLessThanOrEqual(1);
 });
+
+/**
+ * #92: the clip queue limit's default depends on WebCodecs compression
+ * support (10 compressed / 3 raw) and the Settings screen shows the
+ * EFFECTIVE value, marked (auto), until the user picks one.
+ */
+test.describe('clip queue limit auto default (#92)', () => {
+  /** @param {import('@playwright/test').Page} page */
+  const clipQueueRow = (page) =>
+    page.locator('.settings-item', { has: page.locator('[data-setting-note="clipQueueLimit"]') });
+
+  /** @param {import('@playwright/test').Page} page */
+  async function openSettings(page) {
+    await gotoCapture(page);
+    await page.evaluate(() => {
+      location.hash = '#/settings';
+    });
+    await expect(page.locator('#main-content .settings-screen.screen')).toBeVisible();
+  }
+
+  test('shows the compressed default (10) when WebCodecs encode is available', async ({ page }) => {
+    await openSettings(page);
+    const row = clipQueueRow(page);
+    await expect(row.locator('.settings-range-value')).toHaveText('10 clips (auto)');
+    await expect(row.locator('.settings-item-note')).toHaveText(
+      'Default: 10 (queued clips are compressed)',
+    );
+  });
+
+  test('shows the raw-fallback default (3) when WebCodecs encode is unsupported', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      if (globalThis.VideoEncoder) {
+        globalThis.VideoEncoder.isConfigSupported = async () => ({ supported: false });
+      }
+    });
+    await openSettings(page);
+    const row = clipQueueRow(page);
+    await expect(row.locator('.settings-range-value')).toHaveText('3 clips (auto)');
+    await expect(row.locator('.settings-item-note')).toContainText('Default: 3');
+    await expect(row.locator('input[type="range"]')).toHaveValue('3');
+  });
+
+  test('an explicit choice is kept and shown without (auto)', async ({ page }) => {
+    await page.addInitScript(() => {
+      if (globalThis.VideoEncoder) {
+        globalThis.VideoEncoder.isConfigSupported = async () => ({ supported: false });
+      }
+    });
+    await openSettings(page);
+    const row = clipQueueRow(page);
+    await row.locator('input[type="range"]').fill('10');
+    await expect(row.locator('.settings-range-value')).toHaveText('10 clips');
+
+    // Survives a reload on the raw-fallback platform (never overridden)
+    await page.reload();
+    await expect(page.locator('#main-content .settings-screen.screen')).toBeVisible();
+    await expect(clipQueueRow(page).locator('.settings-range-value')).toHaveText('10 clips');
+  });
+});
