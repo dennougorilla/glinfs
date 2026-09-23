@@ -1297,6 +1297,10 @@ export function updateScenesSelection(container, state) {
 function openFrameGridModal(state, handlers, onClose) {
   if (!state.clip) return () => {};
 
+  // Closing removes the focused modal, which drops focus to <body>; return
+  // it to whatever opened the grid (#114)
+  const opener = document.activeElement;
+
   const { cleanup } = renderFrameGridModal({
     container: document.body,
     frames: state.clip.frames,
@@ -1311,16 +1315,32 @@ function openFrameGridModal(state, handlers, onClose) {
         } finally {
           cleanup();
           onClose?.();
+          restoreFrameGridFocus(opener);
         }
       },
       onCancel: () => {
         cleanup();
         onClose?.();
+        restoreFrameGridFocus(opener);
       },
     },
   });
 
   return cleanup;
+}
+
+/**
+ * Return focus to the element that opened the frame grid. Falls back to the
+ * Open Grid button when the opener is gone (e.g. the clip-queue popover
+ * closed by a click inside the modal) or was <body> (the F shortcut).
+ * @param {Element | null} opener
+ */
+function restoreFrameGridFocus(opener) {
+  if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected) {
+    opener.focus();
+    if (document.activeElement === opener) return;
+  }
+  /** @type {HTMLElement | null} */ (document.querySelector('.btn-frame-grid-compact'))?.focus();
 }
 
 /**

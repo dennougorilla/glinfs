@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  createClip,
-  getClipFps,
-  getPlaybackIntervalMs,
-} from '../../../src/features/editor/core.js';
+import { createClip, getClipFps } from '../../../src/features/editor/core.js';
 import { initEditor } from '../../../src/features/editor/index.js';
 import { renderTimeline } from '../../../src/features/editor/timeline.js';
 import { resetAppStore, setClipPayload } from '../../../src/shared/app-store.js';
@@ -66,25 +62,6 @@ describe('FPS-aware playback timing (issue #41)', () => {
       const clip = createClip(createTestFrames(10), 60);
       expect(getClipFps({ ...clip, fps: 0 })).toBe(30);
       expect(getClipFps({ ...clip, fps: undefined })).toBe(30);
-    });
-  });
-
-  describe('getPlaybackIntervalMs', () => {
-    it('returns ~16.7ms for a 60fps clip at 1x speed', () => {
-      expect(getPlaybackIntervalMs(60, 1)).toBeCloseTo(16.67, 1);
-    });
-
-    it('returns ~66.7ms for a 15fps clip at 1x speed', () => {
-      expect(getPlaybackIntervalMs(15, 1)).toBeCloseTo(66.67, 1);
-    });
-
-    it('scales with playback speed', () => {
-      expect(getPlaybackIntervalMs(30, 2)).toBeCloseTo(16.67, 1);
-      expect(getPlaybackIntervalMs(30, 0.5)).toBeCloseTo(66.67, 1);
-    });
-
-    it('defaults playback speed to 1', () => {
-      expect(getPlaybackIntervalMs(30)).toBeCloseTo(33.33, 1);
     });
   });
 
@@ -182,6 +159,19 @@ describe('FPS-aware playback timing (issue #41)', () => {
       expect(currentFrame()).toBe(80);
       flushFrame(t0 + 1010 + 100);
       expect(currentFrame()).toBe(83);
+    });
+
+    it('re-anchors on an FPS change instead of jumping (issue #114)', () => {
+      const t0 = startEditor(200, 30);
+
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(30);
+      // Same frames, higher FPS: the clock must continue from frame 30
+      window.__TEST_HOOKS__.setEditorState({ clip: createClip(createTestFrames(200), 60) });
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(30);
+      flushFrame(t0 + 1500);
+      expect(currentFrame()).toBe(60);
     });
 
     it('stops scheduling frames after cleanup', () => {

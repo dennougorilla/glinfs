@@ -135,16 +135,6 @@ export function getClipFps(clip) {
 }
 
 /**
- * Calculate the playback interval in milliseconds for a given FPS and speed
- * @param {number} fps - Frames per second
- * @param {number} [playbackSpeed] - Playback speed multiplier (default: 1)
- * @returns {number} Interval in ms between frames
- */
-export function getPlaybackIntervalMs(fps, playbackSpeed = 1) {
-  return 1000 / fps / playbackSpeed;
-}
-
-/**
  * Compute the playback frame from elapsed wall-clock time
  *
  * Frame = anchor + floor(elapsed * fps * speed), wrapped to loop within the
