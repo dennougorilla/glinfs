@@ -48,7 +48,7 @@ import { renderFrameGridModal } from './frame-grid.js';
  * @property {() => void} onExport - Export clicked
  * @property {(id: string) => void} [onPromoteClip] - Queue clip entry clicked (promote to active)
  * @property {(id: string) => void} [onDeleteClip] - Queue clip delete clicked
- * @property {() => void} [onDeleteActiveClip] - Active clip delete confirmed (#100 round 4)
+ * @property {() => void} [onDeleteActiveClip] - Active clip delete clicked (#100 round 4)
  * @property {() => import('./types.js').EditorState} [getState] - Get current state
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
  */
@@ -58,6 +58,41 @@ const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
 
 /** @type {number[]} */
 const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 1.5, 2];
+
+/** sessionStorage key for the remembered CLIPS/SCENES sidebar tab (#98) */
+const SIDEBAR_TAB_STORAGE_KEY = 'glinfs.editor.sidebarTab';
+
+/** Module-level fallback when sessionStorage is unavailable (private mode, etc). */
+let sidebarTabFallback = 'clips';
+
+/**
+ * Read the last-selected CLIPS/SCENES sidebar tab, preferring sessionStorage
+ * so the choice survives editor remounts within the same tab session
+ * (#98). Falls back to module state when storage throws or is unset.
+ * @returns {'clips' | 'scenes'}
+ */
+function getStoredSidebarTab() {
+  try {
+    const stored = sessionStorage.getItem(SIDEBAR_TAB_STORAGE_KEY);
+    if (stored === 'clips' || stored === 'scenes') return stored;
+  } catch {
+    // sessionStorage unavailable - fall through to module state
+  }
+  return sidebarTabFallback;
+}
+
+/**
+ * Persist the CLIPS/SCENES sidebar tab choice (#98).
+ * @param {'clips' | 'scenes'} name
+ */
+function setStoredSidebarTab(name) {
+  sidebarTabFallback = name;
+  try {
+    sessionStorage.setItem(SIDEBAR_TAB_STORAGE_KEY, name);
+  } catch {
+    // sessionStorage unavailable - module state above still tracks it
+  }
+}
 
 /**
  * Render the editor screen
@@ -317,9 +352,14 @@ export function renderEditorScreen(container, state, handlers, fps) {
     }
     clipsPane.hidden = name !== 'clips';
     scenesPane.hidden = name !== 'scenes';
+    setStoredSidebarTab(name);
   };
   cleanups.push(on(clipsTab, 'click', () => selectTab('clips')));
   cleanups.push(on(scenesTab, 'click', () => selectTab('scenes')));
+
+  // Restore the remembered tab (#98) - re-renders and editor remounts would
+  // otherwise always reset to CLIPS regardless of what the user last picked.
+  selectTab(getStoredSidebarTab());
 
   leftSidebar.appendChild(leftPanelContent);
   content.appendChild(leftSidebar);
@@ -1070,16 +1110,11 @@ function renderScenesSidebar(container, state, handlers) {
     return cleanups;
   }
 
-  // Completed - render scenes with thumbnails
+  // Completed, zero scenes found - one quiet line (#98), matching the
+  // detection-off hint above instead of the old icon + two-line block
   if (state.scenes.length === 0) {
     container.appendChild(
-      createElement('div', { className: 'scenes-sidebar-empty' }, [
-        createElement('div', { className: 'scenes-sidebar-icon' }, ['\u2713']),
-        createElement('div', { className: 'scenes-sidebar-text' }, ['Single scene clip']),
-        createElement('div', { className: 'scenes-sidebar-subtext' }, [
-          'No scene cuts were detected in your recording',
-        ]),
-      ]),
+      createElement('div', { className: 'scenes-sidebar-hint' }, ['No scene changes detected']),
     );
     return cleanups;
   }

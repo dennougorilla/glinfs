@@ -923,9 +923,9 @@ async function promoteWhenDecoded(id) {
 }
 
 /**
- * Delete a queued clip. Confirmation is the inline two-step control on the
- * entry's delete button (#98) - by the time this runs the user has already
- * confirmed; no blocking dialog.
+ * Delete a queued clip. Deletion is a single click on the entry's delete
+ * button, followed by a 5s Undo toast (#98) - no blocking confirmation
+ * dialog.
  * @param {string} id
  */
 function handleDeleteClip(id) {
@@ -943,8 +943,9 @@ function handleUndoDelete() {
 }
 
 /**
- * Delete the ACTIVE clip (two-step confirmed in the entry UI, #100 round 4)
- * and hand the editor to the succession logic: a full reinit re-runs
+ * Delete the ACTIVE clip (single click in the entry UI, followed by an Undo
+ * toast, #98 / #100 round 4) and hand the editor to the succession logic: a
+ * full reinit re-runs
  * initEditor's empty-mount path — one raw queued clip auto-promotes, several
  * show the select screen, none redirects to Capture.
  */

@@ -3,8 +3,8 @@
  * @module features/editor/live-monitor
  *
  * The editor's docked view of the ongoing capture: live stream video, REC
- * badge, buffer fullness, and Clip Now — pinned at the top of the left
- * sidebar. Replaces the floating PiP overlay, which covered content and
+ * badge, buffer fullness, and Clip Now — pinned at the top of the right
+ * panel. Replaces the floating PiP overlay, which covered content and
  * had no fixed home (no professional editor floats its source monitor).
  *
  * Editor-scoped: mounted by initEditor into the sidebar's monitor slot and

@@ -228,7 +228,8 @@ async function handleStart() {
     // the preserved session (and its store, stashed in screenCaptureState)
     // lives on. With background capture the worker keeps posting stats while
     // the user is on another route — writing them through the module variable
-    // silently dropped them all, freezing the PiP's buffer-fullness readout.
+    // silently dropped them all, freezing the live monitor's buffer-fullness
+    // readout.
     const sessionStore = store;
     const memorySettings = loadSettings().capture;
     workerManager = new CaptureWorkerManager();
