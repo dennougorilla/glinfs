@@ -90,6 +90,7 @@ describe('Frame Grid bounded rendering (issue #47)', () => {
       return /** @type {CanvasRenderingContext2D} */ ({
         canvas: this,
         fillRect: vi.fn(),
+        drawImage: vi.fn(),
       });
     });
     let animationFrameId = 0;

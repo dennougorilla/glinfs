@@ -28,6 +28,7 @@ describe('Frame Grid keyboard handling (issue #42)', () => {
       return /** @type {CanvasRenderingContext2D} */ ({
         canvas: this,
         fillRect: vi.fn(),
+        drawImage: vi.fn(),
       });
     });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {

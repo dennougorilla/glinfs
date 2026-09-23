@@ -6,8 +6,30 @@
 
 import { createElement, on } from '../../shared/utils/dom.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
+import { getGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
 import { isFrameInRange, normalizeSelectionRange } from './core.js';
+
+/**
+ * Copy a rendered thumbnail's pixel content into a brand-new canvas.
+ *
+ * Cached canvases must never be the same object that gets inserted into a
+ * grid item, because evicted rows zero their canvas's width/height to force
+ * immediate backing-store release (see `releaseThumbnail`). Cloning keeps
+ * the cache entry alive and intact after the DOM copy is evicted.
+ * @param {HTMLCanvasElement} source
+ * @returns {HTMLCanvasElement}
+ */
+function cloneThumbnailCanvas(source) {
+  const clone = document.createElement('canvas');
+  clone.width = source.width;
+  clone.height = source.height;
+  const ctx = clone.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(source, 0, 0);
+  }
+  return clone;
+}
 
 /** Controls that must retain their native keyboard behavior inside the modal. */
 const INTERACTIVE_ELEMENT_SELECTOR = [
@@ -1065,9 +1087,26 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     item.querySelector('.frame-grid-thumbnail-error')?.remove();
 
     try {
-      const canvas = createThumbnailCanvas(frame, renderSize);
+      // Route through the grid's dedicated ThumbnailCache instance so a row
+      // that scrolls out of view and re-materializes later reuses its
+      // already-decoded thumbnail instead of re-rendering from the source
+      // frame (issue #76). A dedicated instance (rather than the shared
+      // timeline/scene-panel singleton) avoids the grid's much larger,
+      // denser set of thumbnails evicting theirs. It is still bounded (LRU)
+      // and cleared by resetThumbnailCache() whenever the active clip's
+      // frames change, so entries can never outlive their clip.
+      const thumbnailCache = getGridThumbnailCache();
+      const cached = thumbnailCache.get(frame.id, renderSize);
+      const canvas = cached
+        ? cloneThumbnailCanvas(cached)
+        : createThumbnailCanvas(frame, renderSize);
       canvas.dataset.renderSize = String(renderSize);
       item.insertBefore(canvas, item.firstChild);
+      if (!cached) {
+        // Store an independent copy — this item's canvas gets its width/height
+        // zeroed on eviction, which would otherwise corrupt the cache entry.
+        thumbnailCache.addCanvas(frame.id, renderSize, cloneThumbnailCanvas(canvas));
+      }
     } catch {
       const errorPlaceholder = createElement(
         'div',

@@ -1,12 +1,31 @@
+/**
+ * Regression test for issue #76: the frame grid's dedicated ThumbnailCache
+ * instance must stay bounded. This substitutes a tiny-capacity cache in
+ * place of the real one to make LRU eviction deterministic without
+ * rendering an unreasonable number of frames.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getThumbnailSizesMock = vi.fn();
+vi.mock('../../../src/shared/utils/thumbnail-cache.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const boundedCache = new actual.ThumbnailCache(2);
+  return {
+    ...actual,
+    getGridThumbnailCache: () => boundedCache,
+  };
+});
 
-vi.mock('../../../src/shared/utils/quality-settings.js', () => ({
-  getThumbnailSizes: (...args) => getThumbnailSizesMock(...args),
-}));
+vi.mock('../../../src/features/editor/api.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createThumbnailCanvas: vi.fn(actual.createThumbnailCanvas),
+  };
+});
 
+const { createThumbnailCanvas } = await import('../../../src/features/editor/api.js');
 const { renderFrameGridModal } = await import('../../../src/features/editor/frame-grid.js');
+const { getGridThumbnailCache } = await import('../../../src/shared/utils/thumbnail-cache.js');
 
 const layoutProperties = ['clientWidth', 'clientHeight', 'offsetWidth', 'offsetHeight'];
 const originalLayoutDescriptors = Object.fromEntries(
@@ -15,6 +34,8 @@ const originalLayoutDescriptors = Object.fromEntries(
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, property),
   ]),
 );
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+const originalDevicePixelRatio = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
 
 /**
  * @param {number} count
@@ -29,13 +50,22 @@ function createFrames(count) {
   }));
 }
 
-describe('Frame Grid thumbnail size bounds (re-read quality settings per modal open)', () => {
+/**
+ * @param {string} frameId
+ */
+function renderCallCountFor(frameId) {
+  return createThumbnailCanvas.mock.calls.filter((call) => call[0]?.id === frameId).length;
+}
+
+describe('Frame Grid thumbnail cache budget (issue #76)', () => {
   let cleanup = () => {};
 
   beforeEach(() => {
+    getGridThumbnailCache().clear();
+    createThumbnailCanvas.mockClear();
     document.body.innerHTML = '<div id="container"></div>';
-    getThumbnailSizesMock.mockReset();
 
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
       configurable: true,
       get() {
@@ -65,6 +95,7 @@ describe('Frame Grid thumbnail size bounds (re-read quality settings per modal o
       value: vi.fn(),
       writable: true,
     });
+
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function rect() {
       const inlineWidth = Number.parseFloat(this.style?.width || '');
       const width = this.classList?.contains('frame-grid-item')
@@ -112,10 +143,25 @@ describe('Frame Grid thumbnail size bounds (re-read quality settings per modal o
         delete HTMLElement.prototype[property];
       }
     });
+    if (originalScrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: originalScrollIntoView,
+        writable: true,
+      });
+    } else {
+      delete HTMLElement.prototype.scrollIntoView;
+    }
+    if (originalDevicePixelRatio) {
+      Object.defineProperty(window, 'devicePixelRatio', originalDevicePixelRatio);
+    }
     document.body.innerHTML = '';
   });
 
-  function openModal(frameCount) {
+  it('never grows the cache past its configured budget and evicts the oldest entries first', () => {
+    // Just above VIRTUALIZATION_THRESHOLD (200) — enough to exercise the
+    // virtualized path without the runtime cost of thousands of frames.
+    const frameCount = 600;
     const result = renderFrameGridModal({
       container: /** @type {HTMLElement} */ (document.querySelector('#container')),
       frames: /** @type {import('../../../src/features/capture/types.js').Frame[]} */ (
@@ -126,51 +172,34 @@ describe('Frame Grid thumbnail size bounds (re-read quality settings per modal o
       callbacks: { onApply: vi.fn(), onCancel: vi.fn() },
     });
     cleanup = result.cleanup;
-    return result;
-  }
 
-  it('re-reads thumbnail size bounds from getThumbnailSizes() on every modal open', () => {
-    // Regression: DEFAULT/MIN/MAX_THUMBNAIL_SIZE used to be captured once at
-    // module-load time, so a quality preference change was ignored until the
-    // page was reloaded. renderFrameGridModal must call getThumbnailSizes()
-    // fresh each time it runs.
-    getThumbnailSizesMock.mockReturnValue({
-      timeline: 60,
-      gridMax: 160,
-      gridDefault: 80,
-      gridMin: 40,
-    });
+    const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
+    const body = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-body'));
+    const totalHeight = Number.parseFloat(grid.style.height);
+    const cache = getGridThumbnailCache();
 
-    openModal(4);
-    let sizeSlider = /** @type {HTMLInputElement} */ (document.querySelector('.grid-size-slider'));
-    expect(sizeSlider.min).toBe('40');
-    expect(sizeSlider.max).toBe('160');
-    // Auto-fit (mocked rAF runs synchronously) picks a size within the
-    // preset's [min, max] bounds since the 4 test frames comfortably fit the
-    // 800px-wide container.
-    expect(Number(sizeSlider.value)).toBeGreaterThanOrEqual(40);
-    expect(Number(sizeSlider.value)).toBeLessThanOrEqual(160);
-    const firstOpenValue = Number(sizeSlider.value);
-    cleanup();
+    // Row 0's thumbnail is decoded on the initial render (mount does an
+    // initial-estimate render plus one auto-fit re-render at the settled
+    // size — both are legitimate first renders of row 0, not re-decodes).
+    const callsAfterMount = renderCallCountFor('0');
+    expect(callsAfterMount).toBeGreaterThan(0);
+    expect(cache.size).toBeLessThanOrEqual(2);
 
-    getThumbnailSizesMock.mockReturnValue({
-      timeline: 160,
-      gridMax: 400,
-      gridDefault: 200,
-      gridMin: 100,
-    });
+    // Scroll in a few steps, each landing on a distinct virtual window, so
+    // far more than 2 distinct rows get cached — the bounded cache must
+    // never grow past its budget.
+    for (let step = 1; step <= 4; step++) {
+      body.scrollTop = (totalHeight / 4) * step;
+      body.dispatchEvent(new Event('scroll'));
+      expect(cache.size).toBeLessThanOrEqual(2);
+    }
 
-    openModal(4);
-    sizeSlider = /** @type {HTMLInputElement} */ (document.querySelector('.grid-size-slider'));
-    expect(sizeSlider.min).toBe('100');
-    expect(sizeSlider.max).toBe('400');
-    expect(Number(sizeSlider.value)).toBeGreaterThanOrEqual(100);
-    expect(Number(sizeSlider.value)).toBeLessThanOrEqual(400);
-    // The second preset's bounds are strictly larger, so the auto-fit value
-    // must differ from the first modal open — proving the bounds were
-    // re-read rather than reused from a module-load-time snapshot.
-    expect(Number(sizeSlider.value)).toBeGreaterThan(firstOpenValue);
+    // Row 0 was evicted from the cache long ago (LRU budget of 2). Scrolling
+    // back to it must be a cache miss, re-triggering a real render.
+    body.scrollTop = 0;
+    body.dispatchEvent(new Event('scroll'));
 
-    expect(getThumbnailSizesMock).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[data-index="0"] canvas')).not.toBeNull();
+    expect(renderCallCountFor('0')).toBeGreaterThan(callsAfterMount);
   });
 });

@@ -10,8 +10,19 @@ import { getThumbnailSizes } from './quality-settings.js';
 /** @type {number} Default cache size */
 const DEFAULT_CACHE_SIZE = 300;
 
-/** @type {number} Default thumbnail size (device adaptive) */
-const DEFAULT_THUMBNAIL_SIZE = getThumbnailSizes().timeline;
+/**
+ * Default thumbnail size (device adaptive).
+ *
+ * Read lazily (only when a caller omits `maxDimension`) rather than once at
+ * module load. Callers that always pass an explicit size — e.g. the frame
+ * grid, which sizes thumbnails from live grid density — never trigger this,
+ * so it also avoids forcing `getThumbnailSizes()` to resolve before a
+ * consumer has finished setting up quality-settings mocks/state in tests.
+ * @returns {number}
+ */
+function getDefaultThumbnailSize() {
+  return getThumbnailSizes().timeline;
+}
 
 /**
  * LRU Thumbnail Cache
@@ -49,7 +60,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {HTMLCanvasElement | null}
    */
-  get(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  get(frameId, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
     const cached = this.cache.get(key);
     if (cached) {
@@ -67,7 +78,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {boolean}
    */
-  has(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  has(frameId, maxDimension = getDefaultThumbnailSize()) {
     return this.cache.has(this._key(frameId, maxDimension));
   }
 
@@ -77,7 +88,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension=80] - Maximum size
    * @returns {Promise<HTMLCanvasElement>}
    */
-  async generate(frame, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  async generate(frame, maxDimension = getDefaultThumbnailSize()) {
     // Return if cached at this exact size
     const cached = this.get(frame.id, maxDimension);
     if (cached) return cached;
@@ -131,7 +142,7 @@ export class ThumbnailCache {
    * @param {(progress: number) => void} [onProgress] - Progress callback
    * @returns {Promise<void>}
    */
-  async generateBatch(frames, maxDimension = DEFAULT_THUMBNAIL_SIZE, onProgress) {
+  async generateBatch(frames, maxDimension = getDefaultThumbnailSize(), onProgress) {
     const uncached = frames.filter((f) => !this.has(f.id, maxDimension));
 
     if (uncached.length === 0) {
@@ -168,7 +179,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @private
    */
-  _addToCache(frameId, canvas, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  _addToCache(frameId, canvas, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
     // LRU: Remove oldest entry when over capacity
     if (this.cache.size >= this.maxSize) {
@@ -239,13 +250,60 @@ export function getThumbnailCache() {
 }
 
 /**
- * Reset the singleton instance. Called by the app store whenever the clip's
- * frames change or are cleared — cached canvases are keyed by the previous
- * clip's frame IDs and can never be reused afterwards. Also used by tests.
+ * Entry budget for the frame grid's dedicated cache (see
+ * `getGridThumbnailCache`).
+ *
+ * A single modal open materializes its virtual window twice — once at an
+ * initial size estimate, once more after the auto-fit pass settles on the
+ * final grid density — and a dense, wide viewport can materialize on the
+ * order of 150-200 visible+overscan items per pass. Sizing the budget at
+ * roughly 2-3x that (rather than the shared timeline/scene-panel cache's
+ * 300) keeps the *current* mount's thumbnails resident and leaves headroom
+ * for scrolling back through recent rows, at the cost of a larger memory
+ * ceiling than the shared cache.
+ *
+ * Worst case memory (quality preset 'ultra', 400px max dimension, 16:9
+ * thumbnails): 600 * 400*225*4 bytes ≈ 205 MB. Standard/high presets
+ * (<=320px) stay under ~145 MB. 'ultra' is only auto-selected on devices
+ * reporting >=8GB memory, and this cache exists only while a clip with an
+ * open (or previously opened) frame grid is loaded, so this is an accepted
+ * trade-off rather than a tuned-to-the-byte figure — revisit alongside the
+ * frame-grid virtualization work in #74 if it proves too large in practice.
+ */
+const GRID_CACHE_SIZE = 600;
+
+/** @type {ThumbnailCache | null} */
+let gridInstance = null;
+
+/**
+ * Get the frame grid's dedicated cache instance.
+ *
+ * A separate instance (rather than reusing `getThumbnailCache()`) keeps the
+ * grid's much larger, denser set of thumbnails from evicting the timeline
+ * filmstrip's and scene panel's entries out of the shared 300-entry budget
+ * whenever the frame grid modal is open.
+ * @returns {ThumbnailCache}
+ */
+export function getGridThumbnailCache() {
+  if (!gridInstance) {
+    gridInstance = new ThumbnailCache(GRID_CACHE_SIZE);
+  }
+  return gridInstance;
+}
+
+/**
+ * Reset both singleton instances. Called by the app store whenever the
+ * clip's frames change or are cleared — cached canvases are keyed by the
+ * previous clip's frame IDs and can never be reused afterwards. Also used
+ * by tests.
  */
 export function resetThumbnailCache() {
   if (instance) {
     instance.clear();
     instance = null;
+  }
+  if (gridInstance) {
+    gridInstance.clear();
+    gridInstance = null;
   }
 }
