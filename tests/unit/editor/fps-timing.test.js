@@ -91,51 +91,107 @@ describe('FPS-aware playback timing (issue #41)', () => {
   describe('playback loop uses clip fps', () => {
     /** @type {(() => void) | null} */
     let cleanup = null;
+    /** @type {FrameRequestCallback[]} */
+    let pendingFrames = [];
+
+    /**
+     * Run the queued animation frame callbacks at a given timestamp
+     * @param {number} timestamp
+     */
+    function flushFrame(timestamp) {
+      const callbacks = pendingFrames;
+      pendingFrames = [];
+      for (const callback of callbacks) callback(timestamp);
+    }
+
+    /**
+     * Start the editor with a clip; it auto-plays on init
+     * @param {number} frameCount
+     * @param {number} fps
+     * @returns {number} performance.now() at the time playback started
+     */
+    function startEditor(frameCount, fps) {
+      setClipPayload({ frames: createTestFrames(frameCount), fps, capturedAt: Date.now() });
+      const startedAt = 1000;
+      vi.spyOn(performance, 'now').mockReturnValue(startedAt);
+      cleanup = initEditor();
+      return startedAt;
+    }
 
     beforeEach(() => {
       resetAppStore();
+      pendingFrames = [];
       document.body.innerHTML = '<div id="main-content"></div>';
+      window.__TEST_HOOKS__ = {};
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+        pendingFrames.push(callback);
+        return pendingFrames.length;
+      });
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {
+        pendingFrames = [];
+      });
     });
 
     afterEach(() => {
       cleanup?.();
       cleanup = null;
+      delete window.__TEST_HOOKS__;
       resetAppStore();
       document.body.innerHTML = '';
       vi.restoreAllMocks();
     });
 
-    it('starts the playback interval at ~16.7ms for a 60fps clip', () => {
-      const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    const currentFrame = () => window.__TEST_HOOKS__.getEditorState().currentFrame;
 
-      setClipPayload({
-        frames: createTestFrames(10),
-        fps: 60,
-        capturedAt: Date.now(),
-      });
+    it('advances ~60 frames per second of wall-clock time for a 60fps clip', () => {
+      const t0 = startEditor(200, 60);
+      expect(window.requestAnimationFrame).toHaveBeenCalled();
 
-      // Editor auto-plays on init, which starts the playback interval
-      cleanup = initEditor();
-
-      expect(setIntervalSpy).toHaveBeenCalled();
-      const intervalMs = setIntervalSpy.mock.calls[0][1];
-      expect(intervalMs).toBeCloseTo(1000 / 60, 1);
+      flushFrame(t0 + 1000 / 60 + 1);
+      expect(currentFrame()).toBe(1);
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(60);
     });
 
-    it('starts the playback interval at ~66.7ms for a 15fps clip', () => {
-      const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    it('advances ~15 frames per second of wall-clock time for a 15fps clip', () => {
+      const t0 = startEditor(200, 15);
 
-      setClipPayload({
-        frames: createTestFrames(10),
-        fps: 15,
-        capturedAt: Date.now(),
-      });
+      flushFrame(t0 + 50);
+      expect(currentFrame()).toBe(0);
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(15);
+    });
 
-      cleanup = initEditor();
+    it('catches up on a late tick and wraps within the selected range', () => {
+      const t0 = startEditor(10, 30);
 
-      expect(setIntervalSpy).toHaveBeenCalled();
-      const intervalMs = setIntervalSpy.mock.calls[0][1];
-      expect(intervalMs).toBeCloseTo(1000 / 15, 1);
+      // One tick 1s late: 30 frames elapsed in a 10-frame loop
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(0);
+      flushFrame(t0 + 1100);
+      expect(currentFrame()).toBe(3);
+    });
+
+    it('re-anchors on an external seek instead of jumping back to the clock', () => {
+      const t0 = startEditor(100, 30);
+
+      flushFrame(t0 + 1000);
+      expect(currentFrame()).toBe(30);
+      window.__TEST_HOOKS__.setEditorState({ currentFrame: 80 });
+      flushFrame(t0 + 1010);
+      expect(currentFrame()).toBe(80);
+      flushFrame(t0 + 1010 + 100);
+      expect(currentFrame()).toBe(83);
+    });
+
+    it('stops scheduling frames after cleanup', () => {
+      startEditor(10, 30);
+      expect(pendingFrames.length).toBe(1);
+
+      cleanup?.();
+      cleanup = null;
+      expect(window.cancelAnimationFrame).toHaveBeenCalled();
+      expect(pendingFrames.length).toBe(0);
     });
   });
 

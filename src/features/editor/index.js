@@ -31,7 +31,7 @@ import {
   centerCropAfterConstraint,
   constrainAspectRatio,
   getClipFps,
-  getPlaybackIntervalMs,
+  getPlaybackFrame,
   getPositionInSelection,
 } from './core.js';
 import { initLiveMonitor } from './live-monitor.js';
@@ -68,7 +68,14 @@ import {
 let store = null;
 
 /** @type {number | null} */
-let playbackIntervalId = null;
+let playbackFrameId = null;
+
+/**
+ * Playback clock anchor: frames are derived from elapsed time since `time`,
+ * re-anchored whenever the playhead, range or speed changes outside the loop
+ * @type {{ frame: number, time: number, speed: number, rangeStart: number, rangeEnd: number, lastFrame: number } | null}
+ */
+let playbackAnchor = null;
 
 /** @type {(() => void) | null} */
 let uiCleanup = null;
@@ -614,40 +621,82 @@ function handleTogglePlay() {
 }
 
 /**
+ * Anchor the playback clock at the current state
+ * @param {import('./types.js').EditorState} state
+ * @param {number} time - performance.now()-based timestamp
+ */
+function anchorPlayback(state, time) {
+  playbackAnchor = {
+    frame: state.currentFrame,
+    time,
+    speed: state.playbackSpeed,
+    rangeStart: state.selectedRange.start,
+    rangeEnd: state.selectedRange.end,
+    lastFrame: state.currentFrame,
+  };
+}
+
+/**
  * Start playback loop
+ *
+ * Driven by requestAnimationFrame and elapsed wall-clock time rather than a
+ * per-tick frame step, so late ticks catch up instead of slowing playback.
  */
 function startPlayback() {
-  if (!store) return;
+  if (!store || playbackFrameId !== null) return;
 
-  const state = store.getState();
-  const interval = getPlaybackIntervalMs(getClipFps(state.clip), state.playbackSpeed);
+  anchorPlayback(store.getState(), performance.now());
 
-  playbackIntervalId = window.setInterval(() => {
-    if (!store) return;
-
-    const currentState = store.getState();
-    if (!currentState.clip) return;
-
-    let nextFrameIndex = currentState.currentFrame + 1;
-
-    // Loop within selected range
-    if (nextFrameIndex > currentState.selectedRange.end) {
-      nextFrameIndex = currentState.selectedRange.start;
+  /** @param {number} timestamp */
+  const tick = (timestamp) => {
+    if (!store || !playbackAnchor) {
+      playbackFrameId = null;
+      return;
     }
 
-    store.setState((s) => goToFrame(s, nextFrameIndex));
-    emit('editor:frame', { index: nextFrameIndex });
-  }, interval);
+    const state = store.getState();
+    if (state.clip) {
+      // Seek, range edit or speed change since the last tick: restart the
+      // clock from wherever the playhead is now
+      if (
+        state.currentFrame !== playbackAnchor.lastFrame ||
+        state.playbackSpeed !== playbackAnchor.speed ||
+        state.selectedRange.start !== playbackAnchor.rangeStart ||
+        state.selectedRange.end !== playbackAnchor.rangeEnd
+      ) {
+        anchorPlayback(state, timestamp);
+      }
+
+      const nextFrameIndex = getPlaybackFrame({
+        anchorFrame: playbackAnchor.frame,
+        elapsedMs: timestamp - playbackAnchor.time,
+        fps: getClipFps(state.clip),
+        playbackSpeed: state.playbackSpeed,
+        range: state.selectedRange,
+      });
+
+      if (nextFrameIndex !== state.currentFrame) {
+        store.setState((s) => goToFrame(s, nextFrameIndex));
+        playbackAnchor.lastFrame = store.getState().currentFrame;
+        emit('editor:frame', { index: nextFrameIndex });
+      }
+    }
+
+    playbackFrameId = window.requestAnimationFrame(tick);
+  };
+
+  playbackFrameId = window.requestAnimationFrame(tick);
 }
 
 /**
  * Stop playback loop
  */
 function stopPlayback() {
-  if (playbackIntervalId !== null) {
-    clearInterval(playbackIntervalId);
-    playbackIntervalId = null;
+  if (playbackFrameId !== null) {
+    window.cancelAnimationFrame(playbackFrameId);
+    playbackFrameId = null;
   }
+  playbackAnchor = null;
 }
 
 /**
