@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2](https://github.com/dennougorilla/glinfs/compare/v0.5.1...v0.5.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* **editor:** quiet zero-scenes hint, remember sidebar tab, fix stale comments ([#106](https://github.com/dennougorilla/glinfs/issues/106)) ([c7bcd28](https://github.com/dennougorilla/glinfs/commit/c7bcd280f25b0271f904f54658504801676ac5cf)), closes [#98](https://github.com/dennougorilla/glinfs/issues/98)
+* **export:** verify gifsicle glue integrity before execution ([#105](https://github.com/dennougorilla/glinfs/issues/105)) ([45e819f](https://github.com/dennougorilla/glinfs/commit/45e819f9c2a8c1d4d941482650a532d673d18302))
+
+
+### Performance Improvements
+
+* **editor:** reuse ThumbnailCache for frame-grid thumbnails ([#107](https://github.com/dennougorilla/glinfs/issues/107)) ([2c7fa87](https://github.com/dennougorilla/glinfs/commit/2c7fa87e3ea4905f662727ef21b1531cf7fcb021))
+
 ## [0.5.1](https://github.com/dennougorilla/glinfs/compare/v0.5.0...v0.5.1) (2026-09-23)
 
 
