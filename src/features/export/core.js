@@ -101,7 +101,7 @@ export function calculateMaxColors(quality, presetId) {
  * of clip length and resolution. Measured at 1280x720 in Chromium on a
  * 6-scene clip: palette error flattens from 8 frames on and is flat across
  * 32K-1M sampled pixels, so the cost is mostly the ~2ms extraction per
- * sample frame (~30ms total for 16, vs ~1.7s for per-frame quantize).
+ * sample frame (~30ms total for 16; one full-frame quantize is ~8ms).
  */
 export const PALETTE_SAMPLE = /** @type {const} */ ({
   /** Frames extracted for the sample (evenly spaced, first and last included) */
