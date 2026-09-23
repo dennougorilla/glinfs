@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderSettings } from '../../../src/features/settings/ui.js';
-import { loadSettings, saveSettings } from '../../../src/shared/user-settings.js';
+import { registerClipCodec } from '../../../src/shared/app-store.js';
+import { emit } from '../../../src/shared/bus.js';
+import { loadSettings, saveSettings, updateSetting } from '../../../src/shared/user-settings.js';
 
 describe('renderSettings', () => {
   /** @type {HTMLElement} */
@@ -162,6 +164,79 @@ describe('renderSettings', () => {
 
       expect(loadSettings().capture.fps).toBe(30);
       expect(container.querySelector('.settings-select').value).toBe('30');
+    });
+  });
+
+  describe('clip queue limit auto default (#92)', () => {
+    /** @type {(() => void) | null} */
+    let cleanup = null;
+
+    afterEach(() => {
+      cleanup?.();
+      cleanup = null;
+      registerClipCodec(null);
+    });
+
+    const valueText = () =>
+      container
+        .querySelector('[data-setting-note="clipQueueLimit"]')
+        ?.closest('.settings-item')
+        ?.querySelector('.settings-range-value')?.textContent;
+    const noteText = () =>
+      container.querySelector('[data-setting-note="clipQueueLimit"]')?.textContent;
+    const slider = () =>
+      /** @type {HTMLInputElement} */ (
+        container
+          .querySelector('[data-setting-note="clipQueueLimit"]')
+          ?.closest('.settings-item')
+          ?.querySelector('input[type="range"]')
+      );
+
+    it('shows the raw-fallback effective default while unset', () => {
+      registerClipCodec({ isCompressionAvailable: () => false });
+      cleanup = renderSettings(container);
+      expect(slider().value).toBe('3');
+      expect(valueText()).toBe('3 clips (auto)');
+      expect(noteText()).toContain('Default: 3');
+      expect(noteText()).toContain('uncompressed');
+    });
+
+    it('shows the compressed effective default while unset', () => {
+      registerClipCodec({ isCompressionAvailable: () => true });
+      cleanup = renderSettings(container);
+      expect(slider().value).toBe('10');
+      expect(valueText()).toBe('10 clips (auto)');
+      expect(noteText()).toBe('Default: 10 (queued clips are compressed)');
+    });
+
+    it('moving the slider stores an explicit value shown without (auto)', () => {
+      registerClipCodec({ isCompressionAvailable: () => false });
+      cleanup = renderSettings(container);
+      slider().value = '5';
+      slider().dispatchEvent(new Event('input'));
+      expect(loadSettings().capture.clipQueueLimit).toBe(5);
+      expect(valueText()).toBe('5 clips');
+      // The note still says what Reset would restore
+      expect(noteText()).toContain('Default: 3');
+    });
+
+    it('shows an explicit stored value as-is', () => {
+      registerClipCodec({ isCompressionAvailable: () => false });
+      updateSetting('capture', 'clipQueueLimit', 10);
+      cleanup = renderSettings(container);
+      expect(slider().value).toBe('10');
+      expect(valueText()).toBe('10 clips');
+    });
+
+    it('re-renders when the codec probe resolves after mount', () => {
+      let available = false;
+      registerClipCodec({ isCompressionAvailable: () => available });
+      cleanup = renderSettings(container);
+      expect(valueText()).toBe('3 clips (auto)');
+
+      available = true;
+      emit('queue:changed', { type: 'codec-ready' });
+      expect(valueText()).toBe('10 clips (auto)');
     });
   });
 

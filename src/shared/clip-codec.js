@@ -9,9 +9,21 @@
  * Results are result-objects, never rejections, so the app-store's entry
  * state machine can branch without try/catch:
  * - encode -> { ok:true, chunks, config, byteLength }
- *           | { ok:false, error, frames } (surviving VideoFrames returned —
- *             the caller still owns them and the clip is never lost)
+ *           | { ok:false, error, frames }
  * - decode -> { ok:true, frames } | { ok:false, error }
+ *
+ * Encode failure contract — the caller tells the two cases apart by
+ * comparing frames.length with what it submitted:
+ * - RECOVERABLE (encoder/config error in a healthy worker): every input
+ *   VideoFrame is transferred back in `frames`; the caller owns them again
+ *   and the clip survives.
+ * - LOST (worker crash via onerror, terminate(), or a failure after which
+ *   the worker could not transfer every frame back): `frames` is [] (or
+ *   short). Frames transferred into a dead worker cannot be recovered — the
+ *   caller must drop the clip and tell the user (app-store: 'compress-lost').
+ *   Only the job RUNNING at crash time is affected: pending jobs have not
+ *   transferred anything yet and dispatch to a freshly created worker.
+ * Decode never loses data: its input chunks are cloned, not transferred.
  *
  * Feature detection runs ONCE via VideoEncoder.isConfigSupported (vp09
  * preferred, vp8 fallback). isCompressionAvailable() is synchronous and
@@ -77,6 +89,9 @@ export class ClipCodecManager {
 
   /** @type {Promise<boolean> | null} */
   #probePromise = null;
+
+  /** @type {boolean} Test hook: crash the worker on the next encode job */
+  #crashNextEncode = false;
 
   /**
    * @param {Object} [options]
@@ -155,6 +170,8 @@ export class ClipCodecManager {
       return Promise.resolve({ ok: false, error: 'compression-unavailable', frames });
     }
     const jobId = this.#nextJobId++;
+    const crashForTest = this.#crashNextEncode;
+    this.#crashNextEncode = false;
     return new Promise((resolve) => {
       this.#jobs.set(jobId, { kind: 'encode', resolve });
       this.#pending.push({
@@ -162,7 +179,7 @@ export class ClipCodecManager {
         kind: 'encode',
         message: {
           type: 'ENCODE',
-          payload: { jobId, frames, codec: this.#codec, fps, width, height },
+          payload: { jobId, frames, codec: this.#codec, fps, width, height, crashForTest },
         },
         transfer: frames,
       });
@@ -203,8 +220,19 @@ export class ClipCodecManager {
   }
 
   /**
+   * E2E test hook (exposed via __TEST_HOOKS__ only): the worker throws an
+   * uncaught error as soon as it receives the NEXT encode job — after its
+   * frames were transferred — driving the real onerror crash path.
+   */
+  crashNextEncodeForTest() {
+    this.#crashNextEncode = true;
+  }
+
+  /**
    * Terminate the worker and fail every in-flight/pending job.
-   * Encode jobs whose frames were already transferred cannot get them back.
+   * Encode jobs whose frames were already transferred cannot get them back
+   * (LOST per the failure contract above: resolved with frames: []). Not
+   * terminal: the next encode/decode lazily creates a fresh worker.
    */
   terminate() {
     if (this.#worker) {
@@ -294,8 +322,9 @@ export class ClipCodecManager {
   }
 
   /**
-   * Worker crashed: fail the active job (its transferred frames are gone
-   * with the worker) and recycle the worker for the remaining jobs.
+   * Worker crashed: fail the active job (LOST — its transferred frames are
+   * gone with the worker) and recycle the worker: settling pumps the next
+   * pending job, which lazily creates a fresh worker in #pump().
    * @param {ErrorEvent} e
    */
   #handleWorkerError(e) {

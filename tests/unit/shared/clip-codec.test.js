@@ -234,6 +234,66 @@ describe('worker crash', () => {
   });
 });
 
+describe('crashNextEncodeForTest (E2E hook)', () => {
+  it('flags exactly the next encode job for a forced worker crash', async () => {
+    const { manager, worker } = await createProbedManager();
+    manager.crashNextEncodeForTest();
+    void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    expect(worker.posted[0].message.payload.crashForTest).toBe(true);
+
+    // The worker "crashes"; the following job is a normal one
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    worker.crash('forced');
+    void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    expect(worker.posted[1].message.payload.crashForTest).toBe(false);
+    spy.mockRestore();
+  });
+});
+
+describe('worker crash then encode', () => {
+  it('runs the next ENCODE on a fresh worker and resolves it normally', async () => {
+    vi.stubGlobal('VideoEncoder', {
+      isConfigSupported: vi.fn(async () => ({ supported: true })),
+    });
+    const workers = [];
+    const manager = createClipCodecManager({
+      createWorker: () => {
+        const w = createFakeWorker();
+        workers.push(w);
+        return w;
+      },
+    });
+    await manager.probeSupport();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // A second encode queued BEFORE the crash still owns its frames (not
+    // transferred yet) and must run on the replacement worker
+    const lost = manager.encode(fakeFrames(2), { fps: 30, width: 10, height: 10 });
+    const queued = manager.encode(fakeFrames(2), { fps: 30, width: 10, height: 10 });
+    workers[0].crash('boom');
+
+    await expect(lost).resolves.toEqual({ ok: false, error: 'boom', frames: [] });
+    expect(workers).toHaveLength(2);
+    const { jobId } = workers[1].posted[0].message.payload;
+    expect(workers[1].posted[0].message.type).toBe('ENCODE');
+    workers[1].emit({
+      type: 'ENCODE_RESULT',
+      payload: { jobId, chunks: [], config: { codec: 'vp8' }, byteLength: 4 },
+    });
+    await expect(queued).resolves.toMatchObject({ ok: true, byteLength: 4 });
+
+    // And a job submitted after everything settled also works
+    const later = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    const laterJob = workers[1].posted[1].message.payload.jobId;
+    workers[1].emit({
+      type: 'ENCODE_RESULT',
+      payload: { jobId: laterJob, chunks: [], config: { codec: 'vp8' }, byteLength: 1 },
+    });
+    await expect(later).resolves.toMatchObject({ ok: true });
+    spy.mockRestore();
+  });
+});
+
 describe('terminate', () => {
   it('fails all in-flight and pending jobs without hanging their callers', async () => {
     const { manager, worker } = await createProbedManager();

@@ -276,7 +276,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // Lets E2E specs log/branch on which queue path (compressed vs raw
     // fallback) the test environment actually exercised
     window.__TEST_HOOKS__.isClipCompressionAvailable = isClipCompressionAvailable;
+    // Arms a REAL worker crash on the next encode job, so E2E can drive the
+    // #92 failure contract (lost entry removed + notice, worker recycled)
+    window.__TEST_HOOKS__.crashClipCodecOnNextEncode = () => clipCodec.crashNextEncodeForTest();
   }
+
+  // #92 failure contract: a codec-worker crash mid-encode loses that queued
+  // clip (its frames died with the worker). Say so instead of letting the
+  // entry silently vanish. No Undo — there is nothing left to restore.
+  onBus('queue:changed', ({ type }) => {
+    if (type !== 'compress-lost') return;
+    showToast('A queued clip was lost: its compression worker crashed');
+    announce('A queued clip was lost because its compression worker crashed');
+  });
 
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');

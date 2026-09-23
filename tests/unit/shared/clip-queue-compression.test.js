@@ -220,6 +220,105 @@ describe('encode failure', () => {
   });
 });
 
+describe('worker crash mid-encode (failure contract)', () => {
+  /** What ClipCodecManager resolves for the job running when the worker dies */
+  const crashResult = { ok: false, error: 'worker crashed', frames: [] };
+
+  it('removes the lost entry and announces compress-lost with its id', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry: survivor } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    const { entry: lost } = enqueueClip(clipPayloadOf(createMockFrames(3)));
+
+    const events = [];
+    const unsubscribe = onBus('queue:changed', (payload) => events.push(payload));
+
+    // The newest entry's job was running when the worker crashed
+    codec.encodeCalls[1].resolve(crashResult);
+    await flushJobs();
+
+    // No dangling 'compressing' husk left behind: only the survivor (whose
+    // own job is still running) remains, and the lost entry dropped its
+    // detached frame wrappers
+    expect(getClipQueue()).toEqual([survivor]);
+    expect(lost.frames).toBeNull();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'compress-lost',
+        id: lost.id,
+        error: 'worker crashed',
+        queueLength: 1,
+      }),
+    ]);
+    // Accounting no longer counts the lost clip's detached husks
+    expect(getClipMemoryEstimateMB()).toBeCloseTo((2 * 100 * 100 * 4) / (1024 * 1024), 6);
+
+    unsubscribe();
+  });
+
+  it('treats a short frame hand-back as a loss too (partial transfer-back)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(3)));
+    const returned = codec.encodeCalls[0].frames.slice(0, 1);
+
+    const types = [];
+    const unsubscribe = onBus('queue:changed', (payload) => types.push(payload.type));
+    codec.encodeCalls[0].resolve({ ok: false, error: 'partial', frames: returned });
+    await flushJobs();
+
+    expect(getClipQueue()).not.toContain(entry);
+    expect(types).toEqual(['compress-lost']);
+    // The orphaned survivor is closed, not leaked
+    expect(returned[0].close).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it('keeps compressing later clips after the crash (fresh job succeeds)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    enqueueClip(clipPayloadOf(createMockFrames(2)));
+    codec.encodeCalls[0].resolve(crashResult);
+    await flushJobs();
+    expect(getClipQueue()).toHaveLength(0);
+
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    expect(entry.status).toBe('compressing');
+    codec.encodeCalls[1].resolve(okEncodeResult());
+    await flushJobs();
+
+    expect(entry.status).toBe('compressed');
+    expect(getClipQueue()).toEqual([entry]);
+  });
+
+  it('a promote waiting on the lost encode is refused as not-found', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+
+    const prepared = prepareQueuedClipForPromote(entry.id);
+    codec.encodeCalls[0].resolve(crashResult);
+
+    await expect(prepared).resolves.toEqual({ ok: false, reason: 'not-found' });
+    expect(codec.decode).not.toHaveBeenCalled();
+  });
+
+  it('a user delete before the crash result arrives emits no compress-lost', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+
+    const types = [];
+    const unsubscribe = onBus('queue:changed', (payload) => types.push(payload.type));
+    codec.encodeCalls[0].resolve(crashResult);
+    await flushJobs();
+
+    expect(types).toEqual([]);
+    unsubscribe();
+  });
+});
+
 describe('delete during compress', () => {
   it('discards a late success result without resurrecting the entry', async () => {
     const codec = createMockCodec();

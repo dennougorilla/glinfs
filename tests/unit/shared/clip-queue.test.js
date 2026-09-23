@@ -70,8 +70,10 @@ beforeEach(() => {
 });
 
 describe('queue limit configuration', () => {
-  it('defaults to 10 (#92 compressed queue) and clamps corrupted values into 1-30', () => {
-    expect(getClipQueueLimit()).toBe(10);
+  it('defaults to the raw-fallback 3 with no codec (#92) and clamps corrupted values into 1-30', () => {
+    // No codec registered = raw entries; the compressed default (10) is
+    // covered in clip-queue-limit-default.test.js
+    expect(getClipQueueLimit()).toBe(3);
 
     updateSetting('capture', 'clipQueueLimit', 7);
     expect(getClipQueueLimit()).toBe(7);
@@ -82,8 +84,9 @@ describe('queue limit configuration', () => {
     updateSetting('capture', 'clipQueueLimit', 999);
     expect(getClipQueueLimit()).toBe(30);
 
+    // Non-numeric garbage reads as "auto" (the platform default)
     updateSetting('capture', 'clipQueueLimit', 'garbage');
-    expect(getClipQueueLimit()).toBe(10);
+    expect(getClipQueueLimit()).toBe(3);
   });
 });
 
@@ -102,7 +105,7 @@ describe('enqueueClip', () => {
     expect(queue[0].id).toBe(second.entry.id);
     expect(queue[1].id).toBe(first.entry.id);
     expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({ type: 'enqueue', queueLength: 2, limit: 10 });
+    expect(events[1]).toMatchObject({ type: 'enqueue', queueLength: 2, limit: 3 });
 
     unsubscribe();
   });

@@ -6,6 +6,26 @@
 const STORAGE_KEY = 'glinfs_user_settings';
 
 /**
+ * Persisted schema version. Stored alongside the settings (never returned by
+ * loadSettings) so migrations run exactly once per stored blob.
+ * - 1 (absent): up to v0.5.3
+ * - 2: capture.clipQueueLimit null means "auto" (#92 raw-fallback default)
+ */
+const SCHEMA_VERSION = 2;
+
+/** Effective clip queue limit when unset and queued clips are compressed (#92) */
+export const CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED = 10;
+
+/** Effective clip queue limit when unset and queued clips stay raw (#92) */
+export const CLIP_QUEUE_LIMIT_DEFAULT_RAW = 3;
+
+/**
+ * The only clipQueueLimit default ever shipped before schema 2 (v0.5.0-0.5.3)
+ * @see migrateStoredSettings
+ */
+const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
+
+/**
  * @typedef {Object} UserSettings
  * @property {CaptureSettingsPrefs} capture - Capture settings
  * @property {ExportSettingsPrefs} export - Export settings
@@ -19,13 +39,15 @@ const STORAGE_KEY = 'glinfs_user_settings';
  * @property {boolean} sceneDetection - Auto scene detection enabled
  * @property {boolean} backgroundCapture - Keep the frame-grab loop running while
  *   navigated away from /capture, instead of pausing it (default true)
- * @property {number} clipQueueLimit - Maximum clips held in the clip queue
- *   (1-30, default 10). The active clip is not counted — it lives outside
- *   the queue and can never be evicted by it. The default of 10 assumes
- *   queued clips are WebCodecs-compressed (#92, ~50-100x smaller than raw);
- *   when compression is unavailable entries stay raw and the memoryBudgetMB
- *   refusal is the effective bound well before the count limit. Stored
- *   values outside 1-30 are clamped for display and by getClipQueueLimit().
+ * @property {number|null} clipQueueLimit - Maximum clips held in the clip
+ *   queue (1-30). The active clip is not counted — it lives outside the
+ *   queue and can never be evicted by it. null = "auto" (the default): the
+ *   EFFECTIVE limit then depends on the platform (#92) —
+ *   CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED when queued clips are WebCodecs-
+ *   compressed (~50-100x smaller than raw), CLIP_QUEUE_LIMIT_DEFAULT_RAW when
+ *   they fall back to raw frames (~3.5 GiB per default 1080p clip). A number
+ *   is an explicit user choice and is never overridden. Resolved (and stored
+ *   values outside 1-30 clamped) by app-store's getClipQueueLimit().
  * @property {number} captureResolutionLimit - Maximum long edge of captured
  *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
  *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
@@ -57,7 +79,7 @@ const DEFAULT_SETTINGS = {
     bufferDuration: 15,
     sceneDetection: true,
     backgroundCapture: true,
-    clipQueueLimit: 10,
+    clipQueueLimit: null,
     captureResolutionLimit: 1920,
     memoryBudgetMB: 4000,
   },
@@ -112,6 +134,9 @@ export const SETTINGS_METADATA = {
         min: 1,
         max: 30,
         step: 1,
+        // null (auto) renders at the platform's effective default — the
+        // settings UI resolves it, since this module cannot see the codec
+        autoDefault: true,
         format: (v) => `${v} clip${v === 1 ? '' : 's'}`,
       },
       captureResolutionLimit: {
@@ -227,6 +252,32 @@ function cloneDefaults() {
 }
 
 /**
+ * Bring a stored settings blob up to SCHEMA_VERSION (pure; the migrated form
+ * is persisted by the next saveSettings, and re-running it on an unsaved
+ * legacy blob gives the same result).
+ *
+ * Schema 1 -> 2: a stored clipQueueLimit equal to the old default (10)
+ * becomes null ("auto"). Schema 1 had no way to tell a deliberate 10 from the
+ * default — saveSettings persists the WHOLE merged object, so changing any
+ * other setting materialized clipQueueLimit: 10 — and treating it as
+ * explicit would pin raw-fallback platforms at 10 raw clips (~35 GiB at
+ * 1080p). Demoting it to auto is safe in both directions: compressed
+ * platforms still resolve to 10, raw ones drop to 3, and anyone who really
+ * wants 10 re-selects it (stored as explicit from then on). Any other stored
+ * value was necessarily a user choice and is kept.
+ *
+ * @param {any} parsed - JSON-parsed stored settings
+ * @returns {any}
+ */
+function migrateStoredSettings(parsed) {
+  const version = Number(parsed?.schemaVersion) || 1;
+  if (version < 2 && parsed?.capture?.clipQueueLimit === LEGACY_CLIP_QUEUE_LIMIT_DEFAULT) {
+    return { ...parsed, capture: { ...parsed.capture, clipQueueLimit: null } };
+  }
+  return parsed;
+}
+
+/**
  * Load user settings from localStorage
  * @returns {UserSettings}
  */
@@ -237,7 +288,7 @@ export function loadSettings() {
       return cloneDefaults();
     }
 
-    const parsed = JSON.parse(stored);
+    const parsed = migrateStoredSettings(JSON.parse(stored));
 
     // Merge with defaults to handle new settings added in updates
     return {
@@ -257,7 +308,10 @@ export function loadSettings() {
  */
 export function saveSettings(settings) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...settings, schemaVersion: SCHEMA_VERSION }),
+    );
   } catch (error) {
     console.error('Failed to save user settings:', error);
   }
