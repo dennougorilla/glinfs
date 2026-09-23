@@ -30,6 +30,7 @@ import {
 import { on as onBus } from './shared/bus.js';
 import { createClipCodecManager } from './shared/clip-codec.js';
 import { renderClipEntries } from './shared/clip-entries.js';
+import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { announce } from './shared/live-region.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import {
@@ -281,14 +282,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.__TEST_HOOKS__.crashClipCodecOnNextEncode = () => clipCodec.crashNextEncodeForTest();
   }
 
-  // #92 failure contract: a codec-worker crash mid-encode loses that queued
-  // clip (its frames died with the worker). Say so instead of letting the
-  // entry silently vanish. No Undo — there is nothing left to restore.
-  onBus('queue:changed', ({ type }) => {
-    if (type !== 'compress-lost') return;
-    showToast('A queued clip was lost: its compression worker crashed');
-    announce('A queued clip was lost because its compression worker crashed');
-  });
+  // #92 failure contract: tell the user when a codec-worker crash loses a
+  // queued clip (never displacing a pending deletion's Undo toast)
+  setupClipLossNotice();
 
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');

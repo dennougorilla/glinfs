@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteActiveClip,
   deleteQueuedClip,
   enqueueClip,
   getClipMemoryEstimateMB,
@@ -12,8 +13,11 @@ import {
   releaseAllFramesAndReset,
   resetAppStore,
   setClipPayload,
+  undoDelete,
 } from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
+import { setupClipLossNotice } from '../../../src/shared/clip-loss-notice.js';
+import { hideToast, showToast } from '../../../src/shared/toast.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
 
 /**
@@ -316,6 +320,60 @@ describe('worker crash mid-encode (failure contract)', () => {
 
     expect(types).toEqual([]);
     unsubscribe();
+  });
+});
+
+describe('crash during a pending Undo (review of #92 failure contract)', () => {
+  /** @type {() => void} */
+  let unsubscribeNotice;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<div id="live-region"></div>';
+    unsubscribeNotice = setupClipLossNotice();
+  });
+
+  afterEach(() => {
+    unsubscribeNotice();
+    hideToast();
+    document.body.innerHTML = '';
+    vi.useRealTimers();
+  });
+
+  it('the crash notice never removes the Undo for an unrelated deleted clip', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const activeFrames = createMockFrames(2);
+    setClipPayload(clipPayloadOf(activeFrames));
+
+    // User deletes the active clip; the UI offers Undo (as the editor does)
+    expect(deleteActiveClip()).toBe(true);
+    showToast('Clip deleted', { actionLabel: 'Undo', onAction: () => undoDelete() });
+
+    // Inside the Undo window, ANOTHER clip's codec worker crashes
+    await vi.advanceTimersByTimeAsync(2000);
+    const { entry: lost } = enqueueClip(clipPayloadOf(createMockFrames(3)));
+    codec.encodeCalls[0].resolve({ ok: false, error: 'worker crashed', frames: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getClipQueue()).not.toContain(lost);
+
+    // Crash notice is shown and announced...
+    expect(document.getElementById('toast-root')?.textContent).toContain('A queued clip was lost');
+    expect(document.getElementById('live-region')?.textContent).toContain(
+      'compression worker crashed',
+    );
+    // ...and the Undo is still there and still restores the deleted clip
+    const undo = /** @type {HTMLButtonElement | null} */ (
+      document.querySelector('#toast-root .app-toast-action')
+    );
+    expect(undo).not.toBeNull();
+    undo?.click();
+
+    expect(getClipQueue()).toHaveLength(1);
+    expect(getClipQueue()[0].frames).toBe(activeFrames);
+    // Past the original grace window nothing is finalized: frames alive
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(activeFrames.every((f) => f.frame.closed === false)).toBe(true);
   });
 });
 
