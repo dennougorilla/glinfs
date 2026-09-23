@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitest/config';
+import { computeEncoderJsSha256Hex } from './scripts/compute-encoder-hash.js';
 
 export default defineConfig({
+  define: {
+    // Kept in sync with vite.config.js so gifsicle-encoder.js's integrity
+    // check has a real (non-hand-maintained) expected hash under vitest too.
+    __ENCODER_JS_SHA256__: JSON.stringify(computeEncoderJsSha256Hex()),
+  },
   test: {
     include: ['tests/**/*.test.js'],
     environment: 'jsdom',
