@@ -56,6 +56,8 @@ function createWorkerError(message, code, context) {
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count
  * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
+ * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
+ * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  */
 
 /**
@@ -203,9 +205,14 @@ export class GifEncoderManager {
           frameDelayMs: config.frameDelayMs,
           loopCount: config.loopCount,
           quantizeFormat: config.quantizeFormat,
+          paletteInterval: config.paletteInterval,
+          paletteSample: config.paletteSample,
         });
 
-        this.worker.postMessage(initMessage);
+        // The sample can be ~1MB; transfer it (detaching the caller's copy)
+        // instead of structured-cloning it.
+        const transfer = config.paletteSample ? [config.paletteSample.buffer] : [];
+        this.worker.postMessage(initMessage, transfer);
       } catch (error) {
         settle('reject', error instanceof Error ? error : new Error('Failed to create worker'));
       }

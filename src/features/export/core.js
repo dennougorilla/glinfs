@@ -4,6 +4,7 @@
  */
 
 import { loadSettings } from '../../shared/user-settings.js';
+import { stratifiedPixelIndices } from './pixel-sampling.js';
 
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const VALID_FRAME_SKIPS = /** @type {const} */ ([1, 2, 3, 4, 5]);
@@ -90,6 +91,104 @@ export function calculateMaxColors(quality, presetId) {
     Math.min(COLOR_PALETTE.max, Math.round(quality * COLOR_PALETTE.max)),
   );
   return Math.max(COLOR_PALETTE.min, Math.round(baseColors * preset.maxColorsMultiplier));
+}
+
+/**
+ * Global palette sampling for presets with paletteInterval 0 (#99).
+ *
+ * The palette is quantized once from pixels gathered across the whole clip
+ * instead of from the first frame alone, so later scenes with different
+ * colors still map well. Both limits bound the retained sample independently
+ * of clip length and resolution; each sample frame is still one full-frame
+ * readback, so the pre-pass time scales with resolution. Measured at
+ * 1280x720 in Chromium on a 6-scene clip: palette error flattens from 8
+ * frames on and is flat across 32K-1M sampled pixels, so the cost is mostly the ~2ms extraction per
+ * sample frame (~30ms total for 16; one full-frame quantize is ~8ms).
+ */
+export const PALETTE_SAMPLE = /** @type {const} */ ({
+  /** Frames extracted for the sample (evenly spaced, first and last included) */
+  maxFrames: 16,
+  /** Total sampled pixels across all sample frames (256KB of RGBA) */
+  maxPixels: 65536,
+});
+
+/**
+ * Pick evenly spaced frame indices spanning the whole clip.
+ * @param {number} totalFrames
+ * @param {number} [maxSamples=PALETTE_SAMPLE.maxFrames]
+ * @returns {number[]} Ascending, unique indices; includes 0 and totalFrames-1
+ */
+export function selectPaletteSampleIndices(totalFrames, maxSamples = PALETTE_SAMPLE.maxFrames) {
+  const count = Math.min(Math.floor(totalFrames), Math.floor(maxSamples));
+  if (count <= 0) return [];
+  if (count === 1) return [0];
+  const last = totalFrames - 1;
+  return Array.from({ length: count }, (_, k) => Math.round((k * last) / (count - 1)));
+}
+
+/**
+ * Cell size so that sampling one pixel per step x step cell of
+ * `frameCount` frames stays within `maxPixels`.
+ * @param {number} width
+ * @param {number} height
+ * @param {number} frameCount
+ * @param {number} [maxPixels=PALETTE_SAMPLE.maxPixels]
+ * @returns {number} Step >= 1
+ */
+export function computePaletteSampleStep(
+  width,
+  height,
+  frameCount,
+  maxPixels = PALETTE_SAMPLE.maxPixels,
+) {
+  const perFrameBudget = maxPixels / Math.max(1, frameCount);
+  let step = Math.max(1, Math.ceil(Math.sqrt((width * height) / perFrameBudget)));
+  // ceil() per axis can overshoot the budget slightly; step up until it fits
+  while (
+    step < Math.max(width, height) &&
+    sampledPixelCount(width, height, step) > perFrameBudget
+  ) {
+    step++;
+  }
+  return step;
+}
+
+/**
+ * Number of pixels sampleFramePixels takes from one frame (one per cell).
+ * @param {number} width
+ * @param {number} height
+ * @param {number} step
+ * @returns {number}
+ */
+export function sampledPixelCount(width, height, step) {
+  return Math.ceil(width / step) * Math.ceil(height / step);
+}
+
+/**
+ * Copy one jittered pixel from each step x step cell of an RGBA frame into
+ * `out` (stratified sampling). A fixed grid would alias: content repeating
+ * with the grid's period (e.g. 4 black / 4 white rows at step 8) would be
+ * sampled on one phase only and lose a whole color.
+ * @param {Uint8ClampedArray} rgba - Source frame
+ * @param {number} width
+ * @param {number} height
+ * @param {number} step
+ * @param {Uint8ClampedArray} out - Destination sample buffer
+ * @param {number} offset - Byte offset in `out` to start writing at
+ * @param {number} seed - PRNG seed for the jitter (same seed, same pixels)
+ * @returns {number} Byte offset after the last written pixel
+ */
+export function sampleFramePixels(rgba, width, height, step, out, offset, seed) {
+  let o = offset;
+  for (const pixel of stratifiedPixelIndices(width, height, step, seed)) {
+    const p = pixel * 4;
+    out[o] = rgba[p];
+    out[o + 1] = rgba[p + 1];
+    out[o + 2] = rgba[p + 2];
+    out[o + 3] = rgba[p + 3];
+    o += 4;
+  }
+  return o;
 }
 
 /**

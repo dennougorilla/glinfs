@@ -8,7 +8,11 @@ import {
   applyFrameSkip,
   calculateFrameDelay,
   calculateMaxColors,
+  computePaletteSampleStep,
   getEncoderPreset,
+  sampledPixelCount,
+  sampleFramePixels,
+  selectPaletteSampleIndices,
 } from './core.js';
 
 /**
@@ -155,6 +159,42 @@ export async function getFrameRGBA(frame, crop) {
 }
 
 /**
+ * Gather a bounded pixel sample from frames spread across the whole clip,
+ * for quantizing one global palette up front (#99, paletteInterval 0).
+ *
+ * Frames are extracted one at a time and reduced to a stratified jittered
+ * subsample right away, so peak memory is one full frame plus the (bounded)
+ * sample. The jitter is seeded by frame index, so output is reproducible.
+ *
+ * @param {import('../capture/types.js').Frame[]} frames - Frames to encode (after frame skip)
+ * @param {import('../editor/types.js').CropArea | null} crop
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Uint8ClampedArray>} RGBA sample
+ * @throws {DOMException} AbortError if cancelled between extractions
+ */
+export async function buildPaletteSample(frames, crop, signal) {
+  const indices = selectPaletteSampleIndices(frames.length);
+  /** @type {Uint8ClampedArray | null} */
+  let sample = null;
+  let step = 1;
+  let offset = 0;
+
+  for (const index of indices) {
+    if (signal?.aborted) {
+      throw new DOMException('Encoding cancelled', 'AbortError');
+    }
+    const { data, width, height } = await getFrameRGBA(frames[index], crop);
+    if (!sample) {
+      step = computePaletteSampleStep(width, height, indices.length);
+      sample = new Uint8ClampedArray(sampledPixelCount(width, height, step) * 4 * indices.length);
+    }
+    offset = sampleFramePixels(data, width, height, step, sample, offset, index);
+  }
+
+  return sample ? sample.subarray(0, offset) : new Uint8ClampedArray(0);
+}
+
+/**
  * Check encoder availability and return best available encoder ID
  * @returns {Promise<import('./encoders/types.js').EncoderId | 'unavailable'>}
  */
@@ -257,6 +297,19 @@ export async function encodeGif(params, signal) {
   signal?.addEventListener('abort', abortHandler);
 
   try {
+    // paletteInterval 0 means one palette for the whole clip; build it
+    // from frames sampled across the clip rather than from frame 0 alone.
+    // gifsicle quantizes internally per frame, so skip the pre-pass there.
+    const encoderId = settings.encoderId ?? 'gifenc-js';
+    const paletteSample =
+      preset.paletteInterval === 0 && encoderId === 'gifenc-js'
+        ? await buildPaletteSample(skippedFrames, crop, signal)
+        : undefined;
+
+    if (signal?.aborted) {
+      throw new DOMException('Encoding cancelled', 'AbortError');
+    }
+
     // Initialize worker with selected encoder
     await manager.init({
       encoderId: settings.encoderId,
@@ -268,6 +321,7 @@ export async function encodeGif(params, signal) {
       loopCount: settings.loopCount,
       quantizeFormat: preset.format,
       paletteInterval: preset.paletteInterval,
+      paletteSample,
     });
 
     // Setup progress callback (also releases backpressure window slots)

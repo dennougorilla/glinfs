@@ -50,6 +50,8 @@ export const Events = {
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count
  * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
+ * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
+ * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  */
 
 /**
@@ -132,6 +134,9 @@ export const Events = {
  * @param {number} config.maxColors
  * @param {number} config.frameDelayMs
  * @param {number} config.loopCount
+ * @param {import('../features/export/encoders/types.js').QuantizeFormat} [config.quantizeFormat]
+ * @param {number} [config.paletteInterval]
+ * @param {Uint8ClampedArray} [config.paletteSample]
  * @returns {InitMessage}
  */
 export function createInitMessage(config) {
