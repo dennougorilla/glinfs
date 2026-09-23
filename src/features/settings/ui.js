@@ -3,6 +3,8 @@
  * Provides inline editing interface for all user settings
  */
 
+import { getDefaultClipQueueLimit, isClipCompressionAvailable } from '../../shared/app-store.js';
+import { on as onBus } from '../../shared/bus.js';
 import {
   loadSettings,
   resetCategory,
@@ -11,6 +13,26 @@ import {
   updateSetting,
 } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
+
+/**
+ * Resolve a setting whose stored "auto" (null) value means a platform-
+ * dependent default (metadata.autoDefault). Only clipQueueLimit uses this
+ * (#92): its effective default depends on WebCodecs compression support.
+ * @param {string} key
+ * @returns {{ value: number, note: string }}
+ */
+function resolveAutoDefault(key) {
+  if (key === 'clipQueueLimit') {
+    const value = getDefaultClipQueueLimit();
+    return {
+      value,
+      note: isClipCompressionAvailable()
+        ? `Default: ${value} (queued clips are compressed)`
+        : `Default: ${value} (compression unavailable, queued clips stay uncompressed)`,
+    };
+  }
+  throw new Error(`No auto default for setting "${key}"`);
+}
 
 /**
  * Render settings screen
@@ -109,7 +131,16 @@ export function renderSettings(container, handlers = {}) {
 
   renderPass();
 
+  // The clip codec probe (#92) can resolve after this screen mounted; the
+  // "auto" clip queue default it decides must not stay stale on screen.
+  // Subscribed once, outside renderPass: re-subscribing from inside the
+  // handler would add to the bus's listener Set mid-iteration and loop.
+  const unsubscribeCodecReady = onBus('queue:changed', ({ type }) => {
+    if (type === 'codec-ready') rerender();
+  });
+
   return () => {
+    unsubscribeCodecReady();
     cleanups.forEach((cleanup) => {
       cleanup();
     });
@@ -200,6 +231,30 @@ function renderSettingItem(category, key, value, metadata, cleanups) {
   const item = createElement('div', { className: 'settings-item' });
 
   const labelEl = createElement('label', { className: 'settings-item-label' }, [metadata.label]);
+
+  if (metadata.autoDefault && key !== null) {
+    // Stored null = "auto": show the EFFECTIVE value, marked as automatic,
+    // plus what the default resolves to on this platform. Moving the control
+    // stores an explicit choice, which is never overridden (Reset restores
+    // auto).
+    const auto = resolveAutoDefault(key);
+    const isAuto = value === null || value === undefined;
+    const control = renderRangeControl(
+      isAuto ? auto.value : value,
+      metadata,
+      (newValue) => updateSetting(category, key, newValue),
+      cleanups,
+      isAuto ? ' (auto)' : '',
+    );
+    const text = createElement('div', { className: 'settings-item-text' }, [
+      labelEl,
+      createElement('p', { className: 'settings-item-note', 'data-setting-note': key }, [
+        auto.note,
+      ]),
+    ]);
+    item.append(text, control);
+    return item;
+  }
 
   const control = renderSettingControl(category, key, value, metadata, cleanups);
 
@@ -335,9 +390,11 @@ function renderSelectControl(value, options, onChange, cleanups) {
  * @param {Object} metadata
  * @param {Function} onChange
  * @param {Array} cleanups
+ * @param {string} [initialSuffix] - Appended to the value text until the
+ *   user moves the slider (e.g. ' (auto)' for an unset auto-default setting)
  * @returns {HTMLElement}
  */
-function renderRangeControl(value, metadata, onChange, cleanups) {
+function renderRangeControl(value, metadata, onChange, cleanups, initialSuffix = '') {
   const { min, max, step, format } = metadata;
   const control = createElement('div', { className: 'settings-control' });
 
@@ -353,7 +410,7 @@ function renderRangeControl(value, metadata, onChange, cleanups) {
   });
 
   const valueDisplay = createElement('span', { className: 'settings-range-value' }, [
-    format ? format(value) : String(value),
+    (format ? format(value) : String(value)) + initialSuffix,
   ]);
 
   const handleInput = (e) => {

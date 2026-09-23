@@ -22,6 +22,9 @@
  *   3. inside the codec worker after a successful encode (#92) — at that
  *      point the compressed bytes ARE the clip and the raw frames end,
  *   4. explicit ACTIVE-clip delete (deleteActiveClip — user-confirmed).
+ *   The one involuntary end is a codec-worker crash mid-encode: frames
+ *   already transferred into the dying worker are gone and their entry is
+ *   removed as 'compress-lost' (see FAILURE CONTRACT below).
  *   They are NEVER closed on promoteQueuedClip / demote / setClipPayload
  *   while a queue exists — those operations only MOVE ownership.
  * - The ACTIVE clip is structurally never evictable: it lives in
@@ -37,9 +40,24 @@
  * transcoded to EncodedVideoChunk bytes in a worker. Entry lifecycle:
  *
  *   raw --> compressing --> compressed --> decoding --> raw (then promote)
- *              |  (encode failure: back to raw, frames returned — a clip is
- *              v   never lost to a codec error)
- *             raw
+ *              |     \
+ *              v      `--> (removed: 'compress-lost', see failure contract)
+ *             raw (recoverable encode failure: frames returned)
+ *
+ * FAILURE CONTRACT for 'compressing' entries:
+ * - Recoverable encode error (encoder/config error inside a healthy worker):
+ *   the worker transfers every frame BACK, the entry returns to 'raw' with
+ *   its full clip and pre-#92 accounting. Nothing is lost.
+ * - Worker crash / terminate, or a failure that cannot return every frame:
+ *   the transferred VideoFrames died with the job and CANNOT be recovered.
+ *   The entry is REMOVED from the queue and 'queue:changed' fires with
+ *   type 'compress-lost' (+ id, error); the app shell shows a non-blocking
+ *   notice (no Undo — there is nothing to restore). Only the clip whose job
+ *   was running is lost: queued jobs had not transferred their frames yet
+ *   and run on a freshly created worker.
+ * - Decode failures never lose a clip: chunks are cloned into the worker,
+ *   so the entry simply returns to 'compressed'.
+ * - The ACTIVE clip is never handed to the codec, so it is never at risk.
  *
  * - 'compressing': the entry's VideoFrames were TRANSFERRED into the codec
  *   worker (the wrappers in entry.frames are detached husks kept only for
@@ -56,7 +74,11 @@
  */
 
 import { emit } from './bus.js';
-import { loadSettings } from './user-settings.js';
+import {
+  CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED,
+  CLIP_QUEUE_LIMIT_DEFAULT_RAW,
+  loadSettings,
+} from './user-settings.js';
 import { createFrameThumbnailDataUrl } from './utils/canvas.js';
 import { estimateFramesMemoryMB } from './utils/memory-monitor.js';
 import { resetThumbnailCache } from './utils/thumbnail-cache.js';
@@ -239,6 +261,8 @@ function closeVideoFrames(videoFrames) {
  * machine with a mock codec and no WebCodecs.
  * @typedef {Object} ClipCodecLike
  * @property {() => boolean} isCompressionAvailable
+ * @property {() => Promise<boolean>} [probeSupport] - When present, the store
+ *   re-announces the queue limit once it resolves (the "auto" default moves)
  * @property {(frames: VideoFrame[], options: {fps: number, width: number, height: number}) => Promise<import('./clip-codec.js').EncodeResult>} encode
  * @property {(compressed: {chunks: import('./clip-codec.js').SerializedChunk[], config: import('./clip-codec.js').EncodedClipConfig}) => Promise<import('./clip-codec.js').DecodeResult>} decode
  */
@@ -261,6 +285,11 @@ const pendingEncodeJobs = new Map();
  */
 export function registerClipCodec(codec) {
   clipCodec = codec;
+  // The "auto" queue limit flips from the raw to the compressed default once
+  // the probe finds WebCodecs support — tell limit displays to re-read it
+  void codec?.probeSupport?.().then(() => {
+    if (clipCodec === codec) emitQueueChanged('codec-ready');
+  });
 }
 
 /**
@@ -277,17 +306,50 @@ export function isClipCompressionAvailable() {
 // ============================================================
 
 /**
- * Queue limit from user settings, clamped to the supported 1-30 range so a
- * corrupted localStorage value can never make the queue unbounded (or zero).
- * The 1-30 range (and the default of 10) assumes compressed entries (#92);
- * in the raw fallback the memory-budget refusal is the effective bound long
- * before the count limit.
+ * The queue limit that applies while the user has not chosen one (#92):
+ * 10 when queued clips are compressed, 3 when they stay raw (~3.5 GiB per
+ * default 1080p clip). Until the codec probe resolves, compression reads as
+ * unavailable, so this is the conservative raw value — entries enqueued in
+ * that window stay raw anyway.
+ * @returns {number}
+ */
+export function getDefaultClipQueueLimit() {
+  return isClipCompressionAvailable()
+    ? CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED
+    : CLIP_QUEUE_LIMIT_DEFAULT_RAW;
+}
+
+/**
+ * The user's explicit queue limit, or null for "auto" (stored null/absent,
+ * or non-numeric garbage from a corrupted localStorage value)
+ * @returns {number|null}
+ */
+function readUserClipQueueLimit() {
+  const stored = loadSettings().capture.clipQueueLimit;
+  if (stored === null || stored === undefined) return null;
+  const value = Number(stored);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Whether the user explicitly chose a queue limit (vs. "auto")
+ * @returns {boolean}
+ */
+export function isClipQueueLimitUserSet() {
+  return readUserClipQueueLimit() !== null;
+}
+
+/**
+ * Effective queue limit: the user's explicit choice (never overridden),
+ * else the platform default from getDefaultClipQueueLimit(). Clamped to the
+ * supported 1-30 range so a corrupted localStorage value can never make the
+ * queue unbounded (or zero).
  * @returns {number}
  */
 export function getClipQueueLimit() {
-  const raw = Number(loadSettings().capture.clipQueueLimit);
-  if (!Number.isFinite(raw)) return 10;
-  return Math.min(30, Math.max(1, Math.round(raw)));
+  const userLimit = readUserClipQueueLimit();
+  if (userLimit === null) return getDefaultClipQueueLimit();
+  return Math.min(30, Math.max(1, Math.round(userLimit)));
 }
 
 /**
@@ -416,11 +478,14 @@ export function deleteActiveClip() {
 
 /**
  * Notify listeners that the queue changed
- * @param {'enqueue'|'promote'|'delete'|'delete-active'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'decode-start'|'decode'|'decode-error'} type
+ * @param {'enqueue'|'promote'|'delete'|'delete-active'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'compress-lost'|'decode-start'|'decode'|'decode-error'|'codec-ready'} type
+ * @param {{ id?: string, error?: string }} [detail] - Entry id/error for
+ *   'compress-lost', so listeners can tell a lost clip from a user delete
  */
-function emitQueueChanged(type) {
+function emitQueueChanged(type, detail = {}) {
   emit('queue:changed', {
     type,
+    ...detail,
     queueLength: state.clipQueue.length,
     limit: getClipQueueLimit(),
   });
@@ -492,10 +557,10 @@ function maybeCompressEntry(entry) {
         return;
       }
 
-      // Encode failure: the worker transferred the surviving VideoFrames
-      // back — rebuild the wrappers so the entry stays raw and the clip is
-      // never lost. If the entry was deleted meanwhile, the returned frames
-      // have no owner left: close them here (delete-path semantics).
+      // Encode failure: when the worker transferred every VideoFrame back
+      // (recoverable error), rebuild the wrappers so the entry stays raw
+      // with its full clip. If the entry was deleted meanwhile, the returned
+      // frames have no owner left: close them here (delete-path semantics).
       if (!live) {
         closeVideoFrames(result.frames);
         return;
@@ -511,14 +576,18 @@ function maybeCompressEntry(entry) {
         entry.status = 'raw';
         emitQueueChanged('compress-error');
       } else {
-        // Worker crashed mid-job and the frames are gone with it. The entry
-        // has nothing usable left — remove it honestly instead of keeping a
-        // husk that would render black.
+        // LOSS (see the failure contract in the module header): the worker
+        // crashed/was terminated mid-job, or could not hand every frame
+        // back, so the clip's frames are gone. Nothing usable is left —
+        // remove the entry (no dangling 'compressing' husk that would render
+        // black) and announce it as 'compress-lost', distinct from a user
+        // delete, so the UI can tell the user instead of failing silently.
         closeVideoFrames(result.frames);
+        entry.frames = null;
         const index = state.clipQueue.indexOf(entry);
         if (index !== -1) {
           state.clipQueue.splice(index, 1);
-          emitQueueChanged('delete');
+          emitQueueChanged('compress-lost', { id: entry.id, error: result.error });
         }
       }
     });

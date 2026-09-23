@@ -8,9 +8,12 @@
  *
  * Frame-ownership contract (mirrors the app-store rules):
  * - ENCODE receives its VideoFrames by TRANSFER — this worker owns them.
- *   They are closed here ONLY after the encoder flush succeeds. On any
+ *   They are closed here ONLY after the encoder flush succeeds. On a caught
  *   failure every input frame is transferred BACK in the JOB_ERROR message,
- *   so an encode failure never destroys a clip.
+ *   so a recoverable encode error never destroys a clip. If they cannot all
+ *   be transferred back — or this worker crashes outright — the frames are
+ *   lost; the main thread detects the short/empty `frames` and drops the
+ *   clip with a user-visible notice (see clip-codec.js failure contract).
  * - DECODE output frames are transferred to the main thread, which owns
  *   them from then on. On failure, partially decoded frames are closed
  *   here (the main thread never saw them).
@@ -36,6 +39,16 @@ self.onmessage = (e) => {
   const { type, payload } = e.data;
   switch (type) {
     case 'ENCODE':
+      if (import.meta.env.DEV && payload.crashForTest) {
+        // Test hook (clip-codec.js crashNextEncodeForTest; compiled out of
+        // production builds): an uncaught error in a timer escapes to the
+        // Worker's onerror on the main thread, exactly like a real crash —
+        // the frames just transferred in are lost with this worker.
+        setTimeout(() => {
+          throw new Error('clip-codec-worker: forced crash (test hook)');
+        }, 0);
+        break;
+      }
       void handleEncode(payload);
       break;
     case 'DECODE':

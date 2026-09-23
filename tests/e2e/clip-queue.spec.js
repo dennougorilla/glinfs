@@ -254,6 +254,131 @@ test('raw fallback: queue and promote still work when WebCodecs encode is unsupp
   expect(pageErrors).toEqual([]);
 });
 
+test('codec worker crash mid-encode: entry removed with a notice, later clips still compress', async ({
+  page,
+}) => {
+  /** @type {string[]} */
+  const consoleErrors = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
+
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    window.__TEST_HOOKS__.updateTestConfig({ mockStream: true });
+  });
+
+  // The crash contract only exists on the compressed path
+  await expect
+    .poll(() => page.evaluate(() => window.__TEST_HOOKS__.isClipCompressionAvailable()))
+    .toBe(true);
+
+  const sceneToggle = page.locator('[data-setting="sceneDetection"]');
+  if ((await sceneToggle.getAttribute('aria-pressed')) === 'true') {
+    await sceneToggle.click();
+    await expect(sceneToggle).toHaveAttribute('aria-pressed', 'false');
+  }
+
+  await page.locator('.btn-capture-start').click();
+  await expect(page.locator('.video-preview--active')).toBeVisible();
+  await expect
+    .poll(async () => Number(await page.locator('.stat-value').first().textContent()), {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(0);
+
+  await page.locator('.btn-create-clip').click();
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+  const activeId = await page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id);
+
+  // Arm a REAL worker crash (uncaught error inside the codec worker) for the
+  // next encode job, then queue a clip: its frames are transferred into the
+  // worker that dies — the #92 failure contract's loss case
+  await page.evaluate(() => window.__TEST_HOOKS__.crashClipCodecOnNextEncode());
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Shift+C');
+
+  // Non-blocking notice, and the lost entry is removed — never left
+  // dangling in 'compressing'
+  const toast = page.locator('.app-toast--notice');
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText('A queued clip was lost');
+  await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(0);
+  await expect(page.locator('[data-clip-status="compressing"]')).toHaveCount(0);
+  // It was the real Worker onerror path, not a recoverable encode error
+  expect(consoleErrors.some((t) => /ClipCodecManager.*forced crash/.test(t))).toBe(true);
+
+  // The active clip was never handed to the codec and is untouched
+  expect(await page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id)).toBe(activeId);
+  await expect(page.locator('.editor-canvas')).toBeVisible();
+
+  // The codec worker is re-created: the next clip compresses normally
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Shift+C');
+  await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(1);
+  await expect(page.locator(QUEUE_ENTRIES).first()).toHaveAttribute(
+    'data-clip-status',
+    'compressed',
+    { timeout: 30000 },
+  );
+});
+
+test('codec worker crash during an Undo window keeps the Undo: the deleted clip is restored', async ({
+  page,
+}) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    window.__TEST_HOOKS__.updateTestConfig({ mockStream: true });
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__TEST_HOOKS__.isClipCompressionAvailable()))
+    .toBe(true);
+
+  const sceneToggle = page.locator('[data-setting="sceneDetection"]');
+  if ((await sceneToggle.getAttribute('aria-pressed')) === 'true') {
+    await sceneToggle.click();
+    await expect(sceneToggle).toHaveAttribute('aria-pressed', 'false');
+  }
+
+  await page.locator('.btn-capture-start').click();
+  await expect(page.locator('.video-preview--active')).toBeVisible();
+  await expect
+    .poll(async () => Number(await page.locator('.stat-value').first().textContent()), {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(0);
+
+  await page.locator('.btn-create-clip').click();
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+  const deletedId = await page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id);
+
+  // Single-click delete of the clip being edited -> 5s Undo toast
+  await page.locator('[data-testid="delete-active-clip"]').first().click();
+  const undo = page.locator('.app-toast-action');
+  await expect(undo).toBeVisible();
+
+  // Inside the Undo window, a DIFFERENT clip's codec worker really crashes
+  await page.evaluate(() => window.__TEST_HOOKS__.crashClipCodecOnNextEncode());
+  await page.keyboard.press('Shift+C');
+  await expect(page.locator('.app-toast--notice')).toContainText('A queued clip was lost');
+  await expect(page.locator('#live-region')).toContainText('compression worker crashed');
+
+  // The crash notice did not take the Undo away — and Undo still works
+  await expect(undo).toBeVisible();
+  await undo.click();
+
+  // Restored to the queue with live frames, and still alive after the
+  // original grace window (nothing was finalized behind the user's back)
+  await page.waitForTimeout(5500);
+  const restored = await page.evaluate(async (id) => {
+    const store = await import('/glinfs/shared/app-store.js');
+    const entry = store.getClipQueue().find((e) => e.id === id);
+    return entry ? { width: entry.frames?.[0]?.frame?.codedWidth ?? 0 } : null;
+  }, deletedId);
+  expect(restored).not.toBeNull();
+  expect(restored?.width).toBeGreaterThan(0);
+});
+
 test('digit shortcuts switch and delete clips by their list position (#100 r7)', async ({
   page,
 }) => {
@@ -327,7 +452,7 @@ test('digit shortcuts switch and delete clips by their list position (#100 r7)',
   const queuedPos = rows2.indexOf(false) + 1;
   await page.keyboard.press(`Shift+Digit${queuedPos}`);
   await expect(page.locator(QUEUE_ENTRIES)).toHaveCount(queuedBefore - 1);
-  await expect(page.locator('.app-toast')).toBeVisible();
+  await expect(page.locator('.app-toast-action')).toBeVisible();
   await expect(page.locator('[data-count="clips"]')).toHaveText('2');
 
   // Delete key removes the ACTIVE clip; the survivor is promoted in place

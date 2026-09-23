@@ -121,6 +121,22 @@
   margin: 0;
 }
 
+/* Label + explanatory note stack (settings with a platform-dependent
+   default, e.g. the #92 clip queue limit) */
+.settings-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-item-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
 .settings-control {
   display: flex;
   align-items: center;
