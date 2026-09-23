@@ -19,7 +19,8 @@
  * @property {number} maxColorsMultiplier - Multiplier for quality-based maxColors
  * @property {number} paletteInterval - How often quantize() rebuilds the
  *   palette: 1 = every frame (best color fidelity), N>1 = every Nth frame
- *   (reused between), 0 = once from the first frame (fastest). Palette
+ *   (reused between), 0 = once for the whole clip, from pixels sampled
+ *   across it (fastest; first frame if no sample is given). Palette
  *   rebuilding dominates encode time (#99), so this is the preset's main
  *   speed lever.
  */
@@ -33,6 +34,9 @@
  * @property {number} frameDelayMs - Frame delay (ms)
  * @property {number} loopCount - Loop count (0 = infinite)
  * @property {QuantizeFormat} [quantizeFormat='rgb565'] - Quantization format
+ * @property {number} [paletteInterval=1] - Palette rebuild schedule (see EncoderPresetConfig)
+ * @property {Uint8ClampedArray} [paletteSample] - RGBA pixels sampled across the
+ *   clip; with paletteInterval 0 the palette is quantized once from this
  */
 
 /**

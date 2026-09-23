@@ -81,6 +81,8 @@ async function handleInit(message) {
       frameDelayMs: message.frameDelayMs,
       loopCount: message.loopCount,
       quantizeFormat: message.quantizeFormat,
+      paletteInterval: message.paletteInterval,
+      paletteSample: message.paletteSample,
     });
 
     totalFrames = message.totalFrames;

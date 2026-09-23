@@ -11,6 +11,8 @@ class MockWorker {
     this.terminated = false;
     /** @type {any} */
     this._lastMessage = null;
+    /** @type {Transferable[] | undefined} */
+    this._lastTransfer = undefined;
   }
 
   /**
@@ -37,9 +39,11 @@ class MockWorker {
 
   /**
    * @param {any} message
+   * @param {Transferable[]} [transfer]
    */
-  postMessage(message) {
+  postMessage(message, transfer) {
     this._lastMessage = message;
+    this._lastTransfer = transfer;
   }
 
   terminate() {
@@ -210,6 +214,40 @@ describe('GifEncoderManager', () => {
         frameDelayMs: 33,
         loopCount: 2,
       });
+
+      // Cleanup
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise.catch(() => {});
+      manager.dispose();
+    });
+
+    it('forwards the palette schedule and transfers the palette sample (#99)', async () => {
+      // Arrange
+      const manager = new workerManagerModule.GifEncoderManager();
+      const paletteSample = new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 255]);
+      const config = {
+        width: 100,
+        height: 100,
+        totalFrames: 10,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb444',
+        paletteInterval: 0,
+        paletteSample,
+      };
+
+      // Act
+      const initPromise = manager.init(/** @type {any} */ (config));
+      await Promise.resolve();
+
+      // Assert - dropping these made every preset quantize every frame
+      expect(mockWorkerInstance?._lastMessage).toMatchObject({
+        quantizeFormat: 'rgb444',
+        paletteInterval: 0,
+        paletteSample,
+      });
+      expect(mockWorkerInstance?._lastTransfer).toEqual([paletteSample.buffer]);
 
       // Cleanup
       mockWorkerInstance?._simulateMessage({ event: Events.READY });

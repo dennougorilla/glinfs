@@ -99,6 +99,28 @@ describe('gif-encoder-worker session abort (#45)', () => {
     self.postMessage = originalPostMessage;
   });
 
+  it('forwards the palette schedule and sample to encoder.init (#99)', async () => {
+    const paletteSample = new Uint8ClampedArray([0, 0, 255, 255]);
+
+    await send({
+      command: 'init',
+      encoderId: 'gifenc-js',
+      width: 2,
+      height: 2,
+      totalFrames: 2,
+      maxColors: 64,
+      frameDelayMs: 100,
+      loopCount: 0,
+      quantizeFormat: 'rgb444',
+      paletteInterval: 0,
+      paletteSample,
+    });
+
+    expect(init).toHaveBeenCalledWith(
+      expect.objectContaining({ quantizeFormat: 'rgb444', paletteInterval: 0, paletteSample }),
+    );
+  });
+
   it('drops further ADD_FRAME calls after a frame failure instead of feeding the encoder', async () => {
     addFrame.mockImplementationOnce(() => {
       throw new Error('quantize failed');

@@ -31,7 +31,8 @@ const METADATA = {
  * Whether addFrame should rebuild the palette for this frame.
  *
  * interval semantics: 1 = every frame; N>1 = frames 0, N, 2N, ...;
- * 0 = only when no palette exists yet (first frame / after init).
+ * 0 = only when no palette exists yet (i.e. never once init() built one
+ * from a clip-wide paletteSample; otherwise from the first frame).
  * Exported for unit tests - the schedule IS the perf contract (#99).
  *
  * @param {number} frameIndex
@@ -70,7 +71,13 @@ export function createGifencEncoder() {
     init(encoderConfig) {
       config = encoderConfig;
       encoder = GIFEncoder();
-      palette = null;
+      // A clip-wide sample yields one global palette up front, so later
+      // scenes are not forced onto frame 0's colors (#99).
+      palette = encoderConfig.paletteSample?.length
+        ? quantize(encoderConfig.paletteSample, encoderConfig.maxColors, {
+            format: encoderConfig.quantizeFormat || 'rgb565',
+          })
+        : null;
     },
 
     /**
