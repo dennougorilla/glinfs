@@ -6,8 +6,30 @@
 
 import { createElement, on } from '../../shared/utils/dom.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
+import { createGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
 import { isFrameInRange, normalizeSelectionRange } from './core.js';
+
+/**
+ * Copy a rendered thumbnail's pixel content into a brand-new canvas.
+ *
+ * An evicted row zeroes its canvas's width/height to force immediate
+ * backing-store release (see `releaseThumbnail`), so the row's thumbnail is
+ * cloned into the cache first. A cache hit `take()`s the entry out, so a
+ * canvas is never held by both the cache and the DOM.
+ * @param {HTMLCanvasElement} source
+ * @returns {HTMLCanvasElement}
+ */
+function cloneThumbnailCanvas(source) {
+  const clone = document.createElement('canvas');
+  clone.width = source.width;
+  clone.height = source.height;
+  const ctx = clone.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(source, 0, 0);
+  }
+  return clone;
+}
 
 /** Controls that must retain their native keyboard behavior inside the modal. */
 const INTERACTIVE_ELEMENT_SELECTOR = [
@@ -985,6 +1007,10 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   /** @type {(HTMLElement | undefined)[]} */
   const gridItems = [];
   const materializedIndices = new Set();
+  // Thumbnails of evicted virtual rows, so scrolling back reuses them instead
+  // of re-rendering from the source frame (issue #76). Owned by this mount
+  // and released in cleanup(), so closing the modal frees it (#72).
+  const thumbnailCache = createGridThumbnailCache();
   /** @type {number | null} */
   let virtualRenderFrame = null;
   /** @type {number | null} */
@@ -1065,7 +1091,8 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     item.querySelector('.frame-grid-thumbnail-error')?.remove();
 
     try {
-      const canvas = createThumbnailCanvas(frame, renderSize);
+      const canvas =
+        thumbnailCache.take(frame.id, renderSize) ?? createThumbnailCanvas(frame, renderSize);
       canvas.dataset.renderSize = String(renderSize);
       item.insertBefore(canvas, item.firstChild);
     } catch {
@@ -1179,6 +1206,17 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     // first so it stays inside the modal.
     if (item.contains(document.activeElement)) {
       gridContainer.focus();
+    }
+    // Cache a copy before the row's canvas is zeroed. Caching only here (not
+    // on every render) skips the pre-auto-fit size pass and never holds a
+    // second copy of a thumbnail that is still on screen.
+    const canvas = /** @type {HTMLCanvasElement | null} */ (item.querySelector('canvas'));
+    const frame = frames[index];
+    if (canvas && canvas.width > 0 && frame) {
+      const renderSize = Number.parseInt(canvas.dataset.renderSize, 10);
+      if (!thumbnailCache.has(frame.id, renderSize)) {
+        thumbnailCache.addCanvas(frame.id, renderSize, cloneThumbnailCanvas(canvas));
+      }
     }
     releaseThumbnail(item);
     item.remove();
@@ -1847,6 +1885,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       canvas.width = 0;
       canvas.height = 0;
     });
+    thumbnailCache.release();
     backdrop.remove();
   }
 

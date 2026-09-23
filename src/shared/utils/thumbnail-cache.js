@@ -10,8 +10,19 @@ import { getThumbnailSizes } from './quality-settings.js';
 /** @type {number} Default cache size */
 const DEFAULT_CACHE_SIZE = 300;
 
-/** @type {number} Default thumbnail size (device adaptive) */
-const DEFAULT_THUMBNAIL_SIZE = getThumbnailSizes().timeline;
+/**
+ * Default thumbnail size (device adaptive).
+ *
+ * Read lazily (only when a caller omits `maxDimension`) rather than once at
+ * module load. Callers that always pass an explicit size — e.g. the frame
+ * grid, which sizes thumbnails from live grid density — never trigger this,
+ * so it also avoids forcing `getThumbnailSizes()` to resolve before a
+ * consumer has finished setting up quality-settings mocks/state in tests.
+ * @returns {number}
+ */
+function getDefaultThumbnailSize() {
+  return getThumbnailSizes().timeline;
+}
 
 /**
  * LRU Thumbnail Cache
@@ -20,13 +31,36 @@ const DEFAULT_THUMBNAIL_SIZE = getThumbnailSizes().timeline;
 export class ThumbnailCache {
   /**
    * @param {number} [maxSize=300] - Maximum cache entries
+   * @param {{ maxBytes?: number, disposeOnEvict?: boolean }} [options]
+   *   `maxBytes`: optional total pixel-memory budget, estimated as
+   *   width * height * 4 per entry (unbounded by default).
+   *   `disposeOnEvict`: zero a canvas's backing store when it is evicted,
+   *   replaced or invalidated. Only for caches that exclusively own their
+   *   canvases (the frame grid's); the shared cache hands cached canvases to
+   *   the DOM, so disposing them there would blank live thumbnails.
    */
-  constructor(maxSize = DEFAULT_CACHE_SIZE) {
+  constructor(maxSize = DEFAULT_CACHE_SIZE, { maxBytes = Infinity, disposeOnEvict = false } = {}) {
     /** @type {Map<string, HTMLCanvasElement>} */
     this.cache = new Map();
 
     /** @type {number} */
     this.maxSize = maxSize;
+
+    /** @type {number} */
+    this.maxBytes = maxBytes;
+
+    /** @type {boolean} */
+    this.disposeOnEvict = disposeOnEvict;
+
+    /**
+     * Byte estimate per key, recorded at insert time. Kept separately from
+     * the canvas because a released canvas reads back as 0x0.
+     * @type {Map<string, number>}
+     */
+    this._entryBytes = new Map();
+
+    /** @type {number} */
+    this._bytes = 0;
   }
 
   /**
@@ -49,7 +83,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {HTMLCanvasElement | null}
    */
-  get(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  get(frameId, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
     const cached = this.cache.get(key);
     if (cached) {
@@ -62,12 +96,27 @@ export class ThumbnailCache {
   }
 
   /**
+   * Remove a thumbnail from the cache and hand it to the caller, who then
+   * owns it. Never disposes the canvas, even with `disposeOnEvict`.
+   * @param {string} frameId - Frame ID
+   * @param {number} maxDimension - Maximum size this thumbnail was generated at
+   * @returns {HTMLCanvasElement | null}
+   */
+  take(frameId, maxDimension) {
+    const key = this._key(frameId, maxDimension);
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    this._delete(key, cached);
+    return cached;
+  }
+
+  /**
    * Check if thumbnail exists
    * @param {string} frameId - Frame ID
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @returns {boolean}
    */
-  has(frameId, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  has(frameId, maxDimension = getDefaultThumbnailSize()) {
     return this.cache.has(this._key(frameId, maxDimension));
   }
 
@@ -77,7 +126,7 @@ export class ThumbnailCache {
    * @param {number} [maxDimension=80] - Maximum size
    * @returns {Promise<HTMLCanvasElement>}
    */
-  async generate(frame, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  async generate(frame, maxDimension = getDefaultThumbnailSize()) {
     // Return if cached at this exact size
     const cached = this.get(frame.id, maxDimension);
     if (cached) return cached;
@@ -131,7 +180,7 @@ export class ThumbnailCache {
    * @param {(progress: number) => void} [onProgress] - Progress callback
    * @returns {Promise<void>}
    */
-  async generateBatch(frames, maxDimension = DEFAULT_THUMBNAIL_SIZE, onProgress) {
+  async generateBatch(frames, maxDimension = getDefaultThumbnailSize(), onProgress) {
     const uncached = frames.filter((f) => !this.has(f.id, maxDimension));
 
     if (uncached.length === 0) {
@@ -168,16 +217,40 @@ export class ThumbnailCache {
    * @param {number} [maxDimension] - Maximum size this thumbnail was generated at
    * @private
    */
-  _addToCache(frameId, canvas, maxDimension = DEFAULT_THUMBNAIL_SIZE) {
+  _addToCache(frameId, canvas, maxDimension = getDefaultThumbnailSize()) {
     const key = this._key(frameId, maxDimension);
-    // LRU: Remove oldest entry when over capacity
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey) {
-        this.cache.delete(firstKey);
-      }
+    const bytes = canvas.width * canvas.height * 4;
+    this._delete(key, canvas);
+    // LRU: Remove oldest entries while over the entry or byte budget. An
+    // entry larger than the whole byte budget is still stored on its own.
+    while (
+      this.cache.size > 0 &&
+      (this.cache.size >= this.maxSize || this._bytes + bytes > this.maxBytes)
+    ) {
+      this._delete(this.cache.keys().next().value);
     }
     this.cache.set(key, canvas);
+    this._entryBytes.set(key, bytes);
+    this._bytes += bytes;
+  }
+
+  /**
+   * Remove one entry and its byte accounting, disposing its canvas when
+   * `disposeOnEvict` is set.
+   * @param {string} key
+   * @param {HTMLCanvasElement} [keep] - Canvas the caller still uses (a
+   *   re-added or taken canvas); never disposed
+   * @private
+   */
+  _delete(key, keep) {
+    const canvas = this.cache.get(key);
+    this.cache.delete(key);
+    this._bytes -= this._entryBytes.get(key) ?? 0;
+    this._entryBytes.delete(key);
+    if (this.disposeOnEvict && canvas && canvas !== keep) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   }
 
   /**
@@ -203,7 +276,7 @@ export class ThumbnailCache {
     const prefix = `${frameId}@`;
     for (const key of this.cache.keys()) {
       if (key.startsWith(prefix)) {
-        this.cache.delete(key);
+        this._delete(key);
       }
     }
   }
@@ -213,6 +286,24 @@ export class ThumbnailCache {
    */
   clear() {
     this.cache.clear();
+    this._entryBytes.clear();
+    this._bytes = 0;
+  }
+
+  /**
+   * Zero every cached canvas's backing store, then clear the cache.
+   *
+   * Only for caches that exclusively own their canvases (e.g. the frame
+   * grid's, which `take()`s an entry out before displaying it). The shared
+   * cache's `generate()` hands out the cached canvas itself, so releasing it
+   * would blank live thumbnails.
+   */
+  release() {
+    this.cache.forEach((canvas) => {
+      canvas.width = 0;
+      canvas.height = 0;
+    });
+    this.clear();
   }
 
   /**
@@ -221,6 +312,14 @@ export class ThumbnailCache {
    */
   get size() {
     return this.cache.size;
+  }
+
+  /**
+   * Estimated pixel memory held by the cache (width * height * 4 per entry)
+   * @returns {number}
+   */
+  get bytes() {
+    return this._bytes;
   }
 }
 
@@ -236,6 +335,35 @@ export function getThumbnailCache() {
     instance = new ThumbnailCache();
   }
   return instance;
+}
+
+/**
+ * Budgets for a frame grid mount's cache (see `createGridThumbnailCache`).
+ *
+ * The byte cap is what actually bounds memory: at the 'ultra' preset (400px
+ * longest side) a 1:1 thumbnail is 400*400*4 = 640 KB, so 64 MB holds ~100
+ * of them (~180 at 16:9). Smaller presets and denser grids hit the entry cap
+ * first. 'ultra' can be forced from settings on any device, so the cap does
+ * not assume a large-memory device.
+ */
+const GRID_CACHE_SIZE = 600;
+const GRID_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Create a cache for one frame grid modal mount.
+ *
+ * Each mount owns its cache and calls `release()` on it when the modal
+ * closes, so no grid thumbnail outlives the modal (or its clip), and memory
+ * after close returns to what it was before the grid opened (#72). A
+ * separate instance also keeps the grid's denser thumbnails from evicting
+ * the timeline filmstrip's and scene panel's entries in the shared cache.
+ * @returns {ThumbnailCache}
+ */
+export function createGridThumbnailCache() {
+  return new ThumbnailCache(GRID_CACHE_SIZE, {
+    maxBytes: GRID_CACHE_MAX_BYTES,
+    disposeOnEvict: true,
+  });
 }
 
 /**

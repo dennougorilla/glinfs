@@ -89,6 +89,7 @@ describe('Frame Grid thumbnail size bounds (re-read quality settings per modal o
       return /** @type {CanvasRenderingContext2D} */ ({
         canvas: this,
         fillRect: vi.fn(),
+        drawImage: vi.fn(),
       });
     });
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
