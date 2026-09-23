@@ -399,9 +399,17 @@ function setupClipQueueHeader() {
     // screen readers announce the newly rendered list (Escape restores it)
     popover.focus();
 
-    // Escape closes and returns focus to the badge (keyboard reachability)
+    // Escape closes and returns focus to the badge (keyboard reachability).
+    // Registered in the capture phase and consumed there: the editor's
+    // document-level Escape (clear crop) would otherwise also fire (#102).
+    // A modal opened on top of the popover (e.g. the frame grid via F) is
+    // the foreground overlay and owns Escape, so yield to it.
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
+        const modal = document.querySelector('[aria-modal="true"]');
+        if (modal && popover && !modal.contains(popover)) return;
+        e.preventDefault();
+        e.stopPropagation();
         closePopover();
         badge.focus();
       }
@@ -413,9 +421,9 @@ function setupClipQueueHeader() {
         closePopover();
       }
     };
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('pointerdown', onPointerDown);
-    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown));
+    popoverCleanups.push(() => document.removeEventListener('keydown', onKeyDown, true));
     popoverCleanups.push(() => document.removeEventListener('pointerdown', onPointerDown));
   };
 

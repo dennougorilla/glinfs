@@ -702,11 +702,21 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       return;
     }
 
-    // Don't handle if focused on form element
+    // An open overlay (e.g. the header clip-queue popover) that consumed
+    // Escape marks it handled; don't also clear the crop (#102). Scoped to
+    // Escape: timeline/live-monitor handlers preventDefault keys the editor
+    // shortcuts still act on.
+    if (e.key === 'Escape' && e.defaultPrevented) {
+      return;
+    }
+
+    // Don't handle if focused on an editable element
+    const active = document.activeElement;
     if (
-      document.activeElement instanceof HTMLInputElement ||
-      document.activeElement instanceof HTMLSelectElement ||
-      document.activeElement instanceof HTMLTextAreaElement
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLTextAreaElement ||
+      (active instanceof HTMLElement && active.isContentEditable)
     ) {
       return;
     }
