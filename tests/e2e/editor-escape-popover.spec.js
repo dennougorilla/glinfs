@@ -74,6 +74,33 @@ test.describe('Escape with the clip-queue popover open (#102)', () => {
     await expect(page.locator('.btn-clear-crop')).toHaveCount(0);
   });
 
+  test('a modal opened over the popover owns Escape', async ({ page }) => {
+    await page.locator('#clip-queue-badge').click();
+    await expect(page.locator('.clip-queue-popover')).toBeVisible();
+
+    // F opens the frame grid above the popover and moves focus into it
+    await page.keyboard.press('f');
+    const modal = page.locator('.frame-grid-backdrop');
+    await expect(modal).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => !!document.activeElement?.closest('.frame-grid-backdrop')))
+      .toBe(true);
+
+    // The first Escape closes the modal, not the underlying popover, and
+    // focus is not pulled out to the badge
+    await page.keyboard.press('Escape');
+    await expect(modal).toHaveCount(0);
+    await expect(page.locator('.clip-queue-popover')).toBeVisible();
+    await expect(page.locator('#clip-queue-badge')).not.toBeFocused();
+    await expect(page.locator('.btn-clear-crop')).toBeVisible();
+
+    // The next Escape belongs to the popover again; the crop still survives
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.clip-queue-popover')).toHaveCount(0);
+    await expect(page.locator('#clip-queue-badge')).toBeFocused();
+    await expect(page.locator('.btn-clear-crop')).toBeVisible();
+  });
+
   test('Escape with no popover open still clears the crop', async ({ page }) => {
     await expect(page.locator('.clip-queue-popover')).toHaveCount(0);
     await page.keyboard.press('Escape');

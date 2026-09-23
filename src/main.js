@@ -402,8 +402,12 @@ function setupClipQueueHeader() {
     // Escape closes and returns focus to the badge (keyboard reachability).
     // Registered in the capture phase and consumed there: the editor's
     // document-level Escape (clear crop) would otherwise also fire (#102).
+    // A modal opened on top of the popover (e.g. the frame grid via F) is
+    // the foreground overlay and owns Escape, so yield to it.
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
+        const modal = document.querySelector('[aria-modal="true"]');
+        if (modal && popover && !modal.contains(popover)) return;
         e.preventDefault();
         e.stopPropagation();
         closePopover();
