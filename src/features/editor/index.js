@@ -72,8 +72,8 @@ let playbackFrameId = null;
 
 /**
  * Playback clock anchor: frames are derived from elapsed time since `time`,
- * re-anchored whenever the playhead, range or speed changes outside the loop
- * @type {{ frame: number, time: number, speed: number, rangeStart: number, rangeEnd: number, lastFrame: number } | null}
+ * re-anchored whenever the playhead, range, speed or FPS changes outside the loop
+ * @type {{ frame: number, time: number, speed: number, fps: number, rangeStart: number, rangeEnd: number, lastFrame: number } | null}
  */
 let playbackAnchor = null;
 
@@ -630,6 +630,7 @@ function anchorPlayback(state, time) {
     frame: state.currentFrame,
     time,
     speed: state.playbackSpeed,
+    fps: getClipFps(state.clip),
     rangeStart: state.selectedRange.start,
     rangeEnd: state.selectedRange.end,
     lastFrame: state.currentFrame,
@@ -656,11 +657,13 @@ function startPlayback() {
 
     const state = store.getState();
     if (state.clip) {
-      // Seek, range edit or speed change since the last tick: restart the
-      // clock from wherever the playhead is now
+      // Seek, range edit, speed or FPS change since the last tick: restart
+      // the clock from wherever the playhead is now
+      const fps = getClipFps(state.clip);
       if (
         state.currentFrame !== playbackAnchor.lastFrame ||
         state.playbackSpeed !== playbackAnchor.speed ||
+        fps !== playbackAnchor.fps ||
         state.selectedRange.start !== playbackAnchor.rangeStart ||
         state.selectedRange.end !== playbackAnchor.rangeEnd
       ) {
@@ -670,7 +673,7 @@ function startPlayback() {
       const nextFrameIndex = getPlaybackFrame({
         anchorFrame: playbackAnchor.frame,
         elapsedMs: timestamp - playbackAnchor.time,
-        fps: getClipFps(state.clip),
+        fps,
         playbackSpeed: state.playbackSpeed,
         range: state.selectedRange,
       });
