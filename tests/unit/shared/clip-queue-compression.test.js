@@ -16,6 +16,7 @@ import {
   undoDelete,
 } from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
+import { createClipCodecManager } from '../../../src/shared/clip-codec.js';
 import { setupClipLossNotice } from '../../../src/shared/clip-loss-notice.js';
 import { hideToast, showToast } from '../../../src/shared/toast.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
@@ -221,6 +222,52 @@ describe('encode failure', () => {
     }
 
     unsubscribe();
+  });
+});
+
+describe('codec terminate() with 1 running + 2 pending encodes (#120)', () => {
+  it('loses only the running clip; pending clips get their frames back (kept raw or closed)', async () => {
+    vi.stubGlobal('VideoEncoder', {
+      isConfigSupported: vi.fn(async () => ({ supported: true })),
+    });
+    const worker = { onmessage: null, onerror: null, terminate: vi.fn(), postMessage: vi.fn() };
+    const manager = createClipCodecManager({ createWorker: () => worker });
+    await manager.probeSupport();
+    registerClipCodec(manager);
+
+    const runningFrames = createMockFrames(2);
+    const keptFrames = createMockFrames(3);
+    const deletedFrames = createMockFrames(4);
+    const { entry: running } = enqueueClip(clipPayloadOf(runningFrames));
+    const { entry: kept } = enqueueClip(clipPayloadOf(keptFrames));
+    const { entry: deleted } = enqueueClip(clipPayloadOf(deletedFrames));
+    // One job dispatched (frames transferred), two waiting in the codec queue
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    expect([running, kept, deleted].map((e) => e.status)).toEqual([
+      'compressing',
+      'compressing',
+      'compressing',
+    ]);
+    // A pending clip deleted meanwhile no longer owns its frames' fate
+    deleteQueuedClip(deleted.id);
+
+    const events = [];
+    const unsubscribe = onBus('queue:changed', (payload) => events.push(payload.type));
+    manager.terminate();
+    await flushJobs();
+
+    // Running clip: its frames died with the worker -> removed as lost
+    expect(getClipQueue()).toEqual([kept]);
+    expect(events).toContain('compress-lost');
+    // Pending clip still queued: back to raw with its own, still-open frames
+    expect(kept.status).toBe('raw');
+    expect(kept.frames.map((f) => f.frame)).toEqual(keptFrames.map((f) => f.frame));
+    expect(keptFrames.every((f) => !f.frame.closed)).toBe(true);
+    // Pending clip deleted meanwhile: handed-back frames closed, not leaked
+    expect(deletedFrames.every((f) => f.frame.close.mock.calls.length === 1)).toBe(true);
+
+    unsubscribe();
+    vi.unstubAllGlobals();
   });
 });
 
