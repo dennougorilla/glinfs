@@ -4,6 +4,7 @@
  * @module features/editor/timeline
  */
 
+import { isComposingEvent } from '../../shared/hotkeys.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { clamp } from '../../shared/utils/math.js';
@@ -412,59 +413,56 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
   // ═══════════════════════════════════════════════════════════
   // INTERACTIONS: Keyboard
   // ═══════════════════════════════════════════════════════════
+  /**
+   * Range a key would produce (Shift = 10-frame step), or null for keys the
+   * timeline doesn't handle
+   * @param {string} key
+   * @param {number} step
+   * @returns {import('./types.js').FrameRange | null}
+   */
+  const getKeyboardRange = (key, step) => {
+    const { start, end } = state.range;
+    switch (key) {
+      case 'ArrowLeft':
+        // Move entire selection left
+        return start - step >= 0 ? { start: start - step, end: end - step } : state.range;
+      case 'ArrowRight':
+        // Move entire selection right
+        return end + step <= totalFrames - 1
+          ? { start: start + step, end: end + step }
+          : state.range;
+      case '[':
+        // Expand selection left
+        return { start: Math.max(0, start - step), end };
+      case ']':
+        // Expand selection right
+        return { start, end: Math.min(totalFrames - 1, end + step) };
+      case 'Home':
+        // Select from start
+        return { start: 0, end };
+      case 'End':
+        // Select to end
+        return { start, end: totalFrames - 1 };
+      default:
+        return null;
+    }
+  };
+
+  // The timeline claims a key only when it actually moves the range. With
+  // the whole clip selected (or the range against a clip edge) the key falls
+  // through to the editor's route hotkeys, so Arrow/Home/End seek the
+  // playhead instead: one action per keypress, never both (#102).
   cleanups.push(
     on(timeline, 'keydown', (e) => {
       const ke = /** @type {KeyboardEvent} */ (e);
-      const step = ke.shiftKey ? 10 : 1;
+      // Ctrl/Meta/Alt combos belong to the browser; IME keystrokes are text
+      if (ke.ctrlKey || ke.metaKey || ke.altKey || isComposingEvent(ke)) return;
 
-      switch (ke.key) {
-        case 'ArrowLeft':
-          ke.preventDefault();
-          // Move entire selection left
-          if (state.range.start - step >= 0) {
-            updateRange({
-              start: state.range.start - step,
-              end: state.range.end - step,
-            });
-          }
-          break;
-        case 'ArrowRight':
-          ke.preventDefault();
-          // Move entire selection right
-          if (state.range.end + step <= totalFrames - 1) {
-            updateRange({
-              start: state.range.start + step,
-              end: state.range.end + step,
-            });
-          }
-          break;
-        case '[':
-          ke.preventDefault();
-          // Expand selection left
-          updateRange({
-            start: Math.max(0, state.range.start - step),
-            end: state.range.end,
-          });
-          break;
-        case ']':
-          ke.preventDefault();
-          // Expand selection right
-          updateRange({
-            start: state.range.start,
-            end: Math.min(totalFrames - 1, state.range.end + step),
-          });
-          break;
-        case 'Home':
-          ke.preventDefault();
-          // Select from start
-          updateRange({ start: 0, end: state.range.end });
-          break;
-        case 'End':
-          ke.preventDefault();
-          // Select to end
-          updateRange({ start: state.range.start, end: totalFrames - 1 });
-          break;
-      }
+      const next = getKeyboardRange(ke.key, ke.shiftKey ? 10 : 1);
+      if (!next || (next.start === state.range.start && next.end === state.range.end)) return;
+
+      ke.preventDefault();
+      updateRange(next);
     }),
   );
 

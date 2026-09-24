@@ -6,6 +6,9 @@
  * editor vs. global") and the "typing in a field" guard live in one place.
  *
  * Rules, in order:
+ * - IME composition keystrokes (isComposing, or keyCode 229 in browsers
+ *   that report the composition that way) are never shortcuts: Escape
+ *   while converting Japanese text cancels the conversion, not the crop.
  * - An event another listener already consumed (defaultPrevented) is left
  *   alone. Bubble phase is deliberate: element-level and capture-phase
  *   handlers run first and can claim a key by preventing its default.
@@ -118,9 +121,19 @@ export function isEditableTarget(target) {
   return target.closest(EDITABLE_SELECTOR) !== null;
 }
 
+/**
+ * Whether a keydown belongs to an IME composition session. Listeners outside
+ * the dispatcher use this too, so no shortcut fires mid-conversion.
+ * @param {KeyboardEvent} e
+ * @returns {boolean}
+ */
+export function isComposingEvent(e) {
+  return e.isComposing || e.keyCode === 229;
+}
+
 /** @param {KeyboardEvent} e */
 function dispatch(e) {
-  if (e.defaultPrevented) return;
+  if (isComposingEvent(e) || e.defaultPrevented) return;
 
   // Test-dispatched events target document; real ones target the focused
   // element. Either way the focused element decides "is the user typing".

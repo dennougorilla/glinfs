@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { gotoCapture } from './helpers/app.js';
+import { gotoCapture, gotoEditorWithClip, pauseEditorPlayback } from './helpers/app.js';
 
 /**
  * E2E for #102: every app shortcut now routes through one document-level
@@ -9,7 +9,8 @@ import { gotoCapture } from './helpers/app.js';
  * Shift+digit (route), Space play/pause (route), and F + Escape on the
  * frame grid (foreign aria-modal the dispatcher yields to).
  *
- * Drives the #91 mock stream: capture -> Create Clip -> editor.
+ * Drives the #91 mock stream: capture -> Create Clip -> editor. The
+ * timeline / IME cases use an injected 30-frame clip instead.
  */
 
 /** @param {import('@playwright/test').Page} page */
@@ -28,6 +29,35 @@ async function blurToBody(page) {
 }
 
 const ENTRIES = '.editor-screen [data-testid="clip-entry"]';
+
+/** @param {import('@playwright/test').Page} page */
+const editorState = (page) => page.evaluate(() => window.__TEST_HOOKS__.getEditorState());
+
+/** @param {import('@playwright/test').Page} page */
+const setCurrentFrame = (page, /** @type {number} */ currentFrame) =>
+  page.evaluate(
+    (frame) => window.__TEST_HOOKS__.setEditorState({ currentFrame: frame }),
+    currentFrame,
+  );
+
+/**
+ * Dispatch a synthetic keydown (for flags real key presses can't carry,
+ * e.g. isComposing) and report whether anything claimed it.
+ * @param {import('@playwright/test').Page} page
+ * @param {KeyboardEventInit} init
+ * @param {string} [selector] - Target; defaults to the focused element
+ */
+function dispatchKey(page, init, selector) {
+  return page.evaluate(
+    ({ init, selector }) => {
+      const target = selector ? document.querySelector(selector) : document.activeElement;
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      /** @type {Element} */ (target ?? document.body).dispatchEvent(e);
+      return e.defaultPrevented;
+    },
+    { init, selector },
+  );
+}
 
 test.describe('App hotkeys through the shared dispatcher (#102)', () => {
   test.beforeEach(async ({ page }) => {
@@ -159,4 +189,125 @@ test.describe('App hotkeys through the shared dispatcher (#102)', () => {
     await expect(entries).toHaveCount(1);
     await expect(entries.nth(0)).toHaveAttribute('data-clip-active', 'true');
   });
+
+  test('live monitor viewport owns Space/Enter but not modifier or IME combos', async ({
+    page,
+  }) => {
+    await pauseEditorPlayback(page);
+    const viewport = page.locator('.live-monitor-viewport');
+    const overlay = page.locator('[data-testid="live-view-overlay"]');
+    await viewport.focus();
+
+    for (const init of [
+      { key: ' ', ctrlKey: true },
+      { key: 'Enter', altKey: true },
+      { key: ' ', isComposing: true },
+    ]) {
+      expect(await dispatchKey(page, init)).toBe(false);
+    }
+    await expect(overlay).toHaveCount(0);
+
+    // Space opens the live view without also toggling editor playback
+    await page.keyboard.press('Space');
+    await expect(overlay).toBeVisible();
+    await expect(page.locator('.btn-play')).toHaveAttribute('aria-label', 'Play');
+    await page.keyboard.press('Enter');
+    await expect(overlay).toBeHidden();
+  });
+});
+
+test.describe('Timeline keys and IME guard (#102 review)', () => {
+  test.beforeEach(async ({ page }) => {
+    await gotoEditorWithClip(page, { frameCount: 30 });
+    await pauseEditorPlayback(page);
+  });
+
+  test('focused timeline at full range: Arrow/Home/End seek exactly once', async ({ page }) => {
+    await setCurrentFrame(page, 10);
+    await page.locator('.tl').focus();
+
+    for (const [key, frame] of /** @type {const} */ ([
+      ['ArrowRight', 11],
+      ['ArrowLeft', 10],
+      ['Home', 0],
+      ['End', 29],
+    ])) {
+      await page.keyboard.press(key);
+      const state = await editorState(page);
+      expect(state.currentFrame, key).toBe(frame);
+      expect(state.selectedRange, key).toEqual({ start: 0, end: 29 });
+    }
+  });
+
+  test('unfocused editor: Arrow/Home/End still seek', async ({ page }) => {
+    await blurToBody(page);
+    await setCurrentFrame(page, 10);
+
+    for (const [key, frame] of /** @type {const} */ ([
+      ['ArrowRight', 11],
+      ['ArrowRight', 12],
+      ['ArrowLeft', 11],
+      ['Home', 0],
+      ['End', 29],
+    ])) {
+      await page.keyboard.press(key);
+      expect((await editorState(page)).currentFrame, key).toBe(frame);
+    }
+  });
+
+  test('focused timeline with a partial range moves the range once, never also seeking', async ({
+    page,
+  }) => {
+    // A real drag, so the timeline's own range state matches the editor's
+    const box = await page.locator('.tl-track').boundingBox();
+    expect(box).not.toBeNull();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.2, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.7, y, { steps: 5 });
+    await page.mouse.up();
+    const { start, end } = (await editorState(page)).selectedRange;
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeLessThan(29);
+
+    await setCurrentFrame(page, start + 2);
+    await page.locator('.tl').focus();
+    await page.keyboard.press('ArrowRight');
+    let state = await editorState(page);
+    expect(state.selectedRange).toEqual({ start: start + 1, end: end + 1 });
+    expect(state.currentFrame).toBe(start + 2);
+
+    // Playhead on the IN point: the range reducer carries it to the new IN
+    // point, and the route seek must not add a second step on top
+    await setCurrentFrame(page, start + 1);
+    await page.keyboard.press('ArrowRight');
+    state = await editorState(page);
+    expect(state.selectedRange).toEqual({ start: start + 2, end: end + 2 });
+    expect(state.currentFrame).toBe(start + 2);
+
+    // Alt+Arrow is the browser's (history navigation), not a range shift
+    expect(await dispatchKey(page, { key: 'ArrowLeft', altKey: true })).toBe(false);
+    expect((await editorState(page)).selectedRange).toEqual({ start: start + 2, end: end + 2 });
+  });
+
+  for (const [label, init] of /** @type {const} */ ([
+    ['isComposing', { isComposing: true }],
+    ['keyCode 229', { keyCode: 229 }],
+  ])) {
+    test(`IME Escape (${label}) keeps the crop`, async ({ page }) => {
+      await page.evaluate(() =>
+        window.__TEST_HOOKS__.setEditorState({
+          cropArea: { x: 0, y: 0, width: 100, height: 100, aspectRatio: 'free' },
+        }),
+      );
+      await blurToBody(page);
+
+      expect(await dispatchKey(page, { key: 'Escape', ...init })).toBe(false);
+      expect((await editorState(page)).cropArea).not.toBeNull();
+
+      // The same key outside composition still clears it
+      expect(await dispatchKey(page, { key: 'Escape' })).toBe(true);
+      expect((await editorState(page)).cropArea).toBeNull();
+    });
+  }
 });

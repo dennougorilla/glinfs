@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { countHotkeys, isEditableTarget, registerHotkey } from '../../../src/shared/hotkeys.js';
+import {
+  countHotkeys,
+  isComposingEvent,
+  isEditableTarget,
+  registerHotkey,
+} from '../../../src/shared/hotkeys.js';
 
 /**
  * #102: the single document-level hotkey dispatcher — scope precedence,
@@ -275,6 +280,53 @@ describe('defaultPrevented', () => {
 
     expect(press({ key: 'x' }).defaultPrevented).toBe(false);
     expect(press({ key: 'y' }).defaultPrevented).toBe(true);
+  });
+});
+
+describe('IME composition guard', () => {
+  const composing = [
+    ['isComposing', { isComposing: true }],
+    ['keyCode 229', { keyCode: 229 }],
+  ];
+
+  it.each(composing)('never fires a hotkey for a %s keystroke', (_label, init) => {
+    const route = vi.fn();
+    const overlay = vi.fn();
+    register({ key: 'Escape', scope: 'route', handler: route });
+    register({ key: 'Escape', scope: 'overlay', allowInEditable: true, handler: overlay });
+
+    const e = press({ key: 'Escape', ...init });
+
+    expect(route).not.toHaveBeenCalled();
+    expect(overlay).not.toHaveBeenCalled();
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  it.each(composing)('also skips allowInEditable hotkeys inside a field (%s)', (_label, init) => {
+    const handler = vi.fn();
+    register({ key: 'Escape', scope: 'overlay', allowInEditable: true, handler });
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    press({ key: 'Escape', ...init }, input);
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('fires normally once composition ends', () => {
+    const handler = vi.fn();
+    register({ key: 'Escape', scope: 'route', handler });
+
+    press({ key: 'Escape', isComposing: false, keyCode: 27 });
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('isComposingEvent reads both markers', () => {
+    const make = (/** @type {KeyboardEventInit} */ init) => new KeyboardEvent('keydown', init);
+    expect(isComposingEvent(make({ key: 'a', isComposing: true }))).toBe(true);
+    expect(isComposingEvent(make({ key: 'Process', keyCode: 229 }))).toBe(true);
+    expect(isComposingEvent(make({ key: 'Escape', keyCode: 27 }))).toBe(false);
   });
 });
 
