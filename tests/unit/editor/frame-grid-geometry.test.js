@@ -6,6 +6,7 @@ import {
   computeVirtualWindow,
   GRID_ASPECT_RATIO,
   GRID_GAP,
+  getArrowKeyTarget,
   getItemTop,
   getVirtualItemRect,
   shouldVirtualize,
@@ -182,5 +183,25 @@ describe('calculateOptimalThumbnailSize', () => {
 
   it('stays at the minimum when the container is narrower than one item', () => {
     expect(calculateOptimalThumbnailSize(10, 50, 500, 80, 260)).toBe(80);
+  });
+});
+
+describe('getArrowKeyTarget', () => {
+  it('moves one frame left/right and one row up/down', () => {
+    expect(getArrowKeyTarget('ArrowLeft', 10, 6, 250)).toBe(9);
+    expect(getArrowKeyTarget('ArrowRight', 10, 6, 250)).toBe(11);
+    expect(getArrowKeyTarget('ArrowUp', 10, 6, 250)).toBe(4);
+    expect(getArrowKeyTarget('ArrowDown', 10, 6, 250)).toBe(16);
+  });
+
+  it('clamps to the first and last frame', () => {
+    expect(getArrowKeyTarget('ArrowLeft', 0, 6, 250)).toBe(0);
+    expect(getArrowKeyTarget('ArrowUp', 3, 6, 250)).toBe(0);
+    expect(getArrowKeyTarget('ArrowRight', 249, 6, 250)).toBe(249);
+    expect(getArrowKeyTarget('ArrowDown', 246, 6, 250)).toBe(249);
+  });
+
+  it('leaves focus unchanged for other keys', () => {
+    expect(getArrowKeyTarget('Home', 10, 6, 250)).toBe(10);
   });
 });
