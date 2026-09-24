@@ -10,6 +10,11 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.js'],
     environment: 'jsdom',
+    // No test asserts wall-clock time; the heaviest (3,600-frame frame-grid
+    // renders, palette-staleness sweeps) take ~2-3s serially and blew past
+    // the 5s default when another suite or a second `npm test` shared the
+    // CPU. 30s keeps them deterministic under load while still catching hangs.
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

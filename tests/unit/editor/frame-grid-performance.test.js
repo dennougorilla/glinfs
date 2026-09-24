@@ -28,7 +28,11 @@ function createFrames(count) {
   }));
 }
 
-describe('Frame Grid bounded rendering (issue #47)', () => {
+// Bounds here are DOM/canvas counts, not wall-clock budgets, so a retry cannot
+// mask a real regression (it would fail twice); it only absorbs a rare stall of
+// these 3,600-frame jsdom renders under heavy parallel load (see testTimeout in
+// vitest.config.js).
+describe('Frame Grid bounded rendering (issue #47)', { retry: 1 }, () => {
   let cleanup = () => {};
 
   beforeEach(() => {
