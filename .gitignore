@@ -42,7 +42,6 @@ wasm-build/
 # Playwright
 test-results/
 playwright-report/
-screenshots/
 
 # ===== PUBLIC REPO EXCLUSIONS =====
 

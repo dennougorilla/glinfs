@@ -1,10 +1,11 @@
 /**
- * UI/UX Screenshot Tests for Visual Regression
+ * Main screen state tests
  * @module tests/e2e/screenshots.spec
  *
- * Captures screenshots of the main screen states. Each test also asserts the
- * key UI elements so the suite stays meaningful when snapshots are ignored
- * (CI runs with --ignore-snapshots because baselines are gitignored).
+ * Drives each main screen into a key state (via test hooks) and asserts the
+ * UI that state should render. The visual-regression screenshot comparisons
+ * that used to live here were dropped in #131: their baselines were never
+ * committed, so nothing ever checked them.
  *
  * Rewritten for #48:
  * - editor-empty was removed: the empty state it asserted is dead code; the
@@ -20,24 +21,19 @@ import {
   gotoEditorWithClip,
   gotoExportWithClip,
   pauseEditorPlayback,
-  pauseExportPreview,
 } from './helpers/app.js';
 
 // ============================================================
 // Capture Screen Tests
 // ============================================================
 
-test.describe('Capture Screen Screenshots', () => {
+test.describe('Capture Screen States', () => {
   test('capture-initial: empty preview state', async ({ page }) => {
     await gotoCapture(page);
 
     // Verify key elements
     await expect(page.locator('.preview-empty')).toBeVisible();
     await expect(page.locator('button').filter({ hasText: /Select Screen/i })).toBeEnabled();
-
-    await expect(page).toHaveScreenshot('capture-initial.png', {
-      fullPage: true,
-    });
   });
 
   test('capture-buffered: frames captured state', async ({ page }) => {
@@ -51,10 +47,6 @@ test.describe('Capture Screen Screenshots', () => {
     });
 
     await expect(page.locator('.capture-stats .stat-value').first()).toHaveText('90');
-
-    await expect(page).toHaveScreenshot('capture-buffered.png', {
-      fullPage: true,
-    });
   });
 });
 
@@ -62,17 +54,13 @@ test.describe('Capture Screen Screenshots', () => {
 // Editor Screen Tests
 // ============================================================
 
-test.describe('Editor Screen Screenshots', () => {
+test.describe('Editor Screen States', () => {
   test('editor-initial: frames loaded state', async ({ page }) => {
     await gotoEditorWithClip(page, { frameCount: 30, fps: 30 });
     await pauseEditorPlayback(page);
 
     await expect(page.locator('.editor-canvas')).toBeVisible();
     await expect(page.locator('.playback-controls')).toBeVisible();
-
-    await expect(page).toHaveScreenshot('editor-initial.png', {
-      fullPage: true,
-    });
   });
 
   test('editor-crop: crop mode active state', async ({ page }) => {
@@ -89,10 +77,6 @@ test.describe('Editor Screen Screenshots', () => {
     // Crop info panel reflects the injected crop and Clear Crop appears
     await expect(page.locator('.btn-clear-crop')).toBeVisible();
     await expect(page.locator('.crop-info-value').first()).toHaveText('100');
-
-    await expect(page).toHaveScreenshot('editor-crop.png', {
-      fullPage: true,
-    });
   });
 
   test('editor-selection: custom range selected state', async ({ page }) => {
@@ -108,10 +92,6 @@ test.describe('Editor Screen Screenshots', () => {
     });
 
     await expect(page.locator('.timeline-sel-frames')).toHaveText('(36 frames)');
-
-    await expect(page).toHaveScreenshot('editor-selection.png', {
-      fullPage: true,
-    });
   });
 });
 
@@ -119,49 +99,11 @@ test.describe('Editor Screen Screenshots', () => {
 // Export Screen Tests
 // ============================================================
 
-test.describe('Export Screen Screenshots', () => {
+test.describe('Export Screen States', () => {
   test('export-settings: settings panel visible state', async ({ page }) => {
-    // Single-frame clip: the preview canvas shows frame 0 no matter when
-    // playback is paused, keeping the snapshot deterministic.
-    await gotoExportWithClip(page, { frameCount: 1, fps: 30 });
-    await pauseExportPreview(page);
+    await gotoExportWithClip(page, { frameCount: 30, fps: 30 });
 
     await expect(page.locator('.export-settings-panel')).toBeVisible();
     await expect(page.locator('.btn-export-main')).toBeEnabled();
-
-    await expect(page).toHaveScreenshot('export-settings.png', {
-      fullPage: true,
-    });
-  });
-});
-
-// ============================================================
-// Full Flow Screenshots (for documentation)
-// ============================================================
-
-test.describe('Application Flow Screenshots', () => {
-  test('full-flow: all screens in sequence', async ({ page }) => {
-    // 1. Capture initial
-    await gotoCapture(page);
-    await expect(page).toHaveScreenshot('flow-1-capture.png', { fullPage: true });
-
-    // 2. Inject frames and go to editor
-    await page.evaluate(async () => {
-      await window.__TEST_HOOKS__.injectMockClipPayload({ frameCount: 30, fps: 30 });
-      location.hash = '#/editor';
-    });
-    await page.waitForSelector('.editor-canvas', { state: 'visible' });
-    await pauseEditorPlayback(page);
-    await expect(page).toHaveScreenshot('flow-2-editor.png', { fullPage: true });
-
-    // 3. Set editor payload and go to export (single frame for a
-    // deterministic preview canvas — see pauseExportPreview)
-    await page.evaluate(async () => {
-      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 1, fps: 30 });
-      location.hash = '#/export';
-    });
-    await page.waitForSelector('.export-canvas', { state: 'visible' });
-    await pauseExportPreview(page);
-    await expect(page).toHaveScreenshot('flow-3-export.png', { fullPage: true });
   });
 });

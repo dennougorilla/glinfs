@@ -56,12 +56,8 @@ npm test
 # Run tests with coverage report
 npm run test:coverage
 
-# Run E2E tests (Chromium), matching CI: screenshot assertions are skipped
+# Run E2E tests (Chromium)
 npm run test:e2e
-
-# Run E2E tests including screenshot comparison (baselines are gitignored and
-# platform-specific; seed them with `npm run test:e2e:visual -- --update-snapshots`)
-npm run test:e2e:visual
 
 # Production build
 npm run build
