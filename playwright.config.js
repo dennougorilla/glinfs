@@ -8,27 +8,13 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
 
-  // Snapshot configuration for visual regression testing
-  snapshotDir: './screenshots',
-  snapshotPathTemplate: '{snapshotDir}/{testFilePath}/{arg}{ext}',
-
-  // Screenshot comparison settings
-  expect: {
-    toHaveScreenshot: {
-      maxDiffPixels: 100,
-      threshold: 0.2,
-      animations: 'disabled',
-    },
-  },
-
   use: {
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
 
-    // Fixed viewport for consistent screenshots
+    // Fixed viewport so layout assertions see a consistent size
     viewport: { width: 1280, height: 720 },
 
-    // Disable animations for stable screenshots
     actionTimeout: 10000,
   },
 

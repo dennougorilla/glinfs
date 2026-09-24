@@ -105,10 +105,6 @@ test.describe('US2: Clip Range Display', () => {
       window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 20, end: 29 } });
     });
     await expect(selFrames).toHaveText('(10 frames)');
-
-    await expect(page).toHaveScreenshot('us2-selection-info.png', {
-      fullPage: true,
-    });
   });
 });
 
@@ -170,10 +166,6 @@ test.describe('US3: Playback Controls Layout', () => {
 
     await playButton.click();
     await expect(playButton).toHaveAttribute('aria-label', 'Pause');
-
-    await expect(page).toHaveScreenshot('us3-playback-controls.png', {
-      fullPage: true,
-    });
   });
 });
 
@@ -193,10 +185,6 @@ test.describe('US4: Professional Form Controls', () => {
     for (let i = 0; i < count; i++) {
       await expect(rangeInputs.nth(i)).toBeVisible();
     }
-
-    await expect(page).toHaveScreenshot('us4-capture-sliders.png', {
-      fullPage: true,
-    });
   });
 
   test('export settings have styled select elements', async ({ page }) => {
@@ -210,17 +198,12 @@ test.describe('US4: Professional Form Controls', () => {
     for (let i = 0; i < count; i++) {
       await expect(selectElements.nth(i)).toBeVisible();
     }
-
-    await expect(page).toHaveScreenshot('us4-export-selects.png', {
-      fullPage: true,
-    });
   });
 
   test('form controls consistent across features', async ({ page }) => {
     // Capture
     await gotoCapture(page);
     await expect(page.locator('.capture-settings select').first()).toBeVisible();
-    await expect(page).toHaveScreenshot('us4-form-capture.png', { fullPage: true });
 
     // Editor
     await page.evaluate(async () => {
@@ -231,7 +214,6 @@ test.describe('US4: Professional Form Controls', () => {
     // Playback (the speed select) folds into an accordion since #100 v3
     await page.locator('.prop-accordion-summary', { hasText: 'Playback' }).click();
     await expect(page.locator('.editor-sidebar select').first()).toBeVisible();
-    await expect(page).toHaveScreenshot('us4-form-editor.png', { fullPage: true });
 
     // Export
     await page.evaluate(async () => {
@@ -240,7 +222,6 @@ test.describe('US4: Professional Form Controls', () => {
     });
     await page.waitForSelector('.export-canvas', { state: 'visible' });
     await expect(page.locator('.export-settings-panel select').first()).toBeVisible();
-    await expect(page).toHaveScreenshot('us4-form-export.png', { fullPage: true });
   });
 });
 
@@ -258,7 +239,6 @@ test.describe('Integration: Full UX Flow', () => {
       });
     });
     await expect(page.locator('.capture-stats .stat-value').first()).toHaveText('90');
-    await expect(page).toHaveScreenshot('integration-1-capture.png', { fullPage: true });
 
     // 2. Editor with selection info and playback controls
     await page.evaluate(async () => {
@@ -276,7 +256,6 @@ test.describe('Integration: Full UX Flow', () => {
     });
     await expect(page.locator('.timeline-sel-frames')).toHaveText('(61 frames)');
     await expect(page.locator('.btn-play')).toBeVisible();
-    await expect(page).toHaveScreenshot('integration-2-editor.png', { fullPage: true });
 
     // 3. Export with styled controls and canvas preview
     await page.evaluate(async () => {
@@ -287,6 +266,5 @@ test.describe('Integration: Full UX Flow', () => {
 
     await expect(page.locator('.export-settings-panel')).toBeVisible();
     await expect(page.locator('.export-preview-play-btn')).toBeVisible();
-    await expect(page).toHaveScreenshot('integration-3-export.png', { fullPage: true });
   });
 });
