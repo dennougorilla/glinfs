@@ -116,6 +116,10 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     );
   });
 
+  // Created before the grid so eviction can always drop touch state.
+  const touch = attachTouchLongPress(gridContainer);
+  cleanups.push(touch.cleanup);
+
   const grid = createFrameGridVirtualizer({
     frames,
     body,
@@ -127,9 +131,6 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     onItemMaterialized: updateSingleItemVisualState,
     onItemEvicted: (item) => touch.forgetItem(item),
   });
-
-  const touch = attachTouchLongPress(gridContainer);
-  cleanups.push(touch.cleanup);
 
   cleanups.push(
     attachGridPointer(gridContainer, {

@@ -224,4 +224,42 @@ describe('Frame Grid keyboard handling (issue #42)', () => {
       expect(onCancel).toHaveBeenCalledTimes(1);
     });
   });
+
+  it('selects a whole scene from the scenes panel and scrolls to its start', () => {
+    const scene = (id, startFrame, endFrame) => ({
+      id,
+      startFrame,
+      endFrame,
+      confidence: 0.9,
+      timestamp: startFrame * 33_333,
+      duration: (endFrame - startFrame + 1) * 33,
+    });
+    const result = renderFrameGridModal({
+      container: /** @type {HTMLElement} */ (document.querySelector('#container')),
+      frames: /** @type {import('../../../src/features/capture/types.js').Frame[]} */ (
+        createFrames(4)
+      ),
+      initialRange: { start: 0, end: 1 },
+      scenes: [scene('a', 0, 1), scene('b', 2, 3)],
+      callbacks: { onApply: vi.fn(), onCancel: vi.fn() },
+    });
+    cleanup = result.cleanup;
+
+    const buttons = [
+      .../** @type {NodeListOf<HTMLElement>} */ (
+        document.querySelectorAll('.frame-grid-scene-btn')
+      ),
+    ];
+    expect(buttons.map((btn) => btn.classList.contains('is-active'))).toEqual([true, false]);
+
+    buttons[1].click();
+
+    expect(buttons.map((btn) => btn.classList.contains('is-active'))).toEqual([false, true]);
+    expect(document.querySelector('.frame-grid-selection-info')?.textContent).toBe(
+      'Selection: Frame 3 \u2192 Frame 4 (2 frames)',
+    );
+    const startItem = /** @type {HTMLElement} */ (document.querySelector('[data-index="2"]'));
+    expect(startItem.classList.contains('is-start')).toBe(true);
+    expect(startItem.scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' });
+  });
 });
