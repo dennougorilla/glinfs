@@ -416,15 +416,18 @@ function setupClipQueueHeader() {
     // Overlay scope outranks the editor's route-scope Escape (clear crop),
     // and a modal opened on top (e.g. the frame grid via F) outranks it in
     // turn: the modal scope wins and skips the overlay scope (#102).
-    // stopImmediatePropagation keeps the Escape from also reaching later
-    // document listeners (the live-view overlay's), as the capture-phase
-    // listener this replaced did.
+    // The live-view overlay's Escape shares the overlay scope (#127): with
+    // focus inside the popover (its `element`) the popover closes first
+    // whichever opened last; otherwise the layer opened last closes first.
+    // stopImmediatePropagation keeps the Escape from any other document
+    // listener, as the capture-phase listener this replaced did.
     popoverCleanups.push(
       registerHotkey({
         key: 'Escape',
         modifiers: { shift: 'any' },
         scope: 'overlay',
         allowInEditable: true,
+        element: popover,
         handler: (e) => {
           e.preventDefault();
           e.stopImmediatePropagation();

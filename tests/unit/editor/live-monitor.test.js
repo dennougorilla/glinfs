@@ -24,6 +24,7 @@ vi.mock('../../../src/features/capture/clip-service.js', () => ({
 import { clipNow } from '../../../src/features/capture/clip-service.js';
 import { initLiveMonitor } from '../../../src/features/editor/live-monitor.js';
 import { emit } from '../../../src/shared/bus.js';
+import { countHotkeys, registerHotkey } from '../../../src/shared/hotkeys.js';
 
 /** Fake observable capture store matching shared/store.js's shape */
 function makeCaptureStore(initial) {
@@ -174,6 +175,8 @@ describe('source-monitor Live view overlay (#100 follow-up)', () => {
   afterEach(() => {
     teardown?.();
     teardown = null;
+    // Teardown must drop the live-view Escape hotkey (#127)
+    expect(countHotkeys()).toBe(0);
     vi.useRealTimers();
     vi.clearAllMocks();
     document.body.innerHTML = '';
@@ -227,6 +230,87 @@ describe('source-monitor Live view overlay (#100 follow-up)', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true }));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229 }));
     expect(overlay.hidden).toBe(false);
+  });
+
+  it('Escape is an overlay-scope hotkey only while the overlay is open (#127)', () => {
+    goLive();
+    teardown = mountWithHost();
+    const viewport = /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport'));
+    expect(countHotkeys('overlay')).toBe(0);
+
+    viewport.click();
+    expect(countHotkeys('overlay')).toBe(1);
+
+    // Escape closes via the dispatcher and unregisters
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(countHotkeys()).toBe(0);
+
+    // Close button unregisters too
+    viewport.click();
+    expect(countHotkeys('overlay')).toBe(1);
+    /** @type {HTMLElement} */ (host.querySelector('[data-testid="live-view-close"]')).click();
+    expect(countHotkeys()).toBe(0);
+
+    // Teardown with the overlay open unregisters (checked in afterEach)
+    viewport.click();
+    expect(countHotkeys('overlay')).toBe(1);
+  });
+
+  it('capture end drops the Escape hotkey with the overlay', () => {
+    goLive();
+    teardown = mountWithHost();
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+    expect(countHotkeys('overlay')).toBe(1);
+
+    captureState.active = false;
+    captureState.screenState = null;
+    emit('capture:stopped', {});
+    vi.advanceTimersByTime(2100);
+
+    expect(countHotkeys()).toBe(0);
+  });
+
+  it('Ctrl/Meta/Alt+Escape leave the overlay open', () => {
+    goLive();
+    teardown = mountWithHost();
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+    const overlay = /** @type {HTMLElement} */ (
+      host.querySelector('[data-testid="live-view-overlay"]')
+    );
+
+    for (const mod of ['ctrlKey', 'metaKey', 'altKey']) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', [mod]: true }));
+    }
+    expect(overlay.hidden).toBe(false);
+
+    // Shift does not matter, as before
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true }));
+    expect(overlay.hidden).toBe(true);
+  });
+
+  it('a modal opened over the live view takes the first Escape', () => {
+    goLive();
+    teardown = mountWithHost();
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+    const overlay = /** @type {HTMLElement} */ (
+      host.querySelector('[data-testid="live-view-overlay"]')
+    );
+
+    // Stand-in for the frame grid: a modal Escape that closes itself
+    const onModalEscape = vi.fn(() => unregisterModal());
+    const unregisterModal = registerHotkey({
+      key: 'Escape',
+      scope: 'modal',
+      handler: onModalEscape,
+    });
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onModalEscape).toHaveBeenCalledTimes(1);
+    expect(overlay.hidden).toBe(false);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onModalEscape).toHaveBeenCalledTimes(1);
+    expect(overlay.hidden).toBe(true);
   });
 
   it('viewport Space/Enter toggle the overlay; modifier and IME combos are not claimed', () => {

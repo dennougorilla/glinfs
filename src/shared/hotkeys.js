@@ -12,9 +12,12 @@
  * - An event another listener already consumed (defaultPrevented) is left
  *   alone. Bubble phase is deliberate: element-level and capture-phase
  *   handlers run first and can claim a key by preventing its default.
- * - Scopes are tried modal > overlay > route > global; within a scope the
- *   most recent registration is tried first. The first handler that does
- *   not return `false` wins and nothing else runs.
+ * - Scopes are tried modal > overlay > route > global. Within a scope, a
+ *   registration whose `element` contains the focused element is tried
+ *   first, so Escape closes the layer the user is in whichever layer opened
+ *   last (#127); otherwise the most recent registration (the layer opened
+ *   last) goes first. The first handler that does not return `false` wins
+ *   and nothing else runs.
  * - A modal is exclusive: while any modal-scope hotkey is registered (the
  *   frame grid registers its keys for as long as it is open), the overlay
  *   and route scopes are skipped entirely, so keys the modal does not own
@@ -53,6 +56,9 @@
  *   decline the event and let lower-priority hotkeys try it
  * @property {boolean} [allowInEditable] - Also fire while a form field or
  *   contenteditable element has focus
+ * @property {Element | null} [element] - Root of the layer (popover,
+ *   overlay) this hotkey belongs to; while focus is inside it, the hotkey
+ *   outranks the other registrations in its scope
  */
 
 /** @type {readonly HotkeyScope[]} */
@@ -146,14 +152,28 @@ function dispatch(e) {
   for (const scope of SCOPE_ORDER) {
     if (modalOpen && MODAL_YIELDING_SCOPES.has(scope)) continue;
 
-    // Snapshot: a handler may unregister (e.g. closing the popover)
-    const entries = [.../** @type {HotkeyOptions[]} */ (registry.get(scope))].reverse();
-    for (const entry of entries) {
+    for (const entry of orderEntries(scope, target)) {
       if (!matches(entry, e)) continue;
       if (editable && !entry.allowInEditable) continue;
       if (entry.handler(e) !== false) return;
     }
   }
+}
+
+/**
+ * A scope's entries in try order: those whose layer element holds the
+ * focused target first, then the rest; most recent first within each group.
+ * Returns a snapshot, since a handler may unregister (e.g. closing the popover).
+ * @param {HotkeyScope} scope
+ * @param {Element | null} target
+ * @returns {HotkeyOptions[]}
+ */
+function orderEntries(scope, target) {
+  const entries = [.../** @type {HotkeyOptions[]} */ (registry.get(scope))].reverse();
+  if (!target) return entries;
+  const focused = entries.filter((entry) => entry.element?.contains(target));
+  if (focused.length === 0) return entries;
+  return [...focused, ...entries.filter((entry) => !focused.includes(entry))];
 }
 
 /**

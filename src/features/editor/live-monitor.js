@@ -15,7 +15,7 @@
 
 import { getScreenCaptureState, hasActiveScreenCapture } from '../../shared/app-store.js';
 import { on as onBus } from '../../shared/bus.js';
-import { isComposingEvent } from '../../shared/hotkeys.js';
+import { isComposingEvent, registerHotkey } from '../../shared/hotkeys.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { clipNow } from '../capture/clip-service.js';
 
@@ -98,17 +98,15 @@ export function initLiveMonitor(slot, previewHost = null) {
   let overlayVideo = null;
   /** @type {HTMLElement | null} */
   let overlay = null;
-  /** @type {((e: KeyboardEvent) => void) | null} */
-  let overlayKeyHandler = null;
+  /** @type {(() => void) | null} */
+  let unregisterEscape = null;
 
   const closeLiveView = () => {
     if (!overlay) return;
     overlay.hidden = true;
     if (overlayVideo) overlayVideo.srcObject = null;
-    if (overlayKeyHandler) {
-      document.removeEventListener('keydown', overlayKeyHandler);
-      overlayKeyHandler = null;
-    }
+    unregisterEscape?.();
+    unregisterEscape = null;
   };
 
   const openLiveView = () => {
@@ -173,10 +171,22 @@ export function initLiveMonitor(slot, previewHost = null) {
       overlayVideo.srcObject = getScreenCaptureState()?.stream ?? null;
       overlayVideo.play?.()?.catch?.(() => {});
     }
-    overlayKeyHandler = (e) => {
-      if (e.key === 'Escape' && !isComposingEvent(e)) closeLiveView();
-    };
-    document.addEventListener('keydown', overlayKeyHandler);
+    // Escape goes through the dispatcher (#127) in the overlay scope, so a
+    // modal opened on top (the frame grid) takes the first Escape. Against
+    // the clip-queue popover (same scope) the layer holding focus wins, else
+    // the one opened last. The dispatcher applies the IME guard and leaves
+    // Ctrl/Meta/Alt+Escape alone.
+    unregisterEscape ??= registerHotkey({
+      key: 'Escape',
+      modifiers: { shift: 'any' },
+      scope: 'overlay',
+      allowInEditable: true,
+      element: overlay,
+      handler: (e) => {
+        e.preventDefault();
+        closeLiveView();
+      },
+    });
   };
 
   if (previewHost) {
