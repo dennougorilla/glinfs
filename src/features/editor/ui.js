@@ -665,10 +665,10 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // 'queue:changed' by editor/index.js via updateClipsPanel.
   cleanups.push(...updateClipsPanel(container, handlers));
 
-  // Route-scope keyboard shortcuts. While the frame-grid modal is open
-  // (aria-modal) the dispatcher yields route hotkeys to the grid's own
-  // keydown handler — otherwise Escape would close the modal AND clear the
-  // crop, Space would select a grid frame AND toggle playback.
+  // Route-scope keyboard shortcuts. While the frame-grid modal is open it
+  // holds modal-scope hotkeys, and the dispatcher skips the route scope
+  // entirely — otherwise Escape would close the modal AND clear the crop,
+  // Space would select a grid frame AND toggle playback.
   cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
 
   return {
