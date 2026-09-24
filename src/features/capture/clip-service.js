@@ -17,6 +17,7 @@ import {
   isClipQueueFull,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
+import { registerHotkey } from '../../shared/hotkeys.js';
 import { announce } from '../../shared/live-region.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { convertBitmapFramesToVideoFrames, getLiveCaptureContext } from './index.js';
@@ -181,31 +182,30 @@ export async function clipNow() {
 }
 
 /**
- * Global Shift+C hotkey handler, registered once on document in main.js.
+ * Register the global Shift+C "Clip Now" hotkey with the app dispatcher
+ * (called once from main.js).
  *
- * Guards, in order:
- * - exactly Shift+C (no Cmd/Ctrl/Alt — Ctrl+Shift+C is DevTools inspect and
- *   never reaches the page anyway; Cmd+Shift+G is find-previous)
- * - inert while focus is in a form control (same guard as the editor's own
- *   shortcuts)
- * - inert without a live capture session
+ * The dispatcher enforces exactly Shift+C (no Cmd/Ctrl/Alt — Ctrl+Shift+C
+ * is DevTools inspect and never reaches the page anyway) and keeps it inert
+ * while focus is in a form field or contenteditable element. Global scope:
+ * it stays live under the frame-grid modal, as before the dispatcher.
  *
+ * @returns {() => void} Unsubscribe
+ */
+export function registerClipNowHotkey() {
+  return registerHotkey({
+    key: 'c',
+    modifiers: { shift: true },
+    scope: 'global',
+    handler: handleClipNowHotkey,
+  });
+}
+
+/**
+ * Shift+C handler: inert without a live capture session.
  * @param {KeyboardEvent} e
  */
-export function handleClipNowHotkey(e) {
-  if (e.key !== 'C' || !e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) {
-    return;
-  }
-
-  const active = document.activeElement;
-  if (
-    active instanceof HTMLInputElement ||
-    active instanceof HTMLSelectElement ||
-    active instanceof HTMLTextAreaElement
-  ) {
-    return;
-  }
-
+function handleClipNowHotkey(e) {
   if (!isCaptureLive()) {
     // The editor status bar advertises this shortcut; silence here would
     // read as "broken" whenever the share has already ended (UX review)

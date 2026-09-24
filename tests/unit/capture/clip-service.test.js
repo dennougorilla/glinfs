@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * - a full queue refuses BEFORE draining the worker's ring buffer
  * - a refusal after conversion closes the orphaned frames (they never
  *   entered the store, so the service still owns them)
- * - the hotkey is exactly Shift+C, inert in form fields and without a
- *   live capture session
+ * - the hotkey is exactly Shift+C, inert in form fields / contenteditable
+ *   and without a live capture session, and stays live under a modal
  */
 
 const captureContext = vi.hoisted(() => ({ current: /** @type {any} */ (null) }));
@@ -30,8 +30,8 @@ vi.mock('../../../src/features/capture/index.js', () => ({
 
 import {
   clipNow,
-  handleClipNowHotkey,
   isCaptureLive,
+  registerClipNowHotkey,
 } from '../../../src/features/capture/clip-service.js';
 import { convertBitmapFramesToVideoFrames } from '../../../src/features/capture/index.js';
 import { enqueueClip, getClipQueue, resetAppStore } from '../../../src/shared/app-store.js';
@@ -222,35 +222,44 @@ describe('memory budget refusal (#96)', () => {
   });
 });
 
-describe('handleClipNowHotkey (Shift+C guard)', () => {
-  function keyEvent(overrides = {}) {
-    return {
+describe('Clip Now hotkey (Shift+C via the app dispatcher)', () => {
+  /** @type {(() => void) | null} */
+  let unregister = null;
+
+  beforeEach(() => {
+    unregister = registerClipNowHotkey();
+  });
+
+  afterEach(() => {
+    unregister?.();
+    unregister = null;
+    document.body.innerHTML = '';
+  });
+
+  /** Dispatch a keydown on document and return it (for defaultPrevented) */
+  function press(overrides = {}) {
+    const e = new KeyboardEvent('keydown', {
       key: 'C',
       shiftKey: true,
-      metaKey: false,
-      ctrlKey: false,
-      altKey: false,
-      preventDefault: vi.fn(),
+      bubbles: true,
+      cancelable: true,
       ...overrides,
-    };
+    });
+    document.dispatchEvent(e);
+    return e;
   }
 
   it('fires clipNow on a bare Shift+C with a live capture', () => {
     const workerManager = installLiveCapture();
-    const e = keyEvent();
 
-    handleClipNowHotkey(/** @type {any} */ (e));
+    const e = press();
 
-    expect(e.preventDefault).toHaveBeenCalledOnce();
+    expect(e.defaultPrevented).toBe(true);
     expect(workerManager.requestFrames).toHaveBeenCalledTimes(1);
   });
 
   it('is inert without a live capture session', () => {
-    const e = keyEvent();
-
-    handleClipNowHotkey(/** @type {any} */ (e));
-
-    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(press().defaultPrevented).toBe(false);
   });
 
   it('ignores modified combos (Ctrl/Cmd/Alt) and other keys', () => {
@@ -263,9 +272,7 @@ describe('handleClipNowHotkey (Shift+C guard)', () => {
       { shiftKey: false, key: 'c' },
       { key: 'G' },
     ]) {
-      const e = keyEvent(overrides);
-      handleClipNowHotkey(/** @type {any} */ (e));
-      expect(e.preventDefault).not.toHaveBeenCalled();
+      expect(press(overrides).defaultPrevented).toBe(false);
     }
     expect(workerManager.requestFrames).not.toHaveBeenCalled();
   });
@@ -276,10 +283,29 @@ describe('handleClipNowHotkey (Shift+C guard)', () => {
     document.body.appendChild(input);
     input.focus();
 
-    const e = keyEvent();
-    handleClipNowHotkey(/** @type {any} */ (e));
-
-    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(press().defaultPrevented).toBe(false);
     expect(workerManager.requestFrames).not.toHaveBeenCalled();
+  });
+
+  it('is inert while a contenteditable element has focus', () => {
+    const workerManager = installLiveCapture();
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    editable.tabIndex = 0;
+    document.body.appendChild(editable);
+    editable.focus();
+
+    expect(press().defaultPrevented).toBe(false);
+    expect(workerManager.requestFrames).not.toHaveBeenCalled();
+  });
+
+  it('stays live while a modal (frame grid) is open', () => {
+    const workerManager = installLiveCapture();
+    const modal = document.createElement('div');
+    modal.setAttribute('aria-modal', 'true');
+    document.body.appendChild(modal);
+
+    expect(press().defaultPrevented).toBe(true);
+    expect(workerManager.requestFrames).toHaveBeenCalledTimes(1);
   });
 });

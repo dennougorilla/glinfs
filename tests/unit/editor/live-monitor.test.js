@@ -216,6 +216,50 @@ describe('source-monitor Live view overlay (#100 follow-up)', () => {
     ).toBe(true);
   });
 
+  it('IME composition Escape leaves the overlay open', () => {
+    goLive();
+    teardown = mountWithHost();
+    /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport')).click();
+    const overlay = /** @type {HTMLElement} */ (
+      host.querySelector('[data-testid="live-view-overlay"]')
+    );
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229 }));
+    expect(overlay.hidden).toBe(false);
+  });
+
+  it('viewport Space/Enter toggle the overlay; modifier and IME combos are not claimed', () => {
+    goLive();
+    teardown = mountWithHost();
+    const viewport = /** @type {HTMLElement} */ (slot.querySelector('.live-monitor-viewport'));
+    /** @param {KeyboardEventInit} init */
+    const press = (init) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      viewport.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    const overlayHidden = () =>
+      /** @type {HTMLElement | null} */ (host.querySelector('[data-testid="live-view-overlay"]'))
+        ?.hidden ?? true;
+
+    for (const init of [
+      { key: ' ', ctrlKey: true },
+      { key: ' ', metaKey: true },
+      { key: 'Enter', altKey: true },
+      { key: ' ', isComposing: true },
+      { key: 'Enter', keyCode: 229 },
+    ]) {
+      expect(press(init)).toBe(false);
+    }
+    expect(overlayHidden()).toBe(true);
+
+    expect(press({ key: ' ' })).toBe(true);
+    expect(overlayHidden()).toBe(false);
+    expect(press({ key: 'Enter' })).toBe(true);
+    expect(overlayHidden()).toBe(true);
+  });
+
   it('overlay Clip Now calls the clip service', () => {
     goLive();
     teardown = mountWithHost();

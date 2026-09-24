@@ -15,6 +15,7 @@
 
 import { getScreenCaptureState, hasActiveScreenCapture } from '../../shared/app-store.js';
 import { on as onBus } from '../../shared/bus.js';
+import { isComposingEvent } from '../../shared/hotkeys.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { clipNow } from '../capture/clip-service.js';
 
@@ -173,7 +174,7 @@ export function initLiveMonitor(slot, previewHost = null) {
       overlayVideo.play?.()?.catch?.(() => {});
     }
     overlayKeyHandler = (e) => {
-      if (e.key === 'Escape') closeLiveView();
+      if (e.key === 'Escape' && !isComposingEvent(e)) closeLiveView();
     };
     document.addEventListener('keydown', overlayKeyHandler);
   };
@@ -196,8 +197,11 @@ export function initLiveMonitor(slot, previewHost = null) {
       );
       cleanups.push(
         on(viewport, 'keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
+          const ke = /** @type {KeyboardEvent} */ (e);
+          // Ctrl/Meta/Alt+Space etc. belong to the browser; IME keystrokes are text
+          if (ke.ctrlKey || ke.metaKey || ke.altKey || isComposingEvent(ke)) return;
+          if (ke.key === 'Enter' || ke.key === ' ') {
+            ke.preventDefault();
             viewport.click();
           }
         }),
