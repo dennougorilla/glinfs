@@ -172,14 +172,16 @@ export function initLiveMonitor(slot, previewHost = null) {
       overlayVideo.play?.()?.catch?.(() => {});
     }
     // Escape goes through the dispatcher (#127) in the overlay scope, so a
-    // modal opened on top (the frame grid) takes the first Escape and a
-    // popover opened later closes before the live view. The dispatcher
-    // applies the IME guard and leaves Ctrl/Meta/Alt+Escape alone.
+    // modal opened on top (the frame grid) takes the first Escape. Against
+    // the clip-queue popover (same scope) the layer holding focus wins, else
+    // the one opened last. The dispatcher applies the IME guard and leaves
+    // Ctrl/Meta/Alt+Escape alone.
     unregisterEscape ??= registerHotkey({
       key: 'Escape',
       modifiers: { shift: 'any' },
       scope: 'overlay',
       allowInEditable: true,
+      element: overlay,
       handler: (e) => {
         e.preventDefault();
         closeLiveView();

@@ -115,6 +115,103 @@ describe('scope precedence', () => {
   });
 });
 
+describe('layer element tie-break within a scope (#127)', () => {
+  /** Two overlay layers, A registered (opened) before B, each with a button */
+  function twoLayers() {
+    const layerA = document.createElement('div');
+    const layerB = document.createElement('div');
+    const outside = document.createElement('button');
+    for (const layer of [layerA, layerB]) layer.appendChild(document.createElement('button'));
+    document.body.append(layerA, layerB, outside);
+    return {
+      layerA,
+      layerB,
+      outside,
+      inA: /** @type {HTMLElement} */ (layerA.firstElementChild),
+      inB: /** @type {HTMLElement} */ (layerB.firstElementChild),
+    };
+  }
+
+  /**
+   * @param {string[]} calls
+   * @param {{ layerA: Element, layerB: Element }} layers
+   * @param {{ declineA?: boolean }} [opts]
+   */
+  function registerLayers(calls, { layerA, layerB }, { declineA = false } = {}) {
+    register({
+      key: 'Escape',
+      scope: 'overlay',
+      element: layerA,
+      handler: () => {
+        calls.push('A');
+        return declineA ? false : undefined;
+      },
+    });
+    register({ key: 'Escape', scope: 'overlay', element: layerB, handler: () => calls.push('B') });
+  }
+
+  it('prefers the layer holding focus over a later registration', () => {
+    const calls = [];
+    const layers = twoLayers();
+    registerLayers(calls, layers);
+
+    layers.inA.focus();
+    press({ key: 'Escape' }, layers.inA);
+    layers.inB.focus();
+    press({ key: 'Escape' }, layers.inB);
+
+    expect(calls).toEqual(['A', 'B']);
+  });
+
+  it('falls back to the most recent registration when focus is in neither layer', () => {
+    const calls = [];
+    const layers = twoLayers();
+    registerLayers(calls, layers);
+
+    layers.outside.focus();
+    press({ key: 'Escape' }, layers.outside);
+    // Untargeted (document) events resolve focus via activeElement: body here
+    layers.outside.blur();
+    press({ key: 'Escape' });
+
+    expect(calls).toEqual(['B', 'B']);
+  });
+
+  it('reads focus from activeElement when the event targets document', () => {
+    const calls = [];
+    const layers = twoLayers();
+    registerLayers(calls, layers);
+
+    layers.inA.focus();
+    press({ key: 'Escape' });
+
+    expect(calls).toEqual(['A']);
+  });
+
+  it('lets the focused layer decline so the other layer can act', () => {
+    const calls = [];
+    const layers = twoLayers();
+    registerLayers(calls, layers, { declineA: true });
+
+    layers.inA.focus();
+    press({ key: 'Escape' }, layers.inA);
+
+    expect(calls).toEqual(['A', 'B']);
+  });
+
+  it('never lifts a focused overlay above a modal (modal exclusivity holds)', () => {
+    const calls = [];
+    const layers = twoLayers();
+    registerLayers(calls, layers);
+    register({ key: 'Escape', scope: 'modal', handler: () => calls.push('modal') });
+
+    layers.inA.focus();
+    press({ key: 'Escape' }, layers.inA);
+
+    expect(calls).toEqual(['modal']);
+  });
+});
+
 describe('modal exclusivity (the frame grid registers modal-scope keys)', () => {
   it('skips overlay and route scopes while a modal hotkey is registered', () => {
     const overlay = vi.fn();
