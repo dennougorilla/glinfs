@@ -14,28 +14,19 @@ import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries
 import { registerHotkey } from '../../shared/hotkeys.js';
 import { navigate } from '../../shared/router.js';
 import { loadSettings } from '../../shared/user-settings.js';
-import { createElement, on } from '../../shared/utils/dom.js';
+import { createElement } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
-import {
-  createThumbnailCanvas,
-  getCursorForHandle,
-  hitTestCropHandle,
-  renderFrameOnly,
-  renderOverlay,
-} from './api.js';
-import {
-  calculateCropFromDrag,
-  calculateSelectionInfo,
-  detectBoundaryHit,
-  getOutputDimensions,
-  getPositionInSelection,
-  moveCrop,
-  resizeCropByHandle,
-} from './core.js';
-import { renderFrameGridModal } from './frame-grid.js';
+import { renderFrameOnly, renderOverlay } from './api.js';
+import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } from './core.js';
+import { createFrameGridLauncher } from './panels/frame-grid-launcher.js';
+import { renderEditorLeftSidebar, renderScenesSidebar } from './panels/left-sidebar.js';
+import { renderEditorPreview } from './panels/preview.js';
+import { createClearCropButton, renderEditorPropertiesPanel } from './panels/properties.js';
+import { renderEditorStatusBar } from './panels/status-bar.js';
+import { renderEditorTimelineSection } from './panels/timeline-section.js';
+import { renderEditorToolbar } from './panels/toolbar.js';
 
 /**
  * @typedef {Object} EditorUIHandlers
@@ -54,49 +45,10 @@ import { renderFrameGridModal } from './frame-grid.js';
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
  */
 
-/** @type {string[]} */
-const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
-
-/** @type {number[]} */
-const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 1.5, 2];
-
-/** sessionStorage key for the remembered CLIPS/SCENES sidebar tab (#98) */
-const SIDEBAR_TAB_STORAGE_KEY = 'glinfs.editor.sidebarTab';
-
-/** Module-level fallback when sessionStorage is unavailable (private mode, etc). */
-let sidebarTabFallback = 'clips';
-
 /**
- * Read the last-selected CLIPS/SCENES sidebar tab, preferring sessionStorage
- * so the choice survives editor remounts within the same tab session
- * (#98). Falls back to module state when storage throws or is unset.
- * @returns {'clips' | 'scenes'}
- */
-function getStoredSidebarTab() {
-  try {
-    const stored = sessionStorage.getItem(SIDEBAR_TAB_STORAGE_KEY);
-    if (stored === 'clips' || stored === 'scenes') return stored;
-  } catch {
-    // sessionStorage unavailable - fall through to module state
-  }
-  return sidebarTabFallback;
-}
-
-/**
- * Persist the CLIPS/SCENES sidebar tab choice (#98).
- * @param {'clips' | 'scenes'} name
- */
-function setStoredSidebarTab(name) {
-  sidebarTabFallback = name;
-  try {
-    sessionStorage.setItem(SIDEBAR_TAB_STORAGE_KEY, name);
-  } catch {
-    // sessionStorage unavailable - module state above still tracks it
-  }
-}
-
-/**
- * Render the editor screen
+ * Render the editor screen. Thin orchestrator: each panel builds its own DOM
+ * and listeners (see ./panels/); this assembles them in layout order, mounts
+ * the screen, then populates the post-mount lists and route hotkeys.
  * @param {HTMLElement} container
  * @param {import('./types.js').EditorState} state
  * @param {EditorUIHandlers} handlers
@@ -112,554 +64,46 @@ export function renderEditorScreen(container, state, handlers, fps) {
   const frame = state.clip.frames[state.currentFrame];
   const dimensions = getOutputDimensions(state.cropArea, frame);
 
-  // Read live state via handlers to avoid stale closures (render runs once)
-  const getCurrentState = () => handlers.getState?.() ?? state;
-
   // Main layout
   const screen = createElement('div', { className: 'editor-screen screen' });
 
-  // Toolbar
-  const toolbar = createElement('div', { className: 'editor-toolbar' });
+  const toolbar = renderEditorToolbar(state, handlers, fps);
+  cleanups.push(...toolbar.cleanups);
 
-  // Toolbar left - Back button
-  const toolbarLeft = createElement('div', { className: 'editor-toolbar-left' }, [
-    createElement(
-      'button',
-      {
-        className: 'btn btn-ghost',
-        type: 'button',
-        'aria-label': 'Back to capture',
-      },
-      ['\u2190 Capture'],
-    ),
-  ]);
-  cleanups.push(on(toolbarLeft.querySelector('button'), 'click', () => navigate('/capture')));
+  // Frame grid modal is shared by the timeline's Open Grid button and the F
+  // shortcut; its latch cleanup closes a still-open modal when the editor closes
+  const frameGrid = createFrameGridLauncher(state, handlers);
+  cleanups.push(frameGrid.cleanup);
 
-  // Toolbar center - Playback controls
-  const playbackControls = createElement('div', { className: 'playback-controls' });
-
-  // First frame
-  const firstBtn = createElement(
-    'button',
-    {
-      className: 'btn-playback',
-      type: 'button',
-      'aria-label': 'Go to first frame',
-      title: 'First frame (Home)',
-    },
-    ['\u23EE'],
-  );
-  cleanups.push(
-    on(firstBtn, 'click', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
-  );
-  playbackControls.appendChild(firstBtn);
-
-  // Previous frame
-  const prevBtn = createElement(
-    'button',
-    {
-      className: 'btn-playback',
-      type: 'button',
-      'aria-label': 'Previous frame',
-      title: 'Previous frame (\u2190)',
-    },
-    ['\u23F4'],
-  );
-  cleanups.push(
-    on(prevBtn, 'click', () => handlers.onFrameChange(getCurrentState().currentFrame - 1)),
-  );
-  playbackControls.appendChild(prevBtn);
-
-  // Play/Pause
-  const playBtn = createElement(
-    'button',
-    {
-      className: `btn-play ${state.isPlaying ? 'playing' : ''}`,
-      type: 'button',
-      'aria-label': state.isPlaying ? 'Pause' : 'Play',
-      title: 'Play/Pause (Space)',
-    },
-    [state.isPlaying ? '\u23F8' : '\u25B6'],
-  );
-  cleanups.push(on(playBtn, 'click', () => handlers.onTogglePlay()));
-  playbackControls.appendChild(playBtn);
-
-  // Next frame
-  const nextBtn = createElement(
-    'button',
-    {
-      className: 'btn-playback',
-      type: 'button',
-      'aria-label': 'Next frame',
-      title: 'Next frame (\u2192)',
-    },
-    ['\u23F5'],
-  );
-  cleanups.push(
-    on(nextBtn, 'click', () => handlers.onFrameChange(getCurrentState().currentFrame + 1)),
-  );
-  playbackControls.appendChild(nextBtn);
-
-  // Last frame
-  const lastBtn = createElement(
-    'button',
-    {
-      className: 'btn-playback',
-      type: 'button',
-      'aria-label': 'Go to last frame',
-      title: 'Last frame (End)',
-    },
-    ['\u23ED'],
-  );
-  cleanups.push(
-    on(lastBtn, 'click', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
-  );
-  playbackControls.appendChild(lastBtn);
-
-  // Frame Grid button and modal state
-  /** @type {(() => void) | null} */
-  let frameGridCleanup = null;
-
-  /**
-   * Open frame grid modal
-   */
-  function handleOpenFrameGrid() {
-    const currentState = handlers.getState?.() ?? state;
-    if (currentState.clip && currentState.clip.frames.length > 0 && !frameGridCleanup) {
-      frameGridCleanup = openFrameGridModal(currentState, handlers, () => {
-        frameGridCleanup = null;
-      });
-    }
-  }
-
-  // Track cleanup for modal when editor closes
-  cleanups.push(() => {
-    if (frameGridCleanup) {
-      frameGridCleanup();
-      frameGridCleanup = null;
-    }
-  });
-
-  // Time display - show current position within selection range
-  const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
-  const currentInSelection = getPositionInSelection(state.currentFrame, state.selectedRange);
-  const timeDisplay = createElement('div', { className: 'time-display' }, [
-    createElement('span', { className: 'current' }, [frameToTimecode(currentInSelection, fps)]),
-    createElement('span', { className: 'separator' }, [' / ']),
-    createElement('span', { className: 'total' }, [frameToTimecode(selectionFrameCount, fps)]),
-  ]);
-  playbackControls.appendChild(timeDisplay);
-
-  // Toolbar right - Export button
-  const toolbarRight = createElement('div', { className: 'editor-toolbar-right' });
-  const exportBtn = createElement(
-    'button',
-    {
-      className: 'btn btn-primary',
-      type: 'button',
-      'aria-label': 'Export as GIF',
-    },
-    ['Export \u2192'],
-  );
-  cleanups.push(
-    on(exportBtn, 'click', () => {
-      handlers.onExport();
-      navigate('/export');
-    }),
-  );
-  toolbarRight.appendChild(exportBtn);
-
-  toolbar.appendChild(toolbarLeft);
-  toolbar.appendChild(playbackControls);
-  toolbar.appendChild(toolbarRight);
-  screen.appendChild(toolbar);
+  screen.appendChild(toolbar.element);
 
   // Content area (left sidebar + preview + right sidebar)
   const content = createElement('div', { className: 'editor-content' });
 
-  // Left Sidebar (#100, Layout A): docked live source monitor on top,
-  // CLIPS/SCENES as tabs below — the two lists stop fighting over vertical
-  // space, and the live monitor has a fixed home instead of floating.
-  const leftSidebar = createElement('div', { className: 'editor-sidebar-left' });
-  const leftPanelContent = createElement('div', { className: 'panel-content' });
+  const leftSidebar = renderEditorLeftSidebar();
+  cleanups.push(...leftSidebar.cleanups);
+  content.appendChild(leftSidebar.element);
 
-  // Tab bar
-  const clipsTab = createElement(
-    'button',
-    {
-      className: 'sidebar-tab sidebar-tab--active',
-      type: 'button',
-      'data-tab': 'clips',
-      role: 'tab',
-      'aria-selected': 'true',
-      'data-testid': 'tab-clips',
-    },
-    ['Clips', createElement('span', { className: 'sidebar-tab-count', 'data-count': 'clips' })],
-  );
-  const scenesTab = createElement(
-    'button',
-    {
-      className: 'sidebar-tab',
-      type: 'button',
-      'data-tab': 'scenes',
-      role: 'tab',
-      'aria-selected': 'false',
-      'data-testid': 'tab-scenes',
-    },
-    ['Scenes', createElement('span', { className: 'sidebar-tab-count', 'data-count': 'scenes' })],
-  );
-  const tabBar = createElement('div', { className: 'sidebar-tabs', role: 'tablist' }, [
-    clipsTab,
-    scenesTab,
-  ]);
-  leftPanelContent.appendChild(tabBar);
+  const preview = renderEditorPreview(state, handlers, frame);
+  cleanups.push(...preview.cleanups);
+  content.appendChild(preview.element);
 
-  // CLIPS pane — keeps the existing container hooks so refreshClipsPanel /
-  // the queue-full banner keep working unchanged
-  const clipsPane = createElement('div', { className: 'sidebar-pane', 'data-pane': 'clips' }, [
-    createElement('div', {
-      className: 'clips-queue-banner',
-      role: 'status',
-      hidden: true,
-    }),
-    createElement('div', {
-      className: 'clips-sidebar-content',
-      'data-clips-container': 'true',
-    }),
-    createElement('div', {
-      className: 'clips-sidebar-memory',
-      'data-clips-footer': 'true',
-    }),
-  ]);
-  leftPanelContent.appendChild(clipsPane);
-
-  // SCENES pane — same hook as before for updateScenesSidebar
-  const scenesContainer = createElement('div', {
-    className: 'scenes-sidebar-content',
-    'data-scenes-container': 'true',
-  });
-  const scenesPane = createElement(
-    'div',
-    { className: 'sidebar-pane', 'data-pane': 'scenes', hidden: true },
-    [scenesContainer],
-  );
-  leftPanelContent.appendChild(scenesPane);
-
-  const selectTab = (name) => {
-    for (const tab of [clipsTab, scenesTab]) {
-      const active = tab.dataset.tab === name;
-      tab.classList.toggle('sidebar-tab--active', active);
-      tab.setAttribute('aria-selected', String(active));
-    }
-    clipsPane.hidden = name !== 'clips';
-    scenesPane.hidden = name !== 'scenes';
-    setStoredSidebarTab(name);
-  };
-  cleanups.push(on(clipsTab, 'click', () => selectTab('clips')));
-  cleanups.push(on(scenesTab, 'click', () => selectTab('scenes')));
-
-  // Restore the remembered tab (#98) - re-renders and editor remounts would
-  // otherwise always reset to CLIPS regardless of what the user last picked.
-  selectTab(getStoredSidebarTab());
-
-  leftSidebar.appendChild(leftPanelContent);
-  content.appendChild(leftSidebar);
-
-  // Preview Panel
-  const previewPanel = createElement('div', { className: 'editor-preview-panel' });
-  const previewWrapper = createElement('div', { className: 'editor-preview-wrapper' });
-
-  // Canvas container
-  const canvasContainer = createElement('div', { className: 'editor-canvas-container' });
-
-  // Base canvas (frame only)
-  const baseCanvas = /** @type {HTMLCanvasElement} */ (
-    createElement('canvas', {
-      className: 'editor-canvas',
-      'aria-label': 'Frame preview',
-    })
-  );
-
-  // Overlay canvas (crop, grid, handles)
-  const overlayCanvas = /** @type {HTMLCanvasElement} */ (
-    createElement('canvas', {
-      className: 'editor-canvas-overlay',
-      'aria-label': 'Crop overlay',
-    })
-  );
-
-  // Setup canvas rendering
-  const baseCtx = baseCanvas.getContext('2d');
-  const overlayCtx = overlayCanvas.getContext('2d');
-  if (baseCtx && overlayCtx && frame) {
-    // Render frame to base canvas
-    renderFrameOnly(baseCtx, frame);
-
-    // Render overlay to overlay canvas
-    const hasCrop = state.cropArea !== null;
-    renderOverlay(overlayCtx, state.cropArea, frame.width, frame.height, {
-      showCropOverlay: hasCrop,
-      showGrid: state.showGrid,
-      gridDivisions: 3,
-    });
-  }
-
-  // Setup crop mouse interaction on overlay canvas
-  cleanups.push(setupCropInteraction(overlayCanvas, baseCanvas, handlers, frame));
-
-  canvasContainer.appendChild(baseCanvas);
-  canvasContainer.appendChild(overlayCanvas);
-  previewWrapper.appendChild(canvasContainer);
-  previewPanel.appendChild(previewWrapper);
-  content.appendChild(previewPanel);
-
-  // Sidebar
-  const sidebar = createElement('div', { className: 'editor-sidebar' });
-
-  // Panel content (tabs removed - all controls shown together for simplicity)
-  const panelContent = createElement('div', { className: 'panel-content' });
-
-  // Live source monitor slot (#100 layout v3 / plan 1): docked at the TOP of
-  // the right panel — the underused properties column cedes its prime space
-  // to a permanently visible monitor. Populated by live-monitor.js while a
-  // capture session is live, empty and invisible otherwise.
-  panelContent.appendChild(
-    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
-  );
-
-  // Speed control
-  const speedGroup = createElement('div', { className: 'property-group' }, [
-    createElement('div', { className: 'property-group-title' }, ['Playback']),
-    createElement('div', { className: 'property-row' }, [
-      createElement('span', { className: 'property-label' }, ['Speed']),
-    ]),
-  ]);
-  const speedSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      PLAYBACK_SPEEDS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`]),
-      ),
-    )
-  );
-  speedSelect.value = String(state.playbackSpeed);
-  cleanups.push(on(speedSelect, 'change', () => handlers.onSpeedChange(Number(speedSelect.value))));
-  speedGroup.querySelector('.property-row').appendChild(speedSelect);
-
-  // Crop/Aspect ratio controls
-  const cropGroup = createElement('div', { className: 'property-group' }, [
-    createElement('div', { className: 'property-group-title' }, ['Aspect Ratio']),
-  ]);
-  const ratioButtons = createElement('div', { className: 'aspect-ratio-buttons' });
-  ASPECT_RATIOS.forEach((ratio) => {
-    const btn = createElement(
-      'button',
-      {
-        className: `aspect-btn ${(state.selectedAspectRatio || 'free') === ratio ? 'active' : ''}`,
-        type: 'button',
-        'data-ratio': ratio,
-      },
-      [ratio === 'free' ? 'Free' : ratio],
-    );
-    cleanups.push(on(btn, 'click', () => handlers.onAspectRatioChange(ratio)));
-    ratioButtons.appendChild(btn);
-  });
-  cropGroup.appendChild(ratioButtons);
-  panelContent.appendChild(cropGroup);
-
-  // Grid toggle
-  const gridGroup = createElement('div', { className: 'property-group' }, [
-    createElement('div', { className: 'property-group-title' }, ['Overlay']),
-    createElement('div', { className: 'property-row' }, [
-      createElement('span', { className: 'property-label' }, ['Show Grid']),
-    ]),
-  ]);
-  const gridBtn = createElement(
-    'button',
-    {
-      className: `btn btn-secondary btn-grid-toggle ${state.showGrid ? 'active' : ''}`,
-      type: 'button',
-      'aria-pressed': String(state.showGrid),
-    },
-    [state.showGrid ? 'On' : 'Off'],
-  );
-  cleanups.push(on(gridBtn, 'click', () => handlers.onToggleGrid()));
-  gridGroup.querySelector('.property-row').appendChild(gridBtn);
-
-  // Crop info panel (always visible)
-  const cropValues = state.cropArea
-    ? {
-        x: String(Math.round(state.cropArea.x)),
-        y: String(Math.round(state.cropArea.y)),
-        w: String(Math.round(state.cropArea.width)),
-        h: String(Math.round(state.cropArea.height)),
-      }
-    : { x: '-', y: '-', w: '-', h: '-' };
-
-  const cropInfoGroup = createElement('div', { className: 'property-group crop-info-group' }, [
-    createElement('div', { className: 'property-group-title' }, ['Crop Range']),
-    createElement('div', { className: 'crop-info-grid' }, [
-      createElement('div', { className: 'crop-info-item' }, [
-        createElement('span', { className: 'crop-info-label' }, ['X']),
-        createElement('span', { className: 'crop-info-value' }, [cropValues.x]),
-      ]),
-      createElement('div', { className: 'crop-info-item' }, [
-        createElement('span', { className: 'crop-info-label' }, ['Y']),
-        createElement('span', { className: 'crop-info-value' }, [cropValues.y]),
-      ]),
-      createElement('div', { className: 'crop-info-item' }, [
-        createElement('span', { className: 'crop-info-label' }, ['W']),
-        createElement('span', { className: 'crop-info-value' }, [cropValues.w]),
-      ]),
-      createElement('div', { className: 'crop-info-item' }, [
-        createElement('span', { className: 'crop-info-label' }, ['H']),
-        createElement('span', { className: 'crop-info-value' }, [cropValues.h]),
-      ]),
-    ]),
-  ]);
-  if (state.cropArea) {
-    cropInfoGroup.appendChild(createClearCropButton());
-  }
-
-  // Low-frequency property groups fold into accordions (#100 v3): the user
-  // adjusts Aspect constantly (kept always-visible above) but touches
-  // Playback/Overlay/Crop rarely — the monitor gets their vertical space.
-  // Native <details> keeps this zero-JS; Crop opens itself while a crop
-  // exists so its values are never hidden mid-operation.
-  const makeAccordion = (label, node, open = false) => {
-    const details = createElement('details', { className: 'prop-accordion' }, [
-      createElement('summary', { className: 'prop-accordion-summary' }, [label]),
-      node,
-    ]);
-    if (open) details.setAttribute('open', '');
-    return details;
-  };
-  panelContent.appendChild(makeAccordion('Playback', speedGroup));
-  panelContent.appendChild(makeAccordion('Overlay', gridGroup));
-  panelContent.appendChild(makeAccordion('Crop Range', cropInfoGroup, Boolean(state.cropArea)));
-
-  // Clear Crop clicks are handled via delegation so the listener survives
-  // updateCropInfoPanel() re-creating the button on crop updates (issue #37)
-  cleanups.push(
-    on(panelContent, 'click', (e) => {
-      const target = /** @type {Element | null} */ (e.target);
-      if (target instanceof Element && target.closest('.btn-clear-crop')) {
-        handlers.onCropChange(null);
-      }
-    }),
-  );
-
-  sidebar.appendChild(panelContent);
-  content.appendChild(sidebar);
+  const properties = renderEditorPropertiesPanel(state, handlers);
+  cleanups.push(...properties.cleanups);
+  content.appendChild(properties.element);
   screen.appendChild(content);
 
-  // Timeline section
-  const timelineSection = createElement('div', { className: 'editor-timeline' });
+  const timeline = renderEditorTimelineSection(state, fps, frameGrid.open);
+  cleanups.push(...timeline.cleanups);
+  screen.appendChild(timeline.element);
 
-  // Calculate selection info using the new utility function
-  const selectionInfo = calculateSelectionInfo(state.selectedRange, fps);
-  const inPoint = frameToTimecode(state.selectedRange.start, fps);
-  const outPoint = frameToTimecode(state.selectedRange.end, fps);
-
-  // Frame Grid button for timeline header
-  const frameGridBtn = createElement(
-    'button',
-    {
-      className: 'btn-frame-grid-compact',
-      type: 'button',
-      'aria-label': 'Open frame grid for selection',
-      title: 'Frame Grid (F)',
-    },
-    ['Open Grid'],
-  );
-  cleanups.push(on(frameGridBtn, 'click', handleOpenFrameGrid));
-
-  timelineSection.appendChild(
-    createElement('div', { className: 'timeline-header' }, [
-      createElement('div', { className: 'timeline-header-left' }, [
-        createElement('span', { className: 'timeline-title' }, ['Clip Range']),
-        frameGridBtn,
-      ]),
-      createElement('div', { className: 'timeline-info' }, [
-        createElement('span', { className: 'timeline-point' }, [
-          createElement('span', { className: 'label' }, ['IN']),
-          createElement('span', { className: 'value timeline-in-value' }, [inPoint]),
-        ]),
-        createElement('span', { className: 'timeline-point' }, [
-          createElement('span', { className: 'label' }, ['OUT']),
-          createElement('span', { className: 'value timeline-out-value' }, [outPoint]),
-        ]),
-        // Selection info using calculateSelectionInfo formatted values
-        createElement('span', { className: 'timeline-point timeline-selection-info' }, [
-          createElement('span', { className: 'label' }, ['SEL']),
-          createElement('span', { className: 'value timeline-sel-value' }, [
-            selectionInfo.formattedDuration,
-          ]),
-          createElement('span', { className: 'frames timeline-sel-frames' }, [
-            `(${selectionInfo.formattedFrameCount})`,
-          ]),
-        ]),
-      ]),
-    ]),
-  );
-
-  // Timeline container - rendered by timeline.js with thumbnails
-  const timelineContainer = createElement('div', { className: 'editor-timeline-container' });
-  timelineSection.appendChild(timelineContainer);
-  screen.appendChild(timelineSection);
-
-  // Status bar
-  screen.appendChild(
-    createElement('div', { className: 'editor-status-bar' }, [
-      createElement('div', { className: 'status-section' }, [
-        createElement('div', { className: 'shortcuts-hint' }, [
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['Space']),
-            ' Play',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['\u2190\u2192']),
-            ' Frames',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['F']),
-            ' Frame Grid',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['G']),
-            ' Grid',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['1-9']),
-            ' Switch Clip',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['Del']),
-            ' Delete Clip',
-          ]),
-          createElement('span', { className: 'shortcut' }, [
-            createElement('span', { className: 'kbd' }, ['Shift+C']),
-            ' Clip Now',
-          ]),
-        ]),
-      ]),
-      createElement('div', { className: 'status-section' }, [
-        createElement('div', { className: 'status-item' }, [
-          'Output: ',
-          createElement('span', { className: 'value' }, [
-            `${dimensions.width}\u00D7${dimensions.height}`,
-          ]),
-        ]),
-      ]),
-    ]),
-  );
+  screen.appendChild(renderEditorStatusBar(dimensions));
 
   container.innerHTML = '';
   container.appendChild(screen);
 
   // Populate scenes sidebar with thumbnails
-  cleanups.push(...renderScenesSidebar(scenesContainer, state, handlers));
+  cleanups.push(...renderScenesSidebar(leftSidebar.scenesContainer, state, handlers));
 
   // Populate clips section (active clip + queue). Re-rendered on
   // 'queue:changed' by editor/index.js via updateClipsPanel.
@@ -669,15 +113,15 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // holds modal-scope hotkeys, and the dispatcher skips the route scope
   // entirely — otherwise Escape would close the modal AND clear the crop,
   // Space would select a grid frame AND toggle playback.
-  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: handleOpenFrameGrid }));
+  cleanups.push(setupKeyboardShortcuts(handlers, state, { onOpenFrameGrid: frameGrid.open }));
 
   return {
     cleanup: () =>
       cleanups.forEach((fn) => {
         fn();
       }),
-    baseCanvas,
-    overlayCanvas,
+    baseCanvas: preview.baseCanvas,
+    overlayCanvas: preview.overlayCanvas,
   };
 }
 
@@ -804,198 +248,6 @@ export function updateOverlayCanvas(canvas, crop, frameWidth, frameHeight, showG
 }
 
 /**
- * Setup crop mouse interaction on overlay canvas with visual feedback
- * @param {HTMLCanvasElement} overlayCanvas - Overlay canvas for interaction
- * @param {HTMLCanvasElement} baseCanvas - Base canvas for coordinate reference
- * @param {EditorUIHandlers} handlers
- * @param {import('../capture/types.js').Frame} initialFrame
- * @returns {() => void} Cleanup function
- */
-function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame) {
-  /** @type {import('./types.js').HandlePosition} */
-  let dragMode = null;
-  /** @type {{ x: number, y: number } | null} */
-  let dragStart = null;
-  /** @type {import('./types.js').CropArea | null} */
-  let initialCrop = null;
-  /** @type {import('./types.js').HandlePosition} */
-  let hoveredHandle = null;
-  /** @type {import('./types.js').HandlePosition} */
-  let activeHandle = null;
-  /** @type {import('./types.js').BoundaryHit | null} */
-  let boundaryHit = null;
-
-  // Get current state and frame via handlers (avoids stale closure)
-  const getCurrentState = () => handlers.getState?.();
-  const getCurrentFrame = () => handlers.getFrame?.() ?? initialFrame;
-
-  /**
-   * Get mouse coordinates relative to frame (using base canvas for coordinate reference)
-   * @param {MouseEvent} e
-   * @returns {{ x: number, y: number }}
-   */
-  function getFrameCoords(e) {
-    const frame = getCurrentFrame();
-    const rect = baseCanvas.getBoundingClientRect();
-    const scaleX = frame.width / rect.width;
-    const scaleY = frame.height / rect.height;
-    return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
-    };
-  }
-
-  /**
-   * Re-render the overlay canvas with current visual state
-   */
-  function renderOverlayWithState() {
-    const state = getCurrentState();
-    const frame = getCurrentFrame();
-    if (!state || !frame) return;
-
-    const ctx = overlayCanvas.getContext('2d');
-    if (!ctx) return;
-
-    const crop = state.cropArea;
-    const hasCrop = crop !== null;
-
-    renderOverlay(ctx, crop, frame.width, frame.height, {
-      showCropOverlay: hasCrop,
-      showGrid: state.showGrid,
-      gridDivisions: 3,
-      hoveredHandle,
-      activeHandle,
-      boundaryHit,
-    });
-  }
-
-  /**
-   * Handle mouse down
-   * @param {MouseEvent} e
-   */
-  function onMouseDown(e) {
-    e.preventDefault();
-    const state = getCurrentState();
-    const coords = getFrameCoords(e);
-    dragStart = coords;
-
-    if (state?.cropArea) {
-      // Check if clicking on a handle
-      const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
-      if (handle) {
-        dragMode = handle;
-        activeHandle = handle;
-        initialCrop = { ...state.cropArea };
-      } else {
-        // Start drawing new crop
-        dragMode = 'draw';
-        activeHandle = 'draw';
-        initialCrop = null;
-      }
-    } else {
-      // No crop exists, start drawing
-      dragMode = 'draw';
-      activeHandle = 'draw';
-      initialCrop = null;
-    }
-
-    overlayCanvas.style.cursor = getCursorForHandle(dragMode);
-    renderOverlayWithState();
-  }
-
-  /**
-   * Handle mouse move
-   * @param {MouseEvent} e
-   */
-  function onMouseMove(e) {
-    const state = getCurrentState();
-    const frame = getCurrentFrame();
-    const coords = getFrameCoords(e);
-
-    if (!dragStart || !dragMode) {
-      // Not dragging - update cursor and hover state
-      let newHoveredHandle = null;
-      if (state?.cropArea) {
-        const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
-        newHoveredHandle = handle;
-        overlayCanvas.style.cursor = getCursorForHandle(handle || 'draw');
-      } else {
-        overlayCanvas.style.cursor = 'crosshair';
-      }
-
-      // Update visual feedback if hover state changed
-      if (newHoveredHandle !== hoveredHandle) {
-        hoveredHandle = newHoveredHandle;
-        if (state?.cropArea) {
-          renderOverlayWithState();
-        }
-      }
-      return;
-    }
-
-    e.preventDefault();
-    const aspectRatio = state?.selectedAspectRatio || 'free';
-    let newCrop = null;
-
-    if (dragMode === 'draw') {
-      // Drawing new crop
-      newCrop = calculateCropFromDrag(dragStart, coords, frame, aspectRatio);
-    } else if (dragMode === 'move' && initialCrop) {
-      // Moving existing crop using core moveCrop function
-      const delta = { x: coords.x - dragStart.x, y: coords.y - dragStart.y };
-      newCrop = moveCrop(initialCrop, delta, frame);
-    } else if (initialCrop) {
-      // Resizing via handle using core resizeCropByHandle function
-      newCrop = resizeCropByHandle(initialCrop, dragMode, dragStart, coords, frame);
-    }
-
-    if (newCrop) {
-      // Update boundary hit detection
-      boundaryHit = detectBoundaryHit(newCrop, frame.width, frame.height);
-      handlers.onCropChange(newCrop);
-      // Immediately render overlay with visual feedback
-      renderOverlayWithState();
-    }
-  }
-
-  /**
-   * Handle mouse up
-   * @param {MouseEvent} e
-   */
-  function onMouseUp(e) {
-    dragMode = null;
-    dragStart = null;
-    initialCrop = null;
-    activeHandle = null;
-    boundaryHit = null;
-
-    // Reset cursor to reflect current hover state
-    const state = getCurrentState();
-    const coords = getFrameCoords(e);
-    if (state?.cropArea) {
-      const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
-      hoveredHandle = handle;
-      overlayCanvas.style.cursor = getCursorForHandle(handle || 'draw');
-    } else {
-      hoveredHandle = null;
-      overlayCanvas.style.cursor = 'crosshair';
-    }
-
-    renderOverlayWithState();
-  }
-
-  overlayCanvas.addEventListener('mousedown', onMouseDown);
-  overlayCanvas.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-
-  return () => {
-    overlayCanvas.removeEventListener('mousedown', onMouseDown);
-    overlayCanvas.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-  };
-}
-
-/**
  * Update timeline header info (SEL, IN, OUT) and the toolbar time display
  * Called when selection range or current frame changes
  * @param {HTMLElement} container - The editor screen container
@@ -1038,176 +290,6 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
   if (totalTimeEl) {
     totalTimeEl.textContent = frameToTimecode(selectionInfo.frameCount, fps);
   }
-}
-
-/**
- * Render scenes sidebar with thumbnails (left sidebar)
- * @param {HTMLElement} container - The scenes container element
- * @param {import('./types.js').EditorState} state - Current editor state
- * @param {EditorUIHandlers} handlers - UI handlers
- * @returns {(() => void)[]} Cleanup functions for event listeners
- */
-function renderScenesSidebar(container, state, handlers) {
-  /** @type {(() => void)[]} */
-  const cleanups = [];
-
-  // Clear container
-  container.innerHTML = '';
-
-  // Show different content based on scene detection status
-  if (state.sceneDetectionStatus === 'idle') {
-    // One quiet line (#98) - the old icon + two-line empty state ate more
-    // sidebar height than the actual scenes list usually does
-    container.appendChild(
-      createElement('div', { className: 'scenes-sidebar-hint' }, [
-        'No scenes \u2014 enable Scene Detection in Capture',
-      ]),
-    );
-    return cleanups;
-  }
-
-  if (state.sceneDetectionStatus === 'detecting') {
-    const progressContainer = createElement('div', { className: 'scene-detection-progress' });
-    const progressBar = createElement('div', { className: 'progress-bar' });
-    const progressFill = createElement('div', {
-      className: 'progress-fill',
-      style: `width: ${state.sceneDetectionProgress}%`,
-    });
-    progressBar.appendChild(progressFill);
-    progressContainer.appendChild(
-      createElement('div', { className: 'progress-label' }, [
-        `Detecting... ${state.sceneDetectionProgress}%`,
-      ]),
-    );
-    progressContainer.appendChild(progressBar);
-    container.appendChild(progressContainer);
-    return cleanups;
-  }
-
-  if (state.sceneDetectionStatus === 'error') {
-    container.appendChild(
-      createElement('div', { className: 'scene-detection-error' }, [
-        createElement('span', { className: 'error-icon' }, ['\u26A0']),
-        state.sceneDetectionError || 'Detection failed',
-      ]),
-    );
-    return cleanups;
-  }
-
-  // Completed, zero scenes found - one quiet line (#98), matching the
-  // detection-off hint above instead of the old icon + two-line block
-  if (state.scenes.length === 0) {
-    container.appendChild(
-      createElement('div', { className: 'scenes-sidebar-hint' }, ['No scene changes detected']),
-    );
-    return cleanups;
-  }
-
-  // Create scenes list with thumbnails
-  const scenesList = createElement('div', { className: 'scenes-thumbnail-list' });
-
-  /** @type {HTMLElement[]} */
-  const sceneCards = [];
-
-  /**
-   * Update selection state for all scene cards
-   * @param {number} selectedSceneIndex
-   */
-  function updateCardSelection(selectedSceneIndex) {
-    sceneCards.forEach((card, idx) => {
-      card.classList.toggle('is-selected', idx === selectedSceneIndex);
-    });
-  }
-
-  const sceneThumbnailSize = 160;
-  const thumbnailCache = getThumbnailCache();
-
-  state.scenes.forEach((scene, index) => {
-    const isSelected =
-      state.selectedRange.start === scene.startFrame && state.selectedRange.end === scene.endFrame;
-
-    const sceneCard = createElement('button', {
-      className: `scene-thumbnail-card ${isSelected ? 'is-selected' : ''}`,
-      type: 'button',
-      'data-scene-id': scene.id,
-      // Range bounds are duplicated on the DOM node so a pure range-change
-      // tick can toggle selection (updateScenesSelection) without needing
-      // to re-walk `state.scenes` or rebuild anything (issue #99, fix 2).
-      'data-scene-start': String(scene.startFrame),
-      'data-scene-end': String(scene.endFrame),
-      title: `Scene ${index + 1}: Frames ${scene.startFrame}-${scene.endFrame}`,
-    });
-
-    // Create thumbnail from first frame of scene - routed through the
-    // shared ThumbnailCache so repeated renders of the same scene list
-    // (e.g. after this panel is rebuilt for an unrelated reason) reuse the
-    // already-drawn canvas instead of paying drawImage/getImageData again.
-    const thumbnailContainer = createElement('div', { className: 'scene-thumbnail' });
-    const sceneFrame = state.clip?.frames[scene.startFrame];
-    if (sceneFrame) {
-      try {
-        let canvas = thumbnailCache.get(sceneFrame.id, sceneThumbnailSize);
-        if (!canvas) {
-          canvas = createThumbnailCanvas(sceneFrame, sceneThumbnailSize);
-          thumbnailCache.addCanvas(sceneFrame.id, sceneThumbnailSize, canvas);
-        }
-        // Clone the pixel content (cloneNode alone doesn't copy canvas bitmap data),
-        // so the cached canvas can be reused by other consumers untouched.
-        const canvasClone = document.createElement('canvas');
-        canvasClone.width = canvas.width;
-        canvasClone.height = canvas.height;
-        const cloneCtx = canvasClone.getContext('2d');
-        if (cloneCtx) {
-          cloneCtx.drawImage(canvas, 0, 0);
-        }
-        canvasClone.className = 'scene-thumbnail-canvas';
-        thumbnailContainer.appendChild(canvasClone);
-      } catch (e) {
-        console.warn('[Editor] Failed to create scene thumbnail:', e);
-        thumbnailContainer.appendChild(
-          createElement('div', { className: 'scene-thumbnail-placeholder' }, ['\uD83C\uDFA5']),
-        );
-      }
-    }
-    sceneCard.appendChild(thumbnailContainer);
-
-    // Scene info
-    const sceneInfo = createElement('div', { className: 'scene-thumbnail-info' }, [
-      createElement('div', { className: 'scene-thumbnail-header' }, [
-        createElement('span', { className: 'scene-thumbnail-number' }, [`Scene ${index + 1}`]),
-        createElement('span', { className: 'scene-thumbnail-duration' }, [
-          `${scene.endFrame - scene.startFrame + 1}f`,
-        ]),
-      ]),
-      createElement('div', { className: 'scene-thumbnail-range' }, [
-        `${scene.startFrame} \u2192 ${scene.endFrame}`,
-      ]),
-    ]);
-    sceneCard.appendChild(sceneInfo);
-
-    sceneCards.push(sceneCard);
-
-    cleanups.push(
-      on(sceneCard, 'click', () => {
-        handlers.onFrameChange(scene.startFrame);
-        handlers.onRangeChange({ start: scene.startFrame, end: scene.endFrame });
-        updateCardSelection(index);
-      }),
-    );
-
-    scenesList.appendChild(sceneCard);
-  });
-
-  container.appendChild(scenesList);
-
-  // Scene count footer
-  container.appendChild(
-    createElement('div', { className: 'scenes-sidebar-footer' }, [
-      `${state.scenes.length} scene${state.scenes.length !== 1 ? 's' : ''} detected`,
-    ]),
-  );
-
-  return cleanups;
 }
 
 /**
@@ -1259,80 +341,6 @@ export function updateScenesSelection(container, state) {
     const isSelected = state.selectedRange.start === start && state.selectedRange.end === end;
     card.classList.toggle('is-selected', isSelected);
   });
-}
-
-/**
- * Open Frame Grid Modal
- * @param {import('./types.js').EditorState} state - Current editor state
- * @param {EditorUIHandlers} handlers - UI handlers
- * @param {() => void} [onClose] - Callback when modal closes
- * @returns {() => void} Cleanup function
- */
-function openFrameGridModal(state, handlers, onClose) {
-  if (!state.clip) return () => {};
-
-  // Closing removes the focused modal, which drops focus to <body>; return
-  // it to whatever opened the grid (#114)
-  const opener = document.activeElement;
-
-  const { cleanup } = renderFrameGridModal({
-    container: document.body,
-    frames: state.clip.frames,
-    initialRange: state.selectedRange,
-    scenes: state.scenes,
-    callbacks: {
-      onApply: (range) => {
-        // If onRangeChange throws, the modal must still close instead of
-        // leaving its document-level listeners mounted forever
-        try {
-          handlers.onRangeChange(range);
-        } finally {
-          cleanup();
-          onClose?.();
-          restoreFrameGridFocus(opener);
-        }
-      },
-      onCancel: () => {
-        cleanup();
-        onClose?.();
-        restoreFrameGridFocus(opener);
-      },
-    },
-  });
-
-  return cleanup;
-}
-
-/**
- * Return focus to the element that opened the frame grid. Falls back to the
- * Open Grid button when the opener is gone (e.g. the clip-queue popover
- * closed by a click inside the modal) or was <body> (the F shortcut).
- * @param {Element | null} opener
- */
-function restoreFrameGridFocus(opener) {
-  if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected) {
-    opener.focus();
-    if (document.activeElement === opener) return;
-  }
-  /** @type {HTMLElement | null} */ (document.querySelector('.btn-frame-grid-compact'))?.focus();
-}
-
-/**
- * Create the Clear Crop button element
- * Click handling is delegated to the sidebar panel in renderEditorScreen,
- * so no listener is attached here (issue #37).
- * @returns {HTMLElement}
- */
-function createClearCropButton() {
-  return createElement(
-    'button',
-    {
-      className: 'btn btn-secondary btn-clear-crop',
-      type: 'button',
-      style: 'width: 100%; margin-top: var(--space-4);',
-    },
-    ['Clear Crop'],
-  );
 }
 
 /**
@@ -1408,7 +416,7 @@ export function showClipsQueueFullBanner(container, message) {
 /**
  * Update crop info panel values
  * Clear Crop clicks are handled by a delegated listener registered once in
- * renderEditorScreen, so this function never attaches listeners of its own
+ * renderEditorPropertiesPanel, so this function never attaches listeners of its own
  * (the returned cleanups array is kept for API compatibility).
  * @param {HTMLElement} container - Editor container
  * @param {import('./types.js').CropArea | null} cropArea - Current crop area
