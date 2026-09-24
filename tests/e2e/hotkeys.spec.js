@@ -214,6 +214,119 @@ test.describe('App hotkeys through the shared dispatcher (#102)', () => {
     await page.keyboard.press('Enter');
     await expect(overlay).toBeHidden();
   });
+
+  test('Escape peels live view + frame grid one layer at a time (#127)', async ({ page }) => {
+    await pauseEditorPlayback(page);
+    await drawCrop(page);
+    await expect(page.locator('.btn-clear-crop')).toBeVisible();
+
+    const overlay = page.locator('[data-testid="live-view-overlay"]');
+    await page.locator('.live-monitor-viewport').click();
+    await expect(overlay).toBeVisible();
+
+    await page.keyboard.press('f');
+    const modal = page.locator('.frame-grid-backdrop');
+    await expect(modal).toBeVisible();
+
+    // First Escape: the grid only
+    await page.keyboard.press('Escape');
+    await expect(modal).toHaveCount(0);
+    await expect(overlay).toBeVisible();
+    await expect(page.locator('.btn-clear-crop')).toBeVisible();
+
+    // Second Escape: the live view only; the crop survives
+    await page.keyboard.press('Escape');
+    await expect(overlay).toBeHidden();
+    await expect(page.locator('.btn-clear-crop')).toBeVisible();
+
+    // Third Escape: back to the editor's crop Escape
+    await blurToBody(page);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.btn-clear-crop')).toHaveCount(0);
+  });
+
+  test('popover opened over live view closes first on Escape (#127)', async ({ page }) => {
+    await page.waitForTimeout(600);
+    await page.keyboard.press('Shift+C');
+    await expect(page.locator('#clip-queue-badge')).toHaveText('1');
+
+    const overlay = page.locator('[data-testid="live-view-overlay"]');
+    await page.locator('.live-monitor-viewport').click();
+    await expect(overlay).toBeVisible();
+
+    await page.locator('#clip-queue-badge').click();
+    const popover = page.locator('.clip-queue-popover');
+    await expect(popover).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(popover).toHaveCount(0);
+    await expect(page.locator('#clip-queue-badge')).toBeFocused();
+    await expect(overlay).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(overlay).toBeHidden();
+  });
+
+  // Popover and live view share the overlay scope: Escape closes the layer
+  // holding focus, else the one opened last, whatever the opening order.
+  // Live view opens from the keyboard (viewport Space) so the popover's
+  // outside-pointerdown dismissal never runs; focus() moves without a click.
+  for (const order of /** @type {const} */ (['popover first', 'live view first'])) {
+    for (const focusIn of /** @type {const} */ (['popover', 'viewport'])) {
+      const firstClosed =
+        focusIn === 'popover' || order === 'live view first' ? 'popover' : 'live view';
+
+      test(`${order}, focus in ${focusIn}: Escape closes the ${firstClosed} first (#127)`, async ({
+        page,
+      }) => {
+        await page.waitForTimeout(600);
+        await page.keyboard.press('Shift+C');
+        await expect(page.locator('#clip-queue-badge')).toHaveText('1');
+
+        const overlay = page.locator('[data-testid="live-view-overlay"]');
+        const popover = page.locator('.clip-queue-popover');
+        const viewport = page.locator('.live-monitor-viewport');
+        const openLiveView = async () => {
+          await viewport.focus();
+          await page.keyboard.press('Space');
+          await expect(overlay).toBeVisible();
+        };
+        const openPopover = async () => {
+          await page.locator('#clip-queue-badge').click();
+          await expect(popover).toBeVisible();
+        };
+
+        if (order === 'popover first') {
+          await openPopover();
+          await openLiveView();
+          await expect(popover).toBeVisible();
+        } else {
+          await openLiveView();
+          await openPopover();
+        }
+
+        if (focusIn === 'popover') {
+          await popover.locator('button').first().focus();
+        } else {
+          await viewport.focus();
+        }
+
+        await page.keyboard.press('Escape');
+        if (firstClosed === 'popover') {
+          await expect(popover).toHaveCount(0);
+          await expect(page.locator('#clip-queue-badge')).toBeFocused();
+          await expect(overlay).toBeVisible();
+          await page.keyboard.press('Escape');
+          await expect(overlay).toBeHidden();
+        } else {
+          await expect(overlay).toBeHidden();
+          await expect(popover).toBeVisible();
+          await page.keyboard.press('Escape');
+          await expect(popover).toHaveCount(0);
+        }
+      });
+    }
+  }
 });
 
 test.describe('Timeline keys and IME guard (#102 review)', () => {
