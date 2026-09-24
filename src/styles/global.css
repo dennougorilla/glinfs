@@ -102,13 +102,7 @@ button:focus-visible,
   width: 28px;
   height: 28px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-primary);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  color: white;
+  flex: none;
 }
 
 .app-version {
