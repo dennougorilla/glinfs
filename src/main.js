@@ -414,8 +414,8 @@ function setupClipQueueHeader() {
 
     // Escape closes and returns focus to the badge (keyboard reachability).
     // Overlay scope outranks the editor's route-scope Escape (clear crop),
-    // and the dispatcher yields it to a modal opened on top (e.g. the frame
-    // grid via F), which is then the foreground overlay (#102).
+    // and a modal opened on top (e.g. the frame grid via F) outranks it in
+    // turn: the modal scope wins and skips the overlay scope (#102).
     // stopImmediatePropagation keeps the Escape from also reaching later
     // document listeners (the live-view overlay's), as the capture-phase
     // listener this replaced did.

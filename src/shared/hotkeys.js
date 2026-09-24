@@ -15,10 +15,11 @@
  * - Scopes are tried modal > overlay > route > global; within a scope the
  *   most recent registration is tried first. The first handler that does
  *   not return `false` wins and nothing else runs.
- * - While an unregistered modal (`[aria-modal="true"]`, e.g. the frame
- *   grid, which still owns its own keydown listener) is open, the overlay
- *   and route scopes yield to it. Global shortcuts (Shift+C) stay live, as
- *   they did before the dispatcher existed.
+ * - A modal is exclusive: while any modal-scope hotkey is registered (the
+ *   frame grid registers its keys for as long as it is open), the overlay
+ *   and route scopes are skipped entirely, so keys the modal does not own
+ *   (Delete, 1-9, G...) cannot reach the page underneath. Global shortcuts
+ *   (Shift+C) stay live.
  * - Focus in an input/textarea/select/contenteditable suppresses every
  *   hotkey that did not opt in with `allowInEditable`.
  * - Ctrl/Meta/Alt must match exactly (default: not pressed), so browser and
@@ -57,7 +58,7 @@
 /** @type {readonly HotkeyScope[]} */
 const SCOPE_ORDER = ['modal', 'overlay', 'route', 'global'];
 
-/** Scopes that yield to a foreign (unregistered) aria-modal element */
+/** Scopes skipped while a modal has hotkeys registered */
 const MODAL_YIELDING_SCOPES = new Set(['overlay', 'route']);
 
 const EDITABLE_SELECTOR =
@@ -139,10 +140,11 @@ function dispatch(e) {
   // element. Either way the focused element decides "is the user typing".
   const target = e.target instanceof Element ? e.target : document.activeElement;
   const editable = isEditableTarget(target);
-  const foreignModalOpen = document.querySelector('[aria-modal="true"]') !== null;
+  // Snapshot like the entries below: a handler may close the modal mid-dispatch
+  const modalOpen = countHotkeys('modal') > 0;
 
   for (const scope of SCOPE_ORDER) {
-    if (foreignModalOpen && MODAL_YIELDING_SCOPES.has(scope)) continue;
+    if (modalOpen && MODAL_YIELDING_SCOPES.has(scope)) continue;
 
     // Snapshot: a handler may unregister (e.g. closing the popover)
     const entries = [.../** @type {HotkeyOptions[]} */ (registry.get(scope))].reverse();

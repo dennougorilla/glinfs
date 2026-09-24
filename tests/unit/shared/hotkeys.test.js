@@ -9,7 +9,7 @@ import {
 /**
  * #102: the single document-level hotkey dispatcher — scope precedence,
  * the shared editable-target guard, modifier matching, defaultPrevented,
- * yielding to a foreign aria-modal, and unsubscribe hygiene.
+ * modal-scope exclusivity, and unsubscribe hygiene.
  */
 
 /** @type {(() => void)[]} */
@@ -115,54 +115,61 @@ describe('scope precedence', () => {
   });
 });
 
-describe('foreign aria-modal (frame grid keeps its own listener)', () => {
-  function openForeignModal() {
-    const modal = document.createElement('div');
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
-    document.body.appendChild(modal);
-    return modal;
-  }
-
-  it('yields overlay and route scopes while it is open', () => {
+describe('modal exclusivity (the frame grid registers modal-scope keys)', () => {
+  it('skips overlay and route scopes while a modal hotkey is registered', () => {
     const overlay = vi.fn();
     const route = vi.fn();
     register({ key: 'Escape', scope: 'overlay', handler: overlay });
-    register({ key: ' ', scope: 'route', handler: route });
+    register({ key: 'Delete', scope: 'route', handler: route });
 
-    const modal = openForeignModal();
+    // The modal owns neither key, yet the page below must not see them
+    const closeModal = register({ key: 'Enter', scope: 'modal', handler: () => {} });
     press({ key: 'Escape' });
-    press({ key: ' ' });
+    press({ key: 'Delete' });
     expect(overlay).not.toHaveBeenCalled();
     expect(route).not.toHaveBeenCalled();
 
-    modal.remove();
+    closeModal();
     press({ key: 'Escape' });
-    press({ key: ' ' });
+    press({ key: 'Delete' });
     expect(overlay).toHaveBeenCalledOnce();
     expect(route).toHaveBeenCalledOnce();
   });
 
-  it('keeps global and modal scopes live', () => {
+  it('keeps the global scope live', () => {
     const global = vi.fn();
-    const modalScope = vi.fn();
     register({ key: 'c', modifiers: { shift: true }, scope: 'global', handler: global });
-    register({ key: 'Escape', scope: 'modal', handler: modalScope });
+    register({ key: 'Escape', scope: 'modal', handler: () => {} });
 
-    openForeignModal();
     press({ key: 'C', shiftKey: true });
-    press({ key: 'Escape' });
 
     expect(global).toHaveBeenCalledOnce();
-    expect(modalScope).toHaveBeenCalledOnce();
   });
 
-  it('does not treat a non-modal dialog (the queue popover) as modal', () => {
+  it('does not let a modal handler that closes the modal leak the key below', () => {
+    const route = vi.fn();
+    register({ key: 'Escape', scope: 'route', handler: route });
+    const closeModal = register({
+      key: 'Escape',
+      scope: 'modal',
+      handler: () => {
+        closeModal();
+        return false;
+      },
+    });
+
+    press({ key: 'Escape' });
+
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it('no longer yields to an unregistered aria-modal element', () => {
     const route = vi.fn();
     register({ key: ' ', scope: 'route', handler: route });
-    const popover = document.createElement('div');
-    popover.setAttribute('role', 'dialog');
-    document.body.appendChild(popover);
+    const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    document.body.appendChild(modal);
 
     press({ key: ' ' });
 

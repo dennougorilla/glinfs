@@ -7,7 +7,7 @@ import { gotoCapture, gotoEditorWithClip, pauseEditorPlayback } from './helpers/
  * end to end so a precedence regression shows up as a user-visible failure:
  * Shift+C (global), popover Escape vs. crop (overlay over route), 1-9 /
  * Shift+digit (route), Space play/pause (route), and F + Escape on the
- * frame grid (foreign aria-modal the dispatcher yields to).
+ * frame grid (modal scope, which shuts out the overlay and route scopes).
  *
  * Drives the #91 mock stream: capture -> Create Clip -> editor. The
  * timeline / IME cases use an injected 30-frame clip instead.
@@ -310,4 +310,96 @@ test.describe('Timeline keys and IME guard (#102 review)', () => {
       expect((await editorState(page)).cropArea).toBeNull();
     });
   }
+});
+
+test.describe('Frame grid keys on the dispatcher (#102)', () => {
+  const GRID = '.frame-grid-backdrop';
+
+  test.beforeEach(async ({ page }) => {
+    await gotoEditorWithClip(page, { frameCount: 30 });
+    await pauseEditorPlayback(page);
+    await page.evaluate(() =>
+      window.__TEST_HOOKS__.setEditorState({
+        cropArea: { x: 0, y: 0, width: 100, height: 100, aspectRatio: 'free' },
+      }),
+    );
+    await blurToBody(page);
+    await page.keyboard.press('f');
+    await expect(page.locator(GRID)).toBeVisible();
+    await expect(page.locator('.frame-grid-item').first()).toBeFocused();
+  });
+
+  for (const [label, init] of /** @type {const} */ ([
+    ['isComposing', { isComposing: true }],
+    ['keyCode 229', { keyCode: 229 }],
+  ])) {
+    test(`IME Escape (${label}) keeps the grid open`, async ({ page }) => {
+      expect(await dispatchKey(page, { key: 'Escape', ...init })).toBe(false);
+      await expect(page.locator(GRID)).toBeVisible();
+
+      // Outside composition Escape closes the grid, and only the grid
+      await page.keyboard.press('Escape');
+      await expect(page.locator(GRID)).toHaveCount(0);
+      expect((await editorState(page)).cropArea).not.toBeNull();
+    });
+  }
+
+  test('Cmd/Ctrl+F and other browser combos pass through the grid', async ({ page }) => {
+    const first = page.locator('.frame-grid-item').first();
+
+    for (const init of [
+      { key: 'f', metaKey: true },
+      { key: 'f', ctrlKey: true },
+      { key: 'ArrowRight', metaKey: true },
+      { key: 'Escape', ctrlKey: true },
+    ]) {
+      expect(await dispatchKey(page, init), JSON.stringify(init)).toBe(false);
+    }
+    await page.keyboard.press('ControlOrMeta+f');
+    await expect(page.locator(GRID)).toBeVisible();
+    await expect(first).toBeFocused();
+
+    // The plain keys are still the grid's
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.frame-grid-item').nth(1)).toBeFocused();
+  });
+
+  test('editor shortcuts the grid does not own stay off the page below', async ({ page }) => {
+    await setCurrentFrame(page, 10);
+
+    for (const key of ['Delete', 'Backspace', 'g', 'Home', '1']) {
+      await page.keyboard.press(key);
+    }
+
+    await expect(page.locator(GRID)).toBeVisible();
+    await expect(page.locator('.editor-canvas')).toBeVisible();
+    expect((await editorState(page)).currentFrame).toBe(10);
+  });
+
+  test('leaving the route with the grid open leaves no grid keys behind', async ({ page }) => {
+    await page.evaluate(() => {
+      location.hash = '#/capture';
+    });
+    await page.waitForSelector('.capture-screen', { state: 'visible' });
+    await expect(page.locator(GRID)).toHaveCount(0);
+
+    await page.evaluate(() => {
+      location.hash = '#/editor';
+    });
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    await pauseEditorPlayback(page);
+    await blurToBody(page);
+    await page.evaluate(() =>
+      window.__TEST_HOOKS__.setEditorState({
+        currentFrame: 10,
+        cropArea: { x: 0, y: 0, width: 100, height: 100, aspectRatio: 'free' },
+      }),
+    );
+
+    // A stale modal registration would shut these route keys out
+    await page.keyboard.press('ArrowRight');
+    expect((await editorState(page)).currentFrame).toBe(11);
+    await page.keyboard.press('Escape');
+    expect((await editorState(page)).cropArea).toBeNull();
+  });
 });

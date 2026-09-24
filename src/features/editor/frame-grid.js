@@ -4,6 +4,7 @@
  * @module features/editor/frame-grid
  */
 
+import { registerHotkey } from '../../shared/hotkeys.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { createGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
@@ -830,35 +831,59 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   window.addEventListener('resize', handleResize);
   cleanups.push(() => window.removeEventListener('resize', handleResize));
 
-  // Escape key handler
-  const handleKeyDown = (e) => {
-    if (e.key === 'Escape') {
+  // Grid keys go through the app dispatcher in the modal scope for as long
+  // as the modal is open (#102): the dispatcher skips IME keystrokes, lets
+  // Cmd/Ctrl/Alt combos (Cmd+F, Alt+Arrow) reach the browser, and keeps
+  // route/overlay shortcuts (Delete, 1-9, crop Escape) off the page below.
+  // Shift is accepted: Shift+Enter/Space set End, Shift+Arrow navigates.
+  // allowInEditable because isInteractiveElement is the grid's own, broader
+  // guard; returning without handling still claims the key for the modal.
+  /**
+   * @param {string} key
+   * @param {(e: KeyboardEvent) => void} handler
+   */
+  const gridHotkey = (key, handler) =>
+    registerHotkey({
+      key,
+      modifiers: { shift: 'any' },
+      scope: 'modal',
+      allowInEditable: true,
+      handler,
+    });
+
+  // Escape closes even from a focused control (e.g. the size slider)
+  cleanups.push(
+    gridHotkey('Escape', (e) => {
       e.preventDefault();
       callbacks.onCancel();
-      return;
-    }
+    }),
+  );
 
-    const eventTarget = e.target instanceof Element ? e.target : document.activeElement;
-    if (isInteractiveElement(eventTarget)) {
-      return;
-    }
+  /** @param {KeyboardEvent} e */
+  const isFromInteractiveControl = (e) =>
+    isInteractiveElement(e.target instanceof Element ? e.target : document.activeElement);
 
-    // Arrow key navigation
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
-      e.preventDefault();
-      navigateGrid(e.key);
-      return;
-    }
+  // Arrow key navigation
+  for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+    cleanups.push(
+      gridHotkey(key, (e) => {
+        if (isFromInteractiveControl(e)) return;
+        e.preventDefault();
+        navigateGrid(key);
+      }),
+    );
+  }
 
-    // Enter/Space to select
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const shiftKey = e.shiftKey;
-      handleFrameClick(focusedFrame, shiftKey);
-    }
-  };
-  document.addEventListener('keydown', handleKeyDown);
-  cleanups.push(() => document.removeEventListener('keydown', handleKeyDown));
+  // Enter/Space to select
+  for (const key of ['Enter', ' ']) {
+    cleanups.push(
+      gridHotkey(key, (e) => {
+        if (isFromInteractiveControl(e)) return;
+        e.preventDefault();
+        handleFrameClick(focusedFrame, e.shiftKey);
+      }),
+    );
+  }
 
   // Click outside to close
   cleanups.push(
