@@ -8,7 +8,27 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { createGridThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
 import { createThumbnailCanvas } from './api.js';
-import { isFrameInRange, normalizeSelectionRange } from './core.js';
+import { normalizeSelectionRange } from './core.js';
+import {
+  calculateOptimalThumbnailSize,
+  computeGridMetrics,
+  computeScrollTopForFrame,
+  computeVirtualWindow,
+  GRID_PADDING,
+  getVirtualItemRect,
+  shouldVirtualize,
+} from './frame-grid/geometry.js';
+import {
+  clampFrameIndex,
+  formatSelectionInfo,
+  getAffectedRangeIndices,
+  getFrameSelectionState,
+  isSceneSelected,
+  selectByClick,
+  selectEnd,
+  selectSingleFrame,
+  selectStart,
+} from './frame-grid/selection.js';
 
 /**
  * Copy a rendered thumbnail's pixel content into a brand-new canvas.
@@ -59,12 +79,6 @@ function isInteractiveElement(target) {
   return target instanceof Element && target.closest(INTERACTIVE_ELEMENT_SELECTOR) !== null;
 }
 
-const GRID_GAP = 12;
-const GRID_PADDING = 4;
-const GRID_ASPECT_RATIO = 16 / 9;
-const VIRTUALIZATION_THRESHOLD = 200;
-const VIRTUAL_OVERSCAN_ROWS = 3;
-
 /**
  * Calculate the backing-store size for a thumbnail displayed at a CSS width.
  * The quality preset remains an upper bound, while high-DPI displays receive
@@ -90,55 +104,6 @@ export function calculateThumbnailRenderSize(
  * @property {(range: import('./types.js').FrameRange) => void} onApply - Called when user clicks Apply
  * @property {() => void} onCancel - Called when user cancels (Escape, click outside, Cancel button)
  */
-
-/**
- * Calculate optimal thumbnail size to fit all frames in viewport
- * @param {number} frameCount - Total number of frames
- * @param {number} containerWidth - Available width
- * @param {number} containerHeight - Available height
- * @param {number} minThumbnailSize - Quality-preset minimum thumbnail size
- * @param {number} maxThumbnailSize - Quality-preset maximum thumbnail size
- * @returns {number} - Optimal thumbnail width
- */
-function calculateOptimalThumbnailSize(
-  frameCount,
-  containerWidth,
-  containerHeight,
-  minThumbnailSize,
-  maxThumbnailSize,
-) {
-  const aspectRatio = 16 / 9;
-  const gap = 12;
-
-  // Binary search for optimal size
-  let low = minThumbnailSize;
-  let high = maxThumbnailSize;
-  // If even the minimum size cannot fit every frame, stay at the minimum.
-  // Starting from the default made very large clips silently auto-fit back to
-  // a larger and more memory-intensive thumbnail size.
-  let optimal = minThumbnailSize;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const cols = Math.floor((containerWidth + gap) / (mid + gap));
-    if (cols < 1) {
-      high = mid - 1;
-      continue;
-    }
-    const rows = Math.ceil(frameCount / cols);
-    const itemHeight = mid / aspectRatio;
-    const totalHeight = rows * (itemHeight + gap) - gap;
-
-    if (totalHeight <= containerHeight) {
-      optimal = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  return Math.max(minThumbnailSize, Math.min(optimal, maxThumbnailSize));
-}
 
 /**
  * Render Frame Grid Modal
@@ -337,10 +302,9 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * Update scene button active states
    */
   function updateSceneButtonStates() {
+    const selection = currentSelection();
     sceneButtons.forEach((btn, index) => {
-      const scene = scenes[index];
-      const isActive = startFrame === scene.startFrame && endFrame === scene.endFrame;
-      btn.classList.toggle('is-active', isActive);
+      btn.classList.toggle('is-active', isSceneSelected(selection, scenes[index]));
     });
   }
 
@@ -356,7 +320,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
     className: 'frame-grid-container',
     tabindex: '-1',
   });
-  const isVirtualized = frames.length > VIRTUALIZATION_THRESHOLD;
+  const isVirtualized = shouldVirtualize(frames.length);
   if (isVirtualized) {
     gridContainer.classList.add('is-virtualized');
   }
@@ -382,17 +346,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       gridContainer.clientWidth ||
       gridContainer.offsetWidth ||
       Math.max(0, body.clientWidth - GRID_PADDING * 2);
-    const containerWidth = Math.max(thumbnailSize + GRID_PADDING * 2, measuredWidth);
-    const contentWidth = Math.max(1, containerWidth - GRID_PADDING * 2);
-    const columns = Math.max(1, Math.floor((contentWidth + GRID_GAP) / (thumbnailSize + GRID_GAP)));
-    const cellWidth = Math.max(1, (contentWidth - GRID_GAP * (columns - 1)) / columns);
-    const cellHeight = cellWidth / GRID_ASPECT_RATIO;
-    const rowStride = cellHeight + GRID_GAP;
-    const rowCount = Math.ceil(frames.length / columns);
-    const totalHeight =
-      GRID_PADDING * 2 + rowCount * cellHeight + Math.max(0, rowCount - 1) * GRID_GAP;
-
-    return { columns, cellWidth, cellHeight, rowStride, rowCount, totalHeight };
+    return computeGridMetrics(measuredWidth, thumbnailSize, frames.length);
   }
 
   /**
@@ -516,12 +470,11 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {ReturnType<typeof getGridMetrics>} metrics
    */
   function positionVirtualItem(item, index, metrics) {
-    const row = Math.floor(index / metrics.columns);
-    const column = index % metrics.columns;
-    item.style.left = `${GRID_PADDING + column * (metrics.cellWidth + GRID_GAP)}px`;
-    item.style.top = `${GRID_PADDING + row * metrics.rowStride}px`;
-    item.style.width = `${metrics.cellWidth}px`;
-    item.style.height = `${metrics.cellHeight}px`;
+    const rect = getVirtualItemRect(index, metrics);
+    item.style.left = `${rect.left}px`;
+    item.style.top = `${rect.top}px`;
+    item.style.width = `${rect.width}px`;
+    item.style.height = `${rect.height}px`;
   }
 
   /**
@@ -588,21 +541,14 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
 
     const metrics = getGridMetrics();
     gridContainer.style.height = `${metrics.totalHeight}px`;
-    if (metrics.rowCount === 0) return;
-
-    const viewportHeight = body.clientHeight || 600;
-    const firstVisibleRow = Math.min(
-      metrics.rowCount - 1,
-      Math.max(0, Math.floor(body.scrollTop / metrics.rowStride)),
+    const visibleRange = computeVirtualWindow(
+      metrics,
+      body.scrollTop,
+      body.clientHeight || 600,
+      frames.length,
     );
-    const lastVisibleRow = Math.min(
-      metrics.rowCount - 1,
-      Math.max(firstVisibleRow, Math.ceil((body.scrollTop + viewportHeight) / metrics.rowStride)),
-    );
-    const firstRow = Math.max(0, firstVisibleRow - VIRTUAL_OVERSCAN_ROWS);
-    const lastRow = Math.min(metrics.rowCount - 1, lastVisibleRow + VIRTUAL_OVERSCAN_ROWS);
-    const firstIndex = firstRow * metrics.columns;
-    const lastIndex = Math.min(frames.length - 1, (lastRow + 1) * metrics.columns - 1);
+    if (!visibleRange) return;
+    const { firstIndex, lastIndex } = visibleRange;
 
     materializedIndices.forEach((index) => {
       if (index < firstIndex || index > lastIndex) {
@@ -953,18 +899,32 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
   // =========================================
 
   /**
+   * Current Start/End selection as a selection-model value.
+   * @returns {import('./frame-grid/selection.js').GridSelection}
+   */
+  function currentSelection() {
+    return { start: startFrame, end: endFrame };
+  }
+
+  /**
+   * Commit a selection transition, focus the acted-on frame and refresh the UI.
+   * @param {import('./frame-grid/selection.js').GridSelection} next
+   * @param {number} index - Frame that triggered the transition
+   */
+  function applySelection(next, index) {
+    startFrame = next.start;
+    endFrame = next.end;
+    focusedFrame = index;
+    updateVisualState();
+    updateSelectionInfo();
+  }
+
+  /**
    * Set start frame
    * @param {number} index
    */
   function setStartFrame(index) {
-    startFrame = index;
-    // Clear end if it's before start
-    if (endFrame !== null && endFrame < startFrame) {
-      endFrame = null;
-    }
-    focusedFrame = index;
-    updateVisualState();
-    updateSelectionInfo();
+    applySelection(selectStart(currentSelection(), index), index);
   }
 
   /**
@@ -972,14 +932,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {number} index
    */
   function setEndFrame(index) {
-    endFrame = index;
-    // Auto-set start if not set, or if end < start, set single frame selection (IN=OUT)
-    if (startFrame === null || startFrame > endFrame) {
-      startFrame = index;
-    }
-    focusedFrame = index;
-    updateVisualState();
-    updateSelectionInfo();
+    applySelection(selectEnd(currentSelection(), index), index);
   }
 
   /**
@@ -988,11 +941,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {boolean} shiftKey
    */
   function handleFrameClick(index, shiftKey) {
-    if (shiftKey && startFrame !== null) {
-      setEndFrame(index);
-    } else {
-      setStartFrame(index);
-    }
+    applySelection(selectByClick(currentSelection(), index, shiftKey), index);
   }
 
   /**
@@ -1000,11 +949,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {number} index
    */
   function handleFrameDoubleClick(index) {
-    startFrame = index;
-    endFrame = index;
-    focusedFrame = index;
-    updateVisualState();
-    updateSelectionInfo();
+    applySelection(selectSingleFrame(index), index);
   }
 
   /**
@@ -1026,7 +971,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    */
   function scrollToFrame(index, options = {}) {
     const { block = 'nearest', focus = false } = options;
-    const safeIndex = Math.max(0, Math.min(frames.length - 1, index));
+    const safeIndex = clampFrameIndex(index, frames.length);
 
     if (!isVirtualized) {
       const item = gridItems[safeIndex];
@@ -1036,18 +981,15 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       return;
     }
 
-    const metrics = getGridMetrics();
-    const row = Math.floor(safeIndex / metrics.columns);
-    const itemTop = GRID_PADDING + row * metrics.rowStride;
-    const itemBottom = itemTop + metrics.cellHeight;
-    const viewportHeight = body.clientHeight || 600;
-
-    if (block === 'center') {
-      body.scrollTop = Math.max(0, itemTop - (viewportHeight - metrics.cellHeight) / 2);
-    } else if (itemTop < body.scrollTop) {
-      body.scrollTop = itemTop;
-    } else if (itemBottom > body.scrollTop + viewportHeight) {
-      body.scrollTop = itemBottom - viewportHeight;
+    const nextScrollTop = computeScrollTopForFrame(
+      safeIndex,
+      getGridMetrics(),
+      body.scrollTop,
+      body.clientHeight || 600,
+      block,
+    );
+    if (nextScrollTop !== null) {
+      body.scrollTop = nextScrollTop;
     }
 
     renderVirtualWindow();
@@ -1100,13 +1042,10 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * @param {number} index
    */
   function updateSingleItemVisualState(item, index) {
-    const isStart = index === startFrame;
-    const isEnd = index === endFrame;
-    const effectiveEnd = endFrame ?? startFrame;
-    const inRange = startFrame !== null && isFrameInRange(index, startFrame, effectiveEnd);
+    const { isStart, isEnd, inRange, badges } = getFrameSelectionState(index, currentSelection());
 
     item.classList.toggle('is-start', isStart);
-    item.classList.toggle('is-end', isEnd && endFrame !== null);
+    item.classList.toggle('is-end', isEnd);
     item.classList.toggle('is-in-range', inRange);
 
     // Remove existing badges
@@ -1114,56 +1053,11 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
       badge.remove();
     });
 
-    // Add badges
-    if (isStart && isEnd && startFrame === endFrame) {
-      const badge = createElement('span', { className: 'frame-grid-badge single-badge' }, [
-        'IN=OUT',
-      ]);
-      item.appendChild(badge);
-    } else {
-      if (isStart) {
-        const badge = createElement('span', { className: 'frame-grid-badge start-badge' }, ['IN']);
-        item.appendChild(badge);
-      }
-      if (isEnd && endFrame !== null) {
-        const badge = createElement('span', { className: 'frame-grid-badge end-badge' }, ['OUT']);
-        item.appendChild(badge);
-      }
+    for (const { variant, label } of badges) {
+      item.appendChild(
+        createElement('span', { className: `frame-grid-badge ${variant}-badge` }, [label]),
+      );
     }
-  }
-
-  /**
-   * Get all indices affected by range change
-   * @param {number | null} oldStart
-   * @param {number | null} oldEnd
-   * @param {number | null} newStart
-   * @param {number | null} newEnd
-   * @returns {Set<number>}
-   */
-  function getAffectedRangeIndices(oldStart, oldEnd, newStart, newEnd) {
-    const affected = new Set();
-
-    // Add old range
-    if (oldStart !== null) {
-      const oldEffectiveEnd = oldEnd ?? oldStart;
-      const min = Math.min(oldStart, oldEffectiveEnd);
-      const max = Math.max(oldStart, oldEffectiveEnd);
-      for (let i = min; i <= max; i++) {
-        affected.add(i);
-      }
-    }
-
-    // Add new range
-    if (newStart !== null) {
-      const newEffectiveEnd = newEnd ?? newStart;
-      const min = Math.min(newStart, newEffectiveEnd);
-      const max = Math.max(newStart, newEffectiveEnd);
-      for (let i = min; i <= max; i++) {
-        affected.add(i);
-      }
-    }
-
-    return affected;
   }
 
   /**
@@ -1203,16 +1097,7 @@ export function renderFrameGridModal({ container, frames, initialRange, scenes =
    * Update selection info text
    */
   function updateSelectionInfo() {
-    if (startFrame === null) {
-      selectionInfo.textContent = 'Click [S] to set Start, [E] to set End';
-    } else if (endFrame === null) {
-      selectionInfo.textContent = `Start: Frame ${startFrame + 1} \u2014 Click [E] on another frame`;
-    } else {
-      const count = Math.abs(endFrame - startFrame) + 1;
-      const min = Math.min(startFrame, endFrame);
-      const max = Math.max(startFrame, endFrame);
-      selectionInfo.textContent = `Selection: Frame ${min + 1} \u2192 Frame ${max + 1} (${count} frame${count !== 1 ? 's' : ''})`;
-    }
+    selectionInfo.textContent = formatSelectionInfo(currentSelection());
   }
 
   // Cleanup function

@@ -172,6 +172,8 @@
   background: var(--color-surface, #222);
 }
 
+/* Virtualized items are absolutely positioned (left/top set in JS). Kept after
+   the base item rule so source order agrees with specificity. */
 .frame-grid-container.is-virtualized .frame-grid-item {
   position: absolute;
 }
