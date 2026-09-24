@@ -162,10 +162,6 @@
   content-visibility: visible;
 }
 
-.frame-grid-container.is-virtualized .frame-grid-item {
-  position: absolute;
-}
-
 .frame-grid-item {
   position: relative;
   cursor: pointer;
@@ -174,6 +170,10 @@
   transition: box-shadow 0.15s;
   aspect-ratio: 16 / 9;
   background: var(--color-surface, #222);
+}
+
+.frame-grid-container.is-virtualized .frame-grid-item {
+  position: absolute;
 }
 
 .frame-grid-item:focus {
