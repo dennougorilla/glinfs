@@ -309,4 +309,78 @@ describe('terminate', () => {
     await expect(d1).resolves.toEqual({ ok: false, error: 'terminated' });
     expect(worker.terminate).toHaveBeenCalled();
   });
+
+  // #120: terminate() is teardown-only (no production caller requeues), so it
+  // fails pending jobs instead of pumping them — but it must hand back the
+  // frames they never transferred rather than dropping them unclosed
+  it('with 1 running + 2 pending: running encode is LOST, pending encode gets its own frames back', async () => {
+    vi.stubGlobal('VideoEncoder', {
+      isConfigSupported: vi.fn(async () => ({ supported: true })),
+    });
+    const workers = [];
+    const manager = createClipCodecManager({
+      createWorker: () => {
+        const w = createFakeWorker();
+        workers.push(w);
+        return w;
+      },
+    });
+    await manager.probeSupport();
+
+    const runningFrames = fakeFrames(2);
+    const pendingFrames = fakeFrames(3);
+    const running = manager.encode(runningFrames, { fps: 30, width: 10, height: 10 });
+    const pendingEncode = manager.encode(pendingFrames, { fps: 30, width: 10, height: 10 });
+    const pendingDecode = manager.decode({
+      chunks: [],
+      config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
+    });
+    // Only the first job was dispatched (its frames transferred)
+    expect(workers[0].posted).toHaveLength(1);
+    expect(workers[0].posted[0].transfer).toBe(runningFrames);
+
+    manager.terminate();
+
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    await expect(running).resolves.toEqual({ ok: false, error: 'terminated', frames: [] });
+    const pendingResult = await pendingEncode;
+    expect(pendingResult).toMatchObject({ ok: false, error: 'terminated' });
+    // Same array, same length as submitted: the caller's RECOVERABLE path
+    // (app-store rebuilds the raw entry, or closes the frames if deleted)
+    expect(pendingResult.frames).toBe(pendingFrames);
+    await expect(pendingDecode).resolves.toEqual({ ok: false, error: 'terminated' });
+    // Nothing was requeued onto the dead worker or a new one
+    expect(workers[0].posted).toHaveLength(1);
+    expect(workers).toHaveLength(1);
+
+    // Not terminal: the next job runs on a fresh worker
+    void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    expect(workers).toHaveLength(2);
+    expect(workers[1].posted[0].message.type).toBe('ENCODE');
+  });
+
+  it('ignores late messages from the terminated worker', async () => {
+    const { manager, worker } = await createProbedManager();
+    const job = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    const { jobId } = worker.posted[0].message.payload;
+    manager.terminate();
+    worker.emit({
+      type: 'ENCODE_RESULT',
+      payload: { jobId, chunks: [], config: { codec: 'vp8' }, byteLength: 4 },
+    });
+    await expect(job).resolves.toEqual({ ok: false, error: 'terminated', frames: [] });
+  });
+});
+
+describe('postMessage failure', () => {
+  it('hands the untransferred frames back instead of reporting them lost', async () => {
+    const { manager, worker } = await createProbedManager();
+    worker.postMessage = () => {
+      throw new Error('DataCloneError');
+    };
+    const frames = fakeFrames(2);
+    const result = await manager.encode(frames, { fps: 30, width: 10, height: 10 });
+    expect(result).toMatchObject({ ok: false, error: 'DataCloneError' });
+    expect(result.frames).toBe(frames);
+  });
 });
