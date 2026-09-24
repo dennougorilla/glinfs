@@ -102,13 +102,7 @@ button:focus-visible,
   width: 28px;
   height: 28px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-primary);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  color: white;
+  flex: none;
 }
 
 .app-version {
@@ -862,7 +856,19 @@ input[type="checkbox"] {
     width: 20px;
   }
 
-  .app-logo span:not(.app-logo-icon) {
+  /* The logo mark is aria-hidden, so the name only hides visually:
+     it stays the header link's accessible name */
+  .app-logo span:not(.app-logo-icon, .app-version) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .app-logo .app-version {
     display: none;
   }
 }
