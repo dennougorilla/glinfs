@@ -11,6 +11,12 @@
        zero CSP violations). All fetched code and workers stay same-origin. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; frame-src 'none'; form-action 'none'">
   <title>Glinfs - Screen Capture to GIF</title>
+  <!-- favicon.ico (16/32/48) is the fallback for browsers without SVG favicon
+       support; both it and the apple-touch-icon are rasterized from favicon.svg. -->
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#18181b">
   <link rel="stylesheet" href="./styles/reset.css">
   <link rel="stylesheet" href="./styles/variables.css">
   <link rel="stylesheet" href="./styles/global.css">
