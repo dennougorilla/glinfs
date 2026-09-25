@@ -172,9 +172,15 @@ export function chooseImportFps(durationsMs) {
 /**
  * Slots (constant-fps frames) per source frame, by cumulative rounding so
  * rounding error never accumulates across the clip:
- * `end_i = round(cumMs_i * fps / 1000)`, `slots_i = max(1, end_i - end_{i-1})`.
+ * `end_i = round(cumMs_i * fps / 1000)`, `slots_i = max(1, end_i - emitted)`
+ * where `emitted` is the number of slots already handed out.
+ *
  * Every source frame keeps at least one slot, so a frame shorter than one
- * period is never dropped.
+ * period is never dropped. Measuring against `emitted` (rather than
+ * `end_{i-1}`) lets a later, longer frame absorb the extra slot such a
+ * short frame took, so the clip keeps its real total length whenever that
+ * is possible. Without any forced slot the two are identical.
+ *
  * @param {Array<number|null|undefined>} durationsMs - Per source frame
  * @param {number} fps
  * @returns {number[]} Slot count per source frame (each >= 1)
@@ -183,12 +189,13 @@ export function computeFrameSlots(durationsMs, fps) {
   /** @type {number[]} */
   const slots = [];
   let cumulativeMs = 0;
-  let previousEnd = 0;
+  let emitted = 0;
   for (const ms of durationsMs) {
     cumulativeMs += normalizeFrameDurationMs(ms);
     const end = Math.round((cumulativeMs * fps) / 1000);
-    slots.push(Math.max(1, end - previousEnd));
-    previousEnd = end;
+    const count = Math.max(1, end - emitted);
+    slots.push(count);
+    emitted += count;
   }
   return slots;
 }

@@ -249,7 +249,8 @@ export async function decodeImageFile(file, options = {}) {
     throwIfAborted(signal);
 
     const fps = chooseImportFps(durationsMs);
-    const slots = computeFrameSlots(durationsMs, fps);
+    // A still image has no timing to preserve: one frame, not a 100 ms run
+    const slots = sources.length === 1 ? [1] : computeFrameSlots(durationsMs, fps);
     const totalSlots = slots.reduce((sum, n) => sum + n, 0);
     const slotError = checkTotalSlots(totalSlots, fps);
     if (slotError) throw slotError;
