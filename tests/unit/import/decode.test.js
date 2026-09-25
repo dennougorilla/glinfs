@@ -14,7 +14,7 @@ let allFrames = [];
 
 class MockVideoFrame {
   /**
-   * @param {{ width?: number, height?: number, format?: string|null, durationUs?: number|null, alpha?: number }} spec
+   * @param {{ width?: number, height?: number, format?: string|null, durationUs?: number|null, timestampUs?: number, alpha?: number }} spec
    */
   constructor(spec) {
     this.spec = spec;
@@ -24,6 +24,7 @@ class MockVideoFrame {
     this.codedWidth = this.displayWidth;
     this.codedHeight = this.displayHeight;
     this.duration = spec.durationUs === undefined ? null : spec.durationUs;
+    this.timestamp = spec.timestampUs ?? 0;
     this.closed = false;
     this.close = vi.fn(() => {
       this.closed = true;
@@ -34,13 +35,6 @@ class MockVideoFrame {
       for (let i = 3; i < buffer.length; i += 4) buffer[i] = this.spec.alpha ?? 255;
       return [];
     });
-    this.clone = vi.fn(() => {
-      if (this.spec.cloneThrowsAfter !== undefined) {
-        this.spec.cloneCount = (this.spec.cloneCount ?? 0) + 1;
-        if (this.spec.cloneCount > this.spec.cloneThrowsAfter) throw new Error('clone failed');
-      }
-      return track(new MockVideoFrame({ ...this.spec, clonedFrom: this }));
-    });
     allFrames.push(this);
   }
 
@@ -49,9 +43,32 @@ class MockVideoFrame {
   }
 }
 
-/** @param {MockVideoFrame} frame */
-function track(frame) {
-  return frame;
+/**
+ * `new VideoFrame(source, { timestamp, duration })`: a restamped clone that
+ * remembers its source. `restampThrowsAfter` on the source spec makes the
+ * n+1-th restamp of that source throw.
+ */
+class MockVideoFrameConstructor {
+  /**
+   * @param {MockVideoFrame} source
+   * @param {{ timestamp: number, duration?: number }} init
+   */
+  constructor(source, init) {
+    const spec = source.spec;
+    if (spec.restampThrowsAfter !== undefined) {
+      spec.restampCount = (spec.restampCount ?? 0) + 1;
+      if (spec.restampCount > spec.restampThrowsAfter) throw new Error('restamp failed');
+    }
+    const frame = new MockVideoFrame({
+      ...spec,
+      clonedFrom: source,
+      timestampUs: init.timestamp,
+      durationUs: init.duration,
+    });
+    frame.spec.clonedFrom = source;
+    // biome-ignore lint/correctness/noConstructorReturn: mimics VideoFrame(VideoFrame)
+    return frame;
+  }
 }
 
 /**
@@ -107,6 +124,7 @@ beforeEach(() => {
   MockImageDecoder.isTypeSupported.mockClear();
   MockImageDecoder.isTypeSupported.mockImplementation(async () => true);
   vi.stubGlobal('ImageDecoder', MockImageDecoder);
+  vi.stubGlobal('VideoFrame', MockVideoFrameConstructor);
 });
 
 afterEach(() => {
@@ -124,11 +142,12 @@ async function rejection(promise) {
 }
 
 describe('decodeImageFile success', () => {
-  it('builds constant-fps slots with clones for holds', async () => {
+  it('builds constant-fps slots with restamped clones for holds', async () => {
+    // ImageDecoder stamps each frame at its cumulative start time
     script.frames = [
-      { durationUs: us(100) },
-      { durationUs: us(100) },
-      { durationUs: us(500), alpha: 0 },
+      { durationUs: us(100), timestampUs: 0 },
+      { durationUs: us(100), timestampUs: us(100) },
+      { durationUs: us(500), timestampUs: us(200), alpha: 0 },
     ];
 
     const result = await decodeImageFile(fakeFile());
@@ -143,17 +162,22 @@ describe('decodeImageFile success', () => {
     // Unique wrapper ids; first slot id equals its sharedKey
     expect(new Set(result.frames.map((f) => f.id)).size).toBe(7);
     expect(result.frames[2].id).toBe(keys[2]);
-    // Timestamps in microseconds at the chosen fps
-    expect(result.frames.map((f) => f.timestamp)).toEqual(
-      [0, 1, 2, 3, 4, 5, 6].map((i) => i * 100_000),
-    );
-    // Slots 3..6 are clones of the third decoded frame
+    // Timestamps in microseconds at the chosen fps, on the wrappers AND the
+    // VideoFrames (the queue codec encodes the VideoFrame timestamps)
+    const expected = [0, 1, 2, 3, 4, 5, 6].map((i) => i * 100_000);
+    expect(result.frames.map((f) => f.timestamp)).toEqual(expected);
+    expect(result.frames.map((f) => f.frame.timestamp)).toEqual(expected);
+    // The first slot of each source is the decoded frame itself; slots 3..6
+    // are restamped clones of the third decoded frame
+    const sources = allFrames.filter((f) => !f.spec.clonedFrom);
+    expect(result.frames.slice(0, 3).map((f) => f.frame)).toEqual(sources);
     const third = result.frames[2].frame;
-    expect(third.clone).toHaveBeenCalledTimes(4);
     for (const slot of result.frames.slice(3)) {
       expect(slot.frame).not.toBe(third);
       expect(/** @type {any} */ (slot.frame).spec.clonedFrom).toBe(third);
+      expect(slot.frame.duration).toBe(100_000);
     }
+    expect(allFrames).toHaveLength(7);
     // Nothing closed on success; decoder released
     expect(allFrames.every((f) => !f.closed)).toBe(true);
     expect(decoders[0].close).toHaveBeenCalledTimes(1);
@@ -196,8 +220,24 @@ describe('decodeImageFile success', () => {
     expect(sources[2].copyTo).not.toHaveBeenCalled();
   });
 
+  it('restamps a first slot whose decoded timestamp is off-grid and closes the spare source', async () => {
+    // A decoder that stamps every frame 0: only source 0 lines up
+    script.frames = [{ durationUs: us(100) }, { durationUs: us(200) }];
+    const result = await decodeImageFile(fakeFile());
+
+    expect(result.frames.map((f) => f.frame.timestamp)).toEqual([0, 100_000, 200_000]);
+    const [first, second] = allFrames.filter((f) => !f.spec.clonedFrom);
+    expect(result.frames[0].frame).toBe(first);
+    expect(second.closed).toBe(true);
+    expect(result.frames.slice(1).every((f) => f.frame.spec.clonedFrom === second)).toBe(true);
+    expect(result.frames.every((f) => !f.frame.closed)).toBe(true);
+  });
+
   it('reports hasAlpha false for opaque frames and scans each source once', async () => {
-    script.frames = [{ durationUs: us(40) }, { durationUs: us(80) }];
+    script.frames = [
+      { durationUs: us(40), timestampUs: 0 },
+      { durationUs: us(80), timestampUs: us(40) },
+    ];
     const result = await decodeImageFile(fakeFile());
     expect(result.hasAlpha).toBe(false);
     expect(result.frames).toHaveLength(3);
@@ -331,9 +371,12 @@ describe('decodeImageFile refusals close everything they created', () => {
   });
 
   it('a clone failure closes the sources and the clones already made', async () => {
-    script.frames = [{ durationUs: us(100) }, { durationUs: us(500), cloneThrowsAfter: 2 }];
+    script.frames = [
+      { durationUs: us(100), timestampUs: 0 },
+      { durationUs: us(500), timestampUs: us(100), restampThrowsAfter: 2 },
+    ];
     const error = await rejection(decodeImageFile(fakeFile()));
-    expect(error.message).toBe('clone failed');
+    expect(error.message).toBe('restamp failed');
     // 2 sources + 2 successful clones
     expect(allFrames).toHaveLength(4);
     expect(allFrames.every((f) => f.closed)).toBe(true);

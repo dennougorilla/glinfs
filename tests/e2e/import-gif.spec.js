@@ -27,9 +27,11 @@ const QUEUE_ENTRIES = '[data-testid="clip-entry"]:not([data-clip-active])';
  * Palette: 0 = transparent (frame 3 background), 1 = red, 2 = blue, 3 = green.
  * Every frame uses disposal 2 (restore to background) so frame 3's
  * transparent pixels do not show frame 2 through them.
+ * @param {{ transparent?: boolean }} [options] - false = frame 3's background
+ *   is black instead of transparent (same timing, fully opaque)
  * @returns {Buffer}
  */
-function buildFixtureGif() {
+function buildFixtureGif({ transparent = true } = {}) {
   const palette = [
     [0, 0, 0],
     [255, 0, 0],
@@ -53,7 +55,7 @@ function buildFixtureGif() {
   gif.writeFrame(greenOnClear, WIDTH, HEIGHT, {
     delay: 500,
     dispose: 2,
-    transparent: true,
+    transparent,
     transparentIndex: 0,
   });
   gif.finish();
@@ -77,6 +79,7 @@ async function readActiveClip(page) {
       sceneDetectionEnabled: payload.sceneDetectionEnabled,
       sharedKeys: payload.frames.map((f) => f.sharedKey),
       timestamps: payload.frames.map((f) => f.timestamp),
+      videoFrameTimestamps: payload.frames.map((f) => f.frame.timestamp),
       openFrames: payload.frames.filter((f) => !f.frame.closed).length,
     };
   });
@@ -119,6 +122,8 @@ test.describe('Import a GIF from the Capture screen', () => {
     expect(new Set(keys.slice(2))).toEqual(new Set([keys[2]]));
     // Constant-fps timestamps (microseconds)
     expect(clip?.timestamps).toEqual([0, 1, 2, 3, 4, 5, 6].map((i) => i * 100_000));
+    // ... on the VideoFrames too (repeated slots are restamped clones)
+    expect(clip?.videoFrameTimestamps).toEqual(clip?.timestamps);
 
     await expect
       .poll(() => page.evaluate(() => window.__TEST_HOOKS__.getEditorState()?.frameCount))
@@ -234,5 +239,82 @@ test.describe('Import a GIF from the Capture screen', () => {
 
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
     expect(await readActiveClip(page)).toMatchObject({ sourceName: 'dropped.gif', frameCount: 7 });
+  });
+
+  test('an opaque import with holds survives queue compression; an alpha import stays raw', async ({
+    page,
+  }) => {
+    /** @type {string[]} */
+    const pageErrors = [];
+    /** @type {string[]} */
+    const consoleErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(String(err)));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
+    await gotoCapture(page);
+    await page.locator('[data-testid="import-file-input"]').setInputFiles({
+      name: 'opaque-holds.gif',
+      mimeType: 'image/gif',
+      buffer: buildFixtureGif({ transparent: false }),
+    });
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    expect(await readActiveClip(page)).toMatchObject({ frameCount: 7, hasAlpha: false });
+    const opaqueId = await page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id);
+
+    // Open a second (alpha) file: the opaque clip demotes and compresses
+    await page.evaluate(() => {
+      location.hash = '#/capture';
+    });
+    await page.waitForSelector('.capture-screen', { state: 'visible' });
+    await page.locator('[data-testid="import-file-input"]').setInputFiles({
+      name: 'alpha.gif',
+      mimeType: 'image/gif',
+      buffer: buildFixtureGif(),
+    });
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    const alphaId = await page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id);
+
+    const opaqueEntry = page.locator(`${QUEUE_ENTRIES}[data-clip-id="${opaqueId}"]`);
+    await expect
+      .poll(async () => opaqueEntry.getAttribute('data-clip-status'), { timeout: 20000 })
+      .toMatch(/^(compressed|raw)$/);
+    const compressionAvailable = await page.evaluate(() =>
+      window.__TEST_HOOKS__.isClipCompressionAvailable(),
+    );
+    if (compressionAvailable) {
+      await expect(opaqueEntry).toHaveAttribute('data-clip-status', 'compressed');
+    }
+
+    // Promote the opaque clip back: every slot decodes, in order
+    await opaqueEntry.locator('.clip-entry-main').click();
+    await expect
+      .poll(() => page.evaluate(() => window.__TEST_HOOKS__.getClipPayload()?.id), {
+        timeout: 20000,
+      })
+      .toBe(opaqueId);
+    await expect(page.locator('.editor-canvas')).toBeVisible();
+    expect(await readActiveClip(page)).toMatchObject({
+      frameCount: 7,
+      fps: 10,
+      hasAlpha: false,
+      sourceName: 'opaque-holds.gif',
+      openFrames: 7,
+    });
+    await expect
+      .poll(() => page.evaluate(() => window.__TEST_HOOKS__.getEditorState()?.frameCount))
+      .toBe(7);
+
+    // The alpha clip demoted in the swap and must never be compressed
+    const alphaEntry = page.locator(`${QUEUE_ENTRIES}[data-clip-id="${alphaId}"]`);
+    await expect(alphaEntry).toHaveAttribute('data-clip-status', 'raw');
+    await page.waitForTimeout(500);
+    await expect(alphaEntry).toHaveAttribute('data-clip-status', 'raw');
+
+    expect(pageErrors).toEqual([]);
+    expect(consoleErrors.filter((text) => /closed|VideoFrame|detached|codec/i.test(text))).toEqual(
+      [],
+    );
   });
 });

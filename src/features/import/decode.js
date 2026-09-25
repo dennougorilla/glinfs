@@ -3,7 +3,7 @@
  * @module features/import/decode
  *
  * FRAME OWNERSHIP: every VideoFrame created here (decoded source frames and
- * their clone() slots) is owned by decodeImageFile until it returns. On ANY
+ * the restamped clones that fill repeated slots) is owned by decodeImageFile until it returns. On ANY
  * error, refusal or abort it closes all of them, and the ImageDecoder, before
  * rethrowing. On success ownership passes to the caller, which must either
  * hand the frames to setClipPayload or close them.
@@ -23,8 +23,8 @@ import {
 /**
  * @typedef {Object} DecodedImport
  * @property {import('../capture/types.js').Frame[]} frames - One wrapper per
- *   constant-fps slot; repeated slots hold clone()s sharing their source's
- *   pixels and its sharedKey
+ *   constant-fps slot; repeated slots hold restamped clones of their source
+ *   frame (same pixels, own timestamp) and share its sharedKey
  * @property {number} fps - Chosen clip fps
  * @property {number} width
  * @property {number} height
@@ -259,24 +259,39 @@ export async function decodeImageFile(file, options = {}) {
     const prefix = `import-${Date.now()}-${importCounter}`;
     /** @type {import('../capture/types.js').Frame[]} */
     const frames = [];
+    const slotDurationUs = Math.round(1e6 / fps);
     let slotIndex = 0;
     for (let i = 0; i < sources.length; i++) {
+      const source = sources[i];
       const sourceId = `${prefix}-${i}`;
+      let sourceUsed = false;
       for (let k = 0; k < slots[i]; k++) {
-        // First slot holds the decoded frame itself; holds repeat it as
-        // clones (independent handles over the same pixels)
-        const videoFrame = k === 0 ? sources[i] : sources[i].clone();
-        if (k > 0) created.push(videoFrame);
+        const timestamp = Math.round((slotIndex * 1e6) / fps);
+        /** @type {VideoFrame} */
+        let videoFrame;
+        if (k === 0 && source.timestamp === timestamp) {
+          // First slot holds the decoded frame itself
+          videoFrame = source;
+          sourceUsed = true;
+        } else {
+          // Holds repeat the source as new handles over the SAME pixels (a
+          // clone, restamped): every slot needs its own timestamp, or the
+          // queue codec would see a run of identical presentation times
+          videoFrame = new VideoFrame(source, { timestamp, duration: slotDurationUs });
+          created.push(videoFrame);
+        }
         frames.push({
           id: k === 0 ? sourceId : `${sourceId}-${k}`,
           frame: videoFrame,
-          timestamp: (slotIndex * 1e6) / fps,
+          timestamp,
           width,
           height,
           sharedKey: sourceId,
         });
         slotIndex += 1;
       }
+      // Every slot re-wrapped the source: the decoded handle itself is spare
+      if (!sourceUsed) source.close();
     }
 
     return { frames, fps, width, height, hasAlpha, sourceFrameCount };
