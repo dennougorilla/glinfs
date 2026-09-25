@@ -74,6 +74,29 @@ npm run test:e2e
 npm run build
 ```
 
+### AI cutout model
+
+The AI cutout runs skytnt's
+[anime-segmentation](https://github.com/SkyTNT/anime-segmentation) model
+(`isnetis.onnx`, Apache-2.0, 176 MB) in the browser with
+[ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker.
+The model is not in the repository. Download it once for local development:
+
+```bash
+npm run models:fetch            # into public/models/ (git-ignored), verified by SHA-256
+npm run models:fetch -- --check # verify an existing copy without downloading
+```
+
+The Pages deploy workflow runs the same script before `vite build`, so the
+site serves the model from its own origin. The browser downloads it only when
+someone starts an analysis, checks its SHA-256 and keeps it in Cache Storage.
+`npm run build` and the E2E suite do not need it: E2E serves the tiny stub
+model in `tests/fixtures/models/` (regenerate it with
+`node scripts/generate-stub-seg-model.mjs`). To check the real model on this
+machine's GPU, run
+`E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
+
 ### Architecture
 
 Vanilla JavaScript (ES modules) with no UI framework, built with Vite.

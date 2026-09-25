@@ -63,3 +63,6 @@ reference/
 
 # Development documentation
 docs/
+
+# AI cutout model (downloaded by npm run models:fetch, too large for git)
+public/models/
