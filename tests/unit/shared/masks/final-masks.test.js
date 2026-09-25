@@ -637,6 +637,34 @@ describe('createFinalMaskCache', () => {
     expect(cache.peek({ ...base, storeVersion: 34 })).toBe(fresh);
   });
 
+  it("forgetClip() drops that clip's memo and in-flight build, and nothing else", async () => {
+    const cache = createFinalMaskCache();
+    const a = await cache.build({ ...base, clipId: 'a', storeVersion: 50 });
+    expect(cache.bytes()).toBeGreaterThan(0);
+    cache.forgetClip('b');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 50 })).toBe(a);
+    cache.forgetClip('a');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 50 })).toBeNull();
+    expect(cache.bytes()).toBe(0);
+
+    // A build in flight for the released clip stops; the memo of another stays
+    const b = await cache.build({ ...base, clipId: 'b', storeVersion: 51 });
+    const released = gated({ clipId: 'a', storeVersion: 52 });
+    const releasedOutcome = outcome(cache.build(released.options));
+    cache.forgetClip('a');
+    await released.release();
+    expect(await releasedOutcome).toBe('AbortError');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 52 })).toBeNull();
+    expect(cache.peek({ ...base, clipId: 'b', storeVersion: 51 })).toBe(b);
+
+    // A build in flight for another clip keeps running
+    const other = gated({ clipId: 'c', storeVersion: 53 });
+    const otherBuild = cache.build(other.options);
+    cache.forgetClip('a');
+    await other.release();
+    expect(cache.peek({ ...base, clipId: 'c', storeVersion: 53 })).toBe(await otherBuild);
+  });
+
   it("clear() and the caller's signal stop an in-flight build", async () => {
     const cache = createFinalMaskCache();
     const cleared = gated({ storeVersion: 40 });

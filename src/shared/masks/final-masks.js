@@ -372,11 +372,12 @@ function createMaskSource(masks) {
  * caller without a signal never cancels).
  */
 export function createFinalMaskCache() {
-  /** @type {{ key: string, source: MaskSource, bytes: number } | null} */
+  /** @type {{ key: string, clipId: string | undefined, source: MaskSource, bytes: number } | null} */
   let current = null;
   /**
    * @typedef {Object} InflightBuild
    * @property {string} key
+   * @property {string | undefined} clipId
    * @property {AbortController} controller
    * @property {Promise<MaskSource>} promise - The shared build (callers get joined promises)
    * @property {Set<(progress: BuildProgress) => void>} listeners - Joined callers' onProgress
@@ -408,7 +409,7 @@ export function createFinalMaskCache() {
       });
       throwIfAborted(entry.controller.signal);
       const source = createMaskSource(result.masks);
-      current = { key: entry.key, source, bytes: result.bytes };
+      current = { key: entry.key, clipId: entry.clipId, source, bytes: result.bytes };
       return source;
     } finally {
       if (inflight === entry) inflight = null;
@@ -481,6 +482,7 @@ export function createFinalMaskCache() {
         /** @type {InflightBuild} */
         const entry = {
           key,
+          clipId: options.clipId,
           controller: new AbortController(),
           promise: Promise.resolve(/** @type {any} */ (null)),
           listeners: new Set(),
@@ -510,6 +512,19 @@ export function createFinalMaskCache() {
       current = null;
       inflight?.controller.abort();
       inflight = null;
+    },
+
+    /**
+     * A clip is gone for good: drop its memoized masks and stop a build in
+     * flight for it (masks and builds of other clips stay)
+     * @param {string} clipId
+     */
+    forgetClip(clipId) {
+      if (current?.clipId === clipId) current = null;
+      if (inflight?.clipId === clipId) {
+        inflight.controller.abort();
+        inflight = null;
+      }
     },
 
     /** @returns {number} Bytes held by the memoized masks */

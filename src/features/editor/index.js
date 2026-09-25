@@ -203,6 +203,8 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     // Frames of the clip still in the worker must not store masks afterwards
     getSegmentationManager().forgetClip(id);
     maskStore.deleteClip(id);
+    // Its memoized final masks (~22 MB for 300 frames) and a build for it
+    getSharedFinalMaskCache().forgetClip(id);
   }
 });
 

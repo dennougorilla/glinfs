@@ -19,7 +19,11 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
 
 import { getSharedMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
-import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
+import {
+  buildClipMaskSource,
+  getSharedFinalMaskCache,
+  setWasmAllowed,
+} from '../../../src/features/editor/ai-cutout.js';
 import {
   deleteActiveClipFromAnywhere,
   getEditorState,
@@ -34,6 +38,7 @@ import {
   resetAppStore,
   setClipPayload,
 } from '../../../src/shared/app-store.js';
+import { normalizeEdits } from '../../../src/shared/edits/model.js';
 
 const fake = /** @type {any} */ (segmentation).__fake;
 
@@ -573,6 +578,15 @@ describe('AI cutout in the mounted editor', () => {
     store.set('a0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-a');
     setClipPayload({ frames: createTestFrames(2, 'a'), fps: 10, capturedAt: 0, id: 'clip-a' });
     enqueueClip({ frames: createTestFrames(2, 'q'), fps: 10, capturedAt: 0, id: 'clip-q' });
+    // The queued clip's final masks are memoized in the shared cache
+    const cache = getSharedFinalMaskCache();
+    const ai = normalizeEdits({}, 2).background.ai;
+    await buildClipMaskSource({
+      frames: /** @type {any} */ (createTestFrames(2, 'q')),
+      ai,
+      clipId: 'clip-q',
+    });
+    expect(cache.bytes()).toBeGreaterThan(0);
 
     expect(deleteQueuedClip('clip-q')).toBe(true);
     // Undo window: masks stay
@@ -583,6 +597,8 @@ describe('AI cutout in the mounted editor', () => {
     // Masks of its frames still in the worker are dropped when they arrive
     expect(fake.forgetClip).toHaveBeenCalledWith('clip-q');
     expect(fake.forgetClip).not.toHaveBeenCalledWith('clip-a');
+    // Its memoized final masks go too
+    expect(cache.bytes()).toBe(0);
 
     releaseAllFramesAndReset();
     expect(store.size).toBe(0);
