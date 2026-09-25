@@ -83,6 +83,7 @@ async function handleInit(message) {
       quantizeFormat: message.quantizeFormat,
       paletteInterval: message.paletteInterval,
       paletteSample: message.paletteSample,
+      transparent: message.transparent === true,
     });
 
     totalFrames = message.totalFrames;
@@ -129,6 +130,7 @@ function handleAddFrame(message) {
         rgba,
         width: message.width,
         height: message.height,
+        delayMs: message.delayMs,
       },
       message.frameIndex,
     );

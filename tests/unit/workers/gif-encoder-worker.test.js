@@ -121,6 +121,42 @@ describe('gif-encoder-worker session abort (#45)', () => {
     );
   });
 
+  it('forwards the transparent flag to init and each frame delay to addFrame', async () => {
+    await send({
+      command: 'init',
+      encoderId: 'gifenc-js',
+      width: 2,
+      height: 2,
+      totalFrames: 2,
+      maxColors: 64,
+      frameDelayMs: 100,
+      loopCount: 0,
+      transparent: true,
+    });
+    expect(init).toHaveBeenCalledWith(expect.objectContaining({ transparent: true }));
+
+    await send({ ...makeFrame(0), delayMs: 300 });
+    await send(makeFrame(1));
+
+    expect(addFrame.mock.calls[0][0]).toMatchObject({ width: 2, height: 2, delayMs: 300 });
+    expect(addFrame.mock.calls[0][1]).toBe(0);
+    expect(addFrame.mock.calls[1][0].delayMs).toBeUndefined();
+  });
+
+  it('initializes opaque when INIT carries no transparent flag', async () => {
+    await send({
+      command: 'init',
+      encoderId: 'gifenc-js',
+      width: 2,
+      height: 2,
+      totalFrames: 1,
+      maxColors: 64,
+      frameDelayMs: 100,
+      loopCount: 0,
+    });
+    expect(init).toHaveBeenCalledWith(expect.objectContaining({ transparent: false }));
+  });
+
   it('drops further ADD_FRAME calls after a frame failure instead of feeding the encoder', async () => {
     addFrame.mockImplementationOnce(() => {
       throw new Error('quantize failed');

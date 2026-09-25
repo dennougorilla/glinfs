@@ -52,6 +52,7 @@ export const Events = {
  * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
  * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
+ * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
  */
 
 /**
@@ -62,6 +63,7 @@ export const Events = {
  * @property {number} width - Frame width
  * @property {number} height - Frame height
  * @property {number} frameIndex - Frame index
+ * @property {number} [delayMs] - This frame's delay (ms); the encoder falls back to INIT's frameDelayMs
  */
 
 /**
@@ -137,6 +139,7 @@ export const Events = {
  * @param {import('../features/export/encoders/types.js').QuantizeFormat} [config.quantizeFormat]
  * @param {number} [config.paletteInterval]
  * @param {Uint8ClampedArray} [config.paletteSample]
+ * @param {boolean} [config.transparent]
  * @returns {InitMessage}
  */
 export function createInitMessage(config) {
@@ -158,9 +161,10 @@ export function createInitMessage(config) {
  * @param {number} width
  * @param {number} height
  * @param {number} frameIndex
+ * @param {number} [delayMs] - Per-frame delay (ms); omitted = INIT's frameDelayMs
  * @returns {{ message: AddFrameMessage, transfer: ArrayBuffer[] }}
  */
-export function createAddFrameMessage(rgba, width, height, frameIndex) {
+export function createAddFrameMessage(rgba, width, height, frameIndex, delayMs) {
   // Transfer the buffer directly when the view spans it entirely; only a
   // view into a larger buffer needs the exact byte range copied out.
   const coversWholeBuffer = rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength;
@@ -175,6 +179,7 @@ export function createAddFrameMessage(rgba, width, height, frameIndex) {
       width,
       height,
       frameIndex,
+      delayMs,
     },
     transfer: [buffer],
   };

@@ -88,6 +88,21 @@ describe('Worker Protocol', () => {
         ...config,
       });
     });
+
+    it('carries the transparent flag', () => {
+      const message = createInitMessage({
+        encoderId: 'gifenc-js',
+        width: 10,
+        height: 10,
+        totalFrames: 1,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        transparent: true,
+      });
+
+      expect(message.transparent).toBe(true);
+    });
   });
 
   describe('createAddFrameMessage', () => {
@@ -113,6 +128,14 @@ describe('Worker Protocol', () => {
       expect(message.width).toBe(50);
       expect(message.height).toBe(75);
       expect(message.frameIndex).toBe(5);
+    });
+
+    it('carries the per-frame delay, leaving it undefined when omitted', () => {
+      const withDelay = createAddFrameMessage(new Uint8ClampedArray(4), 1, 1, 2, 250).message;
+      const withoutDelay = createAddFrameMessage(new Uint8ClampedArray(4), 1, 1, 2).message;
+
+      expect(withDelay.delayMs).toBe(250);
+      expect(withoutDelay.delayMs).toBeUndefined();
     });
 
     it('should create Transferable buffer', () => {

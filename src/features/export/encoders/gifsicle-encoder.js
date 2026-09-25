@@ -22,6 +22,8 @@ const METADATA = {
     supportsMaxColors: false,
     supportsQuantizeFormat: false,
     supportsDithering: false,
+    // The WASM build has no transparent-index parameter (needs a rebuild)
+    supportsTransparency: false,
   },
 };
 
@@ -322,7 +324,7 @@ export function createGifsicleEncoder() {
 
       // Add frame to encoder
       // Note: delay is in centiseconds (1/100th of a second)
-      const delayCentiseconds = Math.round(config.frameDelayMs / 10);
+      const delayCentiseconds = Math.round((frameData.delayMs ?? config.frameDelayMs) / 10);
       module._encoder_add_frame(encoderPtr, 0, 0, width, height, ptr, delayCentiseconds);
 
       // Free memory
