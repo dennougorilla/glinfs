@@ -55,7 +55,7 @@ export const MODEL_CACHE_NAME = 'glinfs-models-v1';
  * - https://github.com/SkyTNT/anime-segmentation/blob/55d874013a2811cdf59c365059174c7823acf5b4/inference.py
  *   (`get_mask`, lines 14-35)
  * - https://huggingface.co/spaces/skytnt/anime-remove-background/blob/0ee865394df7f9e5500a67974839f213669fc206/app.py
- *   (`get_mask`, lines 8-22 — the Space that runs this exact isnetis.onnx)
+ *   (`get_mask`, lines 8-21 — the Space that runs this exact isnetis.onnx)
  *
  * Both do: RGB, `img / 255` (no mean/std), resize to fit s×s keeping the
  * aspect ratio with the short side truncated (`int(s * w / h)`), zero-pad
