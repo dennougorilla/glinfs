@@ -374,13 +374,15 @@ describe('createFinalMaskCache', () => {
       yieldToMain: () => new Promise((resolve) => gates.push(() => resolve(undefined))),
     };
     const first = cache.build(slow);
+    // A superseded build is aborted: it rejects instead of resolving stale masks
+    const firstSettled = expect(first).rejects.toMatchObject({ name: 'AbortError' });
     const second = await cache.build({ ...base, storeVersion: 11 });
     while (gates.length) {
       gates.shift()?.();
       await Promise.resolve();
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    await first;
+    await firstSettled;
     expect(cache.peek({ ...base, storeVersion: 11 })).toBe(second);
     expect(cache.peek({ ...base, storeVersion: 10 })).toBeNull();
 
@@ -390,5 +392,108 @@ describe('createFinalMaskCache', () => {
       cache.build({ ...base, storeVersion: 12, signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(cache.peek({ ...base, storeVersion: 11 })).toBe(second);
+  });
+  /**
+   * Build options whose yields wait for release(), so a build stays in flight
+   * @param {object} over
+   */
+  function gated(over) {
+    /** @type {(() => void)[]} */
+    const gates = [];
+    const options = {
+      ...base,
+      sliceMs: 0,
+      yieldToMain: () => new Promise((resolve) => gates.push(() => resolve(undefined))),
+      ...over,
+    };
+    const release = async () => {
+      while (gates.length) {
+        gates.shift()?.();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    };
+    return { options, release };
+  }
+
+  /**
+   * Settle a promise to 'resolved' or the rejection's name (never unhandled)
+   * @param {Promise<unknown>} promise
+   */
+  const outcome = (promise) =>
+    promise.then(
+      () => 'resolved',
+      (error) => error.name,
+    );
+
+  it("keys the memo by clip, so a clip of the same shape never gets another clip's masks", async () => {
+    const cache = createFinalMaskCache();
+    const shape = { frameCount: 2, ai: aiOf(), storeVersion: 5, ...noYield };
+    const a = await cache.build({
+      ...shape,
+      clipId: 'clip-a',
+      getProb: () => ({ data: new Uint8Array(W * H).fill(255), width: W, height: H }),
+    });
+    const b = await cache.build({
+      ...shape,
+      clipId: 'clip-b',
+      getProb: () => ({ data: new Uint8Array(W * H).fill(0), width: W, height: H }),
+    });
+    expect(b).not.toBe(a);
+    expect(Array.from(unpackMask(/** @type {any} */ (a.getFinalMask(0))))).toEqual(
+      new Array(W * H).fill(1),
+    );
+    expect(Array.from(unpackMask(/** @type {any} */ (b.getFinalMask(0))))).toEqual(
+      new Array(W * H).fill(0),
+    );
+    expect(cache.peek({ ...shape, clipId: 'clip-b' })).toBe(b);
+    expect(cache.peek({ ...shape, clipId: 'clip-a' })).toBeNull();
+  });
+
+  it('aborts a superseded build, which rejects and never outranks the newer one', async () => {
+    const cache = createFinalMaskCache();
+    const picks = [{ frame: 2, x: 0.25, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const slow = gated({ storeVersion: 20, ai: aiOf({ picks }) });
+    const stale = outcome(cache.build(slow.options));
+    const fresh = await cache.build({ ...base, storeVersion: 21, ai: aiOf({ threshold: 0.7 }) });
+    await slow.release();
+    expect(await stale).toBe('AbortError');
+    expect(cache.peek({ ...base, storeVersion: 21, ai: aiOf({ threshold: 0.7 }) })).toBe(fresh);
+    expect(cache.peek({ ...base, storeVersion: 20, ai: aiOf({ picks }) })).toBeNull();
+  });
+
+  it('shares an in-flight build between callers with the same inputs', async () => {
+    const cache = createFinalMaskCache();
+    const slow = gated({ storeVersion: 30 });
+    getProb.mockClear();
+    const first = cache.build(slow.options);
+    const again = cache.build({ ...slow.options, ai: aiOf() });
+    await slow.release();
+    const [a, b] = await Promise.all([first, again]);
+    expect(b).toBe(a);
+    // One build's worth of reads: the reference-size probe plus one per frame
+    expect(getProb.mock.calls.length).toBe(1 + base.frameCount);
+    expect(cache.peek({ ...base, storeVersion: 30 })).toBe(a);
+  });
+
+  it("clear() and the caller's signal stop an in-flight build", async () => {
+    const cache = createFinalMaskCache();
+    const cleared = gated({ storeVersion: 40 });
+    const clearedOutcome = outcome(cache.build(cleared.options));
+    cache.clear();
+    await cleared.release();
+    expect(await clearedOutcome).toBe('AbortError');
+    expect(cache.peek({ ...base, storeVersion: 40 })).toBeNull();
+
+    const controller = new AbortController();
+    const cancelled = gated({ storeVersion: 41, signal: controller.signal });
+    const cancelledOutcome = outcome(cache.build(cancelled.options));
+    controller.abort();
+    await cancelled.release();
+    expect(await cancelledOutcome).toBe('AbortError');
+    expect(cache.peek({ ...base, storeVersion: 41 })).toBeNull();
+
+    // The cache still works afterwards
+    const next = await cache.build({ ...base, storeVersion: 42 });
+    expect(cache.peek({ ...base, storeVersion: 42 })).toBe(next);
   });
 });
