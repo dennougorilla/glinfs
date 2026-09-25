@@ -190,6 +190,9 @@ describe('decodeImageFile success', () => {
     expect(file.arrayBuffer).toHaveBeenCalled();
     expect(decoders[0].init.type).toBe('image/gif');
     expect(decoders[0].init.data).toBeInstanceOf(ArrayBuffer);
+    // copyTo-based export reads these frames directly; premultiplied RGB
+    // would darken soft alpha edges
+    expect(decoders[0].init.premultiplyAlpha).toBe('none');
   });
 
   it('decodes an APNG with the PNG decoder', async () => {

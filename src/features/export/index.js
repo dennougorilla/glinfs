@@ -22,7 +22,12 @@ import { throttle } from '../../shared/utils/performance.js';
 import { createKeyedRegionCache } from '../editor/edits-preview.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
-import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
+import {
+  applyFrameSkip,
+  generateFilename,
+  getCroppedDimensions,
+  getEffectiveEncoderId,
+} from './core.js';
 import {
   cancelEncodingState,
   completeEncoding,
@@ -35,12 +40,7 @@ import {
   updateProgress,
   updateSettings,
 } from './state.js';
-import {
-  getEffectiveEncoderId,
-  renderExportScreen,
-  updatePreviewPlaybackUI,
-  updateProgressUI,
-} from './ui.js';
+import { renderExportScreen, updatePreviewPlaybackUI, updateProgressUI } from './ui.js';
 
 /** @type {ReturnType<typeof createExportStore> | null} */
 let store = null;

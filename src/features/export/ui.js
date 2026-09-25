@@ -12,7 +12,7 @@ import {
   formatRemaining,
 } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { ENCODER_PRESETS } from './core.js';
+import { ENCODER_PRESETS, getEffectiveEncoderId } from './core.js';
 
 /**
  * Static encoder definitions for UI display
@@ -61,17 +61,6 @@ const ENCODER_OPTIONS = [
 
 /** Note shown on the disabled WASM encoder card for transparent exports */
 export const TRANSPARENT_ENCODER_NOTE = 'Transparent GIFs use the JavaScript encoder';
-
-/**
- * The encoder an export will actually use: transparent exports always use
- * gifenc (see encodeGif), whatever the stored preference says.
- * @param {import('./types.js').ExportSettings} settings
- * @param {boolean} [transparent]
- * @returns {import('./encoders/types.js').EncoderId}
- */
-export function getEffectiveEncoderId(settings, transparent) {
-  return transparent ? 'gifenc-js' : settings.encoderId;
-}
 
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const FRAME_SKIP_OPTIONS = /** @type {const} */ ([1, 2, 3, 4, 5]);

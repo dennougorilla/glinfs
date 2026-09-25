@@ -485,3 +485,17 @@ export function generateFilename(prefix = 'glinfs') {
 export function calculateEffectiveFps(sourceFps, frameSkip, playbackSpeed) {
   return (sourceFps / frameSkip) * playbackSpeed;
 }
+
+/**
+ * The encoder an export actually uses. The WASM encoder cannot write a
+ * transparent index, so transparent exports always use gifenc, whatever the
+ * stored preference says (the preference itself is left untouched). Shared by
+ * encodeGif and the export UI so the selected card, the job label and the
+ * encoder that runs can never disagree.
+ * @param {import('./types.js').ExportSettings} settings
+ * @param {boolean} [transparent]
+ * @returns {import('./encoders/types.js').EncoderId}
+ */
+export function getEffectiveEncoderId(settings, transparent) {
+  return transparent ? 'gifenc-js' : settings.encoderId;
+}

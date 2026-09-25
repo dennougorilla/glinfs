@@ -12,6 +12,7 @@ import {
   getOutputRegion,
   getSelectedTextOverlay,
   hitTestEditorText,
+  previewDependsOnCrop,
   readSourceRegion,
   sampleSourceColor,
   sampleSourcePixel,
@@ -51,6 +52,32 @@ function edits(bg = {}, textLayers = /** @type {any[]} */ ([])) {
 function allPixels(ctx) {
   return ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height).data;
 }
+
+describe('previewDependsOnCrop', () => {
+  it('is false for an opaque clip without edits', () => {
+    expect(previewDependsOnCrop(createDefaultEdits(), false)).toBe(false);
+    expect(previewDependsOnCrop(null, undefined)).toBe(false);
+  });
+
+  it('is true when edits are drawn in the crop region', () => {
+    const withText = { ...createDefaultEdits(), textLayers: [createTextLayer({ text: 'Hi' }, 5)] };
+    expect(previewDependsOnCrop(withText, false)).toBe(true);
+    const keyed = {
+      ...createDefaultEdits(),
+      background: { ...createDefaultEdits().background, enabled: true },
+    };
+    expect(previewDependsOnCrop(keyed, false)).toBe(true);
+  });
+
+  it('is true for a clip with alpha even without edits (the 1-bit snap follows the crop)', () => {
+    expect(previewDependsOnCrop(createDefaultEdits(), true)).toBe(true);
+  });
+
+  it('ignores blank captions', () => {
+    const blank = { ...createDefaultEdits(), textLayers: [createTextLayer({ text: '   ' }, 5)] };
+    expect(previewDependsOnCrop(blank, false)).toBe(false);
+  });
+});
 
 describe('getOutputRegion', () => {
   it('is the crop, else the whole frame', () => {

@@ -190,7 +190,10 @@ export async function decodeImageFile(file, options = {}) {
 
   try {
     try {
-      decoder = new ImageDecoder({ data, type });
+      // Unpremultiplied pixels: the export fast path reads frames with
+      // VideoFrame.copyTo, and premultiplied RGB would darken the soft
+      // edges of PNG/WebP alpha that canvas paths draw correctly
+      decoder = new ImageDecoder({ data, type, premultiplyAlpha: 'none' });
       await decoder.tracks.ready;
       // The whole file is in memory, so this resolves as soon as parsing is
       // done and frameCount is final (it can grow while data streams in)

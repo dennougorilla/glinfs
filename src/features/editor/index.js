@@ -16,6 +16,7 @@ import {
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
+  toSavedEditorState,
   undoDelete,
   validateClipPayload,
 } from '../../shared/app-store.js';
@@ -40,6 +41,7 @@ import {
   createEditorFrameRenderer,
   detectOutputEdgeColor,
   getSelectedTextOverlay,
+  previewDependsOnCrop,
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
@@ -423,10 +425,7 @@ export function initEditor() {
     const editsChanged = state.edits !== lastRendered.edits;
     const textSelectionChanged = state.selectedTextId !== lastRendered.selectedTextId;
     const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
-    // The crop is the output region the edits are applied in
-    const editsUseCrop =
-      state.edits.background.enabled ||
-      state.edits.textLayers.some((layer) => layer.text.trim() !== '');
+    const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
 
     // Update base canvas ONLY when the composed frame changes
     if (frameChanged || editsChanged || (cropChanged && editsUseCrop)) {
@@ -1093,22 +1092,6 @@ function handlePickKeyColor(color) {
  */
 function handlePickTransparentArea() {
   announce('That area is already transparent. Click a colored area to remove it.');
-}
-
-/**
- * Snapshot of the editor state a clip carries while it is not being edited
- * (restored by restoreSavedEditorState on the next mount)
- * @param {import('./types.js').EditorState} state
- * @returns {import('../../shared/app-store.js').SavedEditorState}
- */
-function toSavedEditorState(state) {
-  return {
-    selectedRange: state.selectedRange,
-    cropArea: state.cropArea,
-    playbackSpeed: state.playbackSpeed,
-    currentFrame: state.currentFrame,
-    edits: state.edits,
-  };
 }
 
 /**

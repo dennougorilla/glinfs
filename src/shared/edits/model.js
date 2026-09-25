@@ -285,11 +285,12 @@ export function normalizeEdits(edits, frameCount) {
 }
 
 /**
- * Whether a layer has visible text
- * @param {TextLayer} layer
+ * Whether a layer has visible text. The single rule every consumer (redraw
+ * decisions, hit testing, drawing, export) uses to decide a layer counts.
+ * @param {TextLayer | null | undefined} layer
  * @returns {boolean}
  */
-function hasVisibleText(layer) {
+export function hasVisibleText(layer) {
   return typeof layer?.text === 'string' && layer.text.trim() !== '';
 }
 

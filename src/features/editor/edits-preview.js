@@ -31,13 +31,14 @@ import {
   snapAlphaToBinary,
   toHexColor,
 } from '../../shared/edits/color-key.js';
-import { composeEditorFrame } from '../../shared/edits/compose.js';
-import { getActiveTextLayers } from '../../shared/edits/model.js';
+import { composeEditorFrame, drawTextLayersInRegion } from '../../shared/edits/compose.js';
 import {
-  drawTextLayer,
-  hitTestTextLayers,
-  layoutTextLayer,
-} from '../../shared/edits/text-render.js';
+  getActiveTextLayers,
+  hasVisibleText,
+  isEditsEmpty,
+  requiresTransparency,
+} from '../../shared/edits/model.js';
+import { hitTestTextLayers, layoutTextLayer } from '../../shared/edits/text-render.js';
 import { getDrawableSource, isFrameValid, syncCanvasSize } from '../../shared/utils/canvas.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
@@ -53,6 +54,19 @@ import { getDrawableSource, isFrameValid, syncCanvasSize } from '../../shared/ut
  * fit entirely and play from the cache after the first loop.
  */
 export const KEYED_CACHE_BUDGET_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Whether the composed editor preview depends on the crop, so a crop change
+ * must redraw it: edits are applied inside the crop (output) region, and a
+ * transparent export's 1-bit alpha snap is too — even with no edits, for a
+ * clip whose source already has alpha.
+ * @param {import('../../shared/edits/model.js').ClipEdits | null | undefined} edits
+ * @param {boolean | undefined} hasAlpha
+ * @returns {boolean}
+ */
+export function previewDependsOnCrop(edits, hasAlpha) {
+  return !isEditsEmpty(edits) || requiresTransparency({ edits, hasAlpha });
+}
 
 /**
  * Output region of a frame in frame pixels: the crop rect, else the frame
@@ -157,29 +171,6 @@ export function createKeyedRegionCache(budgetBytes = KEYED_CACHE_BUDGET_BYTES) {
 }
 
 /**
- * Draw the text layers active on a frame inside the output region, clipped
- * to it — same transform and clip as composeEditorFrame
- * @param {Context2D} ctx
- * @param {Rect} region
- * @param {import('../../shared/edits/model.js').TextLayer[]} layers
- */
-function drawRegionText(ctx, region, layers) {
-  if (layers.length === 0) return;
-  ctx.save();
-  try {
-    ctx.beginPath();
-    ctx.rect(region.x, region.y, region.width, region.height);
-    ctx.clip();
-    ctx.translate(region.x, region.y);
-    for (const layer of layers) {
-      drawTextLayer(ctx, layer, region.width, region.height);
-    }
-  } finally {
-    ctx.restore();
-  }
-}
-
-/**
  * Create the editor's preview renderer (one per editor session)
  * @param {{ budgetBytes?: number }} [options]
  */
@@ -259,7 +250,7 @@ export function createEditorFrameRenderer(options = {}) {
         ctx.putImageData(keyed, region.x, region.y);
       }
 
-      drawRegionText(ctx, region, getActiveTextLayers(edits, frameIndex));
+      drawTextLayersInRegion(ctx, region, getActiveTextLayers(edits, frameIndex));
     },
 
     /** Drop every cached keyed region */
@@ -288,7 +279,7 @@ export function createEditorFrameRenderer(options = {}) {
 export function getSelectedTextOverlay(ctx, state, frame) {
   if (!state.selectedTextId || !frame) return null;
   const layer = state.edits.textLayers.find((l) => l.id === state.selectedTextId);
-  if (!layer || layer.text.trim() === '') return null;
+  if (!hasVisibleText(layer)) return null;
 
   const region = getOutputRegion(frame, state.cropArea);
   ctx.save();

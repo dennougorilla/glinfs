@@ -12,6 +12,7 @@ import {
   calculateFrameDelay,
   calculateMaxColors,
   computePaletteSampleStep,
+  getEffectiveEncoderId,
   getEncoderPreset,
   sampledPixelCount,
   sampleFramePixels,
@@ -312,9 +313,8 @@ export async function encodeGif(params, signal) {
   // Calculate max colors based on quality and preset
   const maxColors = calculateMaxColors(settings.quality, settings.encoderPreset);
 
-  // The WASM encoder cannot write a transparent index, so transparent
-  // exports always use gifenc (the stored preference is left untouched).
-  const encoderId = transparent ? 'gifenc-js' : settings.encoderId;
+  // Transparent exports always use gifenc (see getEffectiveEncoderId)
+  const encoderId = getEffectiveEncoderId(settings, transparent);
 
   // Unedited clips keep the VideoFrame.copyTo fast path; edits render
   // through the compositor so text and keying match the preview.

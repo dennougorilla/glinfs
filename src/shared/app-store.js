@@ -457,11 +457,14 @@ function buildPreviewFrames(frames, mimeType = 'image/jpeg') {
 
 /**
  * Keep only the editor-state fields worth restoring on promote (the caller
- * may pass a larger object, e.g. with scenes).
+ * may pass a larger object, e.g. with scenes or a whole EditorState). The one
+ * place that decides which fields a clip carries while it is not being
+ * edited: the editor's unmount snapshot uses it too, so a new field cannot be
+ * saved on one path and silently dropped on another.
  * @param {SavedEditorState} editorState
  * @returns {SavedEditorState}
  */
-function toSavedEditorState(editorState) {
+export function toSavedEditorState(editorState) {
   /** @type {SavedEditorState} */
   const saved = {
     selectedRange: editorState.selectedRange,

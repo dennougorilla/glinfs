@@ -62,6 +62,31 @@ export function toHexColor({ r, g, b }) {
 }
 
 /**
+ * Flood-fill scratch buffers, reused across connected-mode calls and grown
+ * only when a larger frame arrives. Keying runs on every exported and
+ * previewed frame, and fresh buffers cost ~10 MB of garbage per 1080p frame.
+ * Safe because applyColorKey is synchronous and never re-entered; every
+ * realm (window, worker) gets its own module instance.
+ */
+let scratchVisited = new Uint8Array(0);
+let scratchStack = new Int32Array(0);
+
+/**
+ * @param {number} pixelCount
+ * @returns {{ visited: Uint8Array, stack: Int32Array }} `visited` is zeroed
+ *   for the first pixelCount entries
+ */
+function getFloodScratch(pixelCount) {
+  if (scratchVisited.length < pixelCount) {
+    scratchVisited = new Uint8Array(pixelCount);
+    scratchStack = new Int32Array(pixelCount);
+  } else {
+    scratchVisited.fill(0, 0, pixelCount);
+  }
+  return { visited: scratchVisited, stack: scratchStack };
+}
+
+/**
  * Clear pixels matching the key color. Mutates `rgba` in place: cleared
  * pixels become RGBA 0,0,0,0.
  *
@@ -134,8 +159,7 @@ export function applyColorKey(rgba, width, height, background) {
   // Connected: flood fill from the border. `visited` marks pixels already
   // pushed, so each pixel enters the stack at most once and the stack never
   // exceeds pixelCount entries.
-  const visited = new Uint8Array(pixelCount);
-  const stack = new Int32Array(pixelCount);
+  const { visited, stack } = getFloodScratch(pixelCount);
   let top = 0;
 
   /** @param {number} p */

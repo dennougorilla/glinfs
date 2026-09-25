@@ -165,6 +165,25 @@ describe('applyColorKey', () => {
   it('returns 0 for an empty buffer', () => {
     expect(applyColorKey(new Uint8ClampedArray(0), 0, 0, bg())).toBe(0);
   });
+
+  it('reuses its flood-fill buffers without carrying visited pixels into the next call', () => {
+    // A large all-green call marks every pixel visited in the shared scratch
+    const big = new Uint8ClampedArray(64 * 64 * 4);
+    for (let p = 0; p < 64 * 64; p++) big.set(GREEN, p * 4);
+    expect(applyColorKey(big, 64, 64, bg())).toBe(64 * 64);
+
+    // A smaller, differently shaped call must still flood from scratch
+    const { rgba, width, height } = fromMap(['ggggg', 'grrrg', 'grgrg', 'grrrg', 'ggggg'], {
+      g: GREEN,
+      r: RED,
+    });
+    expect(applyColorKey(rgba, width, height, bg())).toBe(16);
+    expect(alphaMap(rgba, width)).toEqual(['.....', '.###.', '.###.', '.###.', '.....']);
+
+    // And the same size again (scratch not regrown) behaves identically
+    const again = fromMap(['ggggg', 'grrrg', 'grgrg', 'grrrg', 'ggggg'], { g: GREEN, r: RED });
+    expect(applyColorKey(again.rgba, again.width, again.height, bg())).toBe(16);
+  });
 });
 
 describe('detectEdgeColor', () => {

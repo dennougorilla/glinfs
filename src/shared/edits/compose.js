@@ -75,6 +75,30 @@ function drawTextLayers(ctx, layers, outW, outH) {
 }
 
 /**
+ * Draw text layers into an output region of a larger canvas (the editor
+ * shows the full frame; the region is the crop), clipped to that region and
+ * translated so (0, 0) is its top-left corner. The single implementation of
+ * this transform: composeEditorFrame and the editor's cached preview both
+ * use it, so their text placement stays pixel-identical.
+ * @param {Context2D} ctx
+ * @param {{ x: number, y: number, width: number, height: number }} region
+ * @param {import('./model.js').TextLayer[]} layers - Already filtered to the frame
+ */
+export function drawTextLayersInRegion(ctx, region, layers) {
+  if (layers.length === 0) return;
+  ctx.save();
+  try {
+    ctx.beginPath();
+    ctx.rect(region.x, region.y, region.width, region.height);
+    ctx.clip();
+    ctx.translate(region.x, region.y);
+    drawTextLayers(ctx, layers, region.width, region.height);
+  } finally {
+    ctx.restore();
+  }
+}
+
+/**
  * Key out the background of a canvas region in place (readback, key, write)
  * @param {Context2D} ctx
  * @param {number} x
@@ -262,17 +286,5 @@ export function composeEditorFrame(ctx, frame, crop, edits, frameIndex) {
     keyCanvasRegion(ctx, region.x, region.y, region.width, region.height, edits.background);
   }
 
-  const layers = getActiveTextLayers(edits, frameIndex);
-  if (layers.length === 0) return;
-
-  ctx.save();
-  try {
-    ctx.beginPath();
-    ctx.rect(region.x, region.y, region.width, region.height);
-    ctx.clip();
-    ctx.translate(region.x, region.y);
-    drawTextLayers(ctx, layers, region.width, region.height);
-  } finally {
-    ctx.restore();
-  }
+  drawTextLayersInRegion(ctx, region, getActiveTextLayers(edits, frameIndex));
 }

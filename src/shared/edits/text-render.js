@@ -9,6 +9,8 @@
  * @module shared/edits/text-render
  */
 
+import { hasVisibleText } from './model.js';
+
 /**
  * Font stacks per TextFont. CJK-capable families are listed so Japanese
  * captions render with a matching face instead of a fallback.
@@ -131,7 +133,7 @@ export function layoutTextLayer(ctx, layer, outW, outH) {
  * @param {number} outH
  */
 export function drawTextLayer(ctx, layer, outW, outH) {
-  if (typeof layer?.text !== 'string' || layer.text.trim() === '') return;
+  if (!hasVisibleText(layer)) return;
 
   ctx.save();
   try {
@@ -190,7 +192,7 @@ export function drawTextLayer(ctx, layer, outW, outH) {
 export function hitTestTextLayers(ctx, layers, outW, outH, x, y) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i];
-    if (typeof layer?.text !== 'string' || layer.text.trim() === '') continue;
+    if (!hasVisibleText(layer)) continue;
     ctx.save();
     const { bounds } = layoutTextLayer(ctx, layer, outW, outH);
     ctx.restore();
