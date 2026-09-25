@@ -30,7 +30,10 @@ import {
   TYPICAL_FRAME_MS,
 } from '../../../src/features/editor/ai-cutout.js';
 import { normalizeEdits } from '../../../src/shared/edits/model.js';
-import { createFinalMaskCache } from '../../../src/shared/masks/final-masks.js';
+import {
+  createFinalMaskCache,
+  getFinalMaskParamsKey,
+} from '../../../src/shared/masks/final-masks.js';
 
 /** @param {number} count */
 function frames(count) {
@@ -197,7 +200,11 @@ describe('AI cutout helpers', () => {
     expect(getBuildParamsKey(clip, { ...ai })).toBe(key);
     expect(getBuildParamsKey(clip, { ...ai, threshold: 0.6 })).not.toBe(key);
     expect(getBuildParamsKey(frames(3), ai)).not.toBe(key);
-    expect(getBuildParamsKey([], ai)).toContain('0|0|');
+    // The same key the shared cache memoizes under (minus the store version)
+    expect(getBuildParamsKey(clip, ai, 'a')).toBe(
+      getFinalMaskParamsKey({ clipId: 'a', frameCount: 2, sourceWidth: 4, ai }),
+    );
+    expect(getBuildParamsKey([], ai)).toBe(getFinalMaskParamsKey({ frameCount: 0, ai }));
   });
 
   it('estimates the time left from the measured speed, else the typical one', () => {

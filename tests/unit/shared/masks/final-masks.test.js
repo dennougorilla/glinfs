@@ -6,6 +6,7 @@ import {
   createFinalMaskCache,
   edgeRadiusInMaskPixels,
   getAiParamsKey,
+  getFinalMaskParamsKey,
   pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
@@ -74,6 +75,23 @@ describe('getAiParamsKey', () => {
     ]);
     expect(keys.size).toBe(6);
     expect(getAiParamsKey(aiOf())).toBe(getAiParamsKey(base));
+  });
+});
+
+describe('getFinalMaskParamsKey', () => {
+  it('changes with the clip, frame count, source width and AI params', () => {
+    const inputs = { clipId: 'a', frameCount: 3, sourceWidth: 64, ai: aiOf() };
+    const key = getFinalMaskParamsKey(inputs);
+    expect(getFinalMaskParamsKey({ ...inputs, ai: aiOf() })).toBe(key);
+    const others = [
+      { ...inputs, clipId: 'b' },
+      { ...inputs, clipId: undefined },
+      { ...inputs, frameCount: 4 },
+      { ...inputs, sourceWidth: 32 },
+      { ...inputs, sourceWidth: undefined },
+      { ...inputs, ai: aiOf({ threshold: 0.7 }) },
+    ].map(getFinalMaskParamsKey);
+    expect(new Set([key, ...others]).size).toBe(7);
   });
 });
 

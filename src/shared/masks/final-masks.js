@@ -120,6 +120,26 @@ export function getAiParamsKey(ai) {
 }
 
 /**
+ * @typedef {Object} BuildParamsInputs
+ * @property {string} [clipId] - The clip the masks belong to
+ * @property {number} frameCount
+ * @property {number} [sourceWidth]
+ * @property {AiCutout} ai
+ */
+
+/**
+ * Key of what a final-mask build depends on besides the probability masks:
+ * the clip, its shape and the AI parameters. The cache memoizes under this
+ * key plus the mask store's version; a caller that compares builds with
+ * the same key knows they differ only in the masks.
+ * @param {BuildParamsInputs} inputs
+ * @returns {string}
+ */
+export function getFinalMaskParamsKey({ clipId, frameCount, sourceWidth, ai }) {
+  return `${clipId ?? ''}|${frameCount}|${sourceWidth ?? ''}|${getAiParamsKey(ai)}`;
+}
+
+/**
  * Throw AbortError when cancelled
  * @param {AbortSignal | undefined} signal
  */
@@ -367,8 +387,7 @@ export function createFinalMaskCache() {
   let inflight = null;
 
   /** @param {CacheKeyInputs} inputs */
-  const keyOf = (inputs) =>
-    `${inputs.clipId ?? ''}|${inputs.storeVersion}|${inputs.frameCount}|${inputs.sourceWidth ?? ''}|${getAiParamsKey(inputs.ai)}`;
+  const keyOf = (inputs) => `${inputs.storeVersion}|${getFinalMaskParamsKey(inputs)}`;
 
   /**
    * Run one build under its entry's controller, telling every joined caller

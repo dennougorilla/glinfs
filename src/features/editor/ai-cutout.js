@@ -13,7 +13,7 @@
 
 import {
   createFinalMaskCache,
-  getAiParamsKey,
+  getFinalMaskParamsKey,
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -78,18 +78,24 @@ export function getClipProbSource(frames, maskStore) {
 }
 
 /**
- * Inputs of a clip's final-mask build. The cache is shared by every clip and
- * screen, so the clip id is part of the key: two clips of the same shape and
- * parameters must never share memoized masks.
+ * What a clip's final masks depend on besides the probability masks. The
+ * cache is shared by every clip and screen, so the clip id is part of the
+ * key: two clips of the same shape and parameters must never share
+ * memoized masks.
+ * @param {{ frames: Frame[], ai: AiCutout, clipId?: string }} options
+ */
+function paramsInputs({ frames, ai, clipId }) {
+  return { clipId, frameCount: frames.length, sourceWidth: frames[0]?.width, ai };
+}
+
+/**
+ * Inputs of a clip's final-mask build
  * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, clipId?: string }} options
  */
 function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
   return {
-    clipId,
+    ...paramsInputs({ frames, ai, clipId }),
     storeVersion: maskStore.version,
-    frameCount: frames.length,
-    sourceWidth: frames[0]?.width,
-    ai,
     getProb: getClipProbSource(frames, maskStore),
   };
 }
@@ -160,7 +166,7 @@ export function peekClipMaskSource({
  * @returns {string}
  */
 export function getBuildParamsKey(frames, ai, clipId) {
-  return `${clipId ?? ''}|${frames.length}|${frames[0]?.width ?? 0}|${getAiParamsKey(ai)}`;
+  return getFinalMaskParamsKey(paramsInputs({ frames, ai, clipId }));
 }
 
 /**
