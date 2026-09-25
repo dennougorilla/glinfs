@@ -1110,6 +1110,8 @@ function handleRemoveText(id) {
   const clipFrames = before.clip?.frames;
 
   store.setState((state) => removeTextLayer(state, id));
+  // Move keyboard focus off the removed item now, not a throttle tick later
+  syncEditsPanelNow();
   announce('Text layer deleted');
   if (hasPendingDeletion()) {
     // The toast's action slot holds a clip deletion's Undo, and a new action
