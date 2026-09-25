@@ -91,6 +91,7 @@ import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './t
 import {
   renderEditorScreen,
   showClipsQueueFullBanner,
+  updateClipsMemoryFooter,
   updateClipsPanel,
   updateCropInfoPanel,
   updateOverlayCanvas,
@@ -1311,7 +1312,7 @@ function startAiCutoutSession() {
     },
     onMasksChanged: () => {
       const container = document.querySelector('#main-content');
-      if (isCurrent() && container instanceof HTMLElement) refreshClipsPanel(container);
+      if (isCurrent() && container) updateClipsMemoryFooter(container);
     },
     getClipId: getActiveClipId,
     manager: getSegmentationManager(),

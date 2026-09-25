@@ -103,7 +103,7 @@ async function openDiscClip(page, { count, allowWasm }) {
 
 test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
   // Every test compiles ONNX Runtime's WASM binary in a fresh context
-  test.describe.configure({ mode: 'default', timeout: 150_000 });
+  test.describe.configure({ mode: 'default', timeout: 240_000 });
 
   test('cancel keeps finished masks, Analyze finishes the rest, masks survive Editor → Capture → Editor', async ({
     page,

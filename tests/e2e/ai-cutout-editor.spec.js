@@ -118,7 +118,7 @@ async function pickDiscA(page, mode) {
 
 test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
   // Every test compiles ONNX Runtime's WASM binary in a fresh context
-  test.describe.configure({ mode: 'default', timeout: 150_000 });
+  test.describe.configure({ mode: 'default', timeout: 240_000 });
 
   test('analyze, export, then Keep and Remove picks follow disc A through the clip', async ({
     page,

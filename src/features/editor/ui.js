@@ -454,10 +454,20 @@ export function updateClipsPanel(container, handlers) {
     clipsCount.textContent = total > 0 ? String(total) : '';
   }
 
-  // Memory footer: conservative raw-RGBA estimate for active + queued frames,
-  // shown AGAINST the budget so the user sees the wall before hitting it
-  // (a bare "~1.2 GB estimated" gave no sense of remaining headroom). The
-  // AI cutout's probability masks count too.
+  updateClipsMemoryFooter(container);
+
+  return cleanups;
+}
+
+/**
+ * Memory footer: conservative raw-RGBA estimate for active + queued frames,
+ * shown AGAINST the budget so the user sees the wall before hitting it
+ * (a bare "~1.2 GB estimated" gave no sense of remaining headroom). The AI
+ * cutout's probability masks count too, so this also runs on its own while
+ * an analysis adds masks.
+ * @param {ParentNode} container - The editor screen container
+ */
+export function updateClipsMemoryFooter(container) {
   const footer = container.querySelector('[data-clips-footer]');
   if (footer instanceof HTMLElement) {
     const queueLength = getClipQueue().length;
@@ -470,8 +480,6 @@ export function updateClipsPanel(container, handlers) {
       queueLength >= limit || (budgetMB > 0 && usedMB > budgetMB * 0.8),
     );
   }
-
-  return cleanups;
 }
 
 /**

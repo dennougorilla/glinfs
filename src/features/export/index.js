@@ -440,6 +440,16 @@ function setMaskSource(source) {
   if (source === maskSource) return;
   maskSource = source;
   previewFrameCache.clear();
+  // A paused preview only draws on play: show the cutout now
+  if (store && previewCanvas && !store.getState().preview.isPlaying && !aiPrep) {
+    const ctx = getPreviewContext(previewCanvas);
+    const frameSkip = store.getState().settings.frameSkip;
+    const effectiveFrames = applyFrameSkip(frames, frameSkip);
+    if (ctx && effectiveFrames.length > 0) {
+      const k = (currentFrameIndex + effectiveFrames.length - 1) % effectiveFrames.length;
+      renderPreviewFrame(ctx, effectiveFrames[k], absoluteFrameIndex(k, frameSkip));
+    }
+  }
 }
 
 /** Build the preview's final masks from the masks analyzed so far */

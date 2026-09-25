@@ -178,11 +178,8 @@ export function renderAiCutoutSection(handlers) {
   );
   cleanups.push(on(analyzeBtn, 'click', () => handlers.onAiAnalyze?.()));
 
-  const coverage = createElement('p', {
-    className: 'editor-ai-note',
-    id: 'ai-coverage',
-    'aria-live': 'polite',
-  });
+  // Not a live region: the progress line already announces each frame
+  const coverage = createElement('p', { className: 'editor-ai-note', id: 'ai-coverage' });
 
   const progressBar = /** @type {HTMLProgressElement} */ (
     createElement('progress', {
