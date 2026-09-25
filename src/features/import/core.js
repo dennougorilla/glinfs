@@ -154,9 +154,23 @@ function gcd(a, b) {
 }
 
 /**
- * Choose the clip fps for a set of source frame durations:
- * `clamp(round(100 / gcdCs), 1, 50)`, where gcdCs is the GCD of the
- * normalized durations in centiseconds. A single still image gets 30 fps.
+ * Choose the clip fps for a set of source frame durations, so that an
+ * unedited import exports with its original timing.
+ *
+ * gcdCs is the GCD of the normalized durations in centiseconds. The export
+ * writes `round(runLength * 100 / fps)` cs per GIF frame, so the timing is
+ * exact only when the slot period `100 / fps` is a whole number of
+ * centiseconds that divides every duration. The largest such period is
+ * `gcd(gcdCs, 100)` cs, giving `fps = 100 / gcd(gcdCs, 100)` (e.g. 400 ms
+ * frames -> 5 fps, 150 ms -> 20 fps, 700 ms -> 10 fps). Plain
+ * `round(100 / gcdCs)` would turn uniform 400 ms frames into 3 fps with
+ * 1/1/2 slots (330/330/670 ms).
+ *
+ * When that period would need more than 50 fps (gcdCs shares no factor with
+ * 100, e.g. 30 or 70 ms frames), fall back to `clamp(round(100 / gcdCs), 1, 50)`:
+ * its period rounds to gcdCs, so uniform timing still exports exactly.
+ * A single still image gets 30 fps.
+ *
  * @param {Array<number|null|undefined>} durationsMs
  * @returns {number} Integer fps in 1..50
  */
@@ -166,6 +180,8 @@ export function chooseImportFps(durationsMs) {
   for (const ms of durationsMs) {
     gcdCs = gcd(gcdCs, normalizeFrameDurationMs(ms) / 10);
   }
+  const exactFps = 100 / gcd(gcdCs, 100);
+  if (exactFps <= MAX_IMPORT_FPS) return exactFps;
   return Math.min(MAX_IMPORT_FPS, Math.max(1, Math.round(100 / gcdCs)));
 }
 

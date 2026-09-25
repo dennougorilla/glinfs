@@ -17,6 +17,7 @@ import {
   resolveImportMimeType,
   validateImportFile,
 } from '../../../src/features/import/core.js';
+import { calculateFrameDelay } from '../../../src/features/export/core.js';
 
 describe('resolveImportMimeType', () => {
   it.each(ACCEPTED_IMPORT_TYPES)('accepts the reported type %s', (type) => {
@@ -130,6 +131,40 @@ describe('chooseImportFps', () => {
   it('normalizes 0/1 cs delays to 100 ms before taking the gcd', () => {
     expect(chooseImportFps([0, 0, 0])).toBe(10);
     expect(chooseImportFps([10, 200])).toBe(10);
+  });
+});
+
+describe('import -> export timing round trip', () => {
+  /**
+   * What an unedited import exports: each source frame becomes one merged
+   * GIF frame covering its slots (mergeIdenticalFrames on the export side).
+   * @param {number[]} durationsMs
+   */
+  function exportedDelaysMs(durationsMs) {
+    const fps = chooseImportFps(durationsMs);
+    return computeFrameSlots(durationsMs, fps).map(
+      (runLength) => calculateFrameDelay(fps, 1, 1, runLength) * 10,
+    );
+  }
+
+  it.each([
+    [[400, 400, 400], 5],
+    [[150, 150, 150], 20],
+    [[120, 120, 120], 25],
+    [[700, 700], 10],
+    [[400, 800], 5],
+    [[300, 700], 10],
+    [[100, 100, 500], 10],
+  ])('keeps %j exact (fps %i)', (durationsMs, fps) => {
+    expect(chooseImportFps(durationsMs)).toBe(fps);
+    expect(exportedDelaysMs(durationsMs)).toEqual(durationsMs);
+  });
+
+  it('keeps 30 ms and 70 ms frames exact through the round(100 / gcd) fallback', () => {
+    expect(exportedDelaysMs(Array.from({ length: 20 }, () => 30))).toEqual(
+      Array.from({ length: 20 }, () => 30),
+    );
+    expect(exportedDelaysMs([70, 70, 70])).toEqual([70, 70, 70]);
   });
 });
 
