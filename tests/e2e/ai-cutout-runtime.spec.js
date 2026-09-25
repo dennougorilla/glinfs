@@ -144,6 +144,13 @@ function expectNear(actual, expected) {
 }
 
 test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
+  // Each test starts a fresh browser context, so the worker fetches and
+  // compiles ONNX Runtime's 27 MB WASM binary every time; under the full
+  // parallel suite that alone can take well over the default 30 s. Running
+  // this file's tests one after another (in one worker) also keeps several
+  // such compiles from competing with the rest of the suite at once.
+  test.describe.configure({ mode: 'default', timeout: 90_000 });
+
   test('analyzes a clip through the worker and returns probability masks', async ({ page }) => {
     const requests = await serveStubModel(page);
     await openAppWithStub(page, { sha256: STUB_SHA256, bytes: STUB_MODEL.length, allowWasm: true });
@@ -205,9 +212,18 @@ test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
     expect(again.analyzed).toBe(0);
     expect(again.skipped).toBe(4);
     expect(requests.count).toBe(1);
+  });
 
-    // A new visit (fresh page, empty mask store, new worker) loads the
-    // verified model from Cache Storage instead of the network
+  test('a new visit loads the verified model from Cache Storage', async ({ page }) => {
+    const requests = await serveStubModel(page);
+    await openAppWithStub(page, { sha256: STUB_SHA256, bytes: STUB_MODEL.length, allowWasm: true });
+    await injectSyntheticClip(page, { count: 1, width: 640, height: 360 });
+    const first = await analyzeClip(page);
+    expect(first.error).toBeUndefined();
+    expect(first.readyInfo.fromCache).toBe(false);
+    expect(requests.count).toBe(1);
+
+    // Fresh page: empty mask store, new worker, same origin storage
     await page.reload();
     await page.waitForFunction(() => Boolean(window.__TEST_HOOKS__?.aiCutout));
     await page.evaluate((o) => window.__TEST_HOOKS__.aiCutout.setModelOverride(o), {
