@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { calculateFrameDelay } from '../../../src/features/export/core.js';
 import {
   ACCEPTED_IMPORT_TYPES,
   checkSourceFrameCount,
@@ -17,7 +18,6 @@ import {
   resolveImportMimeType,
   validateImportFile,
 } from '../../../src/features/import/core.js';
-import { calculateFrameDelay } from '../../../src/features/export/core.js';
 
 describe('resolveImportMimeType', () => {
   it.each(ACCEPTED_IMPORT_TYPES)('accepts the reported type %s', (type) => {
