@@ -28,6 +28,11 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // Fail instead of silently moving to another port: Playwright reuses an
+    // already-running server on its configured port (see E2E_PORT in
+    // playwright.config.js), so a dev server that drifted to a different port
+    // could make E2E runs test some other checkout's code.
+    strictPort: true,
     // Note: Screen Capture API works on localhost without HTTPS
   },
   worker: {
