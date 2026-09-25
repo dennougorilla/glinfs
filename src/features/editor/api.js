@@ -19,6 +19,17 @@ import {
  * @property {import('./types.js').HandlePosition} [hoveredHandle] - Currently hovered handle
  * @property {import('./types.js').HandlePosition} [activeHandle] - Currently active (dragging) handle
  * @property {import('./types.js').BoundaryHit} [boundaryHit] - Boundary collision state
+ * @property {SelectedTextOverlay | null} [selectedText] - Bounds of the selected text layer
+ */
+
+/**
+ * Selected text layer bounds drawn on the overlay (frame pixels)
+ * @typedef {Object} SelectedTextOverlay
+ * @property {number} x
+ * @property {number} y
+ * @property {number} width
+ * @property {number} height
+ * @property {boolean} active - The layer is drawn on the current frame
  */
 
 /** Handle visual size in pixels */
@@ -397,4 +408,31 @@ export function renderOverlay(ctx, crop, frameWidth, frameHeight, options = {}) 
     const area = crop || { x: 0, y: 0, width: frameWidth, height: frameHeight };
     renderGridInArea(ctx, area, divisions);
   }
+
+  if (options.selectedText) {
+    renderSelectedTextBounds(ctx, options.selectedText);
+  }
+}
+
+/**
+ * Dashed box around the selected text layer. A layer outside its frame
+ * range is not drawn on the current frame, so its box is dimmed.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {SelectedTextOverlay} bounds
+ */
+export function renderSelectedTextBounds(ctx, bounds) {
+  // Scale the stroke with the frame so it stays visible on large frames
+  // that the preview shows downscaled
+  const lineWidth = Math.max(1, Math.round(ctx.canvas.width / 640));
+  ctx.save();
+  ctx.globalAlpha = bounds.active ? 1 : 0.45;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([6 * lineWidth, 4 * lineWidth]);
+  // Two-tone dash stays visible on light and dark footage
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.lineDashOffset = 5 * lineWidth;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.restore();
 }

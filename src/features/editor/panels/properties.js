@@ -1,10 +1,11 @@
 /**
  * Editor properties panel (right column): live monitor slot, aspect ratio,
- * and the Playback / Overlay / Crop Range accordions
+ * and the Playback / Overlay / Crop Range / Text / Background accordions
  * @module features/editor/panels/properties
  */
 
 import { createElement, on } from '../../../shared/utils/dom.js';
+import { renderBackgroundPanel, renderTextPanel } from './edits-panel.js';
 
 /** @type {string[]} */
 const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
@@ -136,8 +137,8 @@ export function renderEditorPropertiesPanel(state, handlers) {
   // Playback/Overlay/Crop rarely — the monitor gets their vertical space.
   // Native <details> keeps this zero-JS; Crop opens itself while a crop
   // exists so its values are never hidden mid-operation.
-  const makeAccordion = (label, node, open = false) => {
-    const details = createElement('details', { className: 'prop-accordion' }, [
+  const makeAccordion = (label, node, open = false, id = undefined) => {
+    const details = createElement('details', { className: 'prop-accordion', id }, [
       createElement('summary', { className: 'prop-accordion-summary' }, [label]),
       node,
     ]);
@@ -147,6 +148,24 @@ export function renderEditorPropertiesPanel(state, handlers) {
   panelContent.appendChild(makeAccordion('Playback', speedGroup));
   panelContent.appendChild(makeAccordion('Overlay', gridGroup));
   panelContent.appendChild(makeAccordion('Crop Range', cropInfoGroup, Boolean(state.cropArea)));
+
+  // Clip edits. Placed after the existing groups so their controls keep
+  // their document order (e.g. the speed select stays the panel's first).
+  // Values are applied by updateEditsPanel() after mount and on changes.
+  const textPanel = renderTextPanel(handlers);
+  cleanups.push(...textPanel.cleanups);
+  panelContent.appendChild(makeAccordion('Text', textPanel.element, true, 'editor-text-accordion'));
+
+  const backgroundPanel = renderBackgroundPanel(handlers);
+  cleanups.push(...backgroundPanel.cleanups);
+  panelContent.appendChild(
+    makeAccordion(
+      'Background',
+      backgroundPanel.element,
+      state.edits?.background.enabled === true,
+      'editor-bg-accordion',
+    ),
+  );
 
   // Clear Crop clicks are handled via delegation so the listener survives
   // updateCropInfoPanel() re-creating the button on crop updates (issue #37)

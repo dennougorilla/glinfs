@@ -34,6 +34,9 @@
  * @property {CropArea|null} cropArea - Optional crop region
  * @property {number} createdAt - Creation timestamp
  * @property {number} fps - Source FPS (default: 30)
+ * @property {boolean} [hasAlpha] - Source frames have transparent pixels (imported GIF/PNG/WebP)
+ * @property {import('../../shared/edits/model.js').ClipEdits} [edits] - Text/background
+ *   edits (mirrors EditorState.edits, like cropArea)
  */
 
 /**
@@ -101,6 +104,11 @@
  * @property {SceneDetectionStatus} sceneDetectionStatus - Scene detection progress status
  * @property {number} sceneDetectionProgress - Detection progress percentage (0-100)
  * @property {string|null} sceneDetectionError - Error message if detection failed
+ * @property {import('../../shared/edits/model.js').ClipEdits} edits - Text layers and
+ *   background removal applied to the clip
+ * @property {string|null} selectedTextId - Text layer being edited (null = none)
+ * @property {boolean} pickingKeyColor - Eyedropper mode: the next preview click picks
+ *   the background key color
  */
 
 /**

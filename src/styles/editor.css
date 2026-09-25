@@ -1586,3 +1586,316 @@
     display: none;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Clip edits: text layers and background removal
+   Every rule is scoped under .editor-screen (feature CSS shares one cascade)
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Checkerboard behind the preview canvas: removed (transparent) pixels show
+   through the canvas element instead of reading as black */
+.editor-screen .editor-canvas {
+  background-color: #c8c8c8;
+  background-image:
+    linear-gradient(45deg, #9a9a9a 25%, transparent 25%),
+    linear-gradient(-45deg, #9a9a9a 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #9a9a9a 75%),
+    linear-gradient(-45deg, transparent 75%, #9a9a9a 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+.editor-screen .editor-bg-picking .editor-canvas-overlay {
+  cursor: crosshair;
+  outline: 2px dashed var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* Text panel */
+.editor-screen .editor-text-panel,
+.editor-screen .editor-bg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-4);
+}
+
+.editor-screen .editor-text-add {
+  width: 100%;
+}
+
+.editor-screen .editor-text-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.editor-screen .editor-text-list[hidden],
+.editor-screen .editor-text-empty[hidden],
+.editor-screen .editor-text-editor[hidden],
+.editor-screen .editor-bg-note[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-text-item {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.editor-screen .editor-text-item--selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
+
+.editor-screen .editor-text-item-select {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.editor-screen .editor-text-item-delete {
+  flex-shrink: 0;
+  width: 32px;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.editor-screen .editor-text-item-delete:hover {
+  color: var(--color-recording);
+}
+
+.editor-screen .editor-text-empty,
+.editor-screen .editor-bg-hint,
+.editor-screen .editor-bg-note,
+.editor-screen .editor-bg-status {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.editor-screen .editor-bg-status:empty {
+  display: none;
+}
+
+.editor-screen .editor-bg-status {
+  color: var(--color-primary);
+}
+
+.editor-screen .editor-text-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.editor-screen .editor-text-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.editor-screen .editor-text-field-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  padding: 0;
+}
+
+.editor-screen .editor-text-field-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-text-field-control input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-screen .editor-text-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 3em;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.editor-screen .editor-text-select,
+.editor-screen .editor-bg-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-screen .editor-text-value {
+  min-width: 3.5em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-text-color,
+.editor-screen .editor-bg-color {
+  width: 40px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.editor-screen .editor-text-check,
+.editor-screen .editor-bg-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.editor-screen .editor-text-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.editor-screen .editor-text-segmented {
+  display: flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.editor-screen .editor-text-segment {
+  flex: 1;
+  position: relative;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* Radios stay in the accessibility tree and keyboard order, visually hidden */
+.editor-screen .editor-text-segment input,
+.editor-screen .editor-bg-pick-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.editor-screen .editor-text-segment span {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-text-segment + .editor-text-segment span {
+  border-left: 1px solid var(--color-border);
+}
+
+.editor-screen .editor-text-segment input:checked + span {
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-text-segment input:focus-visible + span,
+.editor-screen .editor-bg-pick-input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.editor-screen .editor-text-time-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-text-time-label {
+  width: 3em;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-text-time {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-text-time-btn {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+/* Eyedropper toggle: a checkbox styled as a button */
+.editor-screen .editor-bg-pick {
+  position: relative;
+  flex: 1;
+  cursor: pointer;
+}
+
+.editor-screen .editor-bg-pick span {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-bg-pick--active span,
+.editor-screen .editor-bg-pick-input:checked + span {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-text-panel button:focus-visible,
+.editor-screen .editor-text-panel select:focus-visible,
+.editor-screen .editor-text-panel textarea:focus-visible,
+.editor-screen .editor-text-panel input:focus-visible,
+.editor-screen .editor-bg-panel select:focus-visible,
+.editor-screen .editor-bg-panel input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
