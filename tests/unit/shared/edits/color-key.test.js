@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyColorKey,
   detectEdgeColor,
+  findOpaqueEdgeColor,
   MAX_RGB_DISTANCE,
   parseHexColor,
   snapAlphaToBinary,
@@ -205,6 +206,28 @@ describe('detectEdgeColor', () => {
   it('handles a single pixel', () => {
     const { rgba } = fromMap(['r'], { r: RED });
     expect(detectEdgeColor(rgba, 1, 1)).toBe('#ff0000');
+  });
+});
+
+describe('findOpaqueEdgeColor', () => {
+  it('matches detectEdgeColor when the border has an opaque pixel', () => {
+    const { rgba, width, height } = fromMap(['..r..', '.ggg.', '.....'], {
+      g: GREEN,
+      r: RED,
+      '.': CLEAR,
+    });
+    expect(findOpaqueEdgeColor(rgba, width, height)).toBe('#ff0000');
+  });
+
+  it('is null when the border is already transparent (no black fallback)', () => {
+    // A transparent sticker: black outline around a white shape, clear border
+    const { rgba, width, height } = fromMap(['.....', '.kwk.', '.....'], {
+      k: [0, 0, 0, 255],
+      w: [255, 255, 255, 255],
+      '.': CLEAR,
+    });
+    expect(findOpaqueEdgeColor(rgba, width, height)).toBeNull();
+    expect(findOpaqueEdgeColor(new Uint8ClampedArray(0), 0, 0)).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import { encodeGif } from '../../../src/features/export/api.js';
 import { getExportState, initExport } from '../../../src/features/export/index.js';
 import { TRANSPARENT_ENCODER_NOTE } from '../../../src/features/export/ui.js';
 import {
+  getClipPayload,
   resetAppStore,
   setClipPayload,
   setEditorPayload,
@@ -90,6 +91,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.mocked(snapCanvasAlphaToBinary).mockReset();
   exportCleanup?.();
   exportCleanup = null;
   resetAppStore();
@@ -187,6 +189,70 @@ describe('export screen: transparency', () => {
     expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith('2d', {
       willReadFrequently: true,
     });
+  });
+
+  it('composes and snaps each transparent preview frame once, then plays from a cache', () => {
+    vi.mocked(snapCanvasAlphaToBinary).mockClear();
+    vi.mocked(snapCanvasAlphaToBinary).mockImplementation(
+      (ctx) =>
+        /** @type {ImageData} */ (
+          /** @type {unknown} */ ({
+            width: ctx.canvas.width,
+            height: ctx.canvas.height,
+            data: new Uint8ClampedArray(ctx.canvas.width * ctx.canvas.height * 4),
+          })
+        ),
+    );
+    const putImageData = vi.fn();
+    const getImageData = vi.fn((_x, _y, w, h) => ({
+      width: w,
+      height: h,
+      data: new Uint8ClampedArray(w * h * 4),
+    }));
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(function getContext() {
+      return /** @type {CanvasRenderingContext2D} */ (
+        /** @type {unknown} */ ({
+          canvas: this,
+          clearRect: vi.fn(),
+          drawImage: vi.fn(),
+          fillRect: vi.fn(),
+          fillText: vi.fn(),
+          getImageData,
+          putImageData,
+        })
+      );
+    });
+    const count = 4;
+    inject({
+      count,
+      editorExtras: { edits: { ...createDefaultEdits(), background: { enabled: true } } },
+      clipExtras: { hasAlpha: false },
+    });
+    // Valid (open) frames: only those are cached
+    for (const frame of /** @type {any[]} */ (getClipPayload()?.frames ?? [])) {
+      frame.frame = { closed: false };
+    }
+    exportCleanup = initExport();
+
+    // Drive the preview loop: every tick is a frame boundary
+    const animate = vi.mocked(requestAnimationFrame).mock.calls.at(-1)?.[0];
+    let now = 0;
+    const tick = () => {
+      now += 1000;
+      animate?.(now);
+    };
+    const firstLoopSnaps = vi.mocked(snapCanvasAlphaToBinary).mock.calls.length;
+    for (let i = 0; i < count; i++) tick();
+    const snapsAfterFirstLoop = vi.mocked(snapCanvasAlphaToBinary).mock.calls.length;
+    expect(snapsAfterFirstLoop).toBeGreaterThanOrEqual(count - 1);
+    expect(snapsAfterFirstLoop).toBeGreaterThan(firstLoopSnaps);
+
+    // Two more loops: no readback, the cached pixels are written back
+    const readbacksAfterFirstLoop = getImageData.mock.calls.length;
+    for (let i = 0; i < 2 * count; i++) tick();
+    expect(vi.mocked(snapCanvasAlphaToBinary).mock.calls.length).toBe(snapsAfterFirstLoop);
+    expect(getImageData.mock.calls.length).toBe(readbacksAfterFirstLoop);
+    expect(putImageData.mock.calls.length).toBeGreaterThanOrEqual(2 * count);
   });
 
   it('leaves the preview of an opaque export alone', () => {

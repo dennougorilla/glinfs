@@ -14,6 +14,7 @@ import {
   hitTestEditorText,
   readSourceRegion,
   sampleSourceColor,
+  sampleSourcePixel,
 } from '../../../src/features/editor/edits-preview.js';
 import { composeEditorFrame } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
@@ -144,6 +145,78 @@ describe('createEditorFrameRenderer', () => {
     expect(renderer.stats().readbacks).toBe(5);
   });
 
+  it('skips keying while a crop drag is in progress and keeps the cache for the release', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    const e = edits();
+    renderer.render(ctx, frame('a'), null, e, 0);
+    renderer.render(ctx, frame('b'), null, e, 1);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Every pointer move of the drag: a new crop, no readback, cache intact
+    for (let x = 0; x < 5; x++) {
+      const crop = /** @type {any} */ ({ x, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+      renderer.render(ctx, frame('a'), crop, e, 0, { skipKey: true });
+    }
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+    expect(ctx.names().filter((n) => n === 'getImageData')).toHaveLength(2);
+    // The unkeyed frame shows while dragging
+    expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+
+    // Released: the final region is keyed once
+    const released = /** @type {any} */ ({ x: 4, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+    renderer.render(ctx, frame('a'), released, e, 0);
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+    expect(ctx.pixelAt(5, 2)[3]).toBe(0);
+
+    // A drag released where it started re-uses the cached frames
+    const fresh = createEditorFrameRenderer();
+    fresh.render(ctx, frame('a'), null, e, 0);
+    fresh.render(ctx, frame('a'), released, e, 0, { skipKey: true });
+    fresh.render(ctx, frame('a'), null, e, 0);
+    expect(fresh.stats().readbacks).toBe(1);
+  });
+
+  it('snaps the output region to 1-bit alpha for a transparent export, once per frame', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    const soft = (/** @type {string} */ id, /** @type {number} */ alpha) =>
+      frame(id, [200, 100, 50, alpha]);
+    const crop = /** @type {any} */ ({ x: 2, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+    const noKey = createDefaultEdits();
+
+    // A source with alpha, removal off: soft alpha inside the region snaps
+    renderer.render(ctx, soft('a', 100), crop, noKey, 0, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(0);
+    // ...outside the output region the source is left alone
+    expect(ctx.pixelAt(15, 5)[3]).toBe(100);
+    renderer.render(ctx, soft('b', 200), crop, noKey, 1, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(255);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Revisits and text edits come from the cache
+    const withText = { ...noKey, textLayers: [createTextLayer({ text: 'x' }, 2)] };
+    renderer.render(ctx, soft('a', 100), crop, withText, 0, { transparent: true });
+    expect(renderer.stats().readbacks).toBe(2);
+
+    // A crop drag skips the snap without touching the cache
+    renderer.render(ctx, soft('a', 100), null, noKey, 0, { transparent: true, skipKey: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(100);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Opaque export: no snap, no readback, cache freed
+    renderer.render(ctx, soft('a', 100), crop, noKey, 0);
+    expect(ctx.pixelAt(5, 5)[3]).toBe(100);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 0 });
+
+    // With removal on, the key and the snap share one readback per frame
+    const keyed = edits({ color: '#000000', tolerance: 0 });
+    renderer.render(ctx, soft('a', 100), crop, keyed, 0, { transparent: true });
+    renderer.render(ctx, soft('a', 100), crop, keyed, 0, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(0);
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+  });
+
   it('frees the cache when removal is off and draws through composeEditorFrame', () => {
     const renderer = createEditorFrameRenderer();
     const ctx = createFakeContext(20, 10);
@@ -231,7 +304,7 @@ describe('source pixel reads', () => {
     vi.unstubAllGlobals();
   });
 
-  it('samples and detects colors from the source frame', () => {
+  const stubOffscreenCanvas = () =>
     vi.stubGlobal(
       'OffscreenCanvas',
       class {
@@ -245,6 +318,9 @@ describe('source pixel reads', () => {
         }
       },
     );
+
+  it('samples and detects colors from the source frame', () => {
+    stubOffscreenCanvas();
     const source = frame('a', [10, 20, 30, 255]);
     expect(sampleSourceColor(source, { x: 3, y: 4 })).toBe('#0a141e');
     expect(detectOutputEdgeColor(source, null)).toBe('#0a141e');
@@ -252,6 +328,23 @@ describe('source pixel reads', () => {
     expect(readSourceRegion(source, { x: 30, y: -5, width: 5, height: 5 })).toMatchObject({
       width: 1,
       height: 5,
+    });
+  });
+
+  it('offers no key color where the source is already transparent', () => {
+    stubOffscreenCanvas();
+    // A transparent pixel reads back as (0, 0, 0, 0): it must not become a
+    // black key color that erases dark outlines touching the transparency
+    const clear = frame('a', [0, 0, 0, 0]);
+    expect(sampleSourcePixel(clear, { x: 3, y: 4 })).toEqual({
+      color: '#000000',
+      transparent: true,
+    });
+    expect(sampleSourceColor(clear, { x: 3, y: 4 })).toBeNull();
+    expect(detectOutputEdgeColor(clear, null)).toBeNull();
+    expect(sampleSourcePixel(frame('b', [10, 20, 30, 200]), { x: 0, y: 0 })).toEqual({
+      color: '#0a141e',
+      transparent: false,
     });
   });
 

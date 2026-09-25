@@ -34,7 +34,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} onTogglePlay - Toggle playback
  * @property {(frame: number) => void} onFrameChange - Frame changed
  * @property {(range: import('./types.js').FrameRange) => void} onRangeChange - Range changed
- * @property {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop changed
+ * @property {(crop: import('./types.js').CropArea | null, options?: { dragging?: boolean }) => void} onCropChange - Crop changed (dragging: a preview drag is still in progress)
+ * @property {() => void} [onCropDragEnd] - A crop drag on the preview was released
  * @property {() => void} onToggleGrid - Toggle grid
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
@@ -53,6 +54,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(enabled: boolean) => void} [onToggleBackground] - Turn background removal on/off
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
+ * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
  */
 
 /**
@@ -107,7 +109,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   cleanups.push(...timeline.cleanups);
   screen.appendChild(timeline.element);
 
-  screen.appendChild(renderEditorStatusBar(dimensions));
+  screen.appendChild(renderEditorStatusBar(dimensions, state.selectedTextId));
 
   container.innerHTML = '';
   container.appendChild(screen);

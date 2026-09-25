@@ -330,15 +330,17 @@ export function selectTextLayer(state, id) {
 }
 
 /**
- * Patch the background removal settings (values are clamped/validated)
+ * Patch the background removal settings (values are clamped/validated).
+ * Setting a color marks it as chosen (see BackgroundRemoval.colorChosen).
  * @param {import('./types.js').EditorState} state
  * @param {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} patch
  * @returns {import('./types.js').EditorState}
  */
 export function setBackground(state, patch) {
+  const chosen = patch.color !== undefined ? { colorChosen: true } : {};
   return setEdits(state, {
     ...state.edits,
-    background: { ...state.edits.background, ...patch },
+    background: { ...state.edits.background, ...patch, ...chosen },
   });
 }
 

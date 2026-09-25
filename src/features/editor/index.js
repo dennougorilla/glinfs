@@ -12,6 +12,7 @@ import {
   getClipQueue,
   getEditorPayload,
   hasActiveScreenCapture,
+  hasPendingDeletion,
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
@@ -19,7 +20,7 @@ import {
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
-import { createDefaultEdits, normalizeEdits } from '../../shared/edits/model.js';
+import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -42,6 +43,7 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
+import { updateDeleteHint } from './panels/status-bar.js';
 import {
   addTextLayer,
   clearCrop,
@@ -137,10 +139,11 @@ let bannerHideTimer = null;
 let previewRenderer = null;
 
 /**
- * Whether the background key color was chosen (picked, typed, restored or
- * auto-detected) — enabling removal without one detects the edge color
+ * A crop drag on the preview is in progress: the preview skips background
+ * removal until the drag is released (re-keying the moving region on every
+ * pointer move would read back and flood-fill it per tick)
  */
-let keyColorChosen = false;
+let cropDragging = false;
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -303,12 +306,8 @@ export function initEditor() {
     }
   }
 
-  {
-    const { background } = store.getState().edits;
-    keyColorChosen =
-      background.enabled || background.color !== createDefaultEdits().background.color;
-  }
   previewRenderer = createEditorFrameRenderer();
+  cropDragging = false;
 
   // Initial render
   render(container);
@@ -453,6 +452,9 @@ export function initEditor() {
 
     if (editsChanged || textSelectionChanged || pickingChanged) {
       updateEditsPanel(container, state, fps);
+      if (textSelectionChanged) {
+        updateDeleteHint(container, state.selectedTextId);
+      }
       if (pickingChanged) {
         container
           .querySelector('.editor-canvas-container')
@@ -602,6 +604,7 @@ function render(container) {
       onFrameChange: handleFrameChange,
       onRangeChange: handleRangeChange,
       onCropChange: handleCropChange,
+      onCropDragEnd: handleCropDragEnd,
       onToggleGrid: handleToggleGrid,
       onAspectRatioChange: handleAspectRatioChange,
       onSpeedChange: handleSpeedChange,
@@ -618,6 +621,7 @@ function render(container) {
       onToggleBackground: handleToggleBackground,
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
+      onPickTransparentArea: handlePickTransparentArea,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -644,7 +648,10 @@ function drawPreview(state) {
   if (!baseCanvas || !previewRenderer || !frame) return;
   const ctx = baseCanvas.getContext('2d');
   if (!ctx) return;
-  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame);
+  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
+    skipKey: cropDragging,
+    transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
+  });
 }
 
 /**
@@ -820,12 +827,25 @@ function handleRangeChange(range) {
 /**
  * Handle crop change
  * @param {import('./types.js').CropArea | null} crop
+ * @param {{ dragging?: boolean }} [options] - dragging: a preview drag is
+ *   still moving the crop (background removal waits for its release)
  */
-function handleCropChange(crop) {
+function handleCropChange(crop, options) {
   if (!store) return;
+  cropDragging = options?.dragging === true;
 
   store.setState((state) => (crop ? updateCrop(state, crop) : clearCrop(state)));
   emit('editor:crop', { crop });
+}
+
+/**
+ * A crop drag on the preview was released: key the final region once. The
+ * flag is not store state, so nothing else would redraw the preview.
+ */
+function handleCropDragEnd() {
+  if (!store || !cropDragging) return;
+  cropDragging = false;
+  drawPreview(store.getState());
 }
 
 /**
@@ -960,11 +980,50 @@ function handleUpdateText(id, patch) {
   store.setState((state) => updateTextLayer(state, id, patch));
 }
 
-/** @param {string} id */
+/**
+ * Delete a text layer (the Delete key or the list's × button), with an Undo
+ * toast like a clip deletion: the layer and its styling/timing come back at
+ * the same position in the stack.
+ * @param {string} id
+ */
 function handleRemoveText(id) {
   if (!store) return;
+  const before = store.getState();
+  const index = before.edits.textLayers.findIndex((layer) => layer.id === id);
+  if (index === -1) return;
+  const layer = before.edits.textLayers[index];
+  const clipFrames = before.clip?.frames;
+
   store.setState((state) => removeTextLayer(state, id));
   announce('Text layer deleted');
+  if (hasPendingDeletion()) {
+    // The toast's action slot holds a clip deletion's Undo, and a new action
+    // toast would replace it: never make a deleted clip unrecoverable
+    showToast('Text layer deleted');
+    return;
+  }
+  showToast('Text layer deleted', {
+    actionLabel: 'Undo',
+    onAction: () => restoreTextLayer(layer, index, clipFrames),
+  });
+}
+
+/**
+ * Undo a text layer deletion: re-insert it at its old stack position and
+ * select it. A no-op once the editor shows another clip (or none).
+ * @param {import('../../shared/edits/model.js').TextLayer} layer
+ * @param {number} index
+ * @param {unknown} clipFrames - Frames of the clip the layer belonged to
+ */
+function restoreTextLayer(layer, index, clipFrames) {
+  if (!store) return;
+  const state = store.getState();
+  if (!state.clip || state.clip.frames !== clipFrames) return;
+  if (state.edits.textLayers.some((l) => l.id === layer.id)) return;
+  const textLayers = [...state.edits.textLayers];
+  textLayers.splice(Math.min(index, textLayers.length), 0, layer);
+  store.setState((s) => selectTextLayer(setEdits(s, { ...s.edits, textLayers }), layer.id));
+  announce('Text layer restored');
 }
 
 /**
@@ -980,26 +1039,28 @@ function handleMoveText(id, x, y) {
 /** @param {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} patch */
 function handleSetBackground(patch) {
   if (!store) return;
-  if (patch.color !== undefined) keyColorChosen = true;
   store.setState((state) => setBackground(state, patch));
 }
 
 /**
  * Turn background removal on/off. Turning it on before any key color was
- * chosen keys out the most common border color of the current output.
+ * chosen keys out the most common opaque border color of the current
+ * output. A border that is already transparent has no such color: the
+ * current key color stays and the user is pointed at the eyedropper.
  * @param {boolean} enabled
  */
 function handleToggleBackground(enabled) {
   if (!store) return;
   /** @type {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} */
   const patch = { enabled };
-  if (enabled && !keyColorChosen) {
-    const state = store.getState();
+  const state = store.getState();
+  if (enabled && !state.edits.background.colorChosen) {
     const frame = state.clip?.frames[state.currentFrame];
     const detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
     if (detected) {
       patch.color = detected;
-      keyColorChosen = true;
+    } else if (state.clip?.hasAlpha) {
+      announce('The edges are already transparent. Pick the color to remove from the preview.');
     }
   }
   store.setState((state) => setBackground(state, patch));
@@ -1020,11 +1081,18 @@ function handleSetPickingKeyColor(picking) {
  */
 function handlePickKeyColor(color) {
   if (!store) return;
-  keyColorChosen = true;
   store.setState((state) =>
     setPickingKeyColor(setBackground(state, { color, enabled: true }), false),
   );
   announce(`Background color ${color} removed`);
+}
+
+/**
+ * The eyedropper hit a pixel that is already transparent: there is no color
+ * to remove there, so nothing changes and the mode stays on for another try
+ */
+function handlePickTransparentArea() {
+  announce('That area is already transparent. Click a colored area to remove it.');
 }
 
 /**

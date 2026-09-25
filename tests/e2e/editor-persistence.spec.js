@@ -126,6 +126,30 @@ test.describe('Editor edits persistence', () => {
     expect((await readEditorState(page))?.selectedRange).toEqual({ start: 2, end: 9 });
   });
 
+  test('a deliberately chosen default key color is not replaced by edge detection', async ({
+    page,
+  }) => {
+    await page.locator('#editor-bg-accordion summary').click();
+    // Choose the default green on purpose (the clip's edge is #2050a0)
+    await page.locator('#background-color').fill('#ff0000');
+    await page.locator('#background-color').fill('#00ff00');
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background)
+      .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
+
+    await goToCaptureScreen(page);
+    await goToEditorScreen(page);
+
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background)
+      .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
+    await page.locator('#editor-bg-accordion summary').click();
+    await page.locator('#background-enabled').check();
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background)
+      .toMatchObject({ enabled: true, color: '#00ff00' });
+  });
+
   test('survives Editor -> Export -> Editor', async ({ page }) => {
     await addEdits(page, 'Exported');
 
