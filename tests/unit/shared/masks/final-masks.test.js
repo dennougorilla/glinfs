@@ -168,6 +168,38 @@ describe('buildFinalMasks', () => {
     expect(onProgress).toHaveBeenCalledTimes(10);
   });
 
+  it('reads each probability mask once, so masks arriving mid-build never mix into it', async () => {
+    /** @param {number} f @returns {Rect} */
+    const a = (f) => [4 + 2 * f, 6, 6, 6];
+    /** @type {Rect} */
+    const b = [28, 6, 6, 6];
+    const frameCount = 6;
+    const ai = aiOf({ picks: [{ frame: 3, x: (a(3)[0] + 3) / W, y: 0.45, mode: 'keep' }] });
+    const stable = await buildFinalMasks({
+      frameCount,
+      getProb: (f) => probOf(W, H, [a(f), b]),
+      ai,
+      ...noYield,
+    });
+
+    // After the build's first reads the store changes: a new character
+    // appears top left on every frame (it would take label 1 and shift
+    // the labels the backward pass recorded)
+    let calls = 0;
+    const getProb = vi.fn((f) => {
+      calls++;
+      const rects = calls > frameCount ? [[0, 0, 2, 2], a(f), b] : [a(f), b];
+      return probOf(W, H, /** @type {Rect[]} */ (rects));
+    });
+    const changing = await buildFinalMasks({ frameCount, getProb, ai, ...noYield });
+
+    expect(getProb).toHaveBeenCalledTimes(frameCount);
+    expect(changing.masks).toEqual(stable.masks);
+    for (let f = 0; f < frameCount; f++) {
+      expect(changing.masks[f], `frame ${f}`).toEqual(packMask(binaryOf(W, H, [a(f)]), W, H));
+    }
+  });
+
   it('removes a picked character and leaves unanalyzed frames without a mask', async () => {
     /** @type {Rect} */
     const a = [4, 4, 8, 8];
@@ -238,19 +270,18 @@ describe('buildFinalMasks', () => {
     const events = [];
     await buildFinalMasks({
       frameCount: 10,
-      getProb: () => {
-        clock += 10; // each frame costs 10 "ms"
-        return probOf(W, H, [[1, 1, 3, 3]]);
-      },
+      getProb: () => probOf(W, H, [[1, 1, 3, 3]]),
       ai: aiOf(),
-      onProgress: ({ done }) => events.push(`frame${done}`),
+      onProgress: ({ done }) => {
+        clock += 10; // each frame costs 10 "ms"
+        events.push(`frame${done}`);
+      },
       sliceMs: 25,
       now: () => clock,
       yieldToMain: async () => {
         events.push('yield');
       },
     });
-    // The reference-size scan reads frame 0 once before the clock starts
     const runs = events
       .join(' ')
       .split('yield')
@@ -269,12 +300,10 @@ describe('buildFinalMasks', () => {
     }, 0);
     await buildFinalMasks({
       frameCount: 20,
-      getProb: () => {
-        clock += 40;
-        return probOf(W, H, []);
-      },
+      getProb: () => probOf(W, H, []),
       ai: aiOf(),
       onProgress: (p) => {
+        clock += 40;
         done = p.done;
       },
       now: () => clock,
@@ -290,11 +319,11 @@ describe('buildFinalMasks', () => {
       let clock = 0;
       await buildFinalMasks({
         frameCount: 3,
-        getProb: () => {
-          clock += 100;
-          return probOf(W, H, []);
-        },
+        getProb: () => probOf(W, H, []),
         ai: aiOf(),
+        onProgress: () => {
+          clock += 100;
+        },
         now: () => clock,
       });
       expect(yieldFn).toHaveBeenCalled();
@@ -470,8 +499,8 @@ describe('createFinalMaskCache', () => {
     await slow.release();
     const [a, b] = await Promise.all([first, again]);
     expect(b).toBe(a);
-    // One build's worth of reads: the reference-size probe plus one per frame
-    expect(getProb.mock.calls.length).toBe(1 + base.frameCount);
+    // One build's worth of reads: each frame once
+    expect(getProb.mock.calls.length).toBe(base.frameCount);
     expect(cache.peek({ ...base, storeVersion: 30 })).toBe(a);
   });
 
