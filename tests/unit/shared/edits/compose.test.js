@@ -272,9 +272,11 @@ describe('snapCanvasAlphaToBinary', () => {
     ctx.putImageData({ data, width: 3, height: 1 }, 0, 0);
     ctx.calls.length = 0;
 
-    snapCanvasAlphaToBinary(ctx);
+    const snapped = snapCanvasAlphaToBinary(ctx);
 
     expect(ctx.pixelAt(0, 0)).toEqual([255, 0, 0, 255]);
+    // The snapped pixels come back for callers that cache the frame
+    expect(Array.from(snapped?.data ?? [])).toEqual([255, 0, 0, 255, 255, 0, 0, 0, ...GREEN]);
     expect(ctx.pixelAt(1, 0)[3]).toBe(0);
     expect(ctx.pixelAt(2, 0)).toEqual([0, 255, 0, 255]);
     expect(ctx.names()).toEqual(['getImageData', 'putImageData']);
@@ -285,9 +287,10 @@ describe('snapCanvasAlphaToBinary', () => {
     composeOutputFrame(ctx, solidFrame(2, 1), null, null, 0);
     ctx.calls.length = 0;
 
-    snapCanvasAlphaToBinary(ctx);
+    expect(snapCanvasAlphaToBinary(ctx)?.width).toBe(2);
 
     expect(ctx.names()).toEqual(['getImageData']);
+    expect(snapCanvasAlphaToBinary(createFakeContext(0, 0))).toBeNull();
   });
 
   it('does nothing on an empty canvas', () => {

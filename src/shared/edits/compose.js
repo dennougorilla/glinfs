@@ -127,14 +127,18 @@ export function composeOutputFrame(ctx, frame, crop, edits, frameIndex) {
  * background becomes either fully opaque or fully transparent. One
  * readback; the canvas is only written back when a pixel changed.
  * @param {Context2D} ctx
+ * @returns {ImageData | null} The snapped canvas pixels (callers may keep
+ *   them to redraw the frame without another readback), or null for an
+ *   empty canvas
  */
 export function snapCanvasAlphaToBinary(ctx) {
   const { width, height } = ctx.canvas;
-  if (width <= 0 || height <= 0) return;
+  if (width <= 0 || height <= 0) return null;
   const image = ctx.getImageData(0, 0, width, height);
   if (snapAlphaToBinary(image.data)) {
     ctx.putImageData(image, 0, 0);
   }
+  return image;
 }
 
 /**

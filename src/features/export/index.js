@@ -16,8 +16,10 @@ import { composeOutputFrame, snapCanvasAlphaToBinary } from '../../shared/edits/
 import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { navigate } from '../../shared/router.js';
 import { updateSetting } from '../../shared/user-settings.js';
+import { isFrameValid, syncCanvasSize } from '../../shared/utils/canvas.js';
 import { createElement, on, qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { createKeyedRegionCache } from '../editor/edits-preview.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
 import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
@@ -69,6 +71,15 @@ let edits = null;
 
 /** Absolute clip index of frames[0] (the editor's selected range start) */
 let rangeStart = 0;
+
+/**
+ * Composed + alpha-snapped preview frames of a transparent export, keyed by
+ * absolute frame index (edits and crop are fixed for a mount). Background
+ * removal and the 1-bit snap read every frame back on the main thread; the
+ * first loop fills this (byte-capped admission, like the editor's keyed
+ * cache) and later loops just write the pixels back.
+ */
+const previewFrameCache = createKeyedRegionCache();
 
 /**
  * Collapse runs of identical frames into one GIF frame. Only imported clips
@@ -180,6 +191,8 @@ export function initExport() {
   cropArea = editorPayload?.cropArea || null;
   const fps = editorPayload?.fps || DEFAULT_FPS;
   rangeStart = start;
+  // Cached preview frames belong to one clip, crop and set of edits
+  previewFrameCache.clear();
 
   // Edits and alpha travel on the editor payload (or its clip). Both are
   // optional: clips edited before these existed carry neither.
@@ -573,15 +586,29 @@ function getPreviewContext(canvas) {
  * Draw one preview frame through the encoder's compositor. A transparent
  * export is then snapped to GIF's 1-bit alpha, the same threshold the
  * encoder applies, so partial alpha (a text box's opacity, soft edges of an
- * imported PNG) previews exactly as it will be exported.
+ * imported PNG) previews exactly as it will be exported. That readback is
+ * paid once per frame: later loops draw from previewFrameCache.
  * @param {CanvasRenderingContext2D} ctx
  * @param {import('../capture/types.js').Frame} frame
  * @param {number} frameIndex - Absolute clip frame index
  */
 function renderPreviewFrame(ctx, frame, frameIndex) {
+  if (!clipInfo.transparent) {
+    // Opaque exports never read back: nothing to cache
+    composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
+    return;
+  }
+  const cached = previewFrameCache.get(frameIndex);
+  if (cached) {
+    syncCanvasSize(ctx.canvas, cached.width, cached.height);
+    ctx.putImageData(cached, 0, 0);
+    return;
+  }
   composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
-  if (clipInfo.transparent) {
-    snapCanvasAlphaToBinary(ctx);
+  const snapped = snapCanvasAlphaToBinary(ctx);
+  // A closed frame drew the placeholder: never keep that
+  if (snapped && isFrameValid(frame)) {
+    previewFrameCache.set(frameIndex, snapped);
   }
 }
 
@@ -717,6 +744,7 @@ function cleanup() {
   frames = [];
   cropArea = null;
   edits = null;
+  previewFrameCache.clear();
   rangeStart = 0;
   mergeIdenticalFrames = false;
   store = null;
