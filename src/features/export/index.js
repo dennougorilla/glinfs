@@ -28,6 +28,7 @@ import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
+  buildClipMaskSourceSettled,
   describeAnalysisError,
   estimateRemainingMs,
   isAbortError,
@@ -455,7 +456,7 @@ function setMaskSource(source) {
 /** Build the preview's final masks from the masks analyzed so far */
 function refreshPreviewMasks() {
   if (!edits || !isAiCutoutActive(edits.background)) return;
-  const inputs = { frames: clipFrames, ai: edits.background.ai };
+  const inputs = { frames: clipFrames, ai: edits.background.ai, clipId };
   const memo = peekClipMaskSource(inputs);
   if (memo) {
     setMaskSource(memo);
@@ -545,15 +546,18 @@ async function prepareAiMasks(settings, signal) {
     });
   }
   const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
-  const memo = peekClipMaskSource({ frames: clipFrames, ai });
+  const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) {
     setMaskSource(memo);
     return memo;
   }
   showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });
-  const source = await buildClipMaskSource({
+  // Settled: a supersession by the preview's own refresh is not the user's
+  // Cancel and must not end the export as "cancelled"
+  const source = await buildClipMaskSourceSettled({
     frames: clipFrames,
     ai,
+    clipId,
     signal,
     onProgress: ({ done, total }) => {
       if (aiPrep?.phase === 'building')

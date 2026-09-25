@@ -114,13 +114,14 @@ export function createAiCutoutSession(options) {
     }
     const frames = state.clip.frames;
     const ai = state.edits.background.ai;
-    const memo = peekClipMaskSource({ frames, ai, maskStore, cache });
+    const clipId = getClipId();
+    const memo = peekClipMaskSource({ frames, ai, maskStore, clipId, cache });
     if (memo) {
       abortBuild();
       publish(memo);
       return;
     }
-    const key = getBuildParamsKey(frames, ai);
+    const key = getBuildParamsKey(frames, ai, clipId);
     if (buildController && key === buildKey) {
       // Same parameters, more masks: rerun once this build is done
       rebuildAfterBuild = true;
@@ -133,7 +134,7 @@ export function createAiCutoutSession(options) {
     buildKey = key;
     rebuildAfterBuild = false;
     report({ building: true });
-    buildClipMaskSource({ frames, ai, maskStore, cache, signal: controller.signal }).then(
+    buildClipMaskSource({ frames, ai, maskStore, clipId, cache, signal: controller.signal }).then(
       (source) => {
         if (buildController !== controller) return;
         buildController = null;
@@ -152,6 +153,10 @@ export function createAiCutoutSession(options) {
         report({ building: false });
         if (!isAbortError(error)) {
           console.error('[AI cutout] Building the final masks failed:', error);
+        } else if (!controller.signal.aborted) {
+          // Another caller of the shared cache superseded this build (not a
+          // change on this screen): build again so the preview catches up
+          setTimeout(requestBuild, 0);
         }
       },
     );

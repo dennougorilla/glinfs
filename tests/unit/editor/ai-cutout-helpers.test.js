@@ -10,6 +10,7 @@ import {
 } from '../../../src/features/ai-cutout/protocol.js';
 import {
   buildClipMaskSource,
+  buildClipMaskSourceSettled,
   DOWNLOAD_SIZE_LABEL,
   describeAnalysisError,
   describeAnalysisProgress,
@@ -108,6 +109,63 @@ describe('AI cutout helpers', () => {
     // New masks invalidate the memo
     store.set('f1', mask(new Array(8).fill(255)));
     expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache })).toBeNull();
+  });
+
+  it('never shares memoized masks between clips of the same shape', async () => {
+    const store = createMaskStore();
+    const cache = createFinalMaskCache();
+    const clip = /** @type {any[]} */ (frames(2));
+    store.set('f0', mask(new Array(8).fill(255)));
+    const a = await buildClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'a' });
+    expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'a' })).toBe(a);
+    expect(
+      peekClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'b' }),
+    ).toBeNull();
+    const b = await buildClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'b' });
+    expect(b).not.toBe(a);
+    expect(getBuildParamsKey(clip, ai, 'a')).not.toBe(getBuildParamsKey(clip, ai, 'b'));
+  });
+
+  it('a settled build starts again when another caller supersedes it', async () => {
+    const store = createMaskStore();
+    const cache = createFinalMaskCache();
+    const clip = /** @type {any[]} */ (frames(2));
+    store.set('f0', mask(new Array(8).fill(255)));
+    const settled = buildClipMaskSourceSettled({
+      frames: clip,
+      ai,
+      maskStore: store,
+      cache,
+      clipId: 'a',
+    });
+    // Another screen asks for different inputs while the first build runs:
+    // the shared cache aborts the first one
+    const other = buildClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'b' });
+    other.catch(() => {});
+    const source = await settled;
+    expect(source.getFinalMask(0)).not.toBeNull();
+    expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'a' })).toBe(
+      source,
+    );
+  });
+
+  it('a settled build still stops at its own signal', async () => {
+    const store = createMaskStore();
+    const cache = createFinalMaskCache();
+    const clip = /** @type {any[]} */ (frames(2));
+    store.set('f0', mask(new Array(8).fill(255)));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      buildClipMaskSourceSettled({
+        frames: clip,
+        ai,
+        maskStore: store,
+        cache,
+        clipId: 'a',
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('keys builds on the parameters, not the masks', () => {

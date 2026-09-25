@@ -74,11 +74,14 @@ export function getClipProbSource(frames, maskStore) {
 }
 
 /**
- * Inputs of a clip's final-mask build
- * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore }} options
+ * Inputs of a clip's final-mask build. The cache is shared by every clip and
+ * screen, so the clip id is part of the key: two clips of the same shape and
+ * parameters must never share memoized masks.
+ * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, clipId?: string }} options
  */
-function buildInputs({ frames, ai, maskStore = getSharedMaskStore() }) {
+function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
   return {
+    clipId,
     storeVersion: maskStore.version,
     frameCount: frames.length,
     sourceWidth: frames[0]?.width,
@@ -89,27 +92,59 @@ function buildInputs({ frames, ai, maskStore = getSharedMaskStore() }) {
 
 /**
  * Final masks of a clip for these AI parameters (memoized in `cache`)
- * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, cache?: FinalMaskCache, signal?: AbortSignal, onProgress?: (progress: BuildProgress) => void }} options
+ * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, clipId?: string, cache?: FinalMaskCache, signal?: AbortSignal, onProgress?: (progress: BuildProgress) => void }} options
  * @returns {Promise<MaskSource>}
+ * @throws {DOMException} AbortError when `signal` aborts, or when another
+ *   build with different inputs supersedes this one in the shared cache
  */
 export function buildClipMaskSource({
   frames,
   ai,
   maskStore,
+  clipId,
   cache = getSharedFinalMaskCache(),
   signal,
   onProgress,
 }) {
-  return cache.build({ ...buildInputs({ frames, ai, maskStore }), signal, onProgress });
+  return cache.build({ ...buildInputs({ frames, ai, maskStore, clipId }), signal, onProgress });
+}
+
+/** Superseded builds retried before giving up (see buildClipMaskSourceSettled) */
+export const MAX_SUPERSEDED_RETRIES = 3;
+
+/**
+ * buildClipMaskSource for a caller that must end with masks (the export):
+ * when another caller supersedes the shared build, the AbortError is not the
+ * user's cancellation, so the build is simply started again. Only an abort
+ * of the caller's own `signal` (or repeated supersession) rejects.
+ * @param {Parameters<typeof buildClipMaskSource>[0]} options
+ * @returns {Promise<MaskSource>}
+ */
+export async function buildClipMaskSourceSettled(options) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await buildClipMaskSource(options);
+    } catch (error) {
+      if (!isAbortError(error) || options.signal?.aborted || attempt >= MAX_SUPERSEDED_RETRIES) {
+        throw error;
+      }
+    }
+  }
 }
 
 /**
  * The memoized final masks for these inputs, or null (never builds)
- * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, cache?: FinalMaskCache }} options
+ * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, clipId?: string, cache?: FinalMaskCache }} options
  * @returns {MaskSource | null}
  */
-export function peekClipMaskSource({ frames, ai, maskStore, cache = getSharedFinalMaskCache() }) {
-  return cache.peek(buildInputs({ frames, ai, maskStore }));
+export function peekClipMaskSource({
+  frames,
+  ai,
+  maskStore,
+  clipId,
+  cache = getSharedFinalMaskCache(),
+}) {
+  return cache.peek(buildInputs({ frames, ai, maskStore, clipId }));
 }
 
 /**
@@ -117,10 +152,11 @@ export function peekClipMaskSource({ frames, ai, maskStore, cache = getSharedFin
  * (a build with the same key only needs a rerun when masks were added)
  * @param {Frame[]} frames
  * @param {AiCutout} ai
+ * @param {string} [clipId]
  * @returns {string}
  */
-export function getBuildParamsKey(frames, ai) {
-  return `${frames.length}|${frames[0]?.width ?? 0}|${getAiParamsKey(ai)}`;
+export function getBuildParamsKey(frames, ai, clipId) {
+  return `${clipId ?? ''}|${frames.length}|${frames[0]?.width ?? 0}|${getAiParamsKey(ai)}`;
 }
 
 /**
