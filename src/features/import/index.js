@@ -38,7 +38,7 @@ import { decodeImageFile } from './decode.js';
 /**
  * @typedef {Object} ImportResult
  * @property {boolean} ok
- * @property {import('./core.js').ImportErrorCode|'busy'} [reason] - Present when not ok
+ * @property {import('./core.js').ImportErrorCode} [reason] - Present when not ok
  * @property {string} [message] - User-facing reason (not ok)
  * @property {number} [frameCount] - Clip frames (ok)
  * @property {number} [fps] - Clip fps (ok)
@@ -53,6 +53,9 @@ import { decodeImageFile } from './decode.js';
 
 /** True while an import is decoding (one at a time) */
 let importInFlight = false;
+
+/** Why a file is refused while another one is still decoding */
+export const IMPORT_BUSY_MESSAGE = 'Another file is still opening';
 
 /**
  * Whether an import is currently decoding
@@ -141,6 +144,16 @@ function reportImportError(error) {
 }
 
 /**
+ * Tell the user a file was refused because another one is still opening
+ * (toast + live region). Callers that refuse a file before calling
+ * importFile (e.g. while their own busy state is up) use this too, so the
+ * refusal is never silent.
+ */
+export function reportImportBusy() {
+  reportImportError(new ImportError('busy', IMPORT_BUSY_MESSAGE));
+}
+
+/**
  * Open an image file as the active clip and navigate to the editor.
  *
  * Refuses (with a toast + announcement) when the file type/size is
@@ -154,7 +167,8 @@ function reportImportError(error) {
  */
 export async function importFile(file, options = {}) {
   if (importInFlight) {
-    return { ok: false, reason: 'busy', message: 'Another file is still opening' };
+    reportImportBusy();
+    return { ok: false, reason: 'busy', message: IMPORT_BUSY_MESSAGE };
   }
   importInFlight = true;
 

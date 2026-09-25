@@ -21,7 +21,11 @@
  *   2. releaseAllFramesAndReset (which also drains the queue),
  *   3. inside the codec worker after a successful encode (#92) — at that
  *      point the compressed bytes ARE the clip and the raw frames end,
- *   4. explicit ACTIVE-clip delete (deleteActiveClip — user-confirmed).
+ *   4. explicit ACTIVE-clip delete (deleteActiveClip — user-confirmed),
+ *   5. decode-for-promote (prepareQueuedClipForPromote): the redundant
+ *      decoded copies of a sharedKey group (imported holds) are closed and
+ *      replaced by clones of the group's first decoded frame, so holds
+ *      share pixels again (restoreSharedFrames).
  *   The one involuntary end is a codec-worker crash mid-encode: frames
  *   already transferred into the dying worker are gone and their entry is
  *   removed as 'compress-lost' (see FAILURE CONTRACT below).
@@ -658,6 +662,50 @@ function maybeCompressEntry(entry) {
 }
 
 /**
+ * Re-share the pixels of repeated slots after a decode round trip.
+ *
+ * An imported clip's repeated slots (holds) are clones of one source frame
+ * and carry its sharedKey, so they cost one frame of memory (see
+ * estimateFramesMemoryMB). The codec decodes every slot into its OWN
+ * VideoFrame, which would multiply the clip's real memory by
+ * slots / source frames — unchecked by any budget — and, being lossy, could
+ * make the holds differ slightly so export merging stops collapsing them.
+ *
+ * So the first decoded frame of each sharedKey group is kept, every other
+ * slot of the group becomes a restamped clone of it, and the redundant
+ * decoded frame is closed (ownership rule 5). If a clone cannot be created
+ * the slot keeps its own decoded frame and is counted individually (no
+ * sharedKey).
+ *
+ * @param {VideoFrame[]} decodedFrames - Owned by the caller's entry
+ * @param {CompressedClip['frameMeta']} meta
+ * @returns {{ frame: VideoFrame, sharedKey?: string }[]}
+ */
+function restoreSharedFrames(decodedFrames, meta) {
+  /** @type {Map<string, VideoFrame>} */
+  const groupSources = new Map();
+  return decodedFrames.map((decoded, i) => {
+    const sharedKey = meta[i]?.sharedKey;
+    if (sharedKey === undefined) return { frame: decoded };
+    const source = groupSources.get(sharedKey);
+    if (!source) {
+      groupSources.set(sharedKey, decoded);
+      return { frame: decoded, sharedKey };
+    }
+    try {
+      const clone = new VideoFrame(source, {
+        timestamp: decoded.timestamp ?? meta[i].timestamp,
+      });
+      decoded.close();
+      return { frame: clone, sharedKey };
+    } catch (err) {
+      console.warn('[ClipQueue] Could not re-share a decoded hold frame:', err);
+      return { frame: decoded };
+    }
+  });
+}
+
+/**
  * Make a queue entry promotable, decoding it first when it is compressed.
  *
  * Resolves { ok: true } once the entry holds raw frames again — the caller
@@ -719,17 +767,20 @@ export async function prepareQueuedClipForPromote(id) {
     return { ok: false, reason: 'not-found' };
   }
 
-  // sharedKey is deliberately NOT restored: decoded frames are independent
-  // pixel buffers (repeated slots no longer share memory), so counting each
-  // one individually is the honest memory estimate
   const meta = compressed.frameMeta;
-  entry.frames = result.frames.map((vf, i) => ({
-    id: meta[i]?.id ?? `${entry.id}-decoded-${i}`,
-    frame: vf,
-    timestamp: meta[i]?.timestamp ?? vf.timestamp ?? i,
-    width: meta[i]?.width ?? vf.codedWidth ?? 0,
-    height: meta[i]?.height ?? vf.codedHeight ?? 0,
-  }));
+  entry.frames = restoreSharedFrames(result.frames, meta).map((restored, i) => {
+    const vf = restored.frame;
+    /** @type {import('../features/capture/types.js').Frame} */
+    const wrapper = {
+      id: meta[i]?.id ?? `${entry.id}-decoded-${i}`,
+      frame: vf,
+      timestamp: meta[i]?.timestamp ?? vf.timestamp ?? i,
+      width: meta[i]?.width ?? vf.codedWidth ?? 0,
+      height: meta[i]?.height ?? vf.codedHeight ?? 0,
+    };
+    if (restored.sharedKey !== undefined) wrapper.sharedKey = restored.sharedKey;
+    return wrapper;
+  });
   entry.compressed = null;
   entry.byteLengthMB = undefined;
   entry.status = 'raw';

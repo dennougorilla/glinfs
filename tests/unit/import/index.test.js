@@ -13,9 +13,11 @@ vi.mock('../../../src/shared/toast.js', () => ({
 import { ImportError } from '../../../src/features/import/core.js';
 import { decodeImageFile } from '../../../src/features/import/decode.js';
 import {
+  IMPORT_BUSY_MESSAGE,
   importFile,
   isImporting,
   projectImportBudget,
+  reportImportBusy,
 } from '../../../src/features/import/index.js';
 import {
   enqueueClip,
@@ -296,11 +298,26 @@ describe('importFile refusals', () => {
     const first = importFile(gifFile());
     expect(isImporting()).toBe(true);
     const second = await importFile(gifFile('dog.gif'));
-    expect(second).toMatchObject({ ok: false, reason: 'busy' });
+    expect(second).toMatchObject({ ok: false, reason: 'busy', message: IMPORT_BUSY_MESSAGE });
+    // The refusal is never silent
+    expect(showToast).toHaveBeenCalledWith(IMPORT_BUSY_MESSAGE);
 
     finish(decodedImport());
     await expect(first).resolves.toMatchObject({ ok: true });
     expect(isImporting()).toBe(false);
+  });
+});
+
+describe('reportImportBusy', () => {
+  it('tells the user another file is still opening (toast + bus event)', () => {
+    /** @type {any[]} */
+    const events = [];
+    const off = onBus('import:error', (detail) => events.push(detail));
+    reportImportBusy();
+    off();
+
+    expect(showToast).toHaveBeenCalledWith(IMPORT_BUSY_MESSAGE);
+    expect(events).toEqual([{ code: 'busy', message: IMPORT_BUSY_MESSAGE }]);
   });
 });
 

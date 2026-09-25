@@ -20,7 +20,7 @@ import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 import { formatImportBusyLabel } from '../import/core.js';
-import { importFile, isImporting } from '../import/index.js';
+import { importFile, isImporting, reportImportBusy } from '../import/index.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
 // Circular with clip-service (it imports getLiveCaptureContext from here);
 // safe because both sides only call the other's hoisted function declarations
@@ -36,6 +36,7 @@ import {
   pauseCapture,
   resumeCapture,
   setError,
+  setImportError,
   startCapture,
   stopCapture,
   updateSettings,
@@ -209,7 +210,13 @@ function render(container) {
  * @returns {Promise<boolean>} true when the clip opened
  */
 async function handleImportFile(file) {
-  if (!store || isImporting()) return false;
+  if (!store) return false;
+  if (isImporting()) {
+    // One import at a time. Refuse here, before this screen's busy state is
+    // replaced, and tell the user why (toast + live region)
+    reportImportBusy();
+    return false;
+  }
 
   const controller = new AbortController();
   importController = controller;
@@ -240,12 +247,9 @@ async function handleImportFile(file) {
   // Success navigated to the editor; an abort means the screen is gone
   if (result.ok || !store || result.reason === 'aborted') return result.ok;
 
-  if (result.reason === 'busy') {
-    updateImportStatus(container, importBusyLabel);
-    return false;
-  }
   const message = result.message ?? 'Could not open the file';
-  store.setState((state) => setError(state, message));
+  // Not setError: a refused import must not mark a running capture stopped
+  store.setState((state) => setImportError(state, message));
   render(qsRequired('#main-content'));
   return false;
 }

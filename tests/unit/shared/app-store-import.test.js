@@ -260,14 +260,16 @@ describe('sharedKey memory accounting', () => {
     expect(entry.frames.map((f) => f.sharedKey)).toEqual(['k', 'k']);
   });
 
-  it('a decode round trip drops sharedKey (decoded frames no longer share pixels)', async () => {
+  /**
+   * Compress an imported clip (holds share one source frame) and resolve
+   * the decode with independent frames, as the real codec returns them.
+   * @param {Array<[string, string|undefined]>} slots - [id, sharedKey]
+   */
+  async function decodeRoundTrip(slots) {
     const codec = createMockCodec();
     registerClipCodec(codec);
-    const frames = [
-      createMockFrame('s0', { sharedKey: 'k' }),
-      createMockFrame('s1', { sharedKey: 'k' }),
-    ];
-    const { entry } = enqueueClip({ frames, fps: 10, capturedAt: 1 });
+    const frames = slots.map(([id, sharedKey]) => createMockFrame(id, { sharedKey }));
+    const { entry } = enqueueClip({ frames, fps: 10, capturedAt: 1, sourceName: 'x.gif' });
     codec.encodeCalls[0].resolve({
       ok: true,
       chunks: [],
@@ -276,14 +278,96 @@ describe('sharedKey memory accounting', () => {
     });
     await flushJobs();
     expect(entry.status).toBe('compressed');
-    expect(entry.compressed.frameMeta.map((m) => m.sharedKey)).toEqual(['k', 'k']);
 
     const pending = prepareQueuedClipForPromote(entry.id);
-    const decoded = [0, 1].map(() => ({ closed: false, close: vi.fn() }));
+    const decoded = slots.map((_, i) => {
+      const vf = { closed: false, timestamp: i * 100_000, codedWidth: 100, codedHeight: 100 };
+      vf.close = vi.fn(() => {
+        vf.closed = true;
+      });
+      return vf;
+    });
     codec.decodeCalls[0].resolve({ ok: true, frames: decoded });
     await expect(pending).resolves.toEqual({ ok: true });
+    return { entry, decoded };
+  }
 
-    expect(entry.frames.map((f) => f.id)).toEqual(['s0', 's1']);
+  /** `new VideoFrame(source, init)` stand-in: records what it cloned */
+  class MockVideoFrame {
+    constructor(source, init) {
+      this.source = source;
+      this.timestamp = init.timestamp;
+      this.closed = false;
+      this.close = vi.fn(() => {
+        this.closed = true;
+      });
+    }
+  }
+
+  it('a decode round trip re-shares the holds of a sharedKey group', async () => {
+    vi.stubGlobal('VideoFrame', MockVideoFrame);
+    try {
+      const { entry, decoded } = await decodeRoundTrip([
+        ['s0', 'k'],
+        ['s1', 'k'],
+        ['s2', 'k'],
+        ['t0', 'm'],
+      ]);
+
+      expect(entry.frames.map((f) => f.id)).toEqual(['s0', 's1', 's2', 't0']);
+      expect(entry.frames.map((f) => f.sharedKey)).toEqual(['k', 'k', 'k', 'm']);
+      // The group's first decoded frame is kept; the other slots clone it
+      // (keeping their own timestamps) and their decoded copies are closed
+      expect(entry.frames[0].frame).toBe(decoded[0]);
+      expect(entry.frames[1].frame).toBeInstanceOf(MockVideoFrame);
+      expect(entry.frames[1].frame.source).toBe(decoded[0]);
+      expect(entry.frames[1].frame.timestamp).toBe(decoded[1].timestamp);
+      expect(entry.frames[2].frame.source).toBe(decoded[0]);
+      expect(entry.frames[3].frame).toBe(decoded[3]);
+      expect(decoded.map((f) => f.closed)).toEqual([false, true, true, false]);
+
+      // Memory counts two unique frames again, not four
+      const unit = (100 * 100 * 4) / (1024 * 1024);
+      expect(getClipMemoryEstimateMB()).toBeCloseTo(unit * 2, 10);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('frames without a sharedKey keep their own decoded frame', async () => {
+    const { entry, decoded } = await decodeRoundTrip([
+      ['c0', undefined],
+      ['c1', undefined],
+    ]);
+
+    expect(entry.frames.map((f) => f.frame)).toEqual(decoded);
     expect(entry.frames.every((f) => f.sharedKey === undefined)).toBe(true);
+    expect(decoded.every((f) => !f.closed)).toBe(true);
+  });
+
+  it('keeps a decoded hold (counted individually) when it cannot be cloned', async () => {
+    vi.stubGlobal(
+      'VideoFrame',
+      class {
+        constructor() {
+          throw new Error('no clone');
+        }
+      },
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { entry, decoded } = await decodeRoundTrip([
+        ['s0', 'k'],
+        ['s1', 'k'],
+      ]);
+
+      expect(entry.frames.map((f) => f.frame)).toEqual(decoded);
+      expect(entry.frames.map((f) => f.sharedKey)).toEqual(['k', undefined]);
+      expect(decoded.every((f) => !f.closed)).toBe(true);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });

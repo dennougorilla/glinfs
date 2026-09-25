@@ -346,6 +346,16 @@ test.describe('Import a GIF from the Capture screen', () => {
       sourceName: 'opaque-holds.gif',
       openFrames: 7,
     });
+    // The decoded holds share their source frame's pixels again (one
+    // sharedKey per source frame), keeping their own slot timestamps
+    const promoted = await readActiveClip(page);
+    const promotedKeys = /** @type {string[]} */ (promoted?.sharedKeys);
+    expect(new Set(promotedKeys).size).toBe(3);
+    expect(new Set(promotedKeys.slice(2))).toEqual(new Set([promotedKeys[2]]));
+    expect(promoted?.timestamps).toEqual([0, 1, 2, 3, 4, 5, 6].map((i) => i * 100_000));
+    if (compressionAvailable) {
+      expect(promoted?.videoFrameTimestamps).toEqual(promoted?.timestamps);
+    }
     await expect
       .poll(() => page.evaluate(() => window.__TEST_HOOKS__.getEditorState()?.frameCount))
       .toBe(7);

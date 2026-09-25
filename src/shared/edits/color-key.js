@@ -16,6 +16,25 @@ export const MAX_RGB_DISTANCE = 441.673;
 export const ALPHA_THRESHOLD = 128;
 
 /**
+ * Snap every pixel's alpha to what a transparent GIF can store, in place:
+ * below ALPHA_THRESHOLD becomes 0 (the transparent index), everything else
+ * 255 (an opaque palette color). This is the same decision the gifenc
+ * encoder makes, so a preview snapped this way shows what will be exported.
+ * @param {Uint8Array|Uint8ClampedArray} rgba - 4 bytes per pixel, alpha last
+ * @returns {boolean} Whether any pixel changed
+ */
+export function snapAlphaToBinary(rgba) {
+  let changed = false;
+  for (let p = 3; p < rgba.length; p += 4) {
+    const a = rgba[p];
+    if (a === 0 || a === 255) continue;
+    rgba[p] = a < ALPHA_THRESHOLD ? 0 : 255;
+    changed = true;
+  }
+  return changed;
+}
+
+/**
  * Parse '#rrggbb'
  * @param {string} hex
  * @returns {{ r: number, g: number, b: number } | null}
