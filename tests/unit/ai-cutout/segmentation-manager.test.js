@@ -365,6 +365,33 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(worker.terminated).toBe(false);
   });
 
+  it('drops a mask that finishes after its clip was released for good', async () => {
+    const { manager, maskStore, workers } = createHarness({ autoMask: false });
+    const controller = new AbortController();
+    const frames = [makeFrame('a0'), makeFrame('a1')];
+    const run = manager.analyzeFrames(frames, { signal: controller.signal, clipId: 'clip-a' });
+    await flush();
+    const worker = workers[0];
+    const [running] = worker.segments;
+    controller.abort();
+    await run.catch(() => undefined);
+
+    // The clip's deletion becomes final while its frame is still in the worker
+    maskStore.deleteClip('clip-a');
+    manager.forgetClip('clip-a');
+    worker.mask(running);
+    await flush();
+    expect(maskStore.has('a0')).toBe(false);
+    expect(maskStore.keysForClip('clip-a')).toEqual([]);
+
+    // Other clips still store their masks
+    const other = manager.analyzeFrames([makeFrame('b0')], { clipId: 'clip-b' });
+    await flush();
+    worker.mask(worker.segments.at(-1));
+    await other;
+    expect(maskStore.keysForClip('clip-b')).toEqual(['b0']);
+  });
+
   it('closes a bitmap that finishes creating after the job was cancelled', async () => {
     /** @type {(value: unknown) => void} */
     let releaseBitmap = () => {};

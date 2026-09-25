@@ -174,6 +174,13 @@ let aiSession = null;
 /** @type {(() => void) | null} Unsubscribes the AI session's edits watcher */
 let aiEditsUnsubscribe = null;
 
+/**
+ * The deleted active clip this editor keeps on screen while the successor
+ * decodes (see handleDeleteActiveClip)
+ * @type {{ id: string, frames: import('../capture/types.js').Frame[] } | null}
+ */
+let deletedClipOnScreen = null;
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
 
@@ -190,6 +197,8 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     return;
   }
   for (const id of detail?.ids ?? []) {
+    // Frames of the clip still in the worker must not store masks afterwards
+    getSegmentationManager().forgetClip(id);
     maskStore.deleteClip(id);
   }
 });
@@ -201,9 +210,16 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
  */
 function getActiveClipId() {
   const state = store?.getState();
+  if (!state?.clip) return undefined;
   const payload = getClipPayload();
-  if (!state?.clip || !payload || payload.frames !== state.clip.frames) return undefined;
-  return payload.id;
+  if (payload && payload.frames === state.clip.frames) return payload.id;
+  // The active clip was deleted and stays on screen while its successor
+  // decodes: an analysis now still belongs to that clip (so its masks go
+  // when the deletion is final), not to the default group nothing releases
+  if (deletedClipOnScreen && deletedClipOnScreen.frames === state.clip.frames) {
+    return deletedClipOnScreen.id;
+  }
+  return undefined;
 }
 
 /**
@@ -1569,6 +1585,8 @@ function handleDeleteActiveClip() {
 
   // Undo restores the clip from its payload: carry the edits with it
   saveEditorStateToClip();
+  const shownId = getActiveClipId();
+  const shownFrames = store?.getState().clip?.frames;
   if (!deleteActiveClip()) return;
   showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
 
@@ -1590,6 +1608,8 @@ function handleDeleteActiveClip() {
     // screen here is exactly the dark flash the user reported. The entry
     // shows its 'decoding' state in the panel; promoteWhenDecoded swaps in
     // the new clip the moment its frames arrive.
+    deletedClipOnScreen =
+      shownId !== undefined && shownFrames ? { id: shownId, frames: shownFrames } : null;
     void promoteWhenDecoded(successor.id);
     return;
   }
@@ -1791,6 +1811,7 @@ async function startSceneDetectionAsync(frames) {
  */
 function cleanup() {
   stopPlayback();
+  deletedClipOnScreen = null;
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();

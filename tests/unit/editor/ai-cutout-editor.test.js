@@ -12,6 +12,7 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
     getCapabilities: vi.fn(async () => ({ webgpu: false })),
     analyzeFrames: vi.fn(),
     dispose: vi.fn(),
+    forgetClip: vi.fn(),
   };
   return { ...actual, getSegmentationManager: () => fake, __fake: fake };
 });
@@ -19,10 +20,16 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
 import { getSharedMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
 import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
-import { getEditorState, initEditor } from '../../../src/features/editor/index.js';
+import {
+  deleteActiveClipFromAnywhere,
+  getEditorState,
+  initEditor,
+} from '../../../src/features/editor/index.js';
 import {
   deleteQueuedClip,
   enqueueClip,
+  getClipQueue,
+  registerClipCodec,
   releaseAllFramesAndReset,
   resetAppStore,
   setClipPayload,
@@ -85,6 +92,7 @@ describe('AI cutout in the mounted editor', () => {
     document.body.innerHTML = '<div id="main-content"></div>';
     fake.getCapabilities.mockClear();
     fake.dispose.mockClear();
+    fake.forgetClip.mockClear();
     fake.analyzeFrames.mockReset();
     fake.analyzeFrames.mockImplementation(async (frames, options) => {
       const store = getSharedMaskStore();
@@ -344,6 +352,43 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
   });
 
+  it('keeps analyzing the deleted clip on screen under its own id while the successor decodes', async () => {
+    // A compressed successor: deleting the active clip keeps it on screen
+    registerClipCodec({
+      isCompressionAvailable: () => true,
+      encode: async () => ({
+        ok: true,
+        chunks: [{ type: 'key', timestamp: 0, duration: null, data: new ArrayBuffer(16) }],
+        config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
+        byteLength: 16,
+      }),
+      decode: () => new Promise(() => {}),
+    });
+    try {
+      enqueueClip({ frames: createTestFrames(2, 'q'), fps: 10, capturedAt: 0, id: 'clip-q' });
+      await settle();
+      expect(getClipQueue()[0]?.status).toBe('compressed');
+      mount();
+      await chooseAi();
+
+      expect(deleteActiveClipFromAnywhere()).toBe(true);
+      await settle();
+      expect($('#ai-analyze')).not.toBeNull();
+      $('#ai-analyze').click();
+      await settle();
+      expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
+      expect(fake.analyzeFrames.mock.calls[0][1].clipId).toBe('clip-a');
+      expect(getSharedMaskStore().keysForClip('clip-a').length).toBeGreaterThan(0);
+
+      // Once the deletion is final, those masks go with the clip
+      vi.advanceTimersByTime(5000);
+      expect(getSharedMaskStore().keysForClip('clip-a')).toEqual([]);
+      expect(getSharedMaskStore().size).toBe(0);
+    } finally {
+      registerClipCodec(null);
+    }
+  });
+
   it('drops a clip’s masks once its deletion is final, and everything on reset', async () => {
     const store = getSharedMaskStore();
     store.set('q0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-q');
@@ -357,6 +402,9 @@ describe('AI cutout in the mounted editor', () => {
     vi.advanceTimersByTime(5000);
     expect(store.has('q0')).toBe(false);
     expect(store.has('a0')).toBe(true);
+    // Masks of its frames still in the worker are dropped when they arrive
+    expect(fake.forgetClip).toHaveBeenCalledWith('clip-q');
+    expect(fake.forgetClip).not.toHaveBeenCalledWith('clip-a');
 
     releaseAllFramesAndReset();
     expect(store.size).toBe(0);
