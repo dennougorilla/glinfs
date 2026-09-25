@@ -475,6 +475,67 @@ describe('createFinalMaskCache', () => {
     expect(cache.peek({ ...base, storeVersion: 30 })).toBe(a);
   });
 
+  it('a caller joining an in-flight build gets its own progress and its own Cancel', async () => {
+    const cache = createFinalMaskCache();
+    const firstProgress = vi.fn();
+    const secondProgress = vi.fn();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const slow = gated({ storeVersion: 32 });
+    const first = cache.build({
+      ...slow.options,
+      signal: firstController.signal,
+      onProgress: firstProgress,
+    });
+    const second = cache.build({
+      ...slow.options,
+      signal: secondController.signal,
+      onProgress: secondProgress,
+    });
+    const secondOutcome = outcome(second);
+    // The first step (before the first gated yield): both callers hear about it
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(firstProgress).toHaveBeenCalled();
+    expect(secondProgress).toHaveBeenCalled();
+
+    // The joined caller cancels: it rejects at once, the first caller's build goes on
+    secondController.abort();
+    expect(await secondOutcome).toBe('AbortError');
+    await slow.release();
+    const a = await first;
+    expect(cache.peek({ ...base, storeVersion: 32 })).toBe(a);
+  });
+
+  it('keeps a shared build running until every joined caller has cancelled', async () => {
+    const cache = createFinalMaskCache();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const slow = gated({ storeVersion: 33 });
+    const first = outcome(cache.build({ ...slow.options, signal: firstController.signal }));
+    const second = cache.build({ ...slow.options, signal: secondController.signal });
+    // The first caller (e.g. the preview) goes away: the joined export keeps its build
+    firstController.abort();
+    expect(await first).toBe('AbortError');
+    await slow.release();
+    const source = await second;
+    expect(cache.peek({ ...base, storeVersion: 33 })).toBe(source);
+
+    // Both cancel: the build stops and nothing is memoized
+    const c1 = new AbortController();
+    const c2 = new AbortController();
+    const again = gated({ storeVersion: 34 });
+    const o1 = outcome(cache.build({ ...again.options, signal: c1.signal }));
+    const o2 = outcome(cache.build({ ...again.options, signal: c2.signal }));
+    c1.abort();
+    c2.abort();
+    await again.release();
+    expect([await o1, await o2]).toEqual(['AbortError', 'AbortError']);
+    expect(cache.peek({ ...base, storeVersion: 34 })).toBeNull();
+    // A new caller after that starts a fresh build instead of joining the aborted one
+    const fresh = await cache.build({ ...base, storeVersion: 34 });
+    expect(cache.peek({ ...base, storeVersion: 34 })).toBe(fresh);
+  });
+
   it("clear() and the caller's signal stop an in-flight build", async () => {
     const cache = createFinalMaskCache();
     const cleared = gated({ storeVersion: 40 });
