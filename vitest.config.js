@@ -26,6 +26,9 @@ export default defineConfig({
         'src/workers/capture-worker.js',
         'src/workers/gif-encoder-worker.js',
         'src/workers/scene-detection-worker.js',
+        // Needs ONNX Runtime, OffscreenCanvas and a real model; covered
+        // end to end by tests/e2e/ai-cutout-runtime.spec.js instead
+        'src/workers/segmentation-worker.js',
       ],
       // Conservative floors set ~5 points below the measured baseline
       // (statements 71.13%, branches 59.21%, functions 71.02%, lines
