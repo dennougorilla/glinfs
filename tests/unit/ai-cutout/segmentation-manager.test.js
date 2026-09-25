@@ -306,6 +306,9 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(error.code).toBe(SegmentationErrorCode.INFERENCE_FAILED);
     expect(error.message).toBe('bad op');
     expect(worker.posted.at(-1)?.msg).toEqual({ type: 'cancel', jobId: worker.segments[0].jobId });
+    // The worker was recycled, which fails the job's other requests
+    await flush();
+    expect(manager.cancelledJobCount).toBe(0);
   });
 
   it('recycles the worker after an inference failure, so a retry gets a fresh session', async () => {
@@ -355,10 +358,17 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(error.name).toBe('AbortError');
     expect(worker.posted.at(-1)?.msg).toEqual({ type: 'cancel', jobId: running.jobId });
 
+    // The job is remembered as cancelled while its frames are in the worker
+    expect(manager.cancelledJobCount).toBe(1);
+
     // The running frame still finishes: its mask is kept
     worker.mask(running);
+    await flush();
+    expect(manager.cancelledJobCount).toBe(1);
     worker.emit({ type: 'dropped', requestIds: [queued.requestId] });
     await flush();
+    // Every request of the job settled: it is forgotten
+    expect(manager.cancelledJobCount).toBe(0);
     expect(maskStore.has('f0')).toBe(true);
     expect(maskStore.has('f1')).toBe(false);
     expect(worker.segments).toHaveLength(2);
@@ -417,10 +427,16 @@ describe('SegmentationManager.analyzeFrames', () => {
     await flush();
     controller.abort();
     await run.catch(() => undefined);
+    expect(manager.cancelledJobCount).toBe(1);
     releaseBitmap(late);
     await flush();
     expect(late.close).toHaveBeenCalledTimes(1);
     expect(workers[0].segments).toHaveLength(1);
+    // The sent frame is still in the worker
+    expect(manager.cancelledJobCount).toBe(1);
+    workers[0].mask(workers[0].segments[0]);
+    await flush();
+    expect(manager.cancelledJobCount).toBe(0);
   });
 
   it('rejects immediately for an already-aborted signal', async () => {

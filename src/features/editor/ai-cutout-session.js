@@ -11,6 +11,8 @@
  *   change aborts the build in flight and starts a new one; new
  *   probability masks (analysis progress) only queue a rerun after the
  *   current build, debounced, so a long analysis never starves the preview.
+ *   While an analysis runs those reruns start at most every
+ *   ANALYSIS_REBUILD_INTERVAL_MS, and once more when it ends.
  * - The previous final masks stay in use until a new build lands (dropping
  *   them would flash every frame unkeyed while the build runs).
  * - Everything reports through `setStatus` (editor store) and
@@ -37,6 +39,13 @@ import {
 
 /** Debounce of mask-store driven rebuilds (analysis progress) */
 export const STORE_REBUILD_DELAY_MS = 200;
+
+/**
+ * While an analysis runs, mask-store driven rebuilds start at most this
+ * often: each one rebuilds the whole clip, and new masks arrive every
+ * frame
+ */
+export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -79,6 +88,13 @@ export function createAiCutoutSession(options) {
   let rebuildAfterBuild = false;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let storeTimer = null;
+  /**
+   * Runs for ANALYSIS_REBUILD_INTERVAL_MS after a build started during an
+   * analysis; store-driven rebuilds wait for it
+   * @type {ReturnType<typeof setTimeout> | null}
+   */
+  let cooldownTimer = null;
+  let buildAfterCooldown = false;
 
   /** @param {Partial<AiCutoutStatus>} patch */
   const report = (patch) => {
@@ -99,6 +115,36 @@ export function createAiCutoutSession(options) {
     buildKey = null;
     rebuildAfterBuild = false;
     report({ building: false });
+  };
+
+  const clearCooldown = () => {
+    if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+    cooldownTimer = null;
+    buildAfterCooldown = false;
+  };
+
+  /**
+   * New probability masks: rebuild, but while an analysis runs start at
+   * most one build per ANALYSIS_REBUILD_INTERVAL_MS
+   */
+  const requestStoreBuild = () => {
+    if (disposed) return;
+    if (analysisController && cooldownTimer !== null) {
+      buildAfterCooldown = true;
+      return;
+    }
+    requestBuild();
+  };
+
+  /** A build started during an analysis: hold store-driven ones off for a while */
+  const startCooldown = () => {
+    if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+    cooldownTimer = setTimeout(() => {
+      cooldownTimer = null;
+      if (!buildAfterCooldown) return;
+      buildAfterCooldown = false;
+      requestStoreBuild();
+    }, ANALYSIS_REBUILD_INTERVAL_MS);
   };
 
   /**
@@ -134,6 +180,7 @@ export function createAiCutoutSession(options) {
     buildKey = key;
     rebuildAfterBuild = false;
     report({ building: true });
+    if (analysisController) startCooldown();
     buildClipMaskSource({ frames, ai, maskStore, clipId, cache, signal: controller.signal }).then(
       (source) => {
         if (buildController !== controller) return;
@@ -143,7 +190,7 @@ export function createAiCutoutSession(options) {
         publish(source);
         if (rebuildAfterBuild) {
           rebuildAfterBuild = false;
-          requestBuild();
+          requestStoreBuild();
         }
       },
       (error) => {
@@ -170,7 +217,7 @@ export function createAiCutoutSession(options) {
       storeTimer = null;
       if (disposed) return;
       onMasksChanged?.();
-      requestBuild();
+      requestStoreBuild();
     }, STORE_REBUILD_DELAY_MS);
   });
 
@@ -263,6 +310,8 @@ export function createAiCutoutSession(options) {
       }
     } finally {
       if (analysisController === controller) analysisController = null;
+      // Catch up with every mask now, not at the end of the cooldown
+      clearCooldown();
       requestBuild();
     }
   };
@@ -307,6 +356,7 @@ export function createAiCutoutSession(options) {
         clearTimeout(storeTimer);
         storeTimer = null;
       }
+      clearCooldown();
       unsubscribeStore();
       disposed = true;
       maskSource = null;

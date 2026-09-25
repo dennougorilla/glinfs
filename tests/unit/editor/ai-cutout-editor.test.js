@@ -19,7 +19,11 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
 
 import { getSharedMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
-import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
+import {
+  buildClipMaskSource,
+  getSharedFinalMaskCache,
+  setWasmAllowed,
+} from '../../../src/features/editor/ai-cutout.js';
 import {
   deleteActiveClipFromAnywhere,
   getEditorState,
@@ -34,6 +38,7 @@ import {
   resetAppStore,
   setClipPayload,
 } from '../../../src/shared/app-store.js';
+import { normalizeEdits } from '../../../src/shared/edits/model.js';
 
 const fake = /** @type {any} */ (segmentation).__fake;
 
@@ -378,6 +383,35 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-notice').textContent).toBe('');
   });
 
+  it('refuses a pick on the background with a notice and keeps the tool on', async () => {
+    mount(3);
+    await chooseAi();
+    // Frame 1 analyzed: a character on the left half, background on the right
+    const data = new Uint8Array(100);
+    for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 5);
+    getSharedMaskStore().set('a1', { data, width: 10, height: 10 }, 'clip-a');
+    await settle();
+
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    check('ai-pick-keep');
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 90, clientY: 50, bubbles: true }));
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
+    expect(getEditorState()?.aiPickTool).toBe('keep');
+    expect($('#ai-notice').textContent).toBe('No character here. Click on a character.');
+
+    // On the character: added, and the notice goes
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 20, clientY: 50, bubbles: true }));
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect($('#ai-notice').textContent).toBe('');
+  });
+
   it('keeps keyboard focus in the AI section when the focused control hides or disables itself', async () => {
     mount(2);
     await chooseAi();
@@ -573,6 +607,15 @@ describe('AI cutout in the mounted editor', () => {
     store.set('a0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-a');
     setClipPayload({ frames: createTestFrames(2, 'a'), fps: 10, capturedAt: 0, id: 'clip-a' });
     enqueueClip({ frames: createTestFrames(2, 'q'), fps: 10, capturedAt: 0, id: 'clip-q' });
+    // The queued clip's final masks are memoized in the shared cache
+    const cache = getSharedFinalMaskCache();
+    const ai = normalizeEdits({}, 2).background.ai;
+    await buildClipMaskSource({
+      frames: /** @type {any} */ (createTestFrames(2, 'q')),
+      ai,
+      clipId: 'clip-q',
+    });
+    expect(cache.bytes()).toBeGreaterThan(0);
 
     expect(deleteQueuedClip('clip-q')).toBe(true);
     // Undo window: masks stay
@@ -583,6 +626,8 @@ describe('AI cutout in the mounted editor', () => {
     // Masks of its frames still in the worker are dropped when they arrive
     expect(fake.forgetClip).toHaveBeenCalledWith('clip-q');
     expect(fake.forgetClip).not.toHaveBeenCalledWith('clip-a');
+    // Its memoized final masks go too
+    expect(cache.bytes()).toBe(0);
 
     releaseAllFramesAndReset();
     expect(store.size).toBe(0);

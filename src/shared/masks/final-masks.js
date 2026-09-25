@@ -21,6 +21,7 @@
 
 import {
   createPickTracker,
+  findPickedComponent,
   labelComponents,
   morphMask,
   packMask,
@@ -58,7 +59,8 @@ import {
  * @typedef {Object} BuildOptions
  * @property {number} frameCount - Clip frame count; masks cover 0..frameCount-1
  * @property {(frameIndex: number) => ProbMask | null} getProb - Probability
- *   mask of a frame, or null when it was not analyzed
+ *   mask of a frame, or null when it was not analyzed. Read once per frame
+ *   when the build starts; the returned masks must not be mutated afterwards.
  * @property {AiCutout} ai - Normalized AI cutout parameters
  * @property {number} [sourceWidth] - Source frame width in pixels (edge is
  *   in source pixels); defaults to the mask width
@@ -118,6 +120,26 @@ export function getAiParamsKey(ai) {
 }
 
 /**
+ * @typedef {Object} BuildParamsInputs
+ * @property {string} [clipId] - The clip the masks belong to
+ * @property {number} frameCount
+ * @property {number} [sourceWidth]
+ * @property {AiCutout} ai
+ */
+
+/**
+ * Key of what a final-mask build depends on besides the probability masks:
+ * the clip, its shape and the AI parameters. The cache memoizes under this
+ * key plus the mask store's version; a caller that compares builds with
+ * the same key knows they differ only in the masks.
+ * @param {BuildParamsInputs} inputs
+ * @returns {string}
+ */
+export function getFinalMaskParamsKey({ clipId, frameCount, sourceWidth, ai }) {
+  return `${clipId ?? ''}|${frameCount}|${sourceWidth ?? ''}|${getAiParamsKey(ai)}`;
+}
+
+/**
  * Throw AbortError when cancelled
  * @param {AbortSignal | undefined} signal
  */
@@ -128,15 +150,103 @@ function throwIfAborted(signal) {
 }
 
 /**
+ * @typedef {Object} FrameBinarySource
+ * @property {number} width - Reference mask width (the first analyzed frame)
+ * @property {number} height
+ * @property {(frameIndex: number) => Uint8Array | null} binaryAt - Thresholded
+ *   (and, with smoothing, averaged with the neighbouring frames) 0/1 mask of
+ *   a frame at the reference size, or null when it was not analyzed. The
+ *   result lives in a shared buffer that the next call overwrites.
+ */
+
+/**
+ * The per-frame binary masks a build tracks and cuts with, read from a
+ * snapshot of the probability masks.
+ *
+ * Every probability mask is read once, up front: `getProb` may be backed by
+ * a store that keeps changing (analysis progress) while a build yields, and
+ * every pass of one build must see the same masks (the pick tracking keeps
+ * component labels from one pass to the next).
+ *
+ * Frames whose probability mask has another size than the reference (the
+ * first analyzed frame) are resampled to it (nearest neighbour), so
+ * tracking compares like with like.
+ *
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
+ * @returns {FrameBinarySource | null} null when no frame is analyzed
+ */
+export function createFrameBinarySource({ frameCount, getProb, ai }) {
+  /** @type {(ProbMask | null)[]} */
+  const probs = [];
+  for (let f = 0; f < frameCount; f++) probs.push(getProb(f) ?? null);
+
+  const reference = probs.find((prob) => prob && prob.width > 0 && prob.height > 0);
+  if (!reference) return null;
+  const { width, height } = reference;
+  const size = width * height;
+
+  // Scratch, reused for every frame
+  const smoothed = new Uint8Array(size);
+  const binary = new Uint8Array(size);
+  /** @type {Map<number, Uint8Array>} */
+  const resampled = new Map();
+
+  /**
+   * A frame's probability at the reference size (null: not analyzed).
+   * Keeps the last few resampled frames: smoothing reads each one three times.
+   * @param {number} f
+   * @returns {Uint8Array | null}
+   */
+  const probAt = (f) => {
+    const prob = f >= 0 && f < frameCount ? probs[f] : null;
+    if (!prob) return null;
+    if (prob.width === width && prob.height === height) return prob.data;
+    let data = resampled.get(f);
+    if (!data) {
+      if (resampled.size >= 3)
+        resampled.delete(/** @type {number} */ (resampled.keys().next().value));
+      data = resampleNearest(prob.data, prob.width, prob.height, width, height);
+      resampled.set(f, data);
+    }
+    return data;
+  };
+
+  return {
+    width,
+    height,
+    binaryAt(f) {
+      const cur = probAt(f);
+      if (!cur) return null;
+      const source = ai.smoothing
+        ? smoothTemporal(probAt(f - 1), cur, probAt(f + 1), smoothed)
+        : cur;
+      return thresholdMask(source, ai.threshold, binary);
+    },
+  };
+}
+
+/**
+ * Whether a pick on a frame lands on (or within the snap radius of) a
+ * character, judged on the same binary mask a build tracks the pick on
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
+ * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
+ * @returns {boolean}
+ */
+export function pickFindsComponent(options, pick) {
+  const source = createFrameBinarySource(options);
+  const bin = source?.binaryAt(pick.frame);
+  if (!source || !bin) return false;
+  const comps = labelComponents(bin, source.width, source.height);
+  return findPickedComponent(comps, source.width, source.height, pick) !== 0;
+}
+
+/**
  * Build the final masks of a clip.
  *
  * Without picks every frame is independent (one pass). With picks, the
  * tracking walks backward from the last pick frame first, then forward over
- * the whole clip, where each frame's final mask is produced.
- *
- * Frames whose probability mask has another size than the clip's first
- * analyzed frame are resampled to it (nearest neighbour), so tracking
- * compares like with like.
+ * the whole clip, where each frame's final mask is produced. Both passes
+ * work on one snapshot of the probability masks (createFrameBinarySource).
  *
  * @param {BuildOptions} options
  * @returns {Promise<{ masks: (PackedMask | null)[], width: number, height: number, bytes: number }>}
@@ -158,19 +268,11 @@ export async function buildFinalMasks(options) {
   /** @type {(PackedMask | null)[]} */
   const masks = new Array(Math.max(0, frameCount)).fill(null);
 
-  // Reference size: the first analyzed frame
-  let width = 0;
-  let height = 0;
-  for (let f = 0; f < frameCount && width === 0; f++) {
-    const prob = getProb(f);
-    if (prob && prob.width > 0 && prob.height > 0) {
-      width = prob.width;
-      height = prob.height;
-    }
-  }
-  if (width === 0) {
+  const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
+  if (!frameBinary) {
     return { masks, width: 0, height: 0, bytes: 0 };
   }
+  const { width, height, binaryAt } = frameBinary;
 
   const size = width * height;
   const radius = edgeRadiusInMaskPixels(ai.edge, width, options.sourceWidth ?? width);
@@ -180,43 +282,9 @@ export async function buildFinalMasks(options) {
   const total = frameCount + (backwardStart + 1);
 
   // Scratch, reused for every frame
-  const smoothed = new Uint8Array(size);
-  const binary = new Uint8Array(size);
   const labels = new Int32Array(size);
   const selected = new Uint8Array(size);
   const morphed = new Uint8Array(size);
-  /** @type {Map<number, Uint8Array | null>} */
-  const resampled = new Map();
-
-  /**
-   * A frame's probability at the reference size (null: not analyzed).
-   * Keeps the last few resampled frames: smoothing reads each one three times.
-   * @param {number} f
-   * @returns {Uint8Array | null}
-   */
-  const probAt = (f) => {
-    if (f < 0 || f >= frameCount) return null;
-    const prob = getProb(f);
-    if (!prob) return null;
-    if (prob.width === width && prob.height === height) return prob.data;
-    if (!resampled.has(f)) {
-      if (resampled.size >= 3) resampled.delete(resampled.keys().next().value);
-      resampled.set(f, resampleNearest(prob.data, prob.width, prob.height, width, height));
-    }
-    return /** @type {Uint8Array} */ (resampled.get(f));
-  };
-
-  /**
-   * Thresholded (and smoothed) mask of a frame, in the shared scratch
-   * @param {number} f
-   * @returns {Uint8Array | null}
-   */
-  const binaryAt = (f) => {
-    const cur = probAt(f);
-    if (!cur) return null;
-    const source = ai.smoothing ? smoothTemporal(probAt(f - 1), cur, probAt(f + 1), smoothed) : cur;
-    return thresholdMask(source, ai.threshold, binary);
-  };
 
   let done = 0;
   let sliceStart = now();
@@ -304,11 +372,12 @@ function createMaskSource(masks) {
  * caller without a signal never cancels).
  */
 export function createFinalMaskCache() {
-  /** @type {{ key: string, source: MaskSource, bytes: number } | null} */
+  /** @type {{ key: string, clipId: string | undefined, source: MaskSource, bytes: number } | null} */
   let current = null;
   /**
    * @typedef {Object} InflightBuild
    * @property {string} key
+   * @property {string | undefined} clipId
    * @property {AbortController} controller
    * @property {Promise<MaskSource>} promise - The shared build (callers get joined promises)
    * @property {Set<(progress: BuildProgress) => void>} listeners - Joined callers' onProgress
@@ -319,8 +388,7 @@ export function createFinalMaskCache() {
   let inflight = null;
 
   /** @param {CacheKeyInputs} inputs */
-  const keyOf = (inputs) =>
-    `${inputs.clipId ?? ''}|${inputs.storeVersion}|${inputs.frameCount}|${inputs.sourceWidth ?? ''}|${getAiParamsKey(inputs.ai)}`;
+  const keyOf = (inputs) => `${inputs.storeVersion}|${getFinalMaskParamsKey(inputs)}`;
 
   /**
    * Run one build under its entry's controller, telling every joined caller
@@ -341,7 +409,7 @@ export function createFinalMaskCache() {
       });
       throwIfAborted(entry.controller.signal);
       const source = createMaskSource(result.masks);
-      current = { key: entry.key, source, bytes: result.bytes };
+      current = { key: entry.key, clipId: entry.clipId, source, bytes: result.bytes };
       return source;
     } finally {
       if (inflight === entry) inflight = null;
@@ -414,6 +482,7 @@ export function createFinalMaskCache() {
         /** @type {InflightBuild} */
         const entry = {
           key,
+          clipId: options.clipId,
           controller: new AbortController(),
           promise: Promise.resolve(/** @type {any} */ (null)),
           listeners: new Set(),
@@ -443,6 +512,19 @@ export function createFinalMaskCache() {
       current = null;
       inflight?.controller.abort();
       inflight = null;
+    },
+
+    /**
+     * A clip is gone for good: drop its memoized masks and stop a build in
+     * flight for it (masks and builds of other clips stay)
+     * @param {string} clipId
+     */
+    forgetClip(clipId) {
+      if (current?.clipId === clipId) current = null;
+      if (inflight?.clipId === clipId) {
+        inflight.controller.abort();
+        inflight = null;
+      }
     },
 
     /** @returns {number} Bytes held by the memoized masks */

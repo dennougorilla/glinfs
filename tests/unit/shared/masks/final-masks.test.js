@@ -6,6 +6,8 @@ import {
   createFinalMaskCache,
   edgeRadiusInMaskPixels,
   getAiParamsKey,
+  getFinalMaskParamsKey,
+  pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
   morphMask,
@@ -73,6 +75,23 @@ describe('getAiParamsKey', () => {
     ]);
     expect(keys.size).toBe(6);
     expect(getAiParamsKey(aiOf())).toBe(getAiParamsKey(base));
+  });
+});
+
+describe('getFinalMaskParamsKey', () => {
+  it('changes with the clip, frame count, source width and AI params', () => {
+    const inputs = { clipId: 'a', frameCount: 3, sourceWidth: 64, ai: aiOf() };
+    const key = getFinalMaskParamsKey(inputs);
+    expect(getFinalMaskParamsKey({ ...inputs, ai: aiOf() })).toBe(key);
+    const others = [
+      { ...inputs, clipId: 'b' },
+      { ...inputs, clipId: undefined },
+      { ...inputs, frameCount: 4 },
+      { ...inputs, sourceWidth: 32 },
+      { ...inputs, sourceWidth: undefined },
+      { ...inputs, ai: aiOf({ threshold: 0.7 }) },
+    ].map(getFinalMaskParamsKey);
+    expect(new Set([key, ...others]).size).toBe(7);
   });
 });
 
@@ -168,6 +187,56 @@ describe('buildFinalMasks', () => {
     expect(onProgress).toHaveBeenCalledTimes(10);
   });
 
+  it('reads each probability mask once, so masks arriving mid-build never mix into it', async () => {
+    /** @param {number} f @returns {Rect} */
+    const a = (f) => [4 + 2 * f, 6, 6, 6];
+    /** @type {Rect} */
+    const b = [28, 6, 6, 6];
+    const frameCount = 6;
+    const ai = aiOf({ picks: [{ frame: 3, x: (a(3)[0] + 3) / W, y: 0.45, mode: 'keep' }] });
+    const stable = await buildFinalMasks({
+      frameCount,
+      getProb: (f) => probOf(W, H, [a(f), b]),
+      ai,
+      ...noYield,
+    });
+
+    // After the build's first reads the store changes: a new character
+    // appears top left on every frame (it would take label 1 and shift
+    // the labels the backward pass recorded)
+    let calls = 0;
+    const getProb = vi.fn((f) => {
+      calls++;
+      const rects = calls > frameCount ? [[0, 0, 2, 2], a(f), b] : [a(f), b];
+      return probOf(W, H, /** @type {Rect[]} */ (rects));
+    });
+    const changing = await buildFinalMasks({ frameCount, getProb, ai, ...noYield });
+
+    expect(getProb).toHaveBeenCalledTimes(frameCount);
+    expect(changing.masks).toEqual(stable.masks);
+    for (let f = 0; f < frameCount; f++) {
+      expect(changing.masks[f], `frame ${f}`).toEqual(packMask(binaryOf(W, H, [a(f)]), W, H));
+    }
+  });
+
+  it('ignores a keep pick that hit no character instead of emptying every frame', async () => {
+    /** @type {Rect[]} */
+    const rects = [
+      [4, 4, 8, 8],
+      [24, 4, 8, 8],
+    ];
+    const result = await buildFinalMasks({
+      frameCount: 3,
+      getProb: () => probOf(W, H, rects),
+      // Bottom right: background, far from both characters
+      ai: aiOf({ smoothing: true, picks: [{ frame: 1, x: 0.95, y: 0.95, mode: 'keep' }] }),
+      ...noYield,
+    });
+    for (let f = 0; f < 3; f++) {
+      expect(result.masks[f], `frame ${f}`).toEqual(packMask(binaryOf(W, H, rects), W, H));
+    }
+  });
+
   it('removes a picked character and leaves unanalyzed frames without a mask', async () => {
     /** @type {Rect} */
     const a = [4, 4, 8, 8];
@@ -238,19 +307,18 @@ describe('buildFinalMasks', () => {
     const events = [];
     await buildFinalMasks({
       frameCount: 10,
-      getProb: () => {
-        clock += 10; // each frame costs 10 "ms"
-        return probOf(W, H, [[1, 1, 3, 3]]);
-      },
+      getProb: () => probOf(W, H, [[1, 1, 3, 3]]),
       ai: aiOf(),
-      onProgress: ({ done }) => events.push(`frame${done}`),
+      onProgress: ({ done }) => {
+        clock += 10; // each frame costs 10 "ms"
+        events.push(`frame${done}`);
+      },
       sliceMs: 25,
       now: () => clock,
       yieldToMain: async () => {
         events.push('yield');
       },
     });
-    // The reference-size scan reads frame 0 once before the clock starts
     const runs = events
       .join(' ')
       .split('yield')
@@ -269,12 +337,10 @@ describe('buildFinalMasks', () => {
     }, 0);
     await buildFinalMasks({
       frameCount: 20,
-      getProb: () => {
-        clock += 40;
-        return probOf(W, H, []);
-      },
+      getProb: () => probOf(W, H, []),
       ai: aiOf(),
       onProgress: (p) => {
+        clock += 40;
         done = p.done;
       },
       now: () => clock,
@@ -290,11 +356,11 @@ describe('buildFinalMasks', () => {
       let clock = 0;
       await buildFinalMasks({
         frameCount: 3,
-        getProb: () => {
-          clock += 100;
-          return probOf(W, H, []);
-        },
+        getProb: () => probOf(W, H, []),
         ai: aiOf(),
+        onProgress: () => {
+          clock += 100;
+        },
         now: () => clock,
       });
       expect(yieldFn).toHaveBeenCalled();
@@ -326,6 +392,41 @@ describe('buildFinalMasks', () => {
       buildFinalMasks({ frameCount: 5, getProb, ai: aiOf(), signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(getProb).not.toHaveBeenCalled();
+  });
+});
+
+describe('pickFindsComponent', () => {
+  const W = 40;
+  const H = 20;
+  /** @type {Rect} */
+  const rect = [4, 4, 8, 8];
+
+  it('finds a character under the pick or within the snap radius, never on background', () => {
+    const options = { frameCount: 2, getProb: () => probOf(W, H, [rect]), ai: aiOf() };
+    expect(pickFindsComponent(options, { frame: 1, x: 8 / W, y: 8 / H })).toBe(true);
+    // One pixel right of the square (x = 12), inside the ~2% snap radius
+    expect(pickFindsComponent(options, { frame: 1, x: 12.5 / W, y: 8 / H })).toBe(true);
+    expect(pickFindsComponent(options, { frame: 1, x: 0.9, y: 0.9 })).toBe(false);
+  });
+
+  it('judges the frame on the mask the build uses (threshold, smoothing), and needs an analysis', () => {
+    // Frame 1 flickers: the square is only there, so smoothing averages it away
+    const getProb = (/** @type {number} */ f) =>
+      f === 3 ? null : probOf(W, H, f === 1 ? [rect] : []);
+    const pick = { frame: 1, x: 8 / W, y: 8 / H };
+    expect(pickFindsComponent({ frameCount: 4, getProb, ai: aiOf() }, pick)).toBe(true);
+    expect(
+      pickFindsComponent({ frameCount: 4, getProb, ai: aiOf({ smoothing: true }) }, pick),
+    ).toBe(false);
+    expect(
+      pickFindsComponent({ frameCount: 4, getProb, ai: aiOf({ threshold: 0.95 }) }, pick),
+    ).toBe(false);
+    expect(pickFindsComponent({ frameCount: 4, getProb, ai: aiOf() }, { ...pick, frame: 3 })).toBe(
+      false,
+    );
+    expect(pickFindsComponent({ frameCount: 2, getProb: () => null, ai: aiOf() }, pick)).toBe(
+      false,
+    );
   });
 });
 
@@ -470,8 +571,8 @@ describe('createFinalMaskCache', () => {
     await slow.release();
     const [a, b] = await Promise.all([first, again]);
     expect(b).toBe(a);
-    // One build's worth of reads: the reference-size probe plus one per frame
-    expect(getProb.mock.calls.length).toBe(1 + base.frameCount);
+    // One build's worth of reads: each frame once
+    expect(getProb.mock.calls.length).toBe(base.frameCount);
     expect(cache.peek({ ...base, storeVersion: 30 })).toBe(a);
   });
 
@@ -534,6 +635,34 @@ describe('createFinalMaskCache', () => {
     // A new caller after that starts a fresh build instead of joining the aborted one
     const fresh = await cache.build({ ...base, storeVersion: 34 });
     expect(cache.peek({ ...base, storeVersion: 34 })).toBe(fresh);
+  });
+
+  it("forgetClip() drops that clip's memo and in-flight build, and nothing else", async () => {
+    const cache = createFinalMaskCache();
+    const a = await cache.build({ ...base, clipId: 'a', storeVersion: 50 });
+    expect(cache.bytes()).toBeGreaterThan(0);
+    cache.forgetClip('b');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 50 })).toBe(a);
+    cache.forgetClip('a');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 50 })).toBeNull();
+    expect(cache.bytes()).toBe(0);
+
+    // A build in flight for the released clip stops; the memo of another stays
+    const b = await cache.build({ ...base, clipId: 'b', storeVersion: 51 });
+    const released = gated({ clipId: 'a', storeVersion: 52 });
+    const releasedOutcome = outcome(cache.build(released.options));
+    cache.forgetClip('a');
+    await released.release();
+    expect(await releasedOutcome).toBe('AbortError');
+    expect(cache.peek({ ...base, clipId: 'a', storeVersion: 52 })).toBeNull();
+    expect(cache.peek({ ...base, clipId: 'b', storeVersion: 51 })).toBe(b);
+
+    // A build in flight for another clip keeps running
+    const other = gated({ clipId: 'c', storeVersion: 53 });
+    const otherBuild = cache.build(other.options);
+    cache.forgetClip('a');
+    await other.release();
+    expect(cache.peek({ ...base, clipId: 'c', storeVersion: 53 })).toBe(await otherBuild);
   });
 
   it("clear() and the caller's signal stop an in-flight build", async () => {

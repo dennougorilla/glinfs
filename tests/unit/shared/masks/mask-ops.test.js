@@ -422,11 +422,35 @@ describe('trackPicks', () => {
     for (const sel of both.selections) expect(sel).toEqual(scene(W, H, [rects[0]]));
   });
 
-  it('selects nothing for a keep pick that hit nothing', () => {
-    const { selections } = track(2, W, H, () => [[5, 5, 8, 8]], [
-      { frame: 0, x: 0.9, y: 0.9, mode: 'keep' },
+  it('ignores a keep pick that hit nothing on its frame (it never empties the clip)', () => {
+    /** @type {Rect[]} */
+    const rects = [
+      [5, 5, 8, 8],
+      [40, 5, 8, 8],
+    ];
+    const missed = { frame: 1, x: 0.9, y: 0.9, mode: /** @type {const} */ ('keep') };
+    const alone = track(3, W, H, () => rects, [missed]);
+    for (const [f, sel] of alone.selections.entries()) {
+      expect(sel, `frame ${f}`).toEqual(scene(W, H, rects));
+    }
+
+    // Next to a keep pick that hit, only that one counts
+    const both = track(3, W, H, () => rects, [missed, pickAt(2, rects[1], W, H)]);
+    for (const [f, sel] of both.selections.entries()) {
+      expect(sel, `frame ${f}`).toEqual(scene(W, H, [rects[1]]));
+    }
+  });
+
+  it('ignores a remove pick that hit nothing, and picks on a frame without a mask or past the clip', () => {
+    /** @type {Rect[]} */
+    const rects = [[5, 5, 8, 8]];
+    const { selections } = track(4, W, H, (f) => (f === 2 ? null : rects), [
+      { frame: 0, x: 0.9, y: 0.9, mode: 'remove' },
+      pickAt(2, rects[0], W, H),
+      pickAt(9, rects[0], W, H),
     ]);
-    for (const sel of selections) expect(sel?.some(Boolean)).toBe(false);
+    expect(selections[2]).toBeNull();
+    for (const f of [0, 1, 3]) expect(selections[f], `frame ${f}`).toEqual(scene(W, H, rects));
   });
 
   it('refuses a backward step once the forward pass has started', () => {

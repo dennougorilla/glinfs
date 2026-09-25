@@ -410,22 +410,28 @@ function rememberSelection(ref, comps, width, selected) {
  *
  * Each pick is seeded on its own frame (the component under it) and
  * followed away from it in both directions with the default join rule.
+ * A pick that finds no component on its own frame (nothing under it or
+ * within the snap radius, no mask there, or a frame past the clip) is
+ * ignored: a keep pick that missed must not empty every frame. The backward
+ * pass visits every pick's frame before the forward pass selects anything.
  * Only the chosen labels per frame are kept between the passes (labels are
  * deterministic, so the forward pass relabels the same components), plus
  * one bounding-box-sized reference mask per pick.
  *
  * Result per frame = union of the 'keep' selections (all foreground when no
- * pick is a 'keep') minus the 'remove' selections.
+ * 'keep' pick found its character) minus the 'remove' selections.
  *
  * @param {{ picks: readonly Pick[], width: number, height: number }} params
  */
 export function createPickTracker({ picks, width, height }) {
-  const hasKeep = picks.some((p) => p.mode === 'keep');
   const backwardStart = picks.reduce((max, p) => Math.max(max, p.frame), -1);
   /** @type {Map<number, { keep: number[], remove: number[] }>} */
   const backward = new Map();
   let refs = picks.map(() => createTrackRef());
   let forwardStarted = false;
+  /** Picks that found their component on their own frame (the others are ignored) */
+  const seeded = picks.map(() => false);
+  const keepsSome = () => picks.some((p, k) => p.mode === 'keep' && seeded[k]);
 
   /**
    * Selections of the picks active in one direction on one frame
@@ -441,6 +447,7 @@ export function createPickTracker({ picks, width, height }) {
       let selected;
       if (pick.frame === frame) {
         const label = findPickedComponent(comps, width, height, pick);
+        if (label) seeded[k] = true;
         selected = label ? [label] : [];
       } else {
         selected = followSelection(comps, width, height, refs[k]);
@@ -462,8 +469,15 @@ export function createPickTracker({ picks, width, height }) {
     /** Highest frame the backward pass starts at (-1: no picks, skip it) */
     backwardStart,
 
-    /** Whether any pick keeps (otherwise every foreground pixel is kept) */
-    hasKeep,
+    /**
+     * Whether a keep pick found its character (otherwise every foreground
+     * pixel is kept). Final once the backward pass has visited every pick's
+     * frame.
+     * @returns {boolean}
+     */
+    get hasKeep() {
+      return keepsSome();
+    },
 
     /**
      * Backward pass step for one frame
@@ -496,7 +510,7 @@ export function createPickTracker({ picks, width, height }) {
       for (const l of forward.remove) flags[l] |= 2;
       for (const l of before?.keep ?? []) flags[l] |= 1;
       for (const l of before?.remove ?? []) flags[l] |= 2;
-      const need = hasKeep ? 1 : 0;
+      const need = keepsSome() ? 1 : 0;
       const { labels } = comps;
       const size = width * height;
       for (let i = 0; i < size; i++) {

@@ -38,7 +38,7 @@ import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { getSharedFinalMaskCache, isFrameAnalyzed } from './ai-cutout.js';
+import { getSharedFinalMaskCache, isFrameAnalyzed, pickFindsCharacter } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
   centerCropAfterConstraint,
@@ -68,6 +68,7 @@ import {
   goToFrame,
   moveTextLayer,
   PICK_NEEDS_ANALYSIS_NOTICE,
+  PICK_NO_CHARACTER_NOTICE,
   removeAiPick,
   removeTextLayer,
   selectTextLayer,
@@ -202,6 +203,8 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     // Frames of the clip still in the worker must not store masks afterwards
     getSegmentationManager().forgetClip(id);
     maskStore.deleteClip(id);
+    // Its memoized final masks (~22 MB for 300 frames) and a build for it
+    getSharedFinalMaskCache().forgetClip(id);
   }
 });
 
@@ -1324,6 +1327,16 @@ function handleAiPick(point) {
   }
   if (state.edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
     announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
+    return;
+  }
+  // A pick on background would be ignored by the build (a Keep pick there
+  // would otherwise leave nothing): refuse it and keep the tool on
+  const frames = /** @type {import('../capture/types.js').Frame[]} */ (state.clip?.frames);
+  const ai = state.edits.background.ai;
+  if (!pickFindsCharacter({ frames, ai, frameIndex: state.currentFrame, point })) {
+    const message = PICK_NO_CHARACTER_NOTICE;
+    announce(message);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
     return;
   }
   store.setState((s) =>
