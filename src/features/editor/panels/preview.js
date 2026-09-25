@@ -7,6 +7,7 @@
  * @module features/editor/panels/preview
  */
 
+import { isEditableTarget } from '../../../shared/hotkeys.js';
 import { createElement } from '../../../shared/utils/dom.js';
 import { getCursorForHandle, hitTestCropHandle, renderFrameOnly, renderOverlay } from '../api.js';
 import { calculateCropFromDrag, detectBoundaryHit, moveCrop, resizeCropByHandle } from '../core.js';
@@ -209,6 +210,13 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    */
   function onMouseDown(e) {
     e.preventDefault();
+    // preventDefault keeps focus where it was; a panel field (e.g. the
+    // caption being typed) would then swallow the editor shortcuts. Working
+    // on the preview means the keyboard belongs to the editor again.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && isEditableTarget(active)) {
+      active.blur();
+    }
     const state = getCurrentState();
     const coords = getFrameCoords(e);
 

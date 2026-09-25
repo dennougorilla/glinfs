@@ -207,7 +207,9 @@ export function createEditorFrameRenderer(options = {}) {
         if (!keyed) {
           keyed = ctx.getImageData(region.x, region.y, region.width, region.height);
           readbacks++;
-          applyColorKey(keyed.data, region.width, region.height, background);
+          // The ImageData's own size: a crop can carry fractional values
+          // (centered aspect-ratio crops), which getImageData truncates
+          applyColorKey(keyed.data, keyed.width, keyed.height, background);
           cache.set(key, keyed);
         }
         ctx.putImageData(keyed, region.x, region.y);
