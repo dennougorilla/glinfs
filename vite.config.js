@@ -38,4 +38,12 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  // ONNX Runtime Web (AI cutout, loaded only by the segmentation worker) is
+  // served as-is in dev: esbuild pre-bundling would move its module away from
+  // the files it resolves relative to itself. Its WASM binary is imported
+  // with `?url` (emitted as an asset in builds) and passed to
+  // ort.env.wasm.wasmPaths — see src/workers/segmentation-worker.js.
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
 });

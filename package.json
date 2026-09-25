@@ -43,6 +43,7 @@
     "vitest": "^4.0.16"
   },
   "dependencies": {
-    "gifenc": "^1.0.3"
+    "gifenc": "^1.0.3",
+    "onnxruntime-web": "1.30.0"
   }
 }
