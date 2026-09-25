@@ -141,3 +141,72 @@ export async function decodeExportedGif(page) {
     return frames;
   });
 }
+
+/**
+ * Leave the editor for the export screen through its toolbar button
+ * @param {import('@playwright/test').Page} page
+ */
+export async function exportFromEditor(page) {
+  await page.getByRole('button', { name: 'Export as GIF' }).click();
+  await page.waitForSelector('.export-canvas', { state: 'visible' });
+}
+
+/**
+ * Viewport position of a frame-pixel point on the editor preview (the
+ * overlay canvas is CSS-scaled to fit the preview area)
+ * @param {import('@playwright/test').Page} page
+ * @param {number} x - Frame pixel x
+ * @param {number} y - Frame pixel y
+ * @returns {Promise<{ x: number, y: number }>}
+ */
+export async function editorFramePointToViewport(page, x, y) {
+  const overlay = page.locator('.editor-canvas-overlay');
+  const box = await overlay.boundingBox();
+  if (!box) throw new Error('Editor overlay is not visible');
+  const size = await overlay.evaluate((el) => ({
+    width: /** @type {HTMLCanvasElement} */ (el).width,
+    height: /** @type {HTMLCanvasElement} */ (el).height,
+  }));
+  return {
+    x: box.x + (x * box.width) / size.width,
+    y: box.y + (y * box.height) / size.height,
+  };
+}
+
+/**
+ * RGBA of one pixel of a decoded GIF frame
+ * @param {DecodedGifFrame} frame
+ * @param {number} x
+ * @param {number} y
+ * @returns {[number, number, number, number]}
+ */
+export function gifPixel(frame, x, y) {
+  const o = (y * frame.width + x) * 4;
+  return [frame.rgba[o], frame.rgba[o + 1], frame.rgba[o + 2], frame.rgba[o + 3]];
+}
+
+/**
+ * Count opaque pixels within `maxDistance` (RGB Euclidean) of `rgb` inside a
+ * rectangle of a decoded GIF frame
+ * @param {DecodedGifFrame} frame
+ * @param {{ x0: number, y0: number, x1: number, y1: number }} rect - Inclusive-exclusive, clamped to the frame
+ * @param {[number, number, number]} rgb
+ * @param {number} [maxDistance]
+ * @returns {number}
+ */
+export function countGifPixelsNear(frame, rect, rgb, maxDistance = 60) {
+  const x0 = Math.max(0, Math.floor(rect.x0));
+  const y0 = Math.max(0, Math.floor(rect.y0));
+  const x1 = Math.min(frame.width, Math.ceil(rect.x1));
+  const y1 = Math.min(frame.height, Math.ceil(rect.y1));
+  let count = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const p = gifPixel(frame, x, y);
+      if (p[3] === 255 && Math.hypot(p[0] - rgb[0], p[1] - rgb[1], p[2] - rgb[2]) < maxDistance) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
