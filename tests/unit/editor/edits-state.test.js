@@ -40,7 +40,13 @@ describe('createClip with edits', () => {
     expect(clip.hasAlpha).toBe(false);
     expect(clip.edits).toEqual({
       textLayers: [],
-      background: { enabled: false, color: '#00ff00', tolerance: 20, mode: 'connected' },
+      background: {
+        enabled: false,
+        color: '#00ff00',
+        tolerance: 20,
+        mode: 'connected',
+        colorChosen: false,
+      },
     });
   });
 
@@ -155,10 +161,21 @@ describe('background reducers', () => {
       color: '#abcdef',
       tolerance: 100,
       mode: 'connected',
+      colorChosen: true,
     });
     state = setBackground(state, { mode: 'global', color: 'bad' });
     expect(state.edits.background).toMatchObject({ mode: 'global', color: '#00ff00' });
     expect(state.clip?.edits).toBe(state.edits);
+  });
+
+  it('setBackground marks a set color as chosen, even the default one', () => {
+    let state = setBackground(freshState(), { enabled: true, tolerance: 30 });
+    expect(state.edits.background.colorChosen).toBe(false);
+    state = setBackground(freshState(), { color: '#00ff00' });
+    expect(state.edits.background).toMatchObject({ color: '#00ff00', colorChosen: true });
+    // Later patches without a color keep it chosen
+    state = setBackground(state, { enabled: false });
+    expect(state.edits.background.colorChosen).toBe(true);
   });
 
   it('setPickingKeyColor toggles eyedropper mode', () => {

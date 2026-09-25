@@ -38,6 +38,9 @@
  * @property {string} color          - key color '#rrggbb'
  * @property {number} tolerance      - 0..100
  * @property {BackgroundMode} mode   - connected = flood fill from the output border only
+ * @property {boolean} colorChosen   - the key color was chosen (picked, typed or
+ *   detected) rather than left at the default; enabling removal without one
+ *   detects the edge color
  */
 
 /**
@@ -89,6 +92,7 @@ const BACKGROUND_DEFAULTS = /** @type {const} */ ({
   color: '#00ff00',
   tolerance: 20,
   mode: 'connected',
+  colorChosen: false,
 });
 
 /** Fallback id counter for environments without crypto.randomUUID */
@@ -235,9 +239,11 @@ function normalizeBackground(background) {
       ? /** @type {Record<string, unknown>} */ (background)
       : {};
   const { tolerance } = EDIT_LIMITS;
+  const enabled = b.enabled === true;
+  const color = normalizeColor(b.color, BACKGROUND_DEFAULTS.color);
   return {
-    enabled: b.enabled === true,
-    color: normalizeColor(b.color, BACKGROUND_DEFAULTS.color),
+    enabled,
+    color,
     tolerance: clampNumber(
       b.tolerance,
       tolerance.min,
@@ -245,6 +251,12 @@ function normalizeBackground(background) {
       BACKGROUND_DEFAULTS.tolerance,
     ),
     mode: normalizeEnum(b.mode, BACKGROUND_MODES, BACKGROUND_DEFAULTS.mode),
+    // Input without the flag: a removal in use or a non-default color was
+    // evidently chosen
+    colorChosen:
+      typeof b.colorChosen === 'boolean'
+        ? b.colorChosen
+        : enabled || color !== BACKGROUND_DEFAULTS.color,
   };
 }
 

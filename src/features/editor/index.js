@@ -20,7 +20,7 @@ import {
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
-import { createDefaultEdits, normalizeEdits } from '../../shared/edits/model.js';
+import { normalizeEdits } from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -144,12 +144,6 @@ let previewRenderer = null;
  * pointer move would read back and flood-fill it per tick)
  */
 let cropDragging = false;
-
-/**
- * Whether the background key color was chosen (picked, typed, restored or
- * auto-detected) — enabling removal without one detects the edge color
- */
-let keyColorChosen = false;
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -312,11 +306,6 @@ export function initEditor() {
     }
   }
 
-  {
-    const { background } = store.getState().edits;
-    keyColorChosen =
-      background.enabled || background.color !== createDefaultEdits().background.color;
-  }
   previewRenderer = createEditorFrameRenderer();
   cropDragging = false;
 
@@ -1049,7 +1038,6 @@ function handleMoveText(id, x, y) {
 /** @param {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} patch */
 function handleSetBackground(patch) {
   if (!store) return;
-  if (patch.color !== undefined) keyColorChosen = true;
   store.setState((state) => setBackground(state, patch));
 }
 
@@ -1064,13 +1052,12 @@ function handleToggleBackground(enabled) {
   if (!store) return;
   /** @type {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} */
   const patch = { enabled };
-  if (enabled && !keyColorChosen) {
-    const state = store.getState();
+  const state = store.getState();
+  if (enabled && !state.edits.background.colorChosen) {
     const frame = state.clip?.frames[state.currentFrame];
     const detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
     if (detected) {
       patch.color = detected;
-      keyColorChosen = true;
     } else if (state.clip?.hasAlpha) {
       announce('The edges are already transparent. Pick the color to remove from the preview.');
     }
@@ -1093,7 +1080,6 @@ function handleSetPickingKeyColor(picking) {
  */
 function handlePickKeyColor(color) {
   if (!store) return;
-  keyColorChosen = true;
   store.setState((state) =>
     setPickingKeyColor(setBackground(state, { color, enabled: true }), false),
   );

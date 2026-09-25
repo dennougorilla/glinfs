@@ -12,7 +12,13 @@ describe('createDefaultEdits', () => {
   it('has no text and background removal off with the documented defaults', () => {
     expect(createDefaultEdits()).toEqual({
       textLayers: [],
-      background: { enabled: false, color: '#00ff00', tolerance: 20, mode: 'connected' },
+      background: {
+        enabled: false,
+        color: '#00ff00',
+        tolerance: 20,
+        mode: 'connected',
+        colorChosen: false,
+      },
     });
   });
 
@@ -71,6 +77,19 @@ describe('createTextLayer', () => {
 });
 
 describe('normalizeEdits', () => {
+  it('keeps an explicit colorChosen flag and infers it for input without one', () => {
+    const bg = (/** @type {Record<string, unknown>} */ background) =>
+      normalizeEdits({ background }, 10).background.colorChosen;
+    // A deliberately chosen default color survives a round trip
+    expect(bg({ color: '#00ff00', colorChosen: true })).toBe(true);
+    expect(bg({ enabled: true, color: '#123456', colorChosen: false })).toBe(false);
+    // Without the flag: a removal in use or a non-default color was chosen
+    expect(bg({ color: '#00ff00' })).toBe(false);
+    expect(bg({ color: '#123456' })).toBe(true);
+    expect(bg({ enabled: true })).toBe(true);
+    expect(bg({ colorChosen: 'yes' })).toBe(false);
+  });
+
   it('returns defaults for undefined, null and garbage input', () => {
     for (const input of [undefined, null, 42, 'x', []]) {
       expect(normalizeEdits(input, 10)).toEqual(createDefaultEdits());
