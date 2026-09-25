@@ -13,12 +13,28 @@ import {
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
 import { composeOutputFrame, snapCanvasAlphaToBinary } from '../../shared/edits/compose.js';
-import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
+import {
+  isAiCutoutActive,
+  normalizeEdits,
+  requiresTransparency,
+} from '../../shared/edits/model.js';
 import { navigate } from '../../shared/router.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import { isFrameValid, syncCanvasSize } from '../../shared/utils/canvas.js';
 import { createElement, on, qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
+import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import {
+  buildClipMaskSource,
+  describeAnalysisError,
+  estimateRemainingMs,
+  isAbortError,
+  isWasmAllowed,
+  peekClipMaskSource,
+  setWasmAllowed,
+} from '../editor/ai-cutout.js';
 import { createKeyedRegionCache } from '../editor/edits-preview.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
@@ -27,6 +43,7 @@ import {
   generateFilename,
   getCroppedDimensions,
   getEffectiveEncoderId,
+  getExportedFrameIndices,
 } from './core.js';
 import {
   cancelEncodingState,
@@ -40,7 +57,13 @@ import {
   updateProgress,
   updateSettings,
 } from './state.js';
-import { renderExportScreen, updatePreviewPlaybackUI, updateProgressUI } from './ui.js';
+import {
+  renderExportScreen,
+  updateAiPreparationUI,
+  updateExportAiNote,
+  updatePreviewPlaybackUI,
+  updateProgressUI,
+} from './ui.js';
 
 /** @type {ReturnType<typeof createExportStore> | null} */
 let store = null;
@@ -71,6 +94,31 @@ let edits = null;
 
 /** Absolute clip index of frames[0] (the editor's selected range start) */
 let rangeStart = 0;
+
+/** Every frame of the clip (AI cutout masks are built over the whole clip) */
+/** @type {import('../capture/types.js').Frame[]} */
+let clipFrames = [];
+
+/** Mask store group of the clip (its payload id) */
+/** @type {string | undefined} */
+let clipId;
+
+/**
+ * Final AI cutout masks for the preview and the encoder (method 'ai'),
+ * null until built
+ * @type {import('../../shared/masks/final-masks.js').MaskSource | null}
+ */
+let maskSource = null;
+
+/** @type {AbortController | null} Background final-mask build for the preview */
+let maskBuildController = null;
+
+/**
+ * AI cutout preparation shown instead of the preview (analysis of exported
+ * frames without a mask, then the final masks), or null
+ * @type {import('./ui.js').ExportAiPrep | null}
+ */
+let aiPrep = null;
 
 /**
  * Composed + alpha-snapped preview frames of a transparent export, keyed by
@@ -191,6 +239,10 @@ export function initExport() {
   cropArea = editorPayload?.cropArea || null;
   const fps = editorPayload?.fps || DEFAULT_FPS;
   rangeStart = start;
+  clipFrames = clipPayload.frames;
+  clipId = clipPayload.id;
+  maskSource = null;
+  aiPrep = null;
   // Cached preview frames belong to one clip, crop and set of edits
   previewFrameCache.clear();
 
@@ -224,6 +276,7 @@ export function initExport() {
     duration: frames.length / fps,
     fps,
     transparent,
+    aiCutout: isAiCutoutActive(edits?.background),
   };
 
   // Create store
@@ -279,6 +332,10 @@ export function initExport() {
     }
   });
 
+  // AI cutout: build the final masks from the masks analyzed so far (the
+  // editor usually memoized them already) so the preview shows the cutout
+  refreshPreviewMasks();
+
   // Ensure the playback loop is running even when the preview starts
   // paused — handleTogglePlay only flips state; the loop itself renders
   // (or idles) based on preview.isPlaying. startPlaybackLoop is idempotent,
@@ -318,8 +375,11 @@ function render(container) {
       onTogglePlay: handleTogglePlay,
       onAdjustSettings: handleAdjustSettings,
       onCreateNew: handleCreateNew,
+      onAiAllowWasm: handleAiAllowWasm,
+      onAiBack: handleAiBack,
     },
     clipInfo,
+    aiPrep,
   );
 
   uiCleanup = cleanup;
@@ -338,10 +398,175 @@ function render(container) {
     }
   }
 
+  updateMissingMasksNote();
+
   // Restart playback if we have a canvas and state says we should be playing
   if (previewCanvas && state.preview.isPlaying) {
     startPlaybackLoop();
   }
+}
+
+// ============================================================
+// AI cutout
+// ============================================================
+
+/**
+ * Exported frames (after frame skip) as clip frames
+ * @param {number} frameSkip
+ * @returns {import('../capture/types.js').Frame[]}
+ */
+function getExportedClipFrames(frameSkip) {
+  return getExportedFrameIndices(frames.length, frameSkip, rangeStart)
+    .map((index) => clipFrames[index])
+    .filter(Boolean);
+}
+
+/** Tell the user how many exported frames still need the analysis */
+function updateMissingMasksNote() {
+  if (!store || !clipInfo.aiCutout) return;
+  const container = document.querySelector('#main-content');
+  if (!container) return;
+  const exported = getExportedClipFrames(store.getState().settings.frameSkip);
+  const missing = collectPendingFrames(exported, getSharedMaskStore()).length;
+  updateExportAiNote(container, missing, exported.length);
+}
+
+/**
+ * Use new final masks: the cached preview frames were composed with the
+ * old ones
+ * @param {import('../../shared/masks/final-masks.js').MaskSource} source
+ */
+function setMaskSource(source) {
+  if (source === maskSource) return;
+  maskSource = source;
+  previewFrameCache.clear();
+}
+
+/** Build the preview's final masks from the masks analyzed so far */
+function refreshPreviewMasks() {
+  if (!edits || !isAiCutoutActive(edits.background)) return;
+  const inputs = { frames: clipFrames, ai: edits.background.ai };
+  const memo = peekClipMaskSource(inputs);
+  if (memo) {
+    setMaskSource(memo);
+    return;
+  }
+  maskBuildController?.abort();
+  const controller = new AbortController();
+  maskBuildController = controller;
+  buildClipMaskSource({ ...inputs, signal: controller.signal }).then(
+    (source) => {
+      if (maskBuildController !== controller) return;
+      maskBuildController = null;
+      setMaskSource(source);
+    },
+    (error) => {
+      if (maskBuildController === controller) maskBuildController = null;
+      if (!isAbortError(error)) console.error('[Export] Building the AI cutout failed:', error);
+    },
+  );
+}
+
+/**
+ * Show a new preparation step: a new phase group re-renders, progress
+ * within one patches in place
+ * @param {import('./ui.js').ExportAiPrep} next
+ */
+function showAiPrep(next) {
+  const container = document.querySelector('#main-content');
+  const rerender =
+    !aiPrep ||
+    !container?.querySelector('#export-ai-progress-text') ||
+    (aiPrep.phase === 'building') !== (next.phase === 'building');
+  aiPrep = next;
+  if (!container || !store) return;
+  if (rerender) {
+    render(/** @type {HTMLElement} */ (container));
+  } else {
+    updateAiPreparationUI(container, next);
+  }
+}
+
+/**
+ * Final masks for every exported frame: analyze the exported frames that
+ * have no mask yet (with progress; the manager reuses the loaded model),
+ * then build the masks over the whole clip (picks may lie outside the
+ * export range).
+ * @param {import('./types.js').ExportSettings} settings
+ * @param {AbortSignal} signal
+ * @returns {Promise<import('../../shared/masks/final-masks.js').MaskSource>}
+ */
+async function prepareAiMasks(settings, signal) {
+  const maskStore = getSharedMaskStore();
+  const exported = getExportedClipFrames(settings.frameSkip);
+  const pending = collectPendingFrames(exported, maskStore);
+  if (pending.length > 0) {
+    showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: pending.length });
+    if (clipId !== undefined) maskStore.touchClip(clipId);
+    /** @type {number | null} */
+    let analyzingSince = null;
+    await getSegmentationManager().analyzeFrames(exported, {
+      signal,
+      clipId,
+      allowWasm: isWasmAllowed(),
+      onProgress(progress) {
+        if (signal.aborted) return;
+        if (progress.phase === 'analyzing' && analyzingSince === null) {
+          analyzingSince = performance.now();
+        }
+        showAiPrep({
+          phase: progress.phase,
+          loadedBytes: progress.loadedBytes,
+          totalBytes: progress.totalBytes,
+          fromCache: progress.fromCache,
+          framesDone: progress.framesDone,
+          framesTotal: progress.framesTotal,
+          remainingMs:
+            analyzingSince === null
+              ? null
+              : estimateRemainingMs({
+                  framesDone: progress.framesDone,
+                  framesTotal: progress.framesTotal,
+                  elapsedMs: performance.now() - analyzingSince,
+                  backend: progress.backend,
+                }),
+        });
+      },
+    });
+  }
+  const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
+  const memo = peekClipMaskSource({ frames: clipFrames, ai });
+  if (memo) {
+    setMaskSource(memo);
+    return memo;
+  }
+  showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });
+  const source = await buildClipMaskSource({
+    frames: clipFrames,
+    ai,
+    signal,
+    onProgress: ({ done, total }) => {
+      if (aiPrep?.phase === 'building')
+        showAiPrep({ ...aiPrep, buildDone: done, buildTotal: total });
+    },
+  });
+  setMaskSource(source);
+  return source;
+}
+
+/** The explicit "Run without WebGPU (very slow)" choice: export again */
+function handleAiAllowWasm() {
+  setWasmAllowed(true);
+  aiPrep = null;
+  void handleExport();
+}
+
+/** Leave the AI preparation (choice or error) for the settings */
+function handleAiBack() {
+  if (!store) return;
+  aiPrep = null;
+  render(qsRequired('#main-content'));
+  startPlaybackLoop();
 }
 
 /**
@@ -373,6 +598,7 @@ function handleSettingsChange(settings) {
   // Reset frame index when settings change
   currentFrameIndex = 0;
   lastFrameTime = 0;
+  updateMissingMasksNote();
 
   // Re-render UI when encoder changes (shows different settings panel)
   if (encoderChanging) {
@@ -384,9 +610,45 @@ function handleSettingsChange(settings) {
  * Handle export button click
  */
 async function handleExport() {
-  if (!store || frames.length === 0) return;
+  // A running preparation/encode owns the controller: ignore double clicks
+  if (!store || frames.length === 0 || encodingController) return;
 
   const state = store.getState();
+
+  // Create AbortController for cancellation support (AI preparation and
+  // encoding share it, so Cancel stops whichever runs)
+  encodingController = new AbortController();
+  const signal = encodingController.signal;
+
+  // AI cutout: every exported frame needs its final mask before encoding
+  /** @type {import('../../shared/masks/final-masks.js').MaskSource | null} */
+  let exportMasks = null;
+  if (isAiCutoutActive(edits?.background)) {
+    try {
+      exportMasks = await prepareAiMasks(state.settings, signal);
+    } catch (error) {
+      encodingController = null;
+      if (!store) return;
+      if (isAbortError(error)) {
+        aiPrep = null;
+        emit('export:cancelled', {});
+      } else if (
+        /** @type {any} */ (error)?.code === SegmentationErrorCode.WEBGPU_UNAVAILABLE &&
+        !isWasmAllowed()
+      ) {
+        aiPrep = { phase: 'needs-wasm' };
+      } else {
+        aiPrep = { phase: 'error', message: describeAnalysisError(error).message };
+        emit('export:error', { error: aiPrep.message });
+      }
+      render(qsRequired('#main-content'));
+      if (!aiPrep) startPlaybackLoop();
+      return;
+    }
+    // A frame the analysis could not cover makes encodeGif refuse with a
+    // clear MissingCutoutMasksError, shown on the error screen
+    aiPrep = null;
+  }
 
   // Create encoding job (transparent exports always run on gifenc)
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
@@ -394,9 +656,6 @@ async function handleExport() {
     effectiveFrames.length,
     getEffectiveEncoderId(state.settings, clipInfo.transparent),
   );
-
-  // Create AbortController for cancellation support
-  encodingController = new AbortController();
 
   store.setState((s) => startEncoding(s, job));
   emit('export:started', { job });
@@ -415,13 +674,14 @@ async function handleExport() {
         rangeStart,
         transparent: clipInfo.transparent === true,
         mergeIdenticalFrames,
+        maskSource: exportMasks,
         onProgress: (progress) => {
           if (!store) return;
           store.setState((s) => updateProgress(s, progress));
           emit('export:progress', { percent: progress.percent, frame: progress.current });
         },
       },
-      encodingController.signal,
+      signal,
     );
 
     if (!store) return;
@@ -595,7 +855,7 @@ function getPreviewContext(canvas) {
 function renderPreviewFrame(ctx, frame, frameIndex) {
   if (!clipInfo.transparent) {
     // Opaque exports never read back: nothing to cache
-    composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
+    composeOutputFrame(ctx, frame, cropArea, edits, frameIndex, maskSource);
     return;
   }
   const cached = previewFrameCache.get(frameIndex);
@@ -604,7 +864,7 @@ function renderPreviewFrame(ctx, frame, frameIndex) {
     ctx.putImageData(cached, 0, 0);
     return;
   }
-  composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
+  composeOutputFrame(ctx, frame, cropArea, edits, frameIndex, maskSource);
   const snapped = snapCanvasAlphaToBinary(ctx);
   // A closed frame drew the placeholder: never keep that
   if (snapped && isFrameValid(frame)) {
@@ -735,11 +995,19 @@ function cleanup() {
     throttledUpdateProgressUI = null;
   }
 
-  // Cancel any in-progress encoding
+  // Cancel any in-progress encoding (or AI preparation) and preview build
   if (encodingController) {
     encodingController.abort();
     encodingController = null;
   }
+  if (maskBuildController) {
+    maskBuildController.abort();
+    maskBuildController = null;
+  }
+  maskSource = null;
+  aiPrep = null;
+  clipFrames = [];
+  clipId = undefined;
 
   frames = [];
   cropArea = null;
