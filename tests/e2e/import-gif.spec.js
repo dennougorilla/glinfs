@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 import gifenc from 'gifenc';
-import { gotoCapture } from './helpers/app.js';
+import {
+  decodeExportedGif,
+  exportFromEditor,
+  exportGifAndWait,
+  gifPixel,
+  gotoCapture,
+} from './helpers/app.js';
 
 /**
  * E2E: open an existing GIF from the Capture screen (standalone GIF editor).
@@ -10,8 +16,8 @@ import { gotoCapture } from './helpers/app.js';
  * third on a transparent background. Imported at the GCD rate (10 fps) the
  * 500 ms hold becomes 5 repeated slots, so the editor must show 7 frames.
  *
- * Export of imported clips (merging the repeated slots back into one GIF
- * frame) is built by a parallel task and verified after both are merged.
+ * Exporting the imported clip merges the repeated slots back into one GIF
+ * frame, so the round trip reproduces the source timing and transparency.
  */
 
 const { GIFEncoder } = gifenc;
@@ -130,6 +136,44 @@ test.describe('Import a GIF from the Capture screen', () => {
       .toBe(7);
 
     expect(pageErrors).toEqual([]);
+  });
+
+  test('exports the imported GIF back with its frames, timing and transparency', async ({
+    page,
+  }) => {
+    test.slow();
+    await gotoCapture(page);
+    await page.locator('[data-testid="import-file-input"]').setInputFiles({
+      name: 'fixture.gif',
+      mimeType: 'image/gif',
+      buffer: buildFixtureGif(),
+    });
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    expect(await readActiveClip(page)).toMatchObject({ frameCount: 7, hasAlpha: true });
+
+    await exportFromEditor(page);
+    // Source alpha makes the export transparent (JavaScript encoder)
+    await expect(page.getByTestId('export-transparency-badge')).toBeVisible();
+    await expect(page.locator('[data-encoder-id="gifenc-js"]')).toHaveClass(/selected/);
+
+    await exportGifAndWait(page);
+    const frames = await decodeExportedGif(page);
+
+    // 7 slots at 10 fps collapse back into the 3 source frames
+    expect(frames).toHaveLength(3);
+    expect(frames.map((f) => f.durationMs)).toEqual([100, 100, 500]);
+    for (const frame of frames) {
+      expect([frame.width, frame.height]).toEqual([WIDTH, HEIGHT]);
+    }
+
+    const [red, blue, greenOnClear] = frames;
+    expect(gifPixel(red, 5, 5)).toEqual([255, 0, 0, 255]);
+    expect(gifPixel(blue, 5, 5)).toEqual([0, 0, 255, 255]);
+    // Frame 3: transparent background (nothing of frame 2 shows through),
+    // opaque green square
+    expect(gifPixel(greenOnClear, 2, 2)[3]).toBe(0);
+    expect(gifPixel(greenOnClear, WIDTH - 1, HEIGHT - 1)[3]).toBe(0);
+    expect(gifPixel(greenOnClear, 32, 24)).toEqual([0, 255, 0, 255]);
   });
 
   test('a fully opaque GIF is not flagged hasAlpha and imports 1:1', async ({ page }) => {
