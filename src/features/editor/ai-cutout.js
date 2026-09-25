@@ -246,12 +246,13 @@ export function describeAnalysisError(error) {
 }
 
 /**
- * MB with one decimal
+ * Decimal megabytes (10^6 bytes) with one decimal, the unit of the "176 MB"
+ * model size in the README and credits
  * @param {number} bytes
  * @returns {string}
  */
 function mb(bytes) {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 /**

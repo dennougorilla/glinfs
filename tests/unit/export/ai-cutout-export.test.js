@@ -33,11 +33,21 @@ import {
   SegmentationErrorCode,
 } from '../../../src/features/ai-cutout/protocol.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
-import { getSharedFinalMaskCache, setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
+import {
+  getSharedFinalMaskCache,
+  peekClipMaskSource,
+  setWasmAllowed,
+} from '../../../src/features/editor/ai-cutout.js';
 import { encodeGif } from '../../../src/features/export/api.js';
 import { initExport } from '../../../src/features/export/index.js';
 import { describeAiPreparation } from '../../../src/features/export/ui.js';
-import { resetAppStore, setClipPayload, setEditorPayload } from '../../../src/shared/app-store.js';
+import {
+  getClipPayload,
+  resetAppStore,
+  setClipPayload,
+  setEditorPayload,
+} from '../../../src/shared/app-store.js';
+import { createDefaultAiCutout } from '../../../src/shared/edits/model.js';
 
 const fake = /** @type {any} */ (segmentation).__fake;
 const COUNT = 6;
@@ -252,6 +262,50 @@ describe('Export with the AI cutout', () => {
     await flush();
     expect(encodeGif).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ['cancelled', () => $('#export-ai-cancel')?.click()],
+    ['failed', null],
+  ])(
+    'previews the frames analyzed so far with the cutout when the analysis is %s',
+    async (_label, stop) => {
+      inject();
+      cleanup = /** @type {() => void} */ (initExport());
+      await flush();
+      const frames = /** @type {any} */ (getClipPayload()).frames;
+      const ai = createDefaultAiCutout();
+      /** @type {((error: unknown) => void) | null} */
+      let fail = null;
+      fake.analyzeFrames.mockImplementationOnce(
+        (/** @type {any} */ _frames, /** @type {any} */ options) =>
+          new Promise((_resolve, reject) => {
+            // Half of the exported frames finish before the stop
+            storeMask('x1');
+            storeMask('x2');
+            fail = reject;
+            options.signal.addEventListener('abort', () => reject(createAbortError()));
+          }),
+      );
+      $('.btn-export-main')?.click();
+      await flush();
+      expect(peekClipMaskSource({ frames, ai, clipId: 'clip-x' })).toBeNull();
+
+      if (stop) {
+        stop();
+      } else {
+        /** @type {any} */ (fail)(new SegmentationError(SegmentationErrorCode.WORKER_CRASHED, 'x'));
+        await flush();
+        $('#export-ai-back')?.click();
+      }
+      await flush();
+      await flush();
+      // The preview's masks are rebuilt from what the store holds now
+      const source = peekClipMaskSource({ frames, ai, clipId: 'clip-x' });
+      expect(source).not.toBeNull();
+      expect(source?.getFinalMask(1)).not.toBeNull();
+      expect(source?.getFinalMask(3)).toBeNull();
+    },
+  );
 
   it('describes the build step', () => {
     expect(describeAiPreparation({ phase: 'building', buildDone: 3, buildTotal: 12 })).toBe(

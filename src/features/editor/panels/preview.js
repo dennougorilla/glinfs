@@ -8,7 +8,7 @@
  * @module features/editor/panels/preview
  */
 
-import { isEditableTarget } from '../../../shared/hotkeys.js';
+import { isComposingEvent, isEditableTarget } from '../../../shared/hotkeys.js';
 import { createElement } from '../../../shared/utils/dom.js';
 import { getCursorForHandle, hitTestCropHandle, renderFrameOnly, renderOverlay } from '../api.js';
 import { calculateCropFromDrag, detectBoundaryHit, moveCrop, resizeCropByHandle } from '../core.js';
@@ -18,6 +18,66 @@ import {
   hitTestEditorText,
   sampleSourcePixel,
 } from '../edits-preview.js';
+
+/** Overlay name outside the pick tools */
+const CROP_OVERLAY_LABEL = 'Crop overlay';
+
+/** Overlay name while a pick tool is on (it is then keyboard-focusable) */
+export const PICK_OVERLAY_LABEL =
+  'Pick position. Arrow keys move the marker (Shift for bigger steps), Enter picks the character under it, Escape cancels.';
+
+/** Marker step per arrow key press, as a fraction of the frame (Shift: big) */
+export const PICK_MARKER_STEP = /** @type {const} */ ({ small: 0.02, big: 0.1 });
+
+/**
+ * Make the overlay a keyboard pick target while a pick tool is on: the
+ * pointer is not the only way to place a Keep/Remove pick
+ * @param {HTMLElement} overlayCanvas
+ * @param {boolean} picking
+ */
+export function setOverlayPickMode(overlayCanvas, picking) {
+  if (picking) {
+    overlayCanvas.tabIndex = 0;
+    overlayCanvas.setAttribute('role', 'application');
+    overlayCanvas.setAttribute('aria-label', PICK_OVERLAY_LABEL);
+  } else {
+    overlayCanvas.removeAttribute('tabindex');
+    overlayCanvas.removeAttribute('role');
+    overlayCanvas.setAttribute('aria-label', CROP_OVERLAY_LABEL);
+  }
+}
+
+/**
+ * Crosshair of the keyboard pick marker
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} x - Frame pixels
+ * @param {number} y - Frame pixels
+ * @param {number} frameWidth
+ * @param {number} frameHeight
+ */
+function drawPickMarker(ctx, x, y, frameWidth, frameHeight) {
+  const unit = Math.max(1, Math.round(Math.max(frameWidth, frameHeight) / 400));
+  const arm = 12 * unit;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const [color, width] of /** @type {const} */ ([
+    ['rgba(0, 0, 0, 0.8)', 4 * unit],
+    ['#ffffff', 2 * unit],
+  ])) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(x - arm, y);
+    ctx.lineTo(x + arm, y);
+    ctx.moveTo(x, y - arm);
+    ctx.lineTo(x, y + arm);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, arm / 2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 /**
  * Render the preview panel and draw the initial frame + overlay
@@ -61,9 +121,10 @@ export function renderEditorPreview(state, handlers, frame) {
   const overlayCanvas = /** @type {HTMLCanvasElement} */ (
     createElement('canvas', {
       className: 'editor-canvas-overlay',
-      'aria-label': 'Crop overlay',
+      'aria-label': CROP_OVERLAY_LABEL,
     })
   );
+  setOverlayPickMode(overlayCanvas, state.aiPickTool !== null);
 
   // Setup canvas rendering
   const baseCtx = baseCanvas.getContext('2d');
@@ -119,6 +180,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    * @type {{ id: string, start: { x: number, y: number }, layerX: number, layerY: number, outW: number, outH: number } | null}
    */
   let textDrag = null;
+  /** Keyboard pick marker, fractions of the source frame (see onKeyDown) */
+  const pickMarker = { x: 0.5, y: 0.5 };
 
   // Get current state and frame via handlers (avoids stale closure)
   const getCurrentState = () => handlers.getState?.();
@@ -163,6 +226,53 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
       boundaryHit,
       selectedText: getSelectedTextOverlay(ctx, state, frame),
     });
+    if (state.aiPickTool && document.activeElement === overlayCanvas) {
+      drawPickMarker(
+        ctx,
+        pickMarker.x * frame.width,
+        pickMarker.y * frame.height,
+        frame.width,
+        frame.height,
+      );
+    }
+  }
+
+  /**
+   * Keyboard picks while a pick tool is on and the overlay has focus: the
+   * arrow keys move a marker (fractions of the source frame), Enter or
+   * Space picks under it. The keys are claimed (preventDefault) so the
+   * editor's frame-step and playback shortcuts do not also run; Escape is
+   * left to the editor, which leaves the tool.
+   * @param {KeyboardEvent} e
+   */
+  function onKeyDown(e) {
+    const state = getCurrentState();
+    if (!state?.aiPickTool || e.altKey || e.ctrlKey || e.metaKey || isComposingEvent(e)) return;
+    const step = e.shiftKey ? PICK_MARKER_STEP.big : PICK_MARKER_STEP.small;
+    const clamp = (/** @type {number} */ v) => Math.min(1, Math.max(0, v));
+    switch (e.key) {
+      case 'ArrowLeft':
+        pickMarker.x = clamp(pickMarker.x - step);
+        break;
+      case 'ArrowRight':
+        pickMarker.x = clamp(pickMarker.x + step);
+        break;
+      case 'ArrowUp':
+        pickMarker.y = clamp(pickMarker.y - step);
+        break;
+      case 'ArrowDown':
+        pickMarker.y = clamp(pickMarker.y + step);
+        break;
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        if (!e.repeat) handlers.onAiPick?.({ x: pickMarker.x, y: pickMarker.y });
+        return;
+      default:
+        return;
+    }
+    e.preventDefault();
+    renderOverlayWithState();
   }
 
   /**
@@ -395,10 +505,17 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
   overlayCanvas.addEventListener('mousedown', onMouseDown);
   overlayCanvas.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mouseup', onMouseUp);
+  overlayCanvas.addEventListener('keydown', onKeyDown);
+  // The marker shows only while the overlay has focus
+  overlayCanvas.addEventListener('focus', renderOverlayWithState);
+  overlayCanvas.addEventListener('blur', renderOverlayWithState);
 
   return () => {
     overlayCanvas.removeEventListener('mousedown', onMouseDown);
     overlayCanvas.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('mouseup', onMouseUp);
+    overlayCanvas.removeEventListener('keydown', onKeyDown);
+    overlayCanvas.removeEventListener('focus', renderOverlayWithState);
+    overlayCanvas.removeEventListener('blur', renderOverlayWithState);
   };
 }

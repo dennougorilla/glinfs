@@ -55,6 +55,7 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
+import { setOverlayPickMode } from './panels/preview.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import {
   addAiPick,
@@ -66,6 +67,7 @@ import {
   createEditorStoreFromClip,
   goToFrame,
   moveTextLayer,
+  PICK_NEEDS_ANALYSIS_NOTICE,
   removeAiPick,
   removeTextLayer,
   selectTextLayer,
@@ -174,6 +176,13 @@ let aiSession = null;
 /** @type {(() => void) | null} Unsubscribes the AI session's edits watcher */
 let aiEditsUnsubscribe = null;
 
+/**
+ * The deleted active clip this editor keeps on screen while the successor
+ * decodes (see handleDeleteActiveClip)
+ * @type {{ id: string, frames: import('../capture/types.js').Frame[] } | null}
+ */
+let deletedClipOnScreen = null;
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
 
@@ -190,6 +199,8 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     return;
   }
   for (const id of detail?.ids ?? []) {
+    // Frames of the clip still in the worker must not store masks afterwards
+    getSegmentationManager().forgetClip(id);
     maskStore.deleteClip(id);
   }
 });
@@ -201,9 +212,16 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
  */
 function getActiveClipId() {
   const state = store?.getState();
+  if (!state?.clip) return undefined;
   const payload = getClipPayload();
-  if (!state?.clip || !payload || payload.frames !== state.clip.frames) return undefined;
-  return payload.id;
+  if (payload && payload.frames === state.clip.frames) return payload.id;
+  // The active clip was deleted and stays on screen while its successor
+  // decodes: an analysis now still belongs to that clip (so its masks go
+  // when the deletion is final), not to the default group nothing releases
+  if (deletedClipOnScreen && deletedClipOnScreen.frames === state.clip.frames) {
+    return deletedClipOnScreen.id;
+  }
+  return undefined;
 }
 
 /**
@@ -540,6 +558,7 @@ export function initEditor() {
         container
           .querySelector('.editor-canvas-container')
           ?.classList.toggle('editor-ai-picking', state.aiPickTool !== null);
+        updateOverlayPickMode(container, state.aiPickTool, lastRendered.aiPickTool);
       }
       lastRendered.edits = state.edits;
       lastRendered.selectedTextId = state.selectedTextId;
@@ -1206,6 +1225,11 @@ function handleSetBackgroundMethod(method) {
   if (method === 'ai') {
     void aiSession?.checkCapabilities();
     announce('AI cutout selected');
+  } else if (aiSession?.analyzing) {
+    // The AI section (with the progress and Cancel) is hidden now: an
+    // analysis must not go on unseen. Finished frames are kept.
+    aiSession.cancel();
+    announce('Color key selected. The analysis was stopped; finished frames are kept.');
   } else {
     announce('Color key selected');
   }
@@ -1244,12 +1268,39 @@ function handleSetAiParams(patch) {
   store.setState((state) => setAiParams(state, patch));
 }
 
-/** @param {import('../../shared/edits/model.js').PickMode | null} tool */
-function handleSetAiPickTool(tool) {
+/**
+ * @param {import('../../shared/edits/model.js').PickMode | null} tool
+ * @param {{ fromKeyboard?: boolean }} [options] - fromKeyboard: the toggle
+ *   was switched with the keyboard, so the keyboard pick target (the
+ *   preview) takes focus
+ */
+function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
   store.setState((state) => setAiPickTool(state, tool));
-  if (tool) {
+  if (tool && options.fromKeyboard && overlayCanvas) {
+    setOverlayPickMode(overlayCanvas, true);
+    overlayCanvas.focus();
+  } else if (tool) {
     announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
+  }
+}
+
+/**
+ * Follow the pick tool on the preview overlay: focusable (keyboard picks)
+ * while a tool is on. When the tool ends while the overlay has focus (a
+ * pick was placed, or Escape), focus goes back to the tool's toggle
+ * instead of staying on a control that is no longer focusable.
+ * @param {ParentNode} container
+ * @param {import('../../shared/edits/model.js').PickMode | null} tool
+ * @param {import('../../shared/edits/model.js').PickMode | null} previousTool
+ */
+function updateOverlayPickMode(container, tool, previousTool) {
+  if (!overlayCanvas) return;
+  const hadFocus = document.activeElement === overlayCanvas;
+  setOverlayPickMode(overlayCanvas, tool !== null);
+  if (tool === null && hadFocus && previousTool) {
+    const toggle = container.querySelector(`#ai-pick-${previousTool}`);
+    if (toggle instanceof HTMLElement) toggle.focus();
   }
 }
 
@@ -1266,7 +1317,7 @@ function handleAiPick(point) {
   if (!mode) return;
   const frame = state.clip?.frames[state.currentFrame];
   if (!isFrameAnalyzed(frame)) {
-    const message = 'This frame is not analyzed yet. Analyze it, then pick again.';
+    const message = PICK_NEEDS_ANALYSIS_NOTICE;
     announce(message);
     store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
     return;
@@ -1569,6 +1620,8 @@ function handleDeleteActiveClip() {
 
   // Undo restores the clip from its payload: carry the edits with it
   saveEditorStateToClip();
+  const shownId = getActiveClipId();
+  const shownFrames = store?.getState().clip?.frames;
   if (!deleteActiveClip()) return;
   showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
 
@@ -1590,6 +1643,8 @@ function handleDeleteActiveClip() {
     // screen here is exactly the dark flash the user reported. The entry
     // shows its 'decoding' state in the panel; promoteWhenDecoded swaps in
     // the new clip the moment its frames arrive.
+    deletedClipOnScreen =
+      shownId !== undefined && shownFrames ? { id: shownId, frames: shownFrames } : null;
     void promoteWhenDecoded(successor.id);
     return;
   }
@@ -1791,6 +1846,7 @@ async function startSceneDetectionAsync(frames) {
  */
 function cleanup() {
   stopPlayback();
+  deletedClipOnScreen = null;
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();

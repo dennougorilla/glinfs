@@ -237,6 +237,13 @@ export class SegmentationManager {
   #tail = Promise.resolve();
   /** @type {Promise<Capabilities> | null} */
   #capabilities = null;
+  /**
+   * Clips released for good (see forgetClip). Clip ids are never reused,
+   * so an id stays here for the page session (one short string per
+   * deleted clip).
+   * @type {Set<string>}
+   */
+  #releasedClips = new Set();
 
   /** The backend the loaded model runs on, or null before the first analysis. */
   get backend() {
@@ -472,16 +479,30 @@ export class SegmentationManager {
   }
 
   /**
-   * Store a finished mask (even for a cancelled job: it is valid work).
+   * A clip is gone for good (its deletion can no longer be undone): masks
+   * of its frames that are still in the worker are dropped when they
+   * arrive, instead of recreating the clip's group in the mask store after
+   * its masks were deleted (nothing would ever release them again).
+   * @param {string} clipId
+   */
+  forgetClip(clipId) {
+    this.#releasedClips.add(clipId);
+  }
+
+  /**
+   * Store a finished mask (even for a cancelled job: it is valid work),
+   * unless its clip was released meanwhile.
    * @param {{ requestId: number, width: number, height: number, data: ArrayBuffer, totalMs: number, inferenceMs: number }} data
    */
   #onMask(data) {
     this.#settleRequest(data.requestId, (request) => {
-      this.#maskStore.set(
-        request.key,
-        { data: new Uint8Array(data.data), width: data.width, height: data.height },
-        request.clipId,
-      );
+      if (request.clipId === undefined || !this.#releasedClips.has(request.clipId)) {
+        this.#maskStore.set(
+          request.key,
+          { data: new Uint8Array(data.data), width: data.width, height: data.height },
+          request.clipId,
+        );
+      }
       request.resolve({ totalMs: data.totalMs, inferenceMs: data.inferenceMs });
     });
   }

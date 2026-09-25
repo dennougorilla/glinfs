@@ -12,6 +12,7 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
     getCapabilities: vi.fn(async () => ({ webgpu: false })),
     analyzeFrames: vi.fn(),
     dispose: vi.fn(),
+    forgetClip: vi.fn(),
   };
   return { ...actual, getSegmentationManager: () => fake, __fake: fake };
 });
@@ -19,10 +20,16 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
 import { getSharedMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
 import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
-import { getEditorState, initEditor } from '../../../src/features/editor/index.js';
+import {
+  deleteActiveClipFromAnywhere,
+  getEditorState,
+  initEditor,
+} from '../../../src/features/editor/index.js';
 import {
   deleteQueuedClip,
   enqueueClip,
+  getClipQueue,
+  registerClipCodec,
   releaseAllFramesAndReset,
   resetAppStore,
   setClipPayload,
@@ -85,6 +92,7 @@ describe('AI cutout in the mounted editor', () => {
     document.body.innerHTML = '<div id="main-content"></div>';
     fake.getCapabilities.mockClear();
     fake.dispose.mockClear();
+    fake.forgetClip.mockClear();
     fake.analyzeFrames.mockReset();
     fake.analyzeFrames.mockImplementation(async (frames, options) => {
       const store = getSharedMaskStore();
@@ -303,6 +311,184 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-pick-list').hidden).toBe(true);
   });
 
+  it('switching to Color stops a running analysis (its progress and Cancel would be hidden)', async () => {
+    mount(2);
+    await chooseAi();
+    /** @type {AbortSignal | null} */
+    let signal = null;
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          signal = options.signal;
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    expect(signal).not.toBeNull();
+    expect($('#ai-progress').hidden).toBe(false);
+
+    check('ai-method-color');
+    await settle();
+    expect(/** @type {AbortSignal} */ (/** @type {unknown} */ (signal)).aborted).toBe(true);
+    expect($('#ai-section').hidden).toBe(true);
+    expect(getEditorState()?.aiCutout.phase).toBe('idle');
+  });
+
+  it('a pick that works clears the earlier "not analyzed yet" pick notice', async () => {
+    mount(3);
+    await chooseAi();
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
+    await settle();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect($('#ai-notice').textContent).toBe('Analyzed 2 frames.');
+
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+
+    // Frame 2 has no analysis: refused with a notice
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    check('ai-pick-keep');
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect($('#ai-notice').textContent).toContain('not analyzed yet');
+
+    // Frame 1 is analyzed: the pick is added and the notice goes
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    expect($('#ai-notice').textContent).toBe('');
+
+    // Leaving the tool clears it too, but other notices stay
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    check('ai-pick-remove');
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect($('#ai-notice').textContent).toContain('not analyzed yet');
+    press('Escape');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect($('#ai-notice').textContent).toBe('');
+  });
+
+  it('keeps keyboard focus in the AI section when the focused control hides or disables itself', async () => {
+    mount(2);
+    await chooseAi();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+
+    // Clear picks hides itself: focus moves to the Keep tool
+    window.__TEST_HOOKS__.setEditorState({
+      edits: {
+        ...getEditorState()?.edits,
+        background: {
+          ...getEditorState()?.edits.background,
+          ai: { ...getEditorState()?.edits.background.ai, picks: [{ frame: 0, x: 0.1, y: 0.1 }] },
+        },
+      },
+    });
+    await settle();
+    $('#ai-picks-clear').focus();
+    $('#ai-picks-clear').click();
+    await settle();
+    expect($('#ai-picks-clear').hidden).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-pick-keep');
+
+    // Analyze disables itself while running: focus moves to Cancel, and back
+    // to Analyze when Cancel hides
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
+    getSharedMaskStore().delete('a1');
+    getSharedMaskStore().delete('a0');
+    await settle();
+    $('#ai-analyze').focus();
+    $('#ai-analyze').click();
+    await settle();
+    expect(/** @type {HTMLButtonElement} */ ($('#ai-analyze')).disabled).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-cancel');
+    $('#ai-cancel').click();
+    await settle();
+    await settle();
+    expect($('#ai-progress').hidden).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-analyze');
+  });
+
+  it('keyboard picks: the focused preview moves a marker with the arrows and picks on Enter', async () => {
+    mount();
+    await chooseAi();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    await settle();
+
+    const overlay = /** @type {HTMLCanvasElement} */ ($('.editor-canvas-overlay'));
+    expect(overlay.hasAttribute('tabindex')).toBe(false);
+
+    // Switching the toggle from the keyboard sends focus to the preview
+    const keep = /** @type {HTMLInputElement} */ ($('#ai-pick-keep'));
+    keep.focus();
+    keep.matches = (/** @type {string} */ selector) => selector === ':focus-visible';
+    check('ai-pick-keep');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBe('keep');
+    expect(overlay.tabIndex).toBe(0);
+    expect(overlay.getAttribute('aria-label')).toContain('Arrow keys move the marker');
+    expect(document.activeElement).toBe(overlay);
+    expect($('#ai-pick-status').textContent).toContain('arrow keys');
+
+    /** @param {string} key @param {boolean} [shiftKey] */
+    const key = (key, shiftKey = false) => {
+      const event = new KeyboardEvent('keydown', {
+        key,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      overlay.dispatchEvent(event);
+      return event;
+    };
+    // The arrows move the marker, not the playhead
+    expect(key('ArrowRight', true).defaultPrevented).toBe(true);
+    key('ArrowDown');
+    key('ArrowDown');
+    expect(getEditorState()?.currentFrame).toBe(2);
+    key('Enter');
+    await settle();
+    const [pick] = getEditorState()?.edits.background.ai.picks ?? [];
+    expect(pick).toMatchObject({ frame: 2, mode: 'keep' });
+    expect(pick.x).toBeCloseTo(0.6, 5);
+    expect(pick.y).toBeCloseTo(0.54, 5);
+    // The tool ends: focus goes back to its toggle, the preview leaves the tab order
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect(document.activeElement).toBe(keep);
+    expect(overlay.hasAttribute('tabindex')).toBe(false);
+
+    // Escape on the focused preview leaves the tool the same way
+    check('ai-pick-remove');
+    await settle();
+    overlay.focus();
+    press('Escape');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect(document.activeElement?.id).toBe('ai-pick-remove');
+  });
+
   it('parameter controls patch the AI edits', async () => {
     mount(2);
     await chooseAi();
@@ -344,6 +530,43 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
   });
 
+  it('keeps analyzing the deleted clip on screen under its own id while the successor decodes', async () => {
+    // A compressed successor: deleting the active clip keeps it on screen
+    registerClipCodec({
+      isCompressionAvailable: () => true,
+      encode: async () => ({
+        ok: true,
+        chunks: [{ type: 'key', timestamp: 0, duration: null, data: new ArrayBuffer(16) }],
+        config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
+        byteLength: 16,
+      }),
+      decode: () => new Promise(() => {}),
+    });
+    try {
+      enqueueClip({ frames: createTestFrames(2, 'q'), fps: 10, capturedAt: 0, id: 'clip-q' });
+      await settle();
+      expect(getClipQueue()[0]?.status).toBe('compressed');
+      mount();
+      await chooseAi();
+
+      expect(deleteActiveClipFromAnywhere()).toBe(true);
+      await settle();
+      expect($('#ai-analyze')).not.toBeNull();
+      $('#ai-analyze').click();
+      await settle();
+      expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
+      expect(fake.analyzeFrames.mock.calls[0][1].clipId).toBe('clip-a');
+      expect(getSharedMaskStore().keysForClip('clip-a').length).toBeGreaterThan(0);
+
+      // Once the deletion is final, those masks go with the clip
+      vi.advanceTimersByTime(5000);
+      expect(getSharedMaskStore().keysForClip('clip-a')).toEqual([]);
+      expect(getSharedMaskStore().size).toBe(0);
+    } finally {
+      registerClipCodec(null);
+    }
+  });
+
   it('drops a clip’s masks once its deletion is final, and everything on reset', async () => {
     const store = getSharedMaskStore();
     store.set('q0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-q');
@@ -357,6 +580,9 @@ describe('AI cutout in the mounted editor', () => {
     vi.advanceTimersByTime(5000);
     expect(store.has('q0')).toBe(false);
     expect(store.has('a0')).toBe(true);
+    // Masks of its frames still in the worker are dropped when they arrive
+    expect(fake.forgetClip).toHaveBeenCalledWith('clip-q');
+    expect(fake.forgetClip).not.toHaveBeenCalledWith('clip-a');
 
     releaseAllFramesAndReset();
     expect(store.size).toBe(0);

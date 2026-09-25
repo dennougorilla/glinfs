@@ -254,9 +254,15 @@ export function renderAiCutoutSection(handlers) {
   const keep = toggleButton('ai-pick-keep', 'Keep');
   const remove = toggleButton('ai-pick-remove', 'Remove');
   cleanups.push(
-    on(keep.input, 'change', () => handlers.onSetAiPickTool?.(keep.input.checked ? 'keep' : null)),
+    on(keep.input, 'change', () =>
+      handlers.onSetAiPickTool?.(keep.input.checked ? 'keep' : null, {
+        fromKeyboard: isKeyboardFocused(keep.input),
+      }),
+    ),
     on(remove.input, 'change', () =>
-      handlers.onSetAiPickTool?.(remove.input.checked ? 'remove' : null),
+      handlers.onSetAiPickTool?.(remove.input.checked ? 'remove' : null, {
+        fromKeyboard: isKeyboardFocused(remove.input),
+      }),
     ),
   );
   const tools = createElement('fieldset', { className: 'editor-text-fieldset editor-ai-tools' }, [
@@ -317,6 +323,20 @@ export function renderAiCutoutSection(handlers) {
   );
 
   return { methodSwitch, section, cleanups };
+}
+
+/**
+ * Whether a control was reached or used with the keyboard (it matches
+ * :focus-visible; a mouse click on a checkbox does not)
+ * @param {HTMLElement} el
+ * @returns {boolean}
+ */
+function isKeyboardFocused(el) {
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -423,6 +443,7 @@ export function updateAiCutoutSection(root, state, fps) {
   const { background } = state.edits;
   const isAi = background.method === 'ai';
   const status = state.aiCutout;
+  const focused = document.activeElement;
 
   setChecked(q(root, '#ai-method-color'), !isAi);
   setChecked(q(root, '#ai-method-ai'), isAi);
@@ -506,7 +527,7 @@ export function updateAiCutoutSection(root, state, fps) {
   if (full) {
     pickMessage = `The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached. Remove one to add another.`;
   } else if (state.aiPickTool) {
-    pickMessage = `Click a character in the preview to ${state.aiPickTool === 'keep' ? 'keep' : 'remove'} it. Press Escape to cancel.`;
+    pickMessage = `Click a character in the preview to ${state.aiPickTool === 'keep' ? 'keep' : 'remove'} it, or move the marker there with the arrow keys and press Enter. Press Escape to cancel.`;
   }
   setText(q(section, '#ai-pick-status'), pickMessage);
 
@@ -517,4 +538,56 @@ export function updateAiCutoutSection(root, state, fps) {
   clearBtn.hidden = ai.picks.length === 0;
 
   setText(q(section, '#ai-build-status'), status.building ? 'Updating the cutout…' : '');
+
+  keepFocusInSection(root, section, focused, running);
+}
+
+/**
+ * Whether a control can keep keyboard focus: enabled and not inside a
+ * hidden element (up to `root`)
+ * @param {HTMLElement} el
+ * @param {ParentNode} root
+ * @returns {boolean}
+ */
+function canHoldFocus(el, root) {
+  if (/** @type {HTMLButtonElement} */ (el).disabled) return false;
+  for (let node = /** @type {HTMLElement | null} */ (el); node; node = node.parentElement) {
+    if (node.hidden) return false;
+    if (node === root) break;
+  }
+  return true;
+}
+
+/**
+ * Several AI controls hide or disable themselves when used (Clear picks,
+ * Cancel, Retry, Run without WebGPU, Analyze). Focus would then drop to
+ * <body>, so a keyboard or screen reader user loses their place: move it to
+ * the next control that still makes sense.
+ * @param {ParentNode} root - Background panel root
+ * @param {HTMLElement} section
+ * @param {Element | null} focused - Focus before this update
+ * @param {boolean} running - An analysis runs
+ */
+function keepFocusInSection(root, section, focused, running) {
+  if (!(focused instanceof HTMLElement) || !section.contains(focused)) return;
+  // Browsers may already have moved focus to <body> while this update ran
+  // (focus fixup); focus moved anywhere else was moved on purpose
+  const active = document.activeElement;
+  if (active !== focused && active !== null && active !== document.body) return;
+  if (canHoldFocus(focused, root)) return;
+  const inControls = focused.closest('#ai-controls') !== null;
+  const order = [
+    ...(running ? ['#ai-cancel'] : []),
+    ...(inControls ? ['#ai-pick-keep'] : []),
+    '#ai-analyze',
+    '#ai-pick-keep',
+    '#ai-method-ai',
+  ];
+  for (const selector of order) {
+    const target = root.querySelector(selector);
+    if (target instanceof HTMLElement && canHoldFocus(target, root)) {
+      target.focus();
+      return;
+    }
+  }
 }

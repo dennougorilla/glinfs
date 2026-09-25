@@ -459,11 +459,28 @@ export function setBackgroundMethod(state, method, detectedColor = null) {
  */
 export function setAiPickTool(state, tool) {
   if (state.aiPickTool === tool) return state;
-  return {
+  const next = {
     ...state,
     aiPickTool: tool,
     pickingKeyColor: tool ? false : state.pickingKeyColor,
   };
+  // Leaving the tool (a pick that worked, Escape, the toggle) ends the
+  // refused pick the notice was about
+  return tool ? next : clearPickNotice(next);
+}
+
+/** Notice shown when a pick lands on a frame without analysis */
+export const PICK_NEEDS_ANALYSIS_NOTICE =
+  'This frame is not analyzed yet. Analyze it, then pick again.';
+
+/**
+ * Drop the refused-pick notice (other notices, e.g. an analysis outcome, stay)
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+function clearPickNotice(state) {
+  if (state.aiCutout?.notice !== PICK_NEEDS_ANALYSIS_NOTICE) return state;
+  return { ...state, aiCutout: { ...state.aiCutout, notice: '' } };
 }
 
 /**
@@ -491,7 +508,12 @@ export function updateAiCutoutStatus(state, patch) {
  */
 export function setPickingKeyColor(state, picking) {
   if (state.pickingKeyColor === picking) return state;
-  return { ...state, pickingKeyColor: picking, aiPickTool: picking ? null : state.aiPickTool };
+  const next = {
+    ...state,
+    pickingKeyColor: picking,
+    aiPickTool: picking ? null : state.aiPickTool,
+  };
+  return picking ? clearPickNotice(next) : next;
 }
 
 // ============================================================

@@ -297,13 +297,25 @@ function createMaskSource(masks) {
  * Only the newest build runs: a build() with other inputs, or clear(),
  * aborts the one in flight, which then rejects with an AbortError (so a
  * superseded build can never resolve with stale masks). A build() with the
- * same inputs as the one in flight shares its promise; that build stops
- * only at the first caller's signal.
+ * same inputs as the one in flight joins it: every joined caller gets the
+ * build's progress (the latest step at once, then each new one) and can
+ * cancel on its own signal, which rejects that caller's promise right away.
+ * The shared build stops only when every joined caller has cancelled (a
+ * caller without a signal never cancels).
  */
 export function createFinalMaskCache() {
   /** @type {{ key: string, source: MaskSource, bytes: number } | null} */
   let current = null;
-  /** @type {{ key: string, controller: AbortController, promise: Promise<MaskSource> } | null} */
+  /**
+   * @typedef {Object} InflightBuild
+   * @property {string} key
+   * @property {AbortController} controller
+   * @property {Promise<MaskSource>} promise - The shared build (callers get joined promises)
+   * @property {Set<(progress: BuildProgress) => void>} listeners - Joined callers' onProgress
+   * @property {BuildProgress | null} last - Latest progress, replayed to late joiners
+   * @property {number} callers - Joined callers that have not cancelled
+   */
+  /** @type {InflightBuild | null} */
   let inflight = null;
 
   /** @param {CacheKeyInputs} inputs */
@@ -311,27 +323,78 @@ export function createFinalMaskCache() {
     `${inputs.clipId ?? ''}|${inputs.storeVersion}|${inputs.frameCount}|${inputs.sourceWidth ?? ''}|${getAiParamsKey(inputs.ai)}`;
 
   /**
-   * Run one build under its own controller, following the caller's signal
-   * @param {string} key
+   * Run one build under its entry's controller, telling every joined caller
+   * about its progress
+   * @param {InflightBuild} entry
    * @param {BuildOptions} options
-   * @param {AbortController} controller
    * @returns {Promise<MaskSource>}
    */
-  const run = async (key, options, controller) => {
-    const callerSignal = options.signal;
-    const onAbort = () => controller.abort();
-    if (callerSignal?.aborted) controller.abort();
-    callerSignal?.addEventListener('abort', onAbort, { once: true });
+  const run = async (entry, options) => {
     try {
-      const result = await buildFinalMasks({ ...options, signal: controller.signal });
-      throwIfAborted(controller.signal);
+      const result = await buildFinalMasks({
+        ...options,
+        signal: entry.controller.signal,
+        onProgress: (progress) => {
+          entry.last = progress;
+          for (const listener of entry.listeners) listener(progress);
+        },
+      });
+      throwIfAborted(entry.controller.signal);
       const source = createMaskSource(result.masks);
-      current = { key, source, bytes: result.bytes };
+      current = { key: entry.key, source, bytes: result.bytes };
       return source;
     } finally {
-      callerSignal?.removeEventListener('abort', onAbort);
-      if (inflight?.controller === controller) inflight = null;
+      if (inflight === entry) inflight = null;
     }
+  };
+
+  /**
+   * One caller's view of a shared build: its own progress and its own
+   * cancellation (the build stops once no joined caller is left)
+   * @param {InflightBuild} entry
+   * @param {{ signal?: AbortSignal, onProgress?: (progress: BuildProgress) => void }} caller
+   * @returns {Promise<MaskSource>}
+   */
+  const join = (entry, { signal, onProgress }) => {
+    entry.callers++;
+    // A fresh function per caller: two callers may pass the same callback
+    const listener = onProgress ? (/** @type {BuildProgress} */ p) => onProgress(p) : null;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const leave = () => {
+        settled = true;
+        if (listener) entry.listeners.delete(listener);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        if (settled) return;
+        leave();
+        entry.callers--;
+        if (entry.callers === 0) entry.controller.abort();
+        reject(new DOMException('Final mask build cancelled', 'AbortError'));
+      };
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (listener) {
+        entry.listeners.add(listener);
+        if (entry.last) listener(entry.last);
+      }
+      entry.promise.then(
+        (source) => {
+          if (settled) return;
+          leave();
+          resolve(source);
+        },
+        (error) => {
+          if (settled) return;
+          leave();
+          reject(error);
+        },
+      );
+    });
   };
 
   return {
@@ -344,14 +407,25 @@ export function createFinalMaskCache() {
     build(options) {
       const key = keyOf(options);
       if (current && current.key === key) return Promise.resolve(current.source);
-      if (inflight && inflight.key === key) return inflight.promise;
-      inflight?.controller.abort();
-      const controller = new AbortController();
-      const promise = run(key, options, controller);
-      // run() clears `inflight` when it settles, which can be synchronous
-      // (an already-aborted signal): only record a build still running
-      if (!controller.signal.aborted) inflight = { key, controller, promise };
-      return promise;
+      // Join the build in flight for the same inputs, unless every caller
+      // already left it (it is stopping)
+      if (!inflight || inflight.key !== key || inflight.controller.signal.aborted) {
+        inflight?.controller.abort();
+        /** @type {InflightBuild} */
+        const entry = {
+          key,
+          controller: new AbortController(),
+          promise: Promise.resolve(/** @type {any} */ (null)),
+          listeners: new Set(),
+          last: null,
+          callers: 0,
+        };
+        inflight = entry;
+        entry.promise = run(entry, options);
+        // Callers see the outcome through their joined promises
+        entry.promise.catch(() => undefined);
+      }
+      return join(inflight, options);
     },
 
     /**

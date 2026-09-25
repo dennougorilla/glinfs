@@ -162,6 +162,51 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     ]);
   });
 
+  test('keyboard only: a Keep pick placed with the arrow keys, and focus never drops to <body>', async ({
+    page,
+  }) => {
+    await analyzeDiscClip(page);
+    const middle = FRAME_COUNT / 2;
+    await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
+
+    // Space on the Keep toggle: the preview takes focus as the pick target
+    await page.locator('#ai-pick-keep').focus();
+    await page.keyboard.press('Space');
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+    const overlay = page.locator('.editor-canvas-overlay');
+    await expect(overlay).toBeFocused();
+    await expect(overlay).toHaveAttribute('aria-label', /Arrow keys move the marker/);
+    await expect(page.locator('#ai-pick-status')).toContainText('arrow keys');
+
+    // Marker from the centre (0.5, 0.5) to disc A (≈ 0.27, 0.31)
+    for (const key of ['Shift+ArrowLeft', 'Shift+ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {
+      await page.keyboard.press(key);
+    }
+    for (const key of ['Shift+ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp']) {
+      await page.keyboard.press(key);
+    }
+    // The arrows moved the marker, not the playhead
+    expect(await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().currentFrame)).toBe(
+      middle,
+    );
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
+    await expect(page.locator('#ai-pick-list')).toContainText('Keep');
+    await expect(page.locator('#ai-pick-keep')).not.toBeChecked();
+    await expect(page.locator('#ai-pick-keep')).toBeFocused();
+    await waitForAiMasks(page);
+    // Only disc A is kept
+    await expect.poll(() => editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(0);
+    expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
+
+    // Clear picks hides itself: focus moves to the Keep tool, not <body>
+    await page.locator('#ai-picks-clear').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
+    await expect(page.locator('#ai-picks-clear')).toBeHidden();
+    await expect(page.locator('#ai-pick-keep')).toBeFocused();
+  });
+
   test('threshold and edge change the exported coverage in the expected direction', async ({
     page,
   }) => {
