@@ -334,9 +334,7 @@ describe('SegmentationManager.analyzeFrames', () => {
   it('keeps the worker when a job fails for a reason other than inference', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')]);
-    const error = await manager
-      .analyzeFrames([makeFrame('b', { closed: true })])
-      .catch((e) => e);
+    const error = await manager.analyzeFrames([makeFrame('b', { closed: true })]).catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
     expect(workers[0].terminated).toBe(false);
     await expect(manager.analyzeFrames([makeFrame('c')])).resolves.toMatchObject({ analyzed: 1 });
