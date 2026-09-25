@@ -229,7 +229,11 @@ export class SegmentationManager {
   #initProgress = null;
   /** @type {Map<number, PendingRequest>} */
   #requests = new Map();
-  /** @type {Set<number>} */
+  /**
+   * Cancelled jobs whose requests are still settling (a job id leaves once
+   * every request it submitted has settled)
+   * @type {Set<number>}
+   */
   #cancelledJobs = new Set();
   #requestSeq = 0;
   #jobSeq = 0;
@@ -258,6 +262,11 @@ export class SegmentationManager {
   /** The mask store results are written to. */
   get maskStore() {
     return this.#maskStore;
+  }
+
+  /** Cancelled jobs with requests still settling (diagnostics). */
+  get cancelledJobCount() {
+    return this.#cancelledJobs.size;
   }
 
   /**
@@ -331,15 +340,14 @@ export class SegmentationManager {
           request.catch(() => undefined); // awaited below, in order
           inflight.push(request);
         }
-        const result = await raceAbort(
-          /** @type {Promise<{ totalMs: number }>} */ (inflight.shift()),
-          signal,
-        );
+        // Stays in `inflight` until it settles, so a cancel can wait for it
+        const result = await raceAbort(inflight[0], signal);
+        inflight.shift();
         framesDone++;
         report(result.totalMs);
       }
     } catch (error) {
-      this.#cancelJob(jobId);
+      this.#cancelJob(jobId, inflight);
       if (
         error instanceof SegmentationError &&
         error.code === SegmentationErrorCode.INFERENCE_FAILED
@@ -351,7 +359,6 @@ export class SegmentationManager {
       }
       throw error;
     }
-    this.#cancelledJobs.delete(jobId);
     return { analyzed: pending.length, skipped, backend: ready.backend };
   }
 
@@ -578,12 +585,15 @@ export class SegmentationManager {
 
   /**
    * Stop a job: frames not yet sent are never sent, queued ones are dropped
-   * by the worker (which closes their bitmaps).
+   * by the worker (which closes their bitmaps). The job is remembered as
+   * cancelled until every request it submitted has settled.
    * @param {number} jobId
+   * @param {Promise<unknown>[]} submitted - The job's requests that may still be pending
    */
-  #cancelJob(jobId) {
+  #cancelJob(jobId, submitted) {
     this.#cancelledJobs.add(jobId);
     this.#worker?.postMessage({ type: 'cancel', jobId });
+    Promise.allSettled(submitted).then(() => this.#cancelledJobs.delete(jobId));
   }
 
   /**
