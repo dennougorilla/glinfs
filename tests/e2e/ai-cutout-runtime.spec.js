@@ -157,14 +157,16 @@ test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
     const capabilities = await page.evaluate(() =>
       window.__TEST_HOOKS__.aiCutout.getCapabilities(),
     );
-    test.skip(capabilities.webgpu, 'This browser has a WebGPU adapter; the WASM path is not used');
 
     await injectSyntheticClip(page, { count: 4, width: 1280, height: 720, shareLast: true });
     const result = await analyzeClip(page);
 
     expect(result.error).toBeUndefined();
-    expect(result.backend).toBe('wasm');
-    expect(result.readyInfo.backend).toBe('wasm');
+    // Headless Chromium (here and in CI) has no WebGPU adapter, so this runs
+    // the WASM fallback; a browser with an adapter must pick WebGPU instead
+    const expectedBackend = capabilities.webgpu ? 'webgpu' : 'wasm';
+    expect(result.backend).toBe(expectedBackend);
+    expect(result.readyInfo.backend).toBe(expectedBackend);
     expect(result.readyInfo.fromCache).toBe(false);
     // Frame 3 is a hold of frame 2: one mask serves both
     expect(result.analyzed).toBe(3);
