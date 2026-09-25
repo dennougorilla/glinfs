@@ -657,6 +657,7 @@ function maybeCompressEntry(entry) {
         if (index !== -1) {
           state.clipQueue.splice(index, 1);
           emitQueueChanged('compress-lost', { id: entry.id, error: result.error });
+          emitClipsReleased([entry.id]);
         }
       }
     });
@@ -966,7 +967,20 @@ function finalizePendingDeletion() {
   if (!pendingDeletion) return;
   clearTimeout(pendingDeletion.timer);
   closeFrameList(pendingDeletion.entry.frames);
+  const { id } = pendingDeletion.entry;
   pendingDeletion = null;
+  emitClipsReleased([id]);
+}
+
+/**
+ * Tell per-clip caches (the AI cutout's masks) that clips are gone for good:
+ * their deletion can no longer be undone, their frames died, or everything
+ * was reset. Emitted on the bus so this module never imports a feature.
+ * @param {string[]} ids - Clip ids (ClipPayload.id / ClipQueueEntry.id)
+ * @param {boolean} [reset=false] - Every clip was released
+ */
+function emitClipsReleased(ids, reset = false) {
+  emit('clips:released', { ids: ids.filter(Boolean), reset });
 }
 
 /**
@@ -1119,6 +1133,7 @@ export function clearEditorPayload() {
  */
 export function releaseAllFramesAndReset() {
   finalizePendingDeletion();
+  const releasedIds = [state.clipPayload?.id, ...state.clipQueue.map((entry) => entry.id)];
   closeFrameList(state.clipPayload?.frames);
   closeEditorPayloadFrames(state.editorPayload);
   for (const entry of state.clipQueue) {
@@ -1133,6 +1148,7 @@ export function releaseAllFramesAndReset() {
   if (hadQueue) {
     emitQueueChanged('reset');
   }
+  emitClipsReleased(/** @type {string[]} */ (releasedIds), true);
   // Also clear screen capture state for fresh start
   clearScreenCaptureState();
 }

@@ -1899,3 +1899,219 @@
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   AI cutout (Background panel, preview pick tools and status note)
+   Scoped under .editor-screen; every class is prefixed editor-ai-
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.editor-screen .editor-ai-color-fields,
+.editor-screen .editor-ai-section,
+.editor-screen .editor-ai-controls,
+.editor-screen .editor-ai-progress,
+.editor-screen .editor-ai-error,
+.editor-screen .editor-ai-warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.editor-screen .editor-ai-color-fields[hidden],
+.editor-screen .editor-ai-section[hidden],
+.editor-screen .editor-ai-controls[hidden],
+.editor-screen .editor-ai-progress[hidden],
+.editor-screen .editor-ai-error[hidden],
+.editor-screen .editor-ai-warning[hidden],
+.editor-screen .editor-ai-note[hidden],
+.editor-screen .editor-ai-pick-list[hidden],
+.editor-screen .editor-ai-section button[hidden],
+.editor-screen .editor-ai-preview-note[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-ai-intro,
+.editor-screen .editor-ai-note,
+.editor-screen .editor-ai-status,
+.editor-screen .editor-ai-progress-text,
+.editor-screen .editor-ai-warning-text,
+.editor-screen .editor-ai-error-text {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.editor-screen .editor-ai-note:empty,
+.editor-screen .editor-ai-status:empty {
+  display: none;
+}
+
+.editor-screen .editor-ai-status,
+.editor-screen .editor-ai-progress-text {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-ai-wide {
+  width: 100%;
+}
+
+.editor-screen .editor-ai-warning {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+}
+
+.editor-screen .editor-ai-warning-text {
+  color: var(--color-warning);
+}
+
+.editor-screen .editor-ai-error {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+}
+
+.editor-screen .editor-ai-error-text {
+  color: var(--color-error);
+}
+
+.editor-screen .editor-ai-progress-bar {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--color-primary);
+}
+
+.editor-screen .editor-ai-controls {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Keep / Remove pick tools: checkboxes styled as buttons */
+.editor-screen .editor-ai-tool-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-ai-tool {
+  position: relative;
+  flex: 1;
+  cursor: pointer;
+}
+
+.editor-screen .editor-ai-tool-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.editor-screen .editor-ai-tool span {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-ai-tool--active span,
+.editor-screen .editor-ai-tool-input:checked + span {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-ai-tool-input:disabled + span {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-screen .editor-ai-tool-input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* Pick list */
+.editor-screen .editor-ai-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.editor-screen .editor-ai-pick {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.editor-screen .editor-ai-pick--keep {
+  border-left-color: var(--color-primary);
+}
+
+.editor-screen .editor-ai-pick--remove {
+  border-left-color: var(--color-recording);
+}
+
+.editor-screen .editor-ai-pick-go {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-screen .editor-ai-pick-delete {
+  flex-shrink: 0;
+  width: 28px;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.editor-screen .editor-ai-pick-delete:hover {
+  color: var(--color-recording);
+}
+
+.editor-screen .editor-ai-section button:focus-visible,
+.editor-screen .editor-ai-section input:focus-visible,
+.editor-screen .editor-ai-method input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Preview: pick tool active, and the per-frame status note */
+.editor-screen .editor-ai-picking .editor-canvas-overlay {
+  cursor: crosshair;
+  outline: 2px dashed var(--color-primary);
+  outline-offset: -2px;
+}
+
+.editor-screen .editor-ai-preview-note {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: var(--font-size-xs);
+  pointer-events: none;
+}

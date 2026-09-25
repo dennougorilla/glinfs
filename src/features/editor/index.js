@@ -21,7 +21,13 @@ import {
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
-import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
+import {
+  EDIT_LIMITS,
+  isAiCutoutActive,
+  isColorKeyActive,
+  normalizeEdits,
+  requiresTransparency,
+} from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -29,7 +35,11 @@ import { createElement, createErrorScreen, qsRequired } from '../../shared/utils
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
+import { getSharedFinalMaskCache, isFrameAnalyzed } from './ai-cutout.js';
+import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
   centerCropAfterConstraint,
   constrainAspectRatio,
@@ -47,16 +57,22 @@ import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import {
+  addAiPick,
   addTextLayer,
+  clearAiPicks,
   clearCrop,
   completeSceneDetection,
   createEditorStore,
   createEditorStoreFromClip,
   goToFrame,
   moveTextLayer,
+  removeAiPick,
   removeTextLayer,
   selectTextLayer,
+  setAiParams,
+  setAiPickTool,
   setBackground,
+  setBackgroundMethod,
   setEdits,
   setPickingKeyColor,
   setPlaybackSpeed,
@@ -65,6 +81,7 @@ import {
   startSceneDetection,
   toggleGrid,
   togglePlayback,
+  updateAiCutoutStatus,
   updateCrop,
   updateRange,
   updateSceneDetectionProgress,
@@ -74,6 +91,7 @@ import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './t
 import {
   renderEditorScreen,
   showClipsQueueFullBanner,
+  updateClipsMemoryFooter,
   updateClipsPanel,
   updateCropInfoPanel,
   updateOverlayCanvas,
@@ -147,8 +165,46 @@ let previewRenderer = null;
  */
 let cropDragging = false;
 
+/**
+ * AI cutout session of this editor mount (analysis + final masks)
+ * @type {ReturnType<typeof createAiCutoutSession> | null}
+ */
+let aiSession = null;
+
+/** @type {(() => void) | null} Unsubscribes the AI session's edits watcher */
+let aiEditsUnsubscribe = null;
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
+
+// Probability masks belong to clips. When a clip's frames are released for
+// good (its deletion's Undo window ended, or a fresh session drained
+// everything) its masks go too; a full reset also stops the model worker.
+// Subscribed at module scope: the Undo timer can fire on any screen.
+onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ detail) => {
+  const maskStore = getSharedMaskStore();
+  if (detail?.reset) {
+    getSegmentationManager().dispose();
+    maskStore.clear();
+    getSharedFinalMaskCache().clear();
+    return;
+  }
+  for (const id of detail?.ids ?? []) {
+    maskStore.deleteClip(id);
+  }
+});
+
+/**
+ * Mask store group of the clip being edited: the active clip payload's
+ * stable id (it survives demote/promote), when this editor shows it
+ * @returns {string | undefined}
+ */
+function getActiveClipId() {
+  const state = store?.getState();
+  const payload = getClipPayload();
+  if (!state?.clip || !payload || payload.frames !== state.clip.frames) return undefined;
+  return payload.id;
+}
 
 /**
  * Initialize editor feature
@@ -311,6 +367,8 @@ export function initEditor() {
   previewRenderer = createEditorFrameRenderer();
   cropDragging = false;
 
+  startAiCutoutSession();
+
   // Initial render
   render(container);
 
@@ -379,6 +437,8 @@ export function initEditor() {
     edits: initialState.edits,
     selectedTextId: initialState.selectedTextId,
     pickingKeyColor: initialState.pickingKeyColor,
+    aiPickTool: initialState.aiPickTool,
+    aiCutout: initialState.aiCutout,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -425,11 +485,21 @@ export function initEditor() {
     const editsChanged = state.edits !== lastRendered.edits;
     const textSelectionChanged = state.selectedTextId !== lastRendered.selectedTextId;
     const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
+    const pickToolChanged = state.aiPickTool !== lastRendered.aiPickTool;
+    const aiChanged = state.aiCutout !== lastRendered.aiCutout;
+    const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
+    // The analysis coverage shown in the panel depends on the selection
+    const selectionChanged =
+      state.selectedRange.start !== lastRendered.selectedRange.start ||
+      state.selectedRange.end !== lastRendered.selectedRange.end;
 
     // Update base canvas ONLY when the composed frame changes
-    if (frameChanged || editsChanged || (cropChanged && editsUseCrop)) {
+    if (frameChanged || editsChanged || masksChanged || (cropChanged && editsUseCrop)) {
       drawPreview(state);
+    }
+    if (frameChanged || editsChanged || aiChanged) {
+      updateAiPreviewNote(container, state);
     }
 
     if (frameChanged) {
@@ -449,7 +519,14 @@ export function initEditor() {
       drawOverlay(state);
     }
 
-    if (editsChanged || textSelectionChanged || pickingChanged) {
+    if (
+      editsChanged ||
+      textSelectionChanged ||
+      pickingChanged ||
+      pickToolChanged ||
+      aiChanged ||
+      (selectionChanged && state.edits.background.method === 'ai')
+    ) {
       updateEditsPanel(container, state, fps);
       if (textSelectionChanged) {
         updateDeleteHint(container, state.selectedTextId);
@@ -459,9 +536,16 @@ export function initEditor() {
           .querySelector('.editor-canvas-container')
           ?.classList.toggle('editor-bg-picking', state.pickingKeyColor);
       }
+      if (pickToolChanged) {
+        container
+          .querySelector('.editor-canvas-container')
+          ?.classList.toggle('editor-ai-picking', state.aiPickTool !== null);
+      }
       lastRendered.edits = state.edits;
       lastRendered.selectedTextId = state.selectedTextId;
       lastRendered.pickingKeyColor = state.pickingKeyColor;
+      lastRendered.aiPickTool = state.aiPickTool;
+      lastRendered.aiCutout = state.aiCutout;
     }
 
     // Update crop info panel when crop changes
@@ -621,6 +705,15 @@ function render(container) {
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
       onPickTransparentArea: handlePickTransparentArea,
+      onSetBackgroundMethod: handleSetBackgroundMethod,
+      onAiAnalyze: handleAiAnalyze,
+      onAiCancel: handleAiCancel,
+      onAiAllowWasm: handleAiAllowWasm,
+      onSetAiParams: handleSetAiParams,
+      onSetAiPickTool: handleSetAiPickTool,
+      onAiPick: handleAiPick,
+      onRemoveAiPick: handleRemoveAiPick,
+      onClearAiPicks: handleClearAiPicks,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -650,7 +743,30 @@ function drawPreview(state) {
   previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
     skipKey: cropDragging,
     transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
+    maskSource: isAiCutoutActive(state.edits.background) ? (aiSession?.maskSource ?? null) : null,
   });
+}
+
+/**
+ * The small status note on the preview: with the AI cutout on, a frame
+ * without a mask previews unkeyed and says why
+ * @param {ParentNode} container
+ * @param {import('./types.js').EditorState} state
+ */
+function updateAiPreviewNote(container, state) {
+  const note = container.querySelector('#ai-preview-note');
+  if (!(note instanceof HTMLElement)) return;
+  let text = '';
+  if (isAiCutoutActive(state.edits.background)) {
+    const frame = state.clip?.frames[state.currentFrame];
+    if (!isFrameAnalyzed(frame)) {
+      text = 'Not analyzed yet';
+    } else if (!aiSession?.maskSource?.getFinalMask(state.currentFrame)) {
+      text = 'Updating the cutout\u2026';
+    }
+  }
+  if (note.textContent !== text) note.textContent = text;
+  note.hidden = text === '';
 }
 
 /**
@@ -994,6 +1110,8 @@ function handleRemoveText(id) {
   const clipFrames = before.clip?.frames;
 
   store.setState((state) => removeTextLayer(state, id));
+  // Move keyboard focus off the removed item now, not a throttle tick later
+  syncEditsPanelNow();
   announce('Text layer deleted');
   if (hasPendingDeletion()) {
     // The toast's action slot holds a clip deletion's Undo, and a new action
@@ -1053,7 +1171,10 @@ function handleToggleBackground(enabled) {
   /** @type {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} */
   const patch = { enabled };
   const state = store.getState();
-  if (enabled && !state.edits.background.colorChosen) {
+  // Only the color key needs a key color: turning on the AI cutout never
+  // picks one
+  const colorKeyTurnsOn = isColorKeyActive({ ...state.edits.background, enabled });
+  if (colorKeyTurnsOn && !state.edits.background.colorChosen) {
     const frame = state.clip?.frames[state.currentFrame];
     const detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
     if (detected) {
@@ -1063,6 +1184,161 @@ function handleToggleBackground(enabled) {
     }
   }
   store.setState((state) => setBackground(state, patch));
+}
+
+/**
+ * Switch between the color key and the AI cutout. Switching to Color with
+ * removal on and no chosen key color detects the edge color, like turning
+ * the color key on does.
+ * @param {import('../../shared/edits/model.js').BackgroundMethod} method
+ */
+function handleSetBackgroundMethod(method) {
+  if (!store) return;
+  const state = store.getState();
+  const background = state.edits.background;
+  if (background.method === method) return;
+  let detected = null;
+  if (method === 'color' && background.enabled && !background.colorChosen) {
+    const frame = state.clip?.frames[state.currentFrame];
+    detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
+  }
+  store.setState((s) => setBackgroundMethod(s, method, detected));
+  if (method === 'ai') {
+    void aiSession?.checkCapabilities();
+    announce('AI cutout selected');
+  } else {
+    announce('Color key selected');
+  }
+}
+
+/**
+ * Frames of the current selection (what "Analyze selection" analyzes)
+ * @returns {import('../capture/types.js').Frame[]}
+ */
+function getSelectionFrames() {
+  const state = store?.getState();
+  if (!state?.clip) return [];
+  return state.clip.frames.slice(state.selectedRange.start, state.selectedRange.end + 1);
+}
+
+/** Analyze the selection's frames that have no mask yet (also Retry) */
+function handleAiAnalyze() {
+  if (!store || !aiSession) return;
+  void aiSession.analyze(getSelectionFrames());
+}
+
+/** Cancel the running analysis; finished masks are kept */
+function handleAiCancel() {
+  aiSession?.cancel();
+}
+
+/** The explicit "Run without WebGPU (very slow)" choice: run the analysis */
+function handleAiAllowWasm() {
+  if (!store || !aiSession) return;
+  void aiSession.allowWasmAndAnalyze(getSelectionFrames());
+}
+
+/** @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch */
+function handleSetAiParams(patch) {
+  if (!store) return;
+  store.setState((state) => setAiParams(state, patch));
+}
+
+/** @param {import('../../shared/edits/model.js').PickMode | null} tool */
+function handleSetAiPickTool(tool) {
+  if (!store) return;
+  store.setState((state) => setAiPickTool(state, tool));
+  if (tool) {
+    announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
+  }
+}
+
+/**
+ * The pick tool clicked the preview: add a pick on the current frame and
+ * leave the tool. Picks need the frame's analysis (the character under the
+ * click is found in its mask).
+ * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ */
+function handleAiPick(point) {
+  if (!store) return;
+  const state = store.getState();
+  const mode = state.aiPickTool;
+  if (!mode) return;
+  const frame = state.clip?.frames[state.currentFrame];
+  if (!isFrameAnalyzed(frame)) {
+    const message = 'This frame is not analyzed yet. Analyze it, then pick again.';
+    announce(message);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
+    return;
+  }
+  if (state.edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
+    return;
+  }
+  store.setState((s) =>
+    setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
+  );
+  announce(`${mode === 'keep' ? 'Keep' : 'Remove'} pick added. It is followed through the clip.`);
+}
+
+/** @param {number} index */
+function handleRemoveAiPick(index) {
+  if (!store) return;
+  store.setState((state) => removeAiPick(state, index));
+  announce('Pick removed');
+}
+
+/** Remove every pick */
+function handleClearAiPicks() {
+  if (!store) return;
+  store.setState(clearAiPicks);
+  announce('Picks cleared');
+}
+
+/**
+ * Start this mount's AI cutout session: status goes to the editor store
+ * (new final masks bump aiCutout.maskVersion, which redraws the preview)
+ * and background edits rebuild the masks. Every callback checks that this
+ * session's store is still the current one (a promote re-inits the editor
+ * synchronously).
+ */
+function startAiCutoutSession() {
+  if (!store) return;
+  const sessionStore = store;
+  const isCurrent = () => store === sessionStore;
+  const maskStore = getSharedMaskStore();
+  const session = createAiCutoutSession({
+    getState: () => (isCurrent() ? sessionStore.getState() : null),
+    setStatus: (patch) => {
+      if (isCurrent()) sessionStore.setState((s) => updateAiCutoutStatus(s, patch));
+    },
+    onMasksChanged: () => {
+      const container = document.querySelector('#main-content');
+      if (isCurrent() && container) updateClipsMemoryFooter(container);
+    },
+    getClipId: getActiveClipId,
+    manager: getSegmentationManager(),
+    maskStore,
+  });
+  aiSession = session;
+
+  const clipId = getActiveClipId();
+  if (clipId !== undefined) maskStore.touchClip(clipId);
+
+  // Any change of the background settings (method, on/off, parameters,
+  // picks) may need other final masks. Unthrottled, so a build in flight
+  // for old parameters is aborted right away.
+  aiEditsUnsubscribe = sessionStore.subscribe((state, prevState) => {
+    if (state.edits.background !== prevState.edits.background) {
+      session.requestBuild();
+    }
+  });
+
+  // Masks from an earlier visit are memoized: the first draw is keyed
+  session.requestBuild();
+  if (sessionStore.getState().edits.background.method === 'ai') {
+    void session.checkCapabilities();
+  }
 }
 
 /** @param {boolean} picking */
@@ -1518,6 +1794,17 @@ function cleanup() {
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();
+
+  // Stop this mount's analysis and mask build (finished masks stay in the
+  // mask store; the model worker stays up for the export or a later mount)
+  if (aiEditsUnsubscribe) {
+    aiEditsUnsubscribe();
+    aiEditsUnsubscribe = null;
+  }
+  if (aiSession) {
+    aiSession.dispose();
+    aiSession = null;
+  }
   if (previewRenderer) {
     previewRenderer.clear();
     previewRenderer = null;
@@ -1628,6 +1915,8 @@ function registerTestHooks() {
         selectedTextId: state.selectedTextId,
         pickingKeyColor: state.pickingKeyColor,
         hasAlpha: state.clip?.hasAlpha === true,
+        aiPickTool: state.aiPickTool,
+        aiCutout: state.aiCutout,
       };
     };
     // Keyed-background cache counters: readbacks must not grow on text-only edits

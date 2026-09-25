@@ -1075,3 +1075,72 @@
 .export-screen .export-live-column:has(.live-monitor-slot[hidden]) {
   display: none;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   AI cutout: preparation before encoding, and the settings note
+   Scoped under .export-screen; every class is prefixed export-ai-
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.export-screen .export-ai-prep {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  width: 100%;
+  height: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-6);
+  text-align: center;
+}
+
+.export-screen .export-ai-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.export-screen .export-ai-text,
+.export-screen .export-ai-progress-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.export-screen .export-ai-progress-text {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-screen .export-ai-progress-bar {
+  width: 100%;
+  max-width: 400px;
+  height: 8px;
+  accent-color: var(--color-primary);
+}
+
+.export-screen .export-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.export-screen .export-ai-actions button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.export-screen .export-ai-note {
+  margin: 0 var(--space-4) var(--space-3);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.export-screen .export-ai-note[hidden] {
+  display: none;
+}

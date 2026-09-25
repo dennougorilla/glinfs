@@ -1,8 +1,9 @@
 /**
  * Editor preview panel: base + overlay canvases and the overlay's pointer
- * interaction. Pointer priority on the overlay: (1) eyedropper mode picks
- * the background key color, (2) a text layer drawn on the current frame is
- * selected and dragged, (3) otherwise the crop interaction (clicking empty
+ * interaction. Pointer priority on the overlay: (1) an AI pick tool adds a
+ * Keep/Remove pick at the clicked point, (2) eyedropper mode picks the
+ * background key color, (3) a text layer drawn on the current frame is
+ * selected and dragged, (4) otherwise the crop interaction (clicking empty
  * space also deselects the text layer).
  * @module features/editor/panels/preview
  */
@@ -34,7 +35,18 @@ export function renderEditorPreview(state, handlers, frame) {
 
   // Canvas container
   const canvasContainer = createElement('div', {
-    className: `editor-canvas-container${state.pickingKeyColor ? ' editor-bg-picking' : ''}`,
+    className: `editor-canvas-container${state.pickingKeyColor ? ' editor-bg-picking' : ''}${
+      state.aiPickTool ? ' editor-ai-picking' : ''
+    }`,
+  });
+
+  // AI cutout status of the current frame (e.g. not analyzed yet); filled
+  // by editor/index.js
+  const aiNote = createElement('p', {
+    className: 'editor-ai-preview-note',
+    id: 'ai-preview-note',
+    role: 'status',
+    hidden: 'true',
   });
 
   // Base canvas (frame only)
@@ -74,6 +86,7 @@ export function renderEditorPreview(state, handlers, frame) {
 
   canvasContainer.appendChild(baseCanvas);
   canvasContainer.appendChild(overlayCanvas);
+  canvasContainer.appendChild(aiNote);
   previewWrapper.appendChild(canvasContainer);
   previewPanel.appendChild(previewWrapper);
 
@@ -223,6 +236,17 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     const state = getCurrentState();
     const coords = getFrameCoords(e);
 
+    if (state?.aiPickTool) {
+      const frame = getCurrentFrame();
+      if (frame?.width > 0 && frame.height > 0) {
+        handlers.onAiPick?.({
+          x: Math.min(1, Math.max(0, coords.x / frame.width)),
+          y: Math.min(1, Math.max(0, coords.y / frame.height)),
+        });
+      }
+      return;
+    }
+
     if (state?.pickingKeyColor) {
       pickKeyColor(coords);
       return;
@@ -282,12 +306,14 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
 
     if (!dragStart || !dragMode) {
       // Not dragging - update cursor and hover state
-      // Eyedropper and text layers outrank the crop handles (same order
-      // as onMouseDown), so no handle highlights under them
-      const overEdit = Boolean(state?.pickingKeyColor) || hitTestText(coords) !== null;
+      // Pick tools, the eyedropper and text layers outrank the crop
+      // handles (same order as onMouseDown), so no handle highlights
+      // under them
+      const picking = Boolean(state?.aiPickTool || state?.pickingKeyColor);
+      const overEdit = picking || hitTestText(coords) !== null;
       let newHoveredHandle = null;
       if (overEdit) {
-        overlayCanvas.style.cursor = state?.pickingKeyColor ? 'crosshair' : 'move';
+        overlayCanvas.style.cursor = picking ? 'crosshair' : 'move';
       } else if (state?.cropArea) {
         const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
         newHoveredHandle = handle;

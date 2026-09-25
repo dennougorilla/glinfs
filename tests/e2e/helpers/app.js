@@ -210,3 +210,159 @@ export function countGifPixelsNear(frame, rect, rgb, maxDistance = 60) {
   }
   return count;
 }
+
+// ============================================================
+// AI cutout (stub model, WASM fallback)
+// ============================================================
+
+/**
+ * Serve the stub model in place of the real one and count the requests.
+ * Register it before the page loads the app.
+ * @param {import('@playwright/test').Page} page
+ * @param {Buffer} model - Stub model bytes (tests/fixtures/models/stub-seg.onnx)
+ * @returns {Promise<{ count: number }>}
+ */
+export async function serveStubModel(page, model) {
+  const requests = { count: 0 };
+  await page.route('**/models/isnetis.onnx', async (route) => {
+    requests.count++;
+    await route.fulfill({ body: model, contentType: 'application/octet-stream' });
+  });
+  return requests;
+}
+
+/**
+ * Open the app with the DEV-only AI cutout hook set up for the stub model
+ * @param {import('@playwright/test').Page} page
+ * @param {{ sha256: string, bytes: number, allowWasm: boolean }} override - allowWasm:
+ *   run the WASM fallback without the user's explicit choice
+ */
+export async function gotoCaptureWithStubModel(page, override) {
+  await gotoCapture(page);
+  await page.waitForFunction(() => Boolean(window.__TEST_HOOKS__?.aiCutout));
+  await page.evaluate((o) => window.__TEST_HOOKS__.aiCutout.setModelOverride(o), override);
+}
+
+/** Geometry of the synthetic two-disc clip (see injectDiscClip) */
+export const discClip = {
+  width: 240,
+  height: 160,
+  radius: 18,
+  /** White disc moving right @param {number} f */
+  discA: (f) => ({ x: 40 + 6 * f, y: 50 }),
+  /** Grey (160) disc moving left @param {number} f */
+  discB: (f) => ({ x: 200 - 6 * f, y: 115 }),
+};
+
+/**
+ * Make the active clip from `count` synthetic frames and open the editor:
+ * a white disc (A) and a light grey disc (B, value 160) moving in opposite
+ * directions over a black background. They never touch (65 px apart
+ * vertically, radius 18), so the component tracking sees two separate
+ * characters. With the stub model disc A has probability 1, disc B
+ * 160/255 and the background 0.
+ * @param {import('@playwright/test').Page} page
+ * @param {{ count: number, fps?: number }} options
+ */
+export async function injectDiscClip(page, { count, fps = 10 }) {
+  await page.evaluate(
+    async ({ count, fps, width, height, radius }) => {
+      const frames = [];
+      for (let f = 0; f < count; f++) {
+        const canvas = new OffscreenCanvas(width, height);
+        const ctx = /** @type {OffscreenCanvasRenderingContext2D} */ (canvas.getContext('2d'));
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(40 + 6 * f, 50, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgb(160,160,160)';
+        ctx.beginPath();
+        ctx.arc(200 - 6 * f, 115, radius, 0, Math.PI * 2);
+        ctx.fill();
+        const timestamp = Math.round((f * 1e6) / fps);
+        frames.push({
+          id: `disc-${f}`,
+          frame: new VideoFrame(canvas, { timestamp }),
+          timestamp,
+          width,
+          height,
+        });
+      }
+      window.__TEST_HOOKS__.setClipPayload({
+        frames,
+        fps,
+        capturedAt: Date.now(),
+        id: 'disc-clip',
+      });
+      location.hash = '#/editor';
+    },
+    { count, fps, width: discClip.width, height: discClip.height, radius: discClip.radius },
+  );
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+}
+
+/**
+ * Open the editor's Background accordion and choose the AI cutout
+ * @param {import('@playwright/test').Page} page
+ */
+export async function chooseAiCutout(page) {
+  const accordion = page.locator('#editor-bg-accordion');
+  if ((await accordion.getAttribute('open')) === null) {
+    await accordion.locator('summary').click();
+  }
+  await page.locator('label[for="ai-method-ai"]').click();
+  await expect(page.locator('#ai-method-ai')).toBeChecked();
+  await expect(page.locator('#ai-section')).toBeVisible();
+}
+
+/**
+ * The editor's AI cutout runtime status (see EditorState.aiCutout)
+ * @param {import('@playwright/test').Page} page
+ */
+export function readAiStatus(page) {
+  return page.evaluate(() => window.__TEST_HOOKS__.getEditorState()?.aiCutout ?? null);
+}
+
+/**
+ * Wait until the editor's final masks are built for the current settings
+ * @param {import('@playwright/test').Page} page
+ */
+export async function waitForAiMasks(page) {
+  await expect
+    .poll(
+      async () => {
+        const status = await readAiStatus(page);
+        return Boolean(status && !status.building && status.maskVersion > 0);
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+}
+
+/**
+ * Number of probability masks in the mask store
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<number>}
+ */
+export function maskCount(page) {
+  return page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getMaskStoreStats().size);
+}
+
+/**
+ * Alpha of one pixel of the editor's preview (base) canvas
+ * @param {import('@playwright/test').Page} page
+ * @param {number} x
+ * @param {number} y
+ * @returns {Promise<number | undefined>}
+ */
+export function editorPreviewAlpha(page, x, y) {
+  return page.evaluate(
+    ([px, py]) => {
+      const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector('.editor-canvas'));
+      return canvas.getContext('2d')?.getImageData(px, py, 1, 1).data[3];
+    },
+    [x, y],
+  );
+}
