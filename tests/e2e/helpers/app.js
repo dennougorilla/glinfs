@@ -61,8 +61,13 @@ export async function pauseEditorPlayback(page) {
 
 /**
  * Load the export screen with an injected mock editor payload
+ *
+ * `pattern`/`color` style both payloads' frames (the export reads the clip
+ * payload's), `edits`/`hasAlpha` go on the editor payload, and `sourceName`
+ * marks the clip as imported (identical-frame merging on export).
+ *
  * @param {import('@playwright/test').Page} page
- * @param {{ frameCount?: number, fps?: number, selectedRange?: { start: number, end: number }, cropArea?: object | null }} [options]
+ * @param {{ frameCount?: number, fps?: number, width?: number, height?: number, selectedRange?: { start: number, end: number }, cropArea?: object | null, pattern?: 'gradient' | 'checkerboard' | 'solid' | 'numbered', color?: string, edits?: object, hasAlpha?: boolean, sourceName?: string }} [options]
  */
 export async function gotoExportWithClip(page, options = {}) {
   await gotoCapture(page);
@@ -78,4 +83,61 @@ export async function gotoExportWithClip(page, options = {}) {
   // `.export-screen` alone is ambiguous (the "No clip data available" error
   // screen uses it too); the canvas only exists when a payload actually loaded.
   await page.waitForSelector('.export-canvas', { state: 'visible' });
+}
+
+/**
+ * Click Export on the export screen and wait for the complete screen
+ * @param {import('@playwright/test').Page} page
+ */
+export async function exportGifAndWait(page) {
+  await page.locator('.btn-export-main').click();
+  await expect(page.locator('.export-complete-v2')).toBeVisible({ timeout: 60000 });
+}
+
+/**
+ * @typedef {Object} DecodedGifFrame
+ * @property {number} width
+ * @property {number} height
+ * @property {number} durationMs - Frame duration reported by ImageDecoder
+ * @property {number[]} rgba - Composited RGBA pixels (row-major)
+ */
+
+/**
+ * Decode the GIF the export screen just produced, in the page, with
+ * ImageDecoder — the same decoder a browser uses to show it. Requires the
+ * export screen to still be mounted (the result is dropped on leave).
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<DecodedGifFrame[]>}
+ */
+export async function decodeExportedGif(page) {
+  return page.evaluate(async () => {
+    const base64 = await window.__TEST_HOOKS__.getExportResultBase64();
+    if (!base64) throw new Error('No exported GIF');
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+
+    const decoder = new ImageDecoder({ data: bytes, type: 'image/gif' });
+    await decoder.tracks.ready;
+    await decoder.completed;
+    const { frameCount } = decoder.tracks.selectedTrack;
+
+    const frames = [];
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      const { image } = await decoder.decode({ frameIndex });
+      const width = image.displayWidth;
+      const height = image.displayHeight;
+      const canvas = new OffscreenCanvas(width, height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      const { data } = ctx.getImageData(0, 0, width, height);
+      frames.push({
+        width,
+        height,
+        durationMs: (image.duration ?? 0) / 1000,
+        rgba: Array.from(data),
+      });
+      image.close();
+    }
+    decoder.close();
+    return frames;
+  });
 }
