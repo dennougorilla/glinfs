@@ -111,10 +111,13 @@ function closeRefusedFrames(frames) {
   }
 }
 
+/** User-facing text for a queue-full refusal */
+export const QUEUE_FULL_MESSAGE = 'Clip queue full — delete a clip or raise the limit in Settings';
+
 /** Surface a queue-full refusal on every channel the UI listens to */
-function announceQueueFull() {
+export function announceQueueFull() {
   emit('clip:queue-full', { limit: getClipQueueLimit() });
-  announce('Clip queue full — delete a clip or raise the limit in Settings');
+  announce(QUEUE_FULL_MESSAGE);
 }
 
 /**
