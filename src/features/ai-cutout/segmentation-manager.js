@@ -333,6 +333,15 @@ export class SegmentationManager {
       }
     } catch (error) {
       this.#cancelJob(jobId);
+      if (
+        error instanceof SegmentationError &&
+        error.code === SegmentationErrorCode.INFERENCE_FAILED
+      ) {
+        // The session may be unusable (e.g. a lost WebGPU device, which ORT
+        // never re-creates): start a fresh worker on the next call. The
+        // model then loads from Cache Storage, so a retry stays cheap.
+        this.#teardown(error);
+      }
       throw error;
     }
     this.#cancelledJobs.delete(jobId);
@@ -497,14 +506,25 @@ export class SegmentationManager {
    */
   async #submitFrame(jobId, { key, frame }, clipId) {
     const source = getDrawableSource(frame);
-    if (!source) {
+    // A closed VideoFrame has no `closed` flag in browsers; close() zeroes its
+    // coded size (format can be null for open GPU-backed frames, so not that)
+    if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
       throw new SegmentationError(
         SegmentationErrorCode.FRAME_UNAVAILABLE,
         `Frame ${frame.id} has no pixels (its VideoFrame is closed)`,
       );
     }
     const { width, height } = computeMaskSize(frame.width, frame.height);
-    const bitmap = await this.#createBitmap(source, width, height);
+    let bitmap;
+    try {
+      bitmap = await this.#createBitmap(source, width, height);
+    } catch (error) {
+      // e.g. InvalidStateError: the VideoFrame was closed while waiting
+      throw new SegmentationError(
+        SegmentationErrorCode.FRAME_UNAVAILABLE,
+        `Frame ${frame.id} could not be read: ${error instanceof Error ? error.message : error}`,
+      );
+    }
     const worker = this.#worker;
     if (!worker || this.#cancelledJobs.has(jobId)) {
       bitmap.close();

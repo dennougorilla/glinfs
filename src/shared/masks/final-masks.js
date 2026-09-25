@@ -276,60 +276,99 @@ function createMaskSource(masks) {
 }
 
 /**
+ * @typedef {Object} CacheKeyInputs
+ * @property {string} [clipId] - The clip the masks belong to. Pass it
+ *   whenever the cache can serve more than one clip: the other inputs do
+ *   not identify a clip, so two clips of the same shape would share a memo.
+ * @property {number} storeVersion - The mask store's version (bumps
+ *   whenever a probability mask changes)
+ * @property {number} frameCount
+ * @property {number} [sourceWidth]
+ * @property {AiCutout} ai
+ */
+
+/**
  * Memoized final masks for one clip at a time: a build with the same
- * inputs (mask-store version, frame count, source width, AI params) as the
- * last completed one returns its MaskSource without work; a different one
- * replaces it once it completes (the old masks are released). A build that
- * was superseded by a newer call, or cancelled, never replaces the memo.
+ * inputs (clip, mask-store version, frame count, source width, AI params)
+ * as the last completed one returns its MaskSource without work; a
+ * different one replaces it once it completes (the old masks are
+ * released).
+ *
+ * Only the newest build runs: a build() with other inputs, or clear(),
+ * aborts the one in flight, which then rejects with an AbortError (so a
+ * superseded build can never resolve with stale masks). A build() with the
+ * same inputs as the one in flight shares its promise; that build stops
+ * only at the first caller's signal.
  */
 export function createFinalMaskCache() {
   /** @type {{ key: string, source: MaskSource, bytes: number } | null} */
   let current = null;
-  let latestRequest = 0;
+  /** @type {{ key: string, controller: AbortController, promise: Promise<MaskSource> } | null} */
+  let inflight = null;
+
+  /** @param {CacheKeyInputs} inputs */
+  const keyOf = (inputs) =>
+    `${inputs.clipId ?? ''}|${inputs.storeVersion}|${inputs.frameCount}|${inputs.sourceWidth ?? ''}|${getAiParamsKey(inputs.ai)}`;
 
   /**
-   * @param {number} storeVersion
-   * @param {number} frameCount
-   * @param {number | undefined} sourceWidth
-   * @param {AiCutout} ai
+   * Run one build under its own controller, following the caller's signal
+   * @param {string} key
+   * @param {BuildOptions} options
+   * @param {AbortController} controller
+   * @returns {Promise<MaskSource>}
    */
-  const keyOf = (storeVersion, frameCount, sourceWidth, ai) =>
-    `${storeVersion}|${frameCount}|${sourceWidth ?? ''}|${getAiParamsKey(ai)}`;
+  const run = async (key, options, controller) => {
+    const callerSignal = options.signal;
+    const onAbort = () => controller.abort();
+    if (callerSignal?.aborted) controller.abort();
+    callerSignal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      const result = await buildFinalMasks({ ...options, signal: controller.signal });
+      throwIfAborted(controller.signal);
+      const source = createMaskSource(result.masks);
+      current = { key, source, bytes: result.bytes };
+      return source;
+    } finally {
+      callerSignal?.removeEventListener('abort', onAbort);
+      if (inflight?.controller === controller) inflight = null;
+    }
+  };
 
   return {
     /**
      * Final masks for these inputs, building them when not memoized
-     * @param {BuildOptions & { storeVersion: number }} options - storeVersion:
-     *   the mask store's version (bumps whenever a probability mask changes)
+     * @param {BuildOptions & CacheKeyInputs} options
      * @returns {Promise<MaskSource>}
+     * @throws {DOMException} AbortError when cancelled or superseded
      */
-    async build(options) {
-      const key = keyOf(options.storeVersion, options.frameCount, options.sourceWidth, options.ai);
-      if (current && current.key === key) return current.source;
-      latestRequest += 1;
-      const request = latestRequest;
-      const result = await buildFinalMasks(options);
-      const source = createMaskSource(result.masks);
-      if (request === latestRequest) {
-        current = { key, source, bytes: result.bytes };
-      }
-      return source;
+    build(options) {
+      const key = keyOf(options);
+      if (current && current.key === key) return Promise.resolve(current.source);
+      if (inflight && inflight.key === key) return inflight.promise;
+      inflight?.controller.abort();
+      const controller = new AbortController();
+      const promise = run(key, options, controller);
+      // run() clears `inflight` when it settles, which can be synchronous
+      // (an already-aborted signal): only record a build still running
+      if (!controller.signal.aborted) inflight = { key, controller, promise };
+      return promise;
     },
 
     /**
      * The memoized MaskSource for these inputs, or null (never builds)
-     * @param {{ storeVersion: number, frameCount: number, sourceWidth?: number, ai: AiCutout }} inputs
+     * @param {CacheKeyInputs} inputs
      * @returns {MaskSource | null}
      */
     peek(inputs) {
-      const key = keyOf(inputs.storeVersion, inputs.frameCount, inputs.sourceWidth, inputs.ai);
+      const key = keyOf(inputs);
       return current && current.key === key ? current.source : null;
     },
 
-    /** Drop the memoized masks */
+    /** Drop the memoized masks and abort the build in flight */
     clear() {
       current = null;
-      latestRequest += 1;
+      inflight?.controller.abort();
+      inflight = null;
     },
 
     /** @returns {number} Bytes held by the memoized masks */
