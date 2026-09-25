@@ -308,6 +308,41 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(worker.posted.at(-1)?.msg).toEqual({ type: 'cancel', jobId: worker.segments[0].jobId });
   });
 
+  it('recycles the worker after an inference failure, so a retry gets a fresh session', async () => {
+    const { manager, workers } = createHarness({ autoMask: false });
+    const run = manager.analyzeFrames([makeFrame('a'), makeFrame('b')]);
+    await flush();
+    const worker = workers[0];
+    worker.emit({
+      type: 'segment-error',
+      requestId: worker.segments[0].requestId,
+      error: { code: SegmentationErrorCode.INFERENCE_FAILED, message: 'device lost' },
+    });
+    const error = await run.catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.INFERENCE_FAILED);
+    expect(worker.terminated).toBe(true);
+    expect(manager.backend).toBeNull();
+
+    const retry = manager.analyzeFrames([makeFrame('a')]);
+    await flush();
+    expect(workers).toHaveLength(2);
+    expect(workers[1].posted[0].msg.type).toBe('init');
+    workers[1].mask(workers[1].segments[0]);
+    await expect(retry).resolves.toMatchObject({ analyzed: 1, backend: 'webgpu' });
+  });
+
+  it('keeps the worker when a job fails for a reason other than inference', async () => {
+    const { manager, workers } = createHarness();
+    await manager.analyzeFrames([makeFrame('a')]);
+    const error = await manager
+      .analyzeFrames([makeFrame('b', { closed: true })])
+      .catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
+    expect(workers[0].terminated).toBe(false);
+    await expect(manager.analyzeFrames([makeFrame('c')])).resolves.toMatchObject({ analyzed: 1 });
+    expect(workers).toHaveLength(1);
+  });
+
   it('abort rejects with AbortError, cancels queued frames and keeps finished masks', async () => {
     const { manager, maskStore, workers } = createHarness({ autoMask: false });
     const controller = new AbortController();
@@ -421,6 +456,28 @@ describe('SegmentationManager.analyzeFrames', () => {
     const { manager } = createHarness();
     const error = await manager.analyzeFrames([makeFrame('a', { closed: true })]).catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
+  });
+
+  it('refuses a VideoFrame that reports a null format (how browsers expose a closed one)', async () => {
+    const { manager, createBitmap } = createHarness();
+    const frame = { ...makeFrame('a'), frame: { format: null } };
+    const error = await manager.analyzeFrames([/** @type {any} */ (frame)]).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
+    expect(createBitmap).not.toHaveBeenCalled();
+  });
+
+  it('reports FRAME_UNAVAILABLE when a VideoFrame closed without a closed flag cannot be read', async () => {
+    const { manager } = createHarness(
+      {},
+      {
+        createBitmap: async () => {
+          throw new DOMException('The VideoFrame has been closed', 'InvalidStateError');
+        },
+      },
+    );
+    const error = await manager.analyzeFrames([makeFrame('a')]).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
+    expect(error.message).toContain('The VideoFrame has been closed');
   });
 
   it('closes the bitmap when posting to the worker throws', async () => {
