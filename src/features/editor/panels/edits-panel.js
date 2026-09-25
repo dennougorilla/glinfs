@@ -537,18 +537,27 @@ function q(root, selector) {
 
 /**
  * Rebuild the layer list only when its layers changed order/membership;
- * otherwise patch labels and the selection in place
+ * otherwise patch labels and the selection in place. A rebuild keeps
+ * keyboard focus in the list: on the same layer when it is still there,
+ * else (its layer was deleted) on the item now at its position or the last
+ * one, else on `fallbackFocus` — never dropped to <body>.
  * @param {HTMLElement} list
  * @param {TextLayer[]} layers
  * @param {string | null} selectedId
+ * @param {HTMLElement | null} [fallbackFocus] - Focused when the list empties
  */
-function updateLayerList(list, layers, selectedId) {
+function updateLayerList(list, layers, selectedId, fallbackFocus = null) {
   const items = Array.from(list.children);
   const sameIds =
     items.length === layers.length &&
     items.every((item, i) => /** @type {HTMLElement} */ (item).dataset.layerId === layers[i].id);
 
   if (!sameIds) {
+    const focused = document.activeElement;
+    const focusedItem =
+      focused instanceof HTMLElement && list.contains(focused)
+        ? /** @type {HTMLElement | null} */ (focused.closest('[data-layer-id]'))
+        : null;
     list.replaceChildren(
       ...layers.map((layer) =>
         createElement('li', { className: 'editor-text-item', 'data-layer-id': layer.id }, [
@@ -557,6 +566,17 @@ function updateLayerList(list, layers, selectedId) {
         ]),
       ),
     );
+    if (focusedItem && focused instanceof HTMLElement) {
+      const sameLayer = layers.findIndex((layer) => layer.id === focusedItem.dataset.layerId);
+      const buttonClass =
+        sameLayer !== -1 && focused.classList.contains('editor-text-item-delete')
+          ? '.editor-text-item-delete'
+          : '.editor-text-item-select';
+      const index =
+        sameLayer !== -1 ? sameLayer : Math.min(items.indexOf(focusedItem), layers.length - 1);
+      const target = index >= 0 ? list.children[index]?.querySelector(buttonClass) : fallbackFocus;
+      if (target instanceof HTMLElement) target.focus();
+    }
   }
 
   layers.forEach((layer, i) => {
@@ -598,7 +618,7 @@ function updateTextPanel(container, state, fps) {
 
   const layers = state.edits.textLayers;
   const list = /** @type {HTMLElement} */ (q(root, '#text-layer-list'));
-  updateLayerList(list, layers, state.selectedTextId);
+  updateLayerList(list, layers, state.selectedTextId, q(root, '#text-add'));
   list.hidden = layers.length === 0;
   /** @type {HTMLElement} */ (q(root, '.editor-text-empty')).hidden = layers.length > 0;
 

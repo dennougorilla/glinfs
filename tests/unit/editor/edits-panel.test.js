@@ -213,6 +213,40 @@ describe('Text panel', () => {
     expect(handlers.onRemoveText).toHaveBeenCalledWith('b');
   });
 
+  it('keeps keyboard focus in the list when a layer is deleted from it', () => {
+    const layerC = createTextLayer({ id: 'c', text: 'Third' }, 20);
+    const withLayers = (/** @type {any[]} */ layers) =>
+      makeState({ edits: { ...createDefaultEdits(), textLayers: layers }, selectedTextId: null });
+    updateEditsPanel(root, withLayers([layerA, layerB, layerC]), 10);
+    const deleteButtons = () =>
+      /** @type {HTMLElement[]} */ (Array.from(root.querySelectorAll('.editor-text-item-delete')));
+    const selectButtons = () =>
+      /** @type {HTMLElement[]} */ (Array.from(root.querySelectorAll('.editor-text-item-select')));
+
+    // Delete the middle layer: focus moves to the layer now in its place
+    deleteButtons()[1].focus();
+    updateEditsPanel(root, withLayers([layerA, layerC]), 10);
+    expect(document.activeElement).toBe(selectButtons()[1]);
+    expect(document.activeElement?.textContent).toBe('Third');
+
+    // Delete the last layer: focus moves to the one before it
+    deleteButtons()[1].focus();
+    updateEditsPanel(root, withLayers([layerA]), 10);
+    expect(document.activeElement).toBe(selectButtons()[0]);
+
+    // A rebuild that keeps the focused layer keeps focus on the same button
+    deleteButtons()[0].focus();
+    updateEditsPanel(root, withLayers([layerA, layerB]), 10);
+    expect(document.activeElement).toBe(deleteButtons()[0]);
+
+    // The list empties: focus goes to "Add text"
+    deleteButtons()[1].focus();
+    updateEditsPanel(root, withLayers([layerA]), 10);
+    deleteButtons()[0].focus();
+    updateEditsPanel(root, withLayers([]), 10);
+    expect(document.activeElement).toBe($('#text-add'));
+  });
+
   it('does nothing without a selected layer', () => {
     state = { ...state, selectedTextId: null };
     fire($('#text-layer-text'), 'input');
