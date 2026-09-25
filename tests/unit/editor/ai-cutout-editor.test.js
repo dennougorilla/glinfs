@@ -311,6 +311,123 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-pick-list').hidden).toBe(true);
   });
 
+  it('switching to Color stops a running analysis (its progress and Cancel would be hidden)', async () => {
+    mount(2);
+    await chooseAi();
+    /** @type {AbortSignal | null} */
+    let signal = null;
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          signal = options.signal;
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    expect(signal).not.toBeNull();
+    expect($('#ai-progress').hidden).toBe(false);
+
+    check('ai-method-color');
+    await settle();
+    expect(/** @type {AbortSignal} */ (/** @type {unknown} */ (signal)).aborted).toBe(true);
+    expect($('#ai-section').hidden).toBe(true);
+    expect(getEditorState()?.aiCutout.phase).toBe('idle');
+  });
+
+  it('a pick that works clears the earlier "not analyzed yet" pick notice', async () => {
+    mount(3);
+    await chooseAi();
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
+    await settle();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect($('#ai-notice').textContent).toBe('Analyzed 2 frames.');
+
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+
+    // Frame 2 has no analysis: refused with a notice
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    check('ai-pick-keep');
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect($('#ai-notice').textContent).toContain('not analyzed yet');
+
+    // Frame 1 is analyzed: the pick is added and the notice goes
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    expect($('#ai-notice').textContent).toBe('');
+
+    // Leaving the tool clears it too, but other notices stay
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    check('ai-pick-remove');
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    await settle();
+    expect($('#ai-notice').textContent).toContain('not analyzed yet');
+    press('Escape');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect($('#ai-notice').textContent).toBe('');
+  });
+
+  it('keeps keyboard focus in the AI section when the focused control hides or disables itself', async () => {
+    mount(2);
+    await chooseAi();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+
+    // Clear picks hides itself: focus moves to the Keep tool
+    window.__TEST_HOOKS__.setEditorState({
+      edits: {
+        ...getEditorState()?.edits,
+        background: {
+          ...getEditorState()?.edits.background,
+          ai: { ...getEditorState()?.edits.background.ai, picks: [{ frame: 0, x: 0.1, y: 0.1 }] },
+        },
+      },
+    });
+    await settle();
+    $('#ai-picks-clear').focus();
+    $('#ai-picks-clear').click();
+    await settle();
+    expect($('#ai-picks-clear').hidden).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-pick-keep');
+
+    // Analyze disables itself while running: focus moves to Cancel, and back
+    // to Analyze when Cancel hides
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
+    getSharedMaskStore().delete('a1');
+    getSharedMaskStore().delete('a0');
+    await settle();
+    $('#ai-analyze').focus();
+    $('#ai-analyze').click();
+    await settle();
+    expect(/** @type {HTMLButtonElement} */ ($('#ai-analyze')).disabled).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-cancel');
+    $('#ai-cancel').click();
+    await settle();
+    await settle();
+    expect($('#ai-progress').hidden).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-analyze');
+  });
+
   it('parameter controls patch the AI edits', async () => {
     mount(2);
     await chooseAi();

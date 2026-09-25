@@ -423,6 +423,7 @@ export function updateAiCutoutSection(root, state, fps) {
   const { background } = state.edits;
   const isAi = background.method === 'ai';
   const status = state.aiCutout;
+  const focused = document.activeElement;
 
   setChecked(q(root, '#ai-method-color'), !isAi);
   setChecked(q(root, '#ai-method-ai'), isAi);
@@ -517,4 +518,52 @@ export function updateAiCutoutSection(root, state, fps) {
   clearBtn.hidden = ai.picks.length === 0;
 
   setText(q(section, '#ai-build-status'), status.building ? 'Updating the cutout…' : '');
+
+  keepFocusInSection(root, section, focused, running);
+}
+
+/**
+ * Whether a control can keep keyboard focus: enabled and not inside a
+ * hidden element (up to `root`)
+ * @param {HTMLElement} el
+ * @param {ParentNode} root
+ * @returns {boolean}
+ */
+function canHoldFocus(el, root) {
+  if (/** @type {HTMLButtonElement} */ (el).disabled) return false;
+  for (let node = /** @type {HTMLElement | null} */ (el); node; node = node.parentElement) {
+    if (node.hidden) return false;
+    if (node === root) break;
+  }
+  return true;
+}
+
+/**
+ * Several AI controls hide or disable themselves when used (Clear picks,
+ * Cancel, Retry, Run without WebGPU, Analyze). Focus would then drop to
+ * <body>, so a keyboard or screen reader user loses their place: move it to
+ * the next control that still makes sense.
+ * @param {ParentNode} root - Background panel root
+ * @param {HTMLElement} section
+ * @param {Element | null} focused - Focus before this update
+ * @param {boolean} running - An analysis runs
+ */
+function keepFocusInSection(root, section, focused, running) {
+  if (!(focused instanceof HTMLElement) || !section.contains(focused)) return;
+  if (document.activeElement !== focused || canHoldFocus(focused, root)) return;
+  const inControls = focused.closest('#ai-controls') !== null;
+  const order = [
+    ...(running ? ['#ai-cancel'] : []),
+    ...(inControls ? ['#ai-pick-keep'] : []),
+    '#ai-analyze',
+    '#ai-pick-keep',
+    '#ai-method-ai',
+  ];
+  for (const selector of order) {
+    const target = root.querySelector(selector);
+    if (target instanceof HTMLElement && canHoldFocus(target, root)) {
+      target.focus();
+      return;
+    }
+  }
 }

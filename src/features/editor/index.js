@@ -66,6 +66,7 @@ import {
   createEditorStoreFromClip,
   goToFrame,
   moveTextLayer,
+  PICK_NEEDS_ANALYSIS_NOTICE,
   removeAiPick,
   removeTextLayer,
   selectTextLayer,
@@ -1222,6 +1223,11 @@ function handleSetBackgroundMethod(method) {
   if (method === 'ai') {
     void aiSession?.checkCapabilities();
     announce('AI cutout selected');
+  } else if (aiSession?.analyzing) {
+    // The AI section (with the progress and Cancel) is hidden now: an
+    // analysis must not go on unseen. Finished frames are kept.
+    aiSession.cancel();
+    announce('Color key selected. The analysis was stopped; finished frames are kept.');
   } else {
     announce('Color key selected');
   }
@@ -1282,7 +1288,7 @@ function handleAiPick(point) {
   if (!mode) return;
   const frame = state.clip?.frames[state.currentFrame];
   if (!isFrameAnalyzed(frame)) {
-    const message = 'This frame is not analyzed yet. Analyze it, then pick again.';
+    const message = PICK_NEEDS_ANALYSIS_NOTICE;
     announce(message);
     store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
     return;
