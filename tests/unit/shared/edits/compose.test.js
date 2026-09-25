@@ -4,6 +4,7 @@ import {
   composeEditorFrame,
   composeOutputFrame,
   composeOutputFrameRGBA,
+  snapCanvasAlphaToBinary,
 } from '../../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../../src/shared/edits/model.js';
 import { createFakeContext } from './fake-context.js';
@@ -259,5 +260,39 @@ describe('composeEditorFrame', () => {
     composeEditorFrame(ctx, null, null, null, 0);
     expect(ctx.names()).toContain('fillRect');
     expect(ctx.names()).not.toContain('clearRect');
+  });
+});
+
+describe('snapCanvasAlphaToBinary', () => {
+  it('snaps a see-through box to what the GIF encoder writes', () => {
+    const ctx = createFakeContext(3, 1);
+    // A red box at 0.6 opacity (alpha 153) and at 0.4 (alpha 102) over a
+    // transparent background, next to an opaque green pixel
+    const data = new Uint8ClampedArray([...[255, 0, 0, 153], ...[255, 0, 0, 102], ...GREEN]);
+    ctx.putImageData({ data, width: 3, height: 1 }, 0, 0);
+    ctx.calls.length = 0;
+
+    snapCanvasAlphaToBinary(ctx);
+
+    expect(ctx.pixelAt(0, 0)).toEqual([255, 0, 0, 255]);
+    expect(ctx.pixelAt(1, 0)[3]).toBe(0);
+    expect(ctx.pixelAt(2, 0)).toEqual([0, 255, 0, 255]);
+    expect(ctx.names()).toEqual(['getImageData', 'putImageData']);
+  });
+
+  it('skips the write-back when the canvas is already 1-bit', () => {
+    const ctx = createFakeContext(2, 1);
+    composeOutputFrame(ctx, solidFrame(2, 1), null, null, 0);
+    ctx.calls.length = 0;
+
+    snapCanvasAlphaToBinary(ctx);
+
+    expect(ctx.names()).toEqual(['getImageData']);
+  });
+
+  it('does nothing on an empty canvas', () => {
+    const ctx = createFakeContext(0, 0);
+    snapCanvasAlphaToBinary(ctx);
+    expect(ctx.names()).toEqual([]);
   });
 });

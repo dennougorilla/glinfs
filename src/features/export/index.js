@@ -12,7 +12,7 @@ import {
   setExportResult,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
-import { composeOutputFrame } from '../../shared/edits/compose.js';
+import { composeOutputFrame, snapCanvasAlphaToBinary } from '../../shared/edits/compose.js';
 import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { navigate } from '../../shared/router.js';
 import { updateSetting } from '../../shared/user-settings.js';
@@ -557,6 +557,35 @@ function absoluteFrameIndex(k, frameSkip) {
 }
 
 /**
+ * The preview canvas context. Reading it back every frame (background
+ * removal, 1-bit alpha snapping) is fast only when the FIRST getContext call
+ * asks for willReadFrequently, so every caller goes through here.
+ * @param {HTMLCanvasElement} canvas
+ * @returns {CanvasRenderingContext2D | null}
+ */
+function getPreviewContext(canvas) {
+  return canvas.getContext('2d', {
+    willReadFrequently: edits?.background?.enabled === true || clipInfo.transparent === true,
+  });
+}
+
+/**
+ * Draw one preview frame through the encoder's compositor. A transparent
+ * export is then snapped to GIF's 1-bit alpha, the same threshold the
+ * encoder applies, so partial alpha (a text box's opacity, soft edges of an
+ * imported PNG) previews exactly as it will be exported.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('../capture/types.js').Frame} frame
+ * @param {number} frameIndex - Absolute clip frame index
+ */
+function renderPreviewFrame(ctx, frame, frameIndex) {
+  composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
+  if (clipInfo.transparent) {
+    snapCanvasAlphaToBinary(ctx);
+  }
+}
+
+/**
  * Start the playback loop
  *
  * Idempotent: a second call while a loop is running is a no-op. Two
@@ -567,10 +596,7 @@ function startPlaybackLoop() {
   if (animationFrameId !== null) return;
   if (!store || !previewCanvas || frames.length === 0) return;
 
-  // Background removal reads the canvas back every frame
-  const ctx = previewCanvas.getContext('2d', {
-    willReadFrequently: edits?.background?.enabled === true,
-  });
+  const ctx = getPreviewContext(previewCanvas);
   if (!ctx) return;
 
   // Render first frame immediately. The preview goes through the same
@@ -578,13 +604,7 @@ function startPlaybackLoop() {
   const state = store.getState();
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
   if (effectiveFrames.length > 0) {
-    composeOutputFrame(
-      ctx,
-      effectiveFrames[0],
-      cropArea,
-      edits,
-      absoluteFrameIndex(0, state.settings.frameSkip),
-    );
+    renderPreviewFrame(ctx, effectiveFrames[0], absoluteFrameIndex(0, state.settings.frameSkip));
   }
 
   function animate(timestamp) {
@@ -612,14 +632,12 @@ function startPlaybackLoop() {
     const frameDelay = (baseDelay * state.settings.frameSkip) / state.settings.playbackSpeed;
 
     if (timestamp - lastFrameTime >= frameDelay) {
-      const ctx = previewCanvas.getContext('2d');
+      const ctx = getPreviewContext(previewCanvas);
       if (ctx) {
         const k = currentFrameIndex % effectiveFrames.length;
-        composeOutputFrame(
+        renderPreviewFrame(
           ctx,
           effectiveFrames[k],
-          cropArea,
-          edits,
           absoluteFrameIndex(k, state.settings.frameSkip),
         );
         currentFrameIndex = (currentFrameIndex + 1) % effectiveFrames.length;

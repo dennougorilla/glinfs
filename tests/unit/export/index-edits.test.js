@@ -8,12 +8,19 @@ import {
   setEditorPayload,
   setExportResult,
 } from '../../../src/shared/app-store.js';
+import { snapCanvasAlphaToBinary } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
 import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
 
 /**
  * Export screen wiring for edits, transparency and imported clips.
  */
+
+// jsdom has no pixel readback: record the 1-bit alpha snap instead of running it
+vi.mock('../../../src/shared/edits/compose.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, snapCanvasAlphaToBinary: vi.fn() };
+});
 
 vi.mock('../../../src/features/export/api.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -169,6 +176,28 @@ describe('export screen: transparency', () => {
     expect(lastEncodeParams().transparent).toBe(true);
     expect(getExportState()?.job?.encoder).toBe('gifenc-js');
     expect(loadSettings().export.encoderId).toBe('gifsicle-wasm');
+  });
+
+  it('snaps the preview of a transparent export to 1-bit alpha, like the encoder', () => {
+    vi.mocked(snapCanvasAlphaToBinary).mockClear();
+    inject({ editorExtras: { hasAlpha: true } });
+    exportCleanup = initExport();
+
+    expect(snapCanvasAlphaToBinary).toHaveBeenCalled();
+    expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith('2d', {
+      willReadFrequently: true,
+    });
+  });
+
+  it('leaves the preview of an opaque export alone', () => {
+    vi.mocked(snapCanvasAlphaToBinary).mockClear();
+    inject();
+    exportCleanup = initExport();
+
+    expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith('2d', {
+      willReadFrequently: false,
+    });
+    expect(snapCanvasAlphaToBinary).not.toHaveBeenCalled();
   });
 
   it('shows the transparent background badge for sources with alpha', () => {

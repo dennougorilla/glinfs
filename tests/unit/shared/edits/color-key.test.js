@@ -4,6 +4,7 @@ import {
   detectEdgeColor,
   MAX_RGB_DISTANCE,
   parseHexColor,
+  snapAlphaToBinary,
   toHexColor,
 } from '../../../../src/shared/edits/color-key.js';
 
@@ -204,5 +205,24 @@ describe('detectEdgeColor', () => {
   it('handles a single pixel', () => {
     const { rgba } = fromMap(['r'], { r: RED });
     expect(detectEdgeColor(rgba, 1, 1)).toBe('#ff0000');
+  });
+});
+
+describe('snapAlphaToBinary', () => {
+  it('snaps alpha below 128 to 0 and the rest to 255, like the GIF encoder', () => {
+    const rgba = new Uint8ClampedArray([
+      10, 20, 30, 0, 10, 20, 30, 102, 10, 20, 30, 127, 10, 20, 30, 128, 10, 20, 30, 153, 10, 20, 30,
+      255,
+    ]);
+    expect(snapAlphaToBinary(rgba)).toBe(true);
+    expect(Array.from(rgba.filter((_, i) => i % 4 === 3))).toEqual([0, 0, 0, 255, 255, 255]);
+    // Color channels are left alone
+    expect(Array.from(rgba.subarray(4, 7))).toEqual([10, 20, 30]);
+  });
+
+  it('reports no change when every pixel is already 0 or 255', () => {
+    const rgba = new Uint8ClampedArray([1, 2, 3, 0, 4, 5, 6, 255]);
+    expect(snapAlphaToBinary(rgba)).toBe(false);
+    expect(Array.from(rgba)).toEqual([1, 2, 3, 0, 4, 5, 6, 255]);
   });
 });

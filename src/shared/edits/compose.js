@@ -22,7 +22,7 @@ import {
   renderFramePlaceholder,
   syncCanvasSize,
 } from '../utils/canvas.js';
-import { applyColorKey } from './color-key.js';
+import { applyColorKey, snapAlphaToBinary } from './color-key.js';
 import { getActiveTextLayers } from './model.js';
 import { drawTextLayer } from './text-render.js';
 
@@ -118,6 +118,23 @@ export function composeOutputFrame(ctx, frame, crop, edits, frameIndex) {
     keyCanvasRegion(ctx, 0, 0, width, height, edits.background);
   }
   drawTextLayers(ctx, getActiveTextLayers(edits, frameIndex), width, height);
+}
+
+/**
+ * Snap the canvas to GIF's 1-bit alpha (see snapAlphaToBinary), so a
+ * transparent export's preview shows exactly what the encoder will write:
+ * a half-transparent text box or soft edge over a removed/transparent
+ * background becomes either fully opaque or fully transparent. One
+ * readback; the canvas is only written back when a pixel changed.
+ * @param {Context2D} ctx
+ */
+export function snapCanvasAlphaToBinary(ctx) {
+  const { width, height } = ctx.canvas;
+  if (width <= 0 || height <= 0) return;
+  const image = ctx.getImageData(0, 0, width, height);
+  if (snapAlphaToBinary(image.data)) {
+    ctx.putImageData(image, 0, 0);
+  }
 }
 
 /**
