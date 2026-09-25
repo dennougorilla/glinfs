@@ -205,4 +205,38 @@ test.describe('Editor text layers', () => {
       FRAME_COUNT,
     );
   });
+
+  test('a caption deleted with Backspace after dragging it comes back with Undo', async ({
+    page,
+  }) => {
+    await expect(page.locator('[data-delete-hint]')).toHaveText('Delete Clip');
+    await page.locator('#text-add').click();
+    await page.locator('#text-layer-text').fill('Hello');
+    await page.locator('#text-layer-size').fill('30');
+    await expect(page.locator('[data-delete-hint]')).toHaveText('Delete Text');
+
+    // Dragging on the preview hands the keyboard back to the editor
+    const from = await editorFramePointToViewport(page, 0.5 * WIDTH, 0.85 * HEIGHT);
+    const to = await editorFramePointToViewport(page, 0.5 * WIDTH, 0.5 * HEIGHT);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 5 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.textLayers[0].y)
+      .toBeCloseTo(0.5, 1);
+    const [layer] = /** @type {any} */ (await readEditorState(page))?.edits.textLayers;
+
+    await page.keyboard.press('Backspace');
+    await expect.poll(async () => (await readEditorState(page))?.edits.textLayers).toHaveLength(0);
+    const toast = page.locator('.app-toast', { hasText: 'Text layer deleted' });
+    await expect(toast).toBeVisible();
+    await expect(page.locator('[data-delete-hint]')).toHaveText('Delete Clip');
+
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(async () => (await readEditorState(page))?.edits.textLayers).toEqual([layer]);
+    expect((await readEditorState(page))?.selectedTextId).toBe(layer.id);
+    await expect(page.locator('#text-layer-text')).toHaveValue('Hello');
+    await expect(page.locator('[data-delete-hint]')).toHaveText('Delete Text');
+  });
 });

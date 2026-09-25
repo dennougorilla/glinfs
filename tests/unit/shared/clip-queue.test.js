@@ -7,6 +7,7 @@ import {
   getClipQueue,
   getClipQueueLimit,
   getEditorPayload,
+  hasPendingDeletion,
   isClipQueueFull,
   promoteQueuedClip,
   releaseAllFramesAndReset,
@@ -357,9 +358,13 @@ describe('deleteQueuedClip', () => {
     const a = enqueueClip(clipPayloadOf(framesA));
     const b = enqueueClip(clipPayloadOf(createMockFrames(2)));
     // Queue (newest first): [b, a] — delete a (index 1), undo restores there
+    expect(hasPendingDeletion()).toBe(false);
     expect(deleteQueuedClip(a.entry.id)).toBe(true);
+    // The Undo toast is up: the editor must not replace it
+    expect(hasPendingDeletion()).toBe(true);
 
     expect(undoDelete()).toBe(true);
+    expect(hasPendingDeletion()).toBe(false);
 
     expect(getClipQueue().map((e) => e.id)).toEqual([b.entry.id, a.entry.id]);
     for (const frame of framesA) {

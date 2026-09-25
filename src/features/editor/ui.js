@@ -109,7 +109,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   cleanups.push(...timeline.cleanups);
   screen.appendChild(timeline.element);
 
-  screen.appendChild(renderEditorStatusBar(dimensions));
+  screen.appendChild(renderEditorStatusBar(dimensions, state.selectedTextId));
 
   container.innerHTML = '';
   container.appendChild(screen);

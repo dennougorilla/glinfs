@@ -967,6 +967,14 @@ function finalizePendingDeletion() {
 }
 
 /**
+ * Whether a clip deletion can still be undone (its Undo toast is up)
+ * @returns {boolean}
+ */
+export function hasPendingDeletion() {
+  return pendingDeletion !== null;
+}
+
+/**
  * Restore the most recent deletion. Queue entries return to their original
  * position; a deleted ACTIVE clip returns to the queue front (never
  * re-activated — silently swapping the open editor would be worse than the

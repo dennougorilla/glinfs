@@ -12,6 +12,7 @@ import {
   getClipQueue,
   getEditorPayload,
   hasActiveScreenCapture,
+  hasPendingDeletion,
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
@@ -42,6 +43,7 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
+import { updateDeleteHint } from './panels/status-bar.js';
 import {
   addTextLayer,
   clearCrop,
@@ -461,6 +463,9 @@ export function initEditor() {
 
     if (editsChanged || textSelectionChanged || pickingChanged) {
       updateEditsPanel(container, state, fps);
+      if (textSelectionChanged) {
+        updateDeleteHint(container, state.selectedTextId);
+      }
       if (pickingChanged) {
         container
           .querySelector('.editor-canvas-container')
@@ -985,11 +990,50 @@ function handleUpdateText(id, patch) {
   store.setState((state) => updateTextLayer(state, id, patch));
 }
 
-/** @param {string} id */
+/**
+ * Delete a text layer (the Delete key or the list's × button), with an Undo
+ * toast like a clip deletion: the layer and its styling/timing come back at
+ * the same position in the stack.
+ * @param {string} id
+ */
 function handleRemoveText(id) {
   if (!store) return;
+  const before = store.getState();
+  const index = before.edits.textLayers.findIndex((layer) => layer.id === id);
+  if (index === -1) return;
+  const layer = before.edits.textLayers[index];
+  const clipFrames = before.clip?.frames;
+
   store.setState((state) => removeTextLayer(state, id));
   announce('Text layer deleted');
+  if (hasPendingDeletion()) {
+    // The toast's action slot holds a clip deletion's Undo, and a new action
+    // toast would replace it: never make a deleted clip unrecoverable
+    showToast('Text layer deleted');
+    return;
+  }
+  showToast('Text layer deleted', {
+    actionLabel: 'Undo',
+    onAction: () => restoreTextLayer(layer, index, clipFrames),
+  });
+}
+
+/**
+ * Undo a text layer deletion: re-insert it at its old stack position and
+ * select it. A no-op once the editor shows another clip (or none).
+ * @param {import('../../shared/edits/model.js').TextLayer} layer
+ * @param {number} index
+ * @param {unknown} clipFrames - Frames of the clip the layer belonged to
+ */
+function restoreTextLayer(layer, index, clipFrames) {
+  if (!store) return;
+  const state = store.getState();
+  if (!state.clip || state.clip.frames !== clipFrames) return;
+  if (state.edits.textLayers.some((l) => l.id === layer.id)) return;
+  const textLayers = [...state.edits.textLayers];
+  textLayers.splice(Math.min(index, textLayers.length), 0, layer);
+  store.setState((s) => selectTextLayer(setEdits(s, { ...s.edits, textLayers }), layer.id));
+  announce('Text layer restored');
 }
 
 /**
