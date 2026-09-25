@@ -28,6 +28,12 @@ test.describe('Export Canvas Preview', () => {
 
     // Size indicator reflects the mock clip dimensions (640x480 default)
     await expect(page.locator('.export-preview-size')).toHaveText('640×480');
+
+    // Status bar duration is the clip length in seconds: 10 frames at 30fps.
+    // It used to pass milliseconds to a seconds formatter ("5:33").
+    await expect(
+      page.locator('.export-status-bar .status-item', { hasText: 'Duration' }).locator('.value'),
+    ).toHaveText('0.33s');
   });
 
   test('preview canvas draws actual frame pixels', async ({ page }) => {

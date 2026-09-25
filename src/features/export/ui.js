@@ -7,7 +7,7 @@ import { hasActiveScreenCapture } from '../../shared/app-store.js';
 import { createElement, createErrorScreen, on } from '../../shared/utils/dom.js';
 import {
   formatBytes,
-  formatDuration,
+  formatDurationPrecise,
   formatPercent,
   formatRemaining,
 } from '../../shared/utils/format.js';
@@ -173,7 +173,9 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
         ]),
         createElement('div', { className: 'status-item' }, [
           'Duration: ',
-          createElement('span', { className: 'value' }, [formatDuration(clipInfo.duration * 1000)]),
+          // clipInfo.duration is in seconds; GIF clips are usually well under
+          // a minute, so show fractional seconds rather than m:ss
+          createElement('span', { className: 'value' }, [formatDurationPrecise(clipInfo.duration)]),
         ]),
       ]),
       createElement('div', { className: 'export-status-section' }, [
