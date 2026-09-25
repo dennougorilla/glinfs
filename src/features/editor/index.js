@@ -627,6 +627,7 @@ function render(container) {
       onToggleBackground: handleToggleBackground,
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
+      onPickTransparentArea: handlePickTransparentArea,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -1010,7 +1011,9 @@ function handleSetBackground(patch) {
 
 /**
  * Turn background removal on/off. Turning it on before any key color was
- * chosen keys out the most common border color of the current output.
+ * chosen keys out the most common opaque border color of the current
+ * output. A border that is already transparent has no such color: the
+ * current key color stays and the user is pointed at the eyedropper.
  * @param {boolean} enabled
  */
 function handleToggleBackground(enabled) {
@@ -1024,6 +1027,8 @@ function handleToggleBackground(enabled) {
     if (detected) {
       patch.color = detected;
       keyColorChosen = true;
+    } else if (state.clip?.hasAlpha) {
+      announce('The edges are already transparent. Pick the color to remove from the preview.');
     }
   }
   store.setState((state) => setBackground(state, patch));
@@ -1049,6 +1054,14 @@ function handlePickKeyColor(color) {
     setPickingKeyColor(setBackground(state, { color, enabled: true }), false),
   );
   announce(`Background color ${color} removed`);
+}
+
+/**
+ * The eyedropper hit a pixel that is already transparent: there is no color
+ * to remove there, so nothing changes and the mode stays on for another try
+ */
+function handlePickTransparentArea() {
+  announce('That area is already transparent. Click a colored area to remove it.');
 }
 
 /**

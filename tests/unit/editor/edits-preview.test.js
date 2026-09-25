@@ -14,6 +14,7 @@ import {
   hitTestEditorText,
   readSourceRegion,
   sampleSourceColor,
+  sampleSourcePixel,
 } from '../../../src/features/editor/edits-preview.js';
 import { composeEditorFrame } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
@@ -263,7 +264,7 @@ describe('source pixel reads', () => {
     vi.unstubAllGlobals();
   });
 
-  it('samples and detects colors from the source frame', () => {
+  const stubOffscreenCanvas = () =>
     vi.stubGlobal(
       'OffscreenCanvas',
       class {
@@ -277,6 +278,9 @@ describe('source pixel reads', () => {
         }
       },
     );
+
+  it('samples and detects colors from the source frame', () => {
+    stubOffscreenCanvas();
     const source = frame('a', [10, 20, 30, 255]);
     expect(sampleSourceColor(source, { x: 3, y: 4 })).toBe('#0a141e');
     expect(detectOutputEdgeColor(source, null)).toBe('#0a141e');
@@ -284,6 +288,23 @@ describe('source pixel reads', () => {
     expect(readSourceRegion(source, { x: 30, y: -5, width: 5, height: 5 })).toMatchObject({
       width: 1,
       height: 5,
+    });
+  });
+
+  it('offers no key color where the source is already transparent', () => {
+    stubOffscreenCanvas();
+    // A transparent pixel reads back as (0, 0, 0, 0): it must not become a
+    // black key color that erases dark outlines touching the transparency
+    const clear = frame('a', [0, 0, 0, 0]);
+    expect(sampleSourcePixel(clear, { x: 3, y: 4 })).toEqual({
+      color: '#000000',
+      transparent: true,
+    });
+    expect(sampleSourceColor(clear, { x: 3, y: 4 })).toBeNull();
+    expect(detectOutputEdgeColor(clear, null)).toBeNull();
+    expect(sampleSourcePixel(frame('b', [10, 20, 30, 200]), { x: 0, y: 0 })).toEqual({
+      color: '#0a141e',
+      transparent: false,
     });
   });
 

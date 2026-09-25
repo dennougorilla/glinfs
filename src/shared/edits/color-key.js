@@ -186,7 +186,21 @@ export function applyColorKey(rgba, width, height, background) {
  * @returns {string} '#rrggbb'
  */
 export function detectEdgeColor(rgba, width, height) {
-  if (width <= 0 || height <= 0) return '#000000';
+  return findOpaqueEdgeColor(rgba, width, height) ?? '#000000';
+}
+
+/**
+ * detectEdgeColor without the fallback: null when no border pixel is
+ * opaque. A border that is already transparent has no color to key out —
+ * the '#000000' fallback would erase dark outlines touching it.
+ *
+ * @param {Uint8ClampedArray | Uint8Array} rgba
+ * @param {number} width
+ * @param {number} height
+ * @returns {string | null} '#rrggbb', or null without an opaque border pixel
+ */
+export function findOpaqueEdgeColor(rgba, width, height) {
+  if (width <= 0 || height <= 0) return null;
 
   /** @type {Map<number, { count: number, r: number, g: number, b: number }>} */
   const buckets = new Map();
@@ -223,5 +237,5 @@ export function detectEdgeColor(rgba, width, height) {
   for (const bucket of buckets.values()) {
     if (!best || bucket.count > best.count) best = bucket;
   }
-  return best ? toHexColor(best) : '#000000';
+  return best ? toHexColor(best) : null;
 }

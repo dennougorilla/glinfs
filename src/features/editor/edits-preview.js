@@ -17,7 +17,12 @@
  * @module features/editor/edits-preview
  */
 
-import { applyColorKey, detectEdgeColor, toHexColor } from '../../shared/edits/color-key.js';
+import {
+  ALPHA_THRESHOLD,
+  applyColorKey,
+  findOpaqueEdgeColor,
+  toHexColor,
+} from '../../shared/edits/color-key.js';
 import { composeEditorFrame } from '../../shared/edits/compose.js';
 import { getActiveTextLayers } from '../../shared/edits/model.js';
 import {
@@ -347,26 +352,46 @@ export function readSourceRegion(frame, rect) {
 }
 
 /**
+ * The source frame's pixel at a point (eyedropper)
+ * @param {Frame} frame
+ * @param {{ x: number, y: number }} point - Frame pixel coordinates
+ * @returns {{ color: string, transparent: boolean } | null} '#rrggbb' and
+ *   whether the pixel is already transparent (alpha below the GIF
+ *   threshold, where its RGB means nothing), or null when the frame can't
+ *   be read
+ */
+export function sampleSourcePixel(frame, point) {
+  const pixel = readSourceRegion(frame, { x: point.x, y: point.y, width: 1, height: 1 });
+  if (!pixel) return null;
+  return {
+    color: toHexColor({ r: pixel.data[0], g: pixel.data[1], b: pixel.data[2] }),
+    transparent: pixel.data[3] < ALPHA_THRESHOLD,
+  };
+}
+
+/**
  * Color of the source frame's pixel at a point (eyedropper)
  * @param {Frame} frame
  * @param {{ x: number, y: number }} point - Frame pixel coordinates
  * @returns {string | null} '#rrggbb', or null when the frame can't be read
+ *   or the pixel is already transparent (no color to key out)
  */
 export function sampleSourceColor(frame, point) {
-  const pixel = readSourceRegion(frame, { x: point.x, y: point.y, width: 1, height: 1 });
-  if (!pixel) return null;
-  return toHexColor({ r: pixel.data[0], g: pixel.data[1], b: pixel.data[2] });
+  const pixel = sampleSourcePixel(frame, point);
+  return pixel && !pixel.transparent ? pixel.color : null;
 }
 
 /**
- * Most common border color of the frame's output region — the default key
- * color when background removal is enabled without a chosen color
+ * Most common opaque border color of the frame's output region — the
+ * default key color when background removal is enabled without a chosen
+ * color
  * @param {Frame} frame
  * @param {CropArea | null | undefined} crop
  * @returns {string | null} '#rrggbb', or null when the frame can't be read
+ *   or its border is already transparent
  */
 export function detectOutputEdgeColor(frame, crop) {
   const region = readSourceRegion(frame, getOutputRegion(frame, crop));
   if (!region) return null;
-  return detectEdgeColor(region.data, region.width, region.height);
+  return findOpaqueEdgeColor(region.data, region.width, region.height);
 }

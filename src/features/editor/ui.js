@@ -54,6 +54,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(enabled: boolean) => void} [onToggleBackground] - Turn background removal on/off
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
+ * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
  */
 
 /**

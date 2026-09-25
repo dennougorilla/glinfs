@@ -9,6 +9,7 @@
  */
 
 import { expect, test } from '@playwright/test';
+import gifenc from 'gifenc';
 import {
   countGifPixelsNear,
   decodeExportedGif,
@@ -16,6 +17,7 @@ import {
   exportFromEditor,
   exportGifAndWait,
   gifPixel,
+  gotoCapture,
   gotoEditorWithClip,
   pauseEditorPlayback,
 } from './helpers/app.js';
@@ -236,5 +238,88 @@ test.describe('Editor background removal', () => {
     // Turning it off restores the frame
     await page.locator('#background-enabled').uncheck();
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(255);
+  });
+});
+
+/**
+ * A transparent sticker GIF (built in Node with gifenc): a white 24x16 box
+ * with a 2 px black outline in the middle of a transparent 64x48 frame.
+ * Palette: 0 = transparent, 1 = black, 2 = white.
+ * @returns {Buffer}
+ */
+function buildStickerGif() {
+  const width = 64;
+  const height = 48;
+  const index = new Uint8Array(width * height);
+  for (let y = 16; y < 32; y++) {
+    for (let x = 20; x < 44; x++) {
+      const outline = y < 18 || y >= 30 || x < 22 || x >= 42;
+      index[y * width + x] = outline ? 1 : 2;
+    }
+  }
+  const gif = gifenc.GIFEncoder();
+  gif.writeFrame(index, width, height, {
+    palette: [
+      [0, 0, 0],
+      [0, 0, 0],
+      [255, 255, 255],
+    ],
+    delay: 100,
+    transparent: true,
+    transparentIndex: 0,
+  });
+  gif.finish();
+  return Buffer.from(gif.bytes());
+}
+
+test.describe('Background removal on an already transparent clip', () => {
+  test.beforeEach(async ({ page }) => {
+    await gotoCapture(page);
+    await page.locator('[data-testid="import-file-input"]').setInputFiles({
+      name: 'sticker.gif',
+      mimeType: 'image/gif',
+      buffer: buildStickerGif(),
+    });
+    await page.waitForSelector('.editor-canvas', { state: 'visible' });
+    await expect.poll(async () => (await readEditorState(page))?.hasAlpha).toBe(true);
+    await pauseEditorPlayback(page);
+    await openBackgroundPanel(page);
+  });
+
+  test('enabling removal does not key out black and keeps the dark outline', async ({ page }) => {
+    await page.locator('#background-enabled').check();
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background.enabled)
+      .toBe(true);
+    // No opaque border color to detect: the key color is not the black that
+    // transparent pixels read back as
+    expect((await readEditorState(page))?.edits.background.color).not.toBe('#000000');
+    await expect(page.locator('#live-region')).toContainText('already transparent');
+    // The outline and the fill survive in the preview
+    await page.waitForTimeout(100);
+    expect(await previewAlpha(page, 20, 20)).toBe(255);
+    expect(await previewAlpha(page, 30, 24)).toBe(255);
+    expect(await previewAlpha(page, 2, 2)).toBe(0);
+  });
+
+  test('the eyedropper on a transparent area picks nothing and stays on', async ({ page }) => {
+    await page.locator('.editor-bg-pick').click();
+    await expect.poll(async () => (await readEditorState(page))?.pickingKeyColor).toBe(true);
+    const corner = await editorFramePointToViewport(page, 4, 4);
+    await page.mouse.click(corner.x, corner.y);
+
+    await expect(page.locator('#live-region')).toContainText('already transparent');
+    const state = await readEditorState(page);
+    expect(state?.edits.background.enabled).toBe(false);
+    expect(state?.edits.background.color).not.toBe('#000000');
+    expect(state?.pickingKeyColor).toBe(true);
+
+    // A colored pixel still picks: white inside the outline
+    const inside = await editorFramePointToViewport(page, 32, 24);
+    await page.mouse.click(inside.x, inside.y);
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background)
+      .toMatchObject({ enabled: true, color: '#ffffff' });
+    expect(await previewAlpha(page, 20, 20)).toBe(255);
   });
 });

@@ -15,7 +15,7 @@ import {
   getOutputRegion,
   getSelectedTextOverlay,
   hitTestEditorText,
-  sampleSourceColor,
+  sampleSourcePixel,
 } from '../edits-preview.js';
 
 /**
@@ -167,17 +167,20 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
 
   /**
    * Eyedropper click: sample the SOURCE frame (not the keyed/texted
-   * preview) under the pointer
+   * preview) under the pointer. An already transparent pixel has no color
+   * to remove (its RGB reads as black): stay in the mode and say so.
    * @param {{ x: number, y: number }} coords
    */
   function pickKeyColor(coords) {
     const frame = getCurrentFrame();
     if (!frame) return;
-    const color = sampleSourceColor(frame, coords);
-    if (color) {
-      handlers.onPickKeyColor?.(color);
-    } else {
+    const pixel = sampleSourcePixel(frame, coords);
+    if (!pixel) {
       handlers.onSetPickingKeyColor?.(false);
+    } else if (pixel.transparent) {
+      handlers.onPickTransparentArea?.();
+    } else {
+      handlers.onPickKeyColor?.(pixel.color);
     }
   }
 
