@@ -187,6 +187,14 @@ export function opaquePixels(rgba) {
 }
 
 /**
+ * Placeholder palette for a frame without any opaque pixel. It is never
+ * kept for reuse: the next frame quantizes a real palette (otherwise a
+ * clip-wide schedule would map every later frame to black).
+ * @type {number[][]}
+ */
+const NO_OPAQUE_PALETTE = [[0, 0, 0]];
+
+/**
  * Palette size to quantize to. Transparent exports reserve one slot of the
  * (at most 256-entry) color table for the transparent index, which is
  * appended after the quantized colors.
@@ -237,7 +245,7 @@ export function createGifencEncoder() {
       return quantize(rgba, cfg.maxColors, { format });
     }
     const pixels = opaquePixels(rgba);
-    if (pixels.length === 0) return [[0, 0, 0]];
+    if (pixels.length === 0) return NO_OPAQUE_PALETTE;
     return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
   };
 
@@ -345,6 +353,9 @@ export function createGifencEncoder() {
         transparentIndex,
         dispose: 2,
       });
+      if (palette === NO_OPAQUE_PALETTE) {
+        palette = null;
+      }
     },
 
     /**

@@ -161,6 +161,19 @@ describe('transparent frames', () => {
     expect(Array.from(writes[0].index)).toEqual(Array(16).fill(1));
   });
 
+  it('does not reuse the placeholder palette of a fully transparent frame', () => {
+    // Clip-wide schedule without a sample: frame 0 is fully transparent, so
+    // frame 1 must quantize its own palette instead of mapping to black
+    const encoder = initEncoder({ paletteInterval: 0 });
+    encoder.addFrame({ rgba: split(CLEAR, CLEAR), width: 4, height: 4 }, 0);
+    encoder.addFrame({ rgba: split(RED, BLUE), width: 4, height: 4 }, 1);
+    encoder.addFrame({ rgba: split(RED, BLUE), width: 4, height: 4 }, 2);
+
+    expect(quantize).toHaveBeenCalledTimes(1);
+    expect(writes[1].opts.palette).toContainEqual([255, 0, 0]);
+    expect(writes[2].opts.palette).toEqual(writes[1].opts.palette);
+  });
+
   it('keeps the transparent index inside a 256-entry table', () => {
     const encoder = initEncoder({ maxColors: 256, width: 16, height: 16 });
     const rgba = new Uint8ClampedArray(16 * 16 * 4);
