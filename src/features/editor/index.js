@@ -137,6 +137,13 @@ let bannerHideTimer = null;
 let previewRenderer = null;
 
 /**
+ * A crop drag on the preview is in progress: the preview skips background
+ * removal until the drag is released (re-keying the moving region on every
+ * pointer move would read back and flood-fill it per tick)
+ */
+let cropDragging = false;
+
+/**
  * Whether the background key color was chosen (picked, typed, restored or
  * auto-detected) — enabling removal without one detects the edge color
  */
@@ -309,6 +316,7 @@ export function initEditor() {
       background.enabled || background.color !== createDefaultEdits().background.color;
   }
   previewRenderer = createEditorFrameRenderer();
+  cropDragging = false;
 
   // Initial render
   render(container);
@@ -602,6 +610,7 @@ function render(container) {
       onFrameChange: handleFrameChange,
       onRangeChange: handleRangeChange,
       onCropChange: handleCropChange,
+      onCropDragEnd: handleCropDragEnd,
       onToggleGrid: handleToggleGrid,
       onAspectRatioChange: handleAspectRatioChange,
       onSpeedChange: handleSpeedChange,
@@ -644,7 +653,9 @@ function drawPreview(state) {
   if (!baseCanvas || !previewRenderer || !frame) return;
   const ctx = baseCanvas.getContext('2d');
   if (!ctx) return;
-  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame);
+  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
+    skipKey: cropDragging,
+  });
 }
 
 /**
@@ -820,12 +831,25 @@ function handleRangeChange(range) {
 /**
  * Handle crop change
  * @param {import('./types.js').CropArea | null} crop
+ * @param {{ dragging?: boolean }} [options] - dragging: a preview drag is
+ *   still moving the crop (background removal waits for its release)
  */
-function handleCropChange(crop) {
+function handleCropChange(crop, options) {
   if (!store) return;
+  cropDragging = options?.dragging === true;
 
   store.setState((state) => (crop ? updateCrop(state, crop) : clearCrop(state)));
   emit('editor:crop', { crop });
+}
+
+/**
+ * A crop drag on the preview was released: key the final region once. The
+ * flag is not store state, so nothing else would redraw the preview.
+ */
+function handleCropDragEnd() {
+  if (!store || !cropDragging) return;
+  cropDragging = false;
+  drawPreview(store.getState());
 }
 
 /**

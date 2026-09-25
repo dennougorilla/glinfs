@@ -168,6 +168,40 @@ test.describe('Editor background removal', () => {
     }
   });
 
+  test('a crop drag does not re-key the frame on every pointer move', async ({ page }) => {
+    await openBackgroundPanel(page);
+    await page.locator('#background-enabled').check();
+    await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(0);
+    await page.waitForTimeout(100);
+    const before = await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats());
+
+    const from = await editorFramePointToViewport(page, 20, 20);
+    const to = await editorFramePointToViewport(page, 120, 90);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 10 });
+    await expect
+      .poll(async () => (await readEditorState(page))?.cropArea?.width ?? 0)
+      .toBeGreaterThan(80);
+    await page.waitForTimeout(100);
+    // Mid-drag: the crop moved several times, nothing was read back
+    const during = await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats());
+    expect(during?.readbacks).toBe(before?.readbacks);
+
+    await page.mouse.up();
+    // Released: the final region is keyed exactly once
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats()))?.readbacks,
+      )
+      .toBe((before?.readbacks ?? 0) + 1);
+    await expect.poll(() => previewAlpha(page, 60, 50)).toBe(0);
+    await page.waitForTimeout(100);
+    const after = await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats());
+    expect(after?.readbacks).toBe((before?.readbacks ?? 0) + 1);
+  });
+
   test('Escape leaves the eyedropper without changing the background', async ({ page }) => {
     await openBackgroundPanel(page);
     await page.locator('.editor-bg-pick').click();

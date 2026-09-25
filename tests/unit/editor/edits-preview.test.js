@@ -144,6 +144,38 @@ describe('createEditorFrameRenderer', () => {
     expect(renderer.stats().readbacks).toBe(5);
   });
 
+  it('skips keying while a crop drag is in progress and keeps the cache for the release', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    const e = edits();
+    renderer.render(ctx, frame('a'), null, e, 0);
+    renderer.render(ctx, frame('b'), null, e, 1);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Every pointer move of the drag: a new crop, no readback, cache intact
+    for (let x = 0; x < 5; x++) {
+      const crop = /** @type {any} */ ({ x, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+      renderer.render(ctx, frame('a'), crop, e, 0, { skipKey: true });
+    }
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+    expect(ctx.names().filter((n) => n === 'getImageData')).toHaveLength(2);
+    // The unkeyed frame shows while dragging
+    expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+
+    // Released: the final region is keyed once
+    const released = /** @type {any} */ ({ x: 4, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+    renderer.render(ctx, frame('a'), released, e, 0);
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+    expect(ctx.pixelAt(5, 2)[3]).toBe(0);
+
+    // A drag released where it started re-uses the cached frames
+    const fresh = createEditorFrameRenderer();
+    fresh.render(ctx, frame('a'), null, e, 0);
+    fresh.render(ctx, frame('a'), released, e, 0, { skipKey: true });
+    fresh.render(ctx, frame('a'), null, e, 0);
+    expect(fresh.stats().readbacks).toBe(1);
+  });
+
   it('frees the cache when removal is off and draws through composeEditorFrame', () => {
     const renderer = createEditorFrameRenderer();
     const ctx = createFakeContext(20, 10);

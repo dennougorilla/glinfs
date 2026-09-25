@@ -179,8 +179,23 @@ export function createEditorFrameRenderer(options = {}) {
      * @param {CropArea | null | undefined} crop
      * @param {ClipEdits | null | undefined} edits
      * @param {number} frameIndex - Absolute clip frame index (text ranges)
+     * @param {{ skipKey?: boolean }} [options] - skipKey: draw without
+     *   background removal and leave the cache alone (a crop drag in
+     *   progress moves the region on every pointer move; keying each move
+     *   would read back and flood-fill the whole region per tick and drop
+     *   every cached frame — the drag's release keys once instead)
      */
-    render(ctx, frame, crop, edits, frameIndex) {
+    render(ctx, frame, crop, edits, frameIndex, options = {}) {
+      if (options.skipKey && edits?.background?.enabled) {
+        composeEditorFrame(
+          ctx,
+          frame,
+          crop,
+          { ...edits, background: { ...edits.background, enabled: false } },
+          frameIndex,
+        );
+        return;
+      }
       const background = edits?.background;
       const source =
         background?.enabled && isFrameValid(frame)

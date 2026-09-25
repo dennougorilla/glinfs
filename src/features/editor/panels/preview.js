@@ -322,7 +322,7 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     if (newCrop) {
       // Update boundary hit detection
       boundaryHit = detectBoundaryHit(newCrop, frame.width, frame.height);
-      handlers.onCropChange(newCrop);
+      handlers.onCropChange(newCrop, { dragging: true });
       // Immediately render overlay with visual feedback
       renderOverlayWithState();
     }
@@ -338,6 +338,7 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
       overlayCanvas.style.cursor = 'move';
       return;
     }
+    const wasCropDrag = dragMode !== null;
     dragMode = null;
     dragStart = null;
     initialCrop = null;
@@ -357,6 +358,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     }
 
     renderOverlayWithState();
+    if (wasCropDrag) {
+      handlers.onCropDragEnd?.();
+    }
   }
 
   overlayCanvas.addEventListener('mousedown', onMouseDown);

@@ -34,7 +34,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} onTogglePlay - Toggle playback
  * @property {(frame: number) => void} onFrameChange - Frame changed
  * @property {(range: import('./types.js').FrameRange) => void} onRangeChange - Range changed
- * @property {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop changed
+ * @property {(crop: import('./types.js').CropArea | null, options?: { dragging?: boolean }) => void} onCropChange - Crop changed (dragging: a preview drag is still in progress)
+ * @property {() => void} [onCropDragEnd] - A crop drag on the preview was released
  * @property {() => void} onToggleGrid - Toggle grid
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
