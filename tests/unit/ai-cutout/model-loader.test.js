@@ -177,6 +177,29 @@ describe('loadModelBytes', () => {
     expect(Array.from(entries.get(key) ?? [])).toEqual(Array.from(MODEL));
   });
 
+  it('evicts a cached copy whose body cannot be read and downloads again', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries, cache } = createFakeCaches();
+    const key = modelCacheKey(spec, BASE);
+    entries.set(key, MODEL.slice());
+    cache.match.mockImplementationOnce(async () => ({
+      arrayBuffer: () => Promise.reject(new DOMException('blob gone', 'NotReadableError')),
+    }));
+    const fetchImpl = vi.fn(async () => chunkedResponse(MODEL));
+
+    const result = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    });
+    expect(cache.delete).toHaveBeenCalledWith(key);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.fromCache).toBe(false);
+    expect(Array.from(result.bytes)).toEqual(Array.from(MODEL));
+    expect(Array.from(entries.get(key) ?? [])).toEqual(Array.from(MODEL));
+  });
+
   it('works without Cache Storage', async () => {
     const result = await loadModelBytes(specFor(MODEL), {
       fetchImpl: async () => chunkedResponse(MODEL),

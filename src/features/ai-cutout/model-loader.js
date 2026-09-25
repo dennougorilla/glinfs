@@ -164,18 +164,18 @@ export async function loadModelBytes(spec, deps = {}) {
   if (cache) {
     const hit = await cache.match(key).catch(() => undefined);
     if (hit) {
-      const bytes = new Uint8Array(await hit.arrayBuffer());
-      onProgress?.({
-        phase: 'verifying',
-        loadedBytes: bytes.byteLength,
-        totalBytes: spec.bytes,
-        fromCache: true,
-      });
       try {
+        const bytes = new Uint8Array(await hit.arrayBuffer());
+        onProgress?.({
+          phase: 'verifying',
+          loadedBytes: bytes.byteLength,
+          totalBytes: spec.bytes,
+          fromCache: true,
+        });
         await verifyModelBytes(bytes, spec, subtle);
         return { bytes, fromCache: true, cached: true };
       } catch {
-        // Corrupt or stale entry: drop it and download a fresh copy
+        // Unreadable, corrupt or stale entry: drop it and download a fresh copy
         await cache.delete(key).catch(() => false);
       }
     }
