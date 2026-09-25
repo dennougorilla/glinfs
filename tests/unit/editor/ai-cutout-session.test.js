@@ -12,6 +12,7 @@ import {
 } from '../../../src/features/ai-cutout/protocol.js';
 import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
 import {
+  ANALYSIS_REBUILD_INTERVAL_MS,
   createAiCutoutSession,
   STORE_REBUILD_DELAY_MS,
 } from '../../../src/features/editor/ai-cutout-session.js';
@@ -300,6 +301,84 @@ describe('AI cutout session', () => {
     vi.advanceTimersByTime(STORE_REBUILD_DELAY_MS);
     expect(changed).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(session.maskSource?.getFinalMask(1)).not.toBeNull());
+  });
+
+  it('rebuilds at a coarse cadence while an analysis runs, and once more when it ends', async () => {
+    const FRAME_EVERY_MS = 300;
+    const BUILD_MS = 100;
+    const frames = makeFrames(20);
+    state = { ...state, clip: { frames } };
+    /** @type {number[]} */
+    const starts = [];
+    let version = 0;
+    // Takes BUILD_MS; memoizes the last build by store version
+    /** @type {{ storeVersion: number, source: any } | null} */
+    let memo = null;
+    const cache = {
+      peek: (/** @type {any} */ inputs) =>
+        memo?.storeVersion === inputs.storeVersion ? memo.source : null,
+      build: vi.fn((/** @type {any} */ options) => {
+        starts.push(Date.now());
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            memo = {
+              storeVersion: options.storeVersion,
+              source: { version: ++version, getFinalMask: () => null },
+            };
+            resolve(memo.source);
+          }, BUILD_MS);
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(createAbortError());
+          });
+        });
+      }),
+    };
+    // One new mask every FRAME_EVERY_MS
+    manager.analyzeFrames.mockImplementationOnce(async (/** @type {any[]} */ list, options) => {
+      for (const frame of list) {
+        await new Promise((resolve) => setTimeout(resolve, FRAME_EVERY_MS));
+        maskStore.set(frame.id, prob(), options.clipId);
+      }
+      return { analyzed: list.length, skipped: 0, backend: 'webgpu' };
+    });
+    session.dispose();
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      getClipId: () => undefined,
+      manager: /** @type {any} */ (manager),
+      maskStore,
+      cache: /** @type {any} */ (cache),
+    });
+
+    const startedAt = Date.now();
+    const running = session.analyze(frames);
+    await vi.advanceTimersByTimeAsync(frames.length * FRAME_EVERY_MS);
+    await running;
+    const endedAt = Date.now();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS * 3);
+
+    const during = starts.filter((t) => t < endedAt);
+    const after = starts.filter((t) => t >= endedAt);
+    // The first masks show up quickly, then at most one start per interval
+    expect(during[0] - startedAt).toBeLessThanOrEqual(FRAME_EVERY_MS + STORE_REBUILD_DELAY_MS);
+    for (let i = 1; i < during.length; i++) {
+      expect(during[i] - during[i - 1]).toBeGreaterThanOrEqual(ANALYSIS_REBUILD_INTERVAL_MS);
+    }
+    expect(during.length).toBeLessThanOrEqual(
+      Math.ceil((frames.length * FRAME_EVERY_MS) / ANALYSIS_REBUILD_INTERVAL_MS) + 1,
+    );
+    // Once more when it ends, right away, and then nothing
+    expect(after).toHaveLength(1);
+    expect(after[0] - endedAt).toBeLessThanOrEqual(BUILD_MS);
+
+    // Without an analysis, a store change rebuilds after the short debounce
+    maskStore.set('extra', prob());
+    const changedAt = Date.now();
+    await vi.advanceTimersByTimeAsync(STORE_REBUILD_DELAY_MS);
+    expect(starts.at(-1)).toBe(changedAt + STORE_REBUILD_DELAY_MS);
+    expect(starts).toHaveLength(during.length + after.length + 1);
   });
 
   it('writes nothing after dispose', async () => {
