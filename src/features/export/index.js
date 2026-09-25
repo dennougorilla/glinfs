@@ -581,6 +581,8 @@ function handleAiBack() {
   aiPrep = null;
   render(qsRequired('#main-content'));
   startPlaybackLoop();
+  // The failed analysis may have added masks: preview them with the cutout
+  refreshPreviewMasks();
 }
 
 /**
@@ -657,6 +659,9 @@ async function handleExport() {
       }
       render(qsRequired('#main-content'));
       if (!aiPrep) startPlaybackLoop();
+      // Frames analyzed before the stop have masks now: the preview built
+      // at mount does not know them, so rebuild it
+      refreshPreviewMasks();
       return;
     }
     // A frame the analysis could not cover makes encodeGif refuse with a
