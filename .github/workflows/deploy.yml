@@ -25,7 +25,28 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      # AI cutout model (176 MB, too large for git): restored from the cache
+      # or downloaded from its pinned Hugging Face commit. The cache key is
+      # the pinned SHA-256 (src/features/ai-cutout/model-config.js and
+      # scripts/fetch-models.mjs; a unit test keeps all three in sync).
+      - name: Restore AI cutout model
+        uses: actions/cache@v4
+        with:
+          path: public/models/isnetis.onnx
+          key: ai-model-isnetis-sha256-f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
+      # Verifies size and SHA-256 of a restored copy too; any mismatch
+      # re-downloads, and a mismatching download fails the job
+      - name: Fetch AI cutout model
+        run: npm run models:fetch
       - run: npm run build
+      - name: Verify the model in the Pages artifact
+        run: |
+          expected=f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
+          actual=$(sha256sum dist/models/isnetis.onnx | cut -d' ' -f1)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::dist/models/isnetis.onnx SHA-256 is $actual, expected $expected"
+            exit 1
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

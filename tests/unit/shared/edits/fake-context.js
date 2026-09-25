@@ -4,7 +4,8 @@
  * measureText returns width = characters * fontPx / 2, parsed from ctx.font,
  * so layouts are deterministic. getImageData/putImageData work on a real
  * RGBA backing buffer, and drawImage fills the drawn region from the
- * source's `fill` color (tests pass `{ fill: [r, g, b, a] }` as the source),
+ * source's `fill` color (tests pass `{ fill: [r, g, b, a] }` as the source)
+ * or copies a patterned source (`{ rgba, width, height }`) pixel for pixel,
  * so keying and readback order can be asserted on real pixels. fillText
  * paints one pixel of the fill color at its anchor (x, y), translated by any
  * translate() calls since the last save().
@@ -107,6 +108,24 @@ export function createFakeContext(width = 0, height = 0, canvas = { width, heigh
       return { width: (text.length * px) / 2 };
     },
     drawImage: record('drawImage', (source, ...rest) => {
+      if (source?.rgba) {
+        // Patterned source ({ rgba, width, height }): copied 1:1, unscaled
+        const [sx, sy, sw, sh, dx, dy] =
+          rest.length === 2
+            ? [0, 0, source.width, source.height, rest[0], rest[1]]
+            : [rest[0], rest[1], rest[2], rest[3], rest[4], rest[5]];
+        sync();
+        for (let yy = 0; yy < sh; yy++) {
+          for (let xx = 0; xx < sw; xx++) {
+            const x = dx + xx;
+            const y = dy + yy;
+            if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
+            const from = ((sy + yy) * source.width + sx + xx) * 4;
+            pixels.set(source.rgba.subarray(from, from + 4), (y * canvas.width + x) * 4);
+          }
+        }
+        return;
+      }
       const rgba = source?.fill ?? [1, 2, 3, 255];
       if (rest.length === 2) {
         fill(rest[0], rest[1], canvas.width, canvas.height, rgba);

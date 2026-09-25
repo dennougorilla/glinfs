@@ -16,6 +16,7 @@
 import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
+import { renderAiCutoutSection, updateAiCutoutSection } from './ai-cutout-panel.js';
 
 /** @typedef {import('../../../shared/edits/model.js').TextLayer} TextLayer */
 
@@ -484,12 +485,15 @@ export function renderBackgroundPanel(handlers) {
     ['This clip already has transparent areas. They stay transparent in the exported GIF.'],
   );
 
-  const element = createElement(
+  // Method switch + AI cutout section; the color-key controls below are
+  // the Color method's and hide while the AI method is chosen
+  const ai = renderAiCutoutSection(handlers);
+  cleanups.push(...ai.cleanups);
+
+  const colorFields = createElement(
     'div',
-    { className: 'property-group editor-bg-panel', 'data-edits-panel': 'background' },
+    { className: 'editor-ai-color-fields', id: 'ai-color-fields' },
     [
-      createElement('div', { className: 'property-group-title' }, ['Background']),
-      enabled.wrapper,
       createElement('div', { className: 'editor-text-field' }, [
         createElement('label', { className: 'editor-text-field-label', for: 'background-color' }, [
           'Key color',
@@ -514,6 +518,18 @@ export function renderBackgroundPanel(handlers) {
         ]),
         createElement('div', { className: 'editor-text-field-control' }, [mode]),
       ]),
+    ],
+  );
+
+  const element = createElement(
+    'div',
+    { className: 'property-group editor-bg-panel', 'data-edits-panel': 'background' },
+    [
+      createElement('div', { className: 'property-group-title' }, ['Background']),
+      enabled.wrapper,
+      ai.methodSwitch,
+      colorFields,
+      ai.section,
       createElement('p', { className: 'editor-bg-hint' }, [
         'GIF transparency is on or off per pixel: removed pixels become fully transparent, everything else stays opaque.',
       ]),
@@ -604,7 +620,7 @@ function updateLayerList(list, layers, selectedId, fallbackFocus = null) {
  */
 export function updateEditsPanel(container, state, fps) {
   updateTextPanel(container, state, fps);
-  updateBackgroundPanel(container, state);
+  updateBackgroundPanel(container, state, fps);
 }
 
 /**
@@ -673,8 +689,9 @@ function updateTextPanel(container, state, fps) {
 /**
  * @param {ParentNode} container
  * @param {import('../types.js').EditorState} state
+ * @param {number} fps
  */
-function updateBackgroundPanel(container, state) {
+function updateBackgroundPanel(container, state, fps) {
   const root = q(container, '[data-edits-panel="background"]');
   if (!root || !state.edits) return;
   const { background } = state.edits;
@@ -695,4 +712,6 @@ function updateBackgroundPanel(container, state) {
   if (status.textContent !== message) status.textContent = message;
 
   /** @type {HTMLElement} */ (q(root, '#background-alpha-note')).hidden = !state.clip?.hasAlpha;
+
+  updateAiCutoutSection(root, state, fps);
 }

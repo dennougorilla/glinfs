@@ -18,6 +18,7 @@ import { createElement } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { renderFrameOnly, renderOverlay } from './api.js';
 import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } from './core.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
@@ -55,6 +56,15 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
  * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
+ * @property {(method: import('../../shared/edits/model.js').BackgroundMethod) => void} [onSetBackgroundMethod] - Color key or AI cutout
+ * @property {() => void} [onAiAnalyze] - Analyze the selection (also Retry)
+ * @property {() => void} [onAiCancel] - Cancel the running analysis
+ * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice
+ * @property {(patch: Partial<import('../../shared/edits/model.js').AiCutout>) => void} [onSetAiParams] - Threshold/smoothing/edge
+ * @property {(tool: import('../../shared/edits/model.js').PickMode | null, options?: { fromKeyboard?: boolean }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks)
+ * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)
+ * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
+ * @property {() => void} [onClearAiPicks] - Remove every pick
  */
 
 /**
@@ -226,11 +236,13 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('Home', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
     plain('End', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
     plain('g', () => handlers.onToggleGrid()),
-    // Escape unwinds the innermost editing mode first: eyedropper, then the
-    // text selection, then the crop
+    // Escape unwinds the innermost editing mode first: a pick tool, the
+    // eyedropper, then the text selection, then the crop
     plain('Escape', () => {
       const current = getCurrentState();
-      if (current.pickingKeyColor) {
+      if (current.aiPickTool) {
+        handlers.onSetAiPickTool?.(null);
+      } else if (current.pickingKeyColor) {
         handlers.onSetPickingKeyColor?.(false);
       } else if (current.selectedTextId) {
         handlers.onSelectText?.(null);
@@ -246,8 +258,8 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('Backspace', deleteSelection),
     exportShortcut({ ctrl: true }),
     exportShortcut({ meta: true }),
-    // Escape also leaves the eyedropper while a panel control has focus
-    // (the "Pick from preview" toggle itself keeps focus after a click).
+    // Escape also leaves a pick tool or the eyedropper while a panel
+    // control has focus (their toggles keep focus after a click).
     // Registered last so it is tried before the plain Escape above; it
     // declines everything else, so typing in fields stays shortcut-free.
     registerHotkey({
@@ -255,7 +267,13 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       scope: 'route',
       allowInEditable: true,
       handler: (e) => {
-        if (!getCurrentState().pickingKeyColor) return false;
+        const current = getCurrentState();
+        if (current.aiPickTool) {
+          e.preventDefault();
+          handlers.onSetAiPickTool?.(null);
+          return;
+        }
+        if (!current.pickingKeyColor) return false;
         e.preventDefault();
         handlers.onSetPickingKeyColor?.(false);
       },
@@ -436,14 +454,25 @@ export function updateClipsPanel(container, handlers) {
     clipsCount.textContent = total > 0 ? String(total) : '';
   }
 
-  // Memory footer: conservative raw-RGBA estimate for active + queued frames,
-  // shown AGAINST the budget so the user sees the wall before hitting it
-  // (a bare "~1.2 GB estimated" gave no sense of remaining headroom)
+  updateClipsMemoryFooter(container);
+
+  return cleanups;
+}
+
+/**
+ * Memory footer: conservative raw-RGBA estimate for active + queued frames,
+ * shown AGAINST the budget so the user sees the wall before hitting it
+ * (a bare "~1.2 GB estimated" gave no sense of remaining headroom). The AI
+ * cutout's probability masks count too, so this also runs on its own while
+ * an analysis adds masks.
+ * @param {ParentNode} container - The editor screen container
+ */
+export function updateClipsMemoryFooter(container) {
   const footer = container.querySelector('[data-clips-footer]');
   if (footer instanceof HTMLElement) {
     const queueLength = getClipQueue().length;
     const limit = getClipQueueLimit();
-    const usedMB = getClipMemoryEstimateMB();
+    const usedMB = getClipMemoryEstimateMB() + getSharedMaskStore().byteLength / (1024 * 1024);
     const budgetMB = loadSettings().capture.memoryBudgetMB;
     footer.textContent = `~${formatMemory(usedMB)} / ${formatMemory(budgetMB)} \u00b7 ${queueLength}/${limit} queued`;
     footer.classList.toggle(
@@ -451,8 +480,6 @@ export function updateClipsPanel(container, handlers) {
       queueLength >= limit || (budgetMB > 0 && usedMB > budgetMB * 0.8),
     );
   }
-
-  return cleanups;
 }
 
 /**

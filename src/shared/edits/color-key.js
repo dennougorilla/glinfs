@@ -101,6 +101,9 @@ function getFloodScratch(pixelCount) {
  *
  * Iterative (explicit Int32Array stack), O(width * height).
  *
+ * Does nothing unless the color method is the active one: with the 'ai'
+ * method the segmentation masks remove the background instead.
+ *
  * @param {Uint8ClampedArray | Uint8Array} rgba - RGBA buffer, width * height * 4 bytes
  * @param {number} width
  * @param {number} height
@@ -108,7 +111,7 @@ function getFloodScratch(pixelCount) {
  * @returns {number} Number of opaque pixels cleared
  */
 export function applyColorKey(rgba, width, height, background) {
-  if (!background?.enabled || width <= 0 || height <= 0) return 0;
+  if (!background?.enabled || background.method === 'ai' || width <= 0 || height <= 0) return 0;
   const key = parseHexColor(background.color);
   if (!key) return 0;
 

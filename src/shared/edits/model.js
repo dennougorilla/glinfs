@@ -12,6 +12,8 @@
 /** @typedef {'sans'|'serif'|'mono'|'impact'} TextFont */
 /** @typedef {'left'|'center'|'right'} TextAlign */
 /** @typedef {'connected'|'global'} BackgroundMode */
+/** @typedef {'color'|'ai'} BackgroundMethod */
+/** @typedef {'keep'|'remove'} PickMode */
 
 /**
  * @typedef {Object} TextLayer
@@ -33,9 +35,35 @@
  */
 
 /**
+ * A click on the preview that selects the character (connected region of
+ * the AI mask) under it; the selection is followed through the clip.
+ * @typedef {Object} CutoutPick
+ * @property {number} frame  - absolute clip frame index the pick was made on
+ * @property {number} x      - fraction of the SOURCE frame width, 0..1
+ * @property {number} y      - fraction of the SOURCE frame height, 0..1
+ * @property {PickMode} mode - keep only picked characters, or remove them
+ */
+
+/**
+ * AI cutout parameters (used when BackgroundRemoval.method is 'ai')
+ * @typedef {Object} AiCutout
+ * @property {number} threshold  - foreground probability cut-off, 0.05..0.95
+ * @property {boolean} smoothing - average each frame's probability with its
+ *   neighbours before thresholding (steadier edges between frames)
+ * @property {number} edge       - integer SOURCE pixels, -8..8: positive grows
+ *   the cutout, negative shrinks it
+ * @property {CutoutPick[]} picks - at most 16, in the order they were made
+ */
+
+/**
  * @typedef {Object} BackgroundRemoval
- * @property {boolean} enabled
- * @property {string} color          - key color '#rrggbb'
+ * @property {boolean} enabled       - master switch for either method
+ * @property {BackgroundMethod} method - 'color' keys out a color; 'ai' cuts
+ *   characters out with the segmentation masks. Edits saved before the AI
+ *   method existed have no method and mean 'color'.
+ * @property {AiCutout} ai           - kept while the color method is active so
+ *   switching back and forth loses nothing
+ * @property {string} color          - key color '#rrggbb' (method 'color')
  * @property {number} tolerance      - 0..100
  * @property {BackgroundMode} mode   - connected = flood fill from the output border only
  * @property {boolean} colorChosen   - the key color was chosen (picked, typed or
@@ -61,6 +89,12 @@ export const TEXT_ALIGNS = /** @type {const} */ (['left', 'center', 'right']);
 /** @type {readonly BackgroundMode[]} */
 export const BACKGROUND_MODES = /** @type {const} */ (['connected', 'global']);
 
+/** @type {readonly BackgroundMethod[]} */
+export const BACKGROUND_METHODS = /** @type {const} */ (['color', 'ai']);
+
+/** @type {readonly PickMode[]} */
+export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
+
 /** Numeric ranges enforced by normalizeEdits */
 export const EDIT_LIMITS = /** @type {const} */ ({
   size: { min: 0.02, max: 0.5 },
@@ -68,6 +102,9 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   boxOpacity: { min: 0, max: 1 },
   position: { min: 0, max: 1 },
   tolerance: { min: 0, max: 100 },
+  aiThreshold: { min: 0.05, max: 0.95 },
+  aiEdge: { min: -8, max: 8 },
+  aiPicks: { max: 16 },
 });
 
 /** Defaults for a new text layer (start/end/id are derived per call) */
@@ -86,9 +123,17 @@ const TEXT_LAYER_DEFAULTS = /** @type {const} */ ({
   boxOpacity: 0.6,
 });
 
-/** Defaults for background removal */
+/** Defaults for the AI cutout parameters (picks default to none) */
+const AI_DEFAULTS = /** @type {const} */ ({
+  threshold: 0.5,
+  smoothing: true,
+  edge: 0,
+});
+
+/** Defaults for background removal (the `ai` object is added per call) */
 const BACKGROUND_DEFAULTS = /** @type {const} */ ({
   enabled: false,
+  method: 'color',
   color: '#00ff00',
   tolerance: 20,
   mode: 'connected',
@@ -160,7 +205,15 @@ function lastFrameIndex(frameCount) {
  * @returns {ClipEdits}
  */
 export function createDefaultEdits() {
-  return { textLayers: [], background: { ...BACKGROUND_DEFAULTS } };
+  return { textLayers: [], background: { ...BACKGROUND_DEFAULTS, ai: createDefaultAiCutout() } };
+}
+
+/**
+ * Default AI cutout parameters (a fresh object with its own picks array)
+ * @returns {AiCutout}
+ */
+export function createDefaultAiCutout() {
+  return { ...AI_DEFAULTS, picks: [] };
 }
 
 /**
@@ -229,11 +282,56 @@ function normalizeTextLayer(layer, frameCount) {
 }
 
 /**
+ * Normalize one pick; null when it has no usable position or frame
+ * @param {unknown} pick
+ * @param {number} frameCount
+ * @returns {CutoutPick | null}
+ */
+function normalizePick(pick, frameCount) {
+  if (!pick || typeof pick !== 'object' || Array.isArray(pick)) return null;
+  const p = /** @type {Record<string, unknown>} */ (pick);
+  const { position } = EDIT_LIMITS;
+  if (![p.frame, p.x, p.y].every((v) => typeof v === 'number' && Number.isFinite(v))) {
+    return null;
+  }
+  return {
+    frame: Math.round(clampNumber(p.frame, 0, lastFrameIndex(frameCount), 0)),
+    x: clampNumber(p.x, position.min, position.max, 0.5),
+    y: clampNumber(p.y, position.min, position.max, 0.5),
+    mode: normalizeEnum(p.mode, PICK_MODES, 'keep'),
+  };
+}
+
+/**
+ * Normalize AI cutout parameters. Picks without a finite frame/x/y are
+ * dropped, the rest are clamped (frame into the clip, x/y into 0..1) and
+ * only the first EDIT_LIMITS.aiPicks.max are kept.
+ * @param {unknown} ai
+ * @param {number} frameCount
+ * @returns {AiCutout}
+ */
+function normalizeAiCutout(ai, frameCount) {
+  const a = ai && typeof ai === 'object' ? /** @type {Record<string, unknown>} */ (ai) : {};
+  const { aiThreshold, aiEdge, aiPicks } = EDIT_LIMITS;
+  const picks = Array.isArray(a.picks) ? a.picks : [];
+  return {
+    threshold: clampNumber(a.threshold, aiThreshold.min, aiThreshold.max, AI_DEFAULTS.threshold),
+    smoothing: typeof a.smoothing === 'boolean' ? a.smoothing : AI_DEFAULTS.smoothing,
+    edge: Math.round(clampNumber(a.edge, aiEdge.min, aiEdge.max, AI_DEFAULTS.edge)),
+    picks: picks
+      .map((pick) => normalizePick(pick, frameCount))
+      .filter((pick) => pick !== null)
+      .slice(0, aiPicks.max),
+  };
+}
+
+/**
  * Normalize background removal settings
  * @param {unknown} background
+ * @param {number} frameCount - Clip frame count (pick frames are clamped into it)
  * @returns {BackgroundRemoval}
  */
-function normalizeBackground(background) {
+function normalizeBackground(background, frameCount) {
   const b =
     background && typeof background === 'object'
       ? /** @type {Record<string, unknown>} */ (background)
@@ -243,6 +341,9 @@ function normalizeBackground(background) {
   const color = normalizeColor(b.color, BACKGROUND_DEFAULTS.color);
   return {
     enabled,
+    // v0.7.0 edits have no method: they were color keys
+    method: normalizeEnum(b.method, BACKGROUND_METHODS, BACKGROUND_DEFAULTS.method),
+    ai: normalizeAiCutout(b.ai, frameCount),
     color,
     tolerance: clampNumber(
       b.tolerance,
@@ -280,7 +381,7 @@ export function normalizeEdits(edits, frameCount) {
     textLayers: layers
       .filter((layer) => layer !== null && typeof layer === 'object' && !Array.isArray(layer))
       .map((layer) => normalizeTextLayer(layer, frameCount)),
-    background: normalizeBackground(e.background),
+    background: normalizeBackground(e.background, frameCount),
   };
 }
 
@@ -295,8 +396,28 @@ export function hasVisibleText(layer) {
 }
 
 /**
- * True when the edits change nothing: background removal is off and no
- * layer has non-blank text. Tolerates null/undefined.
+ * Whether the color key runs: removal on with the 'color' method (or no
+ * method, as in edits saved before the AI method existed)
+ * @param {BackgroundRemoval | null | undefined} background
+ * @returns {boolean}
+ */
+export function isColorKeyActive(background) {
+  return background?.enabled === true && background.method !== 'ai';
+}
+
+/**
+ * Whether AI cutout masks replace the color key: removal on with the 'ai'
+ * method
+ * @param {BackgroundRemoval | null | undefined} background
+ * @returns {boolean}
+ */
+export function isAiCutoutActive(background) {
+  return background?.enabled === true && background.method === 'ai';
+}
+
+/**
+ * True when the edits change nothing: background removal (either method)
+ * is off and no layer has non-blank text. Tolerates null/undefined.
  * @param {ClipEdits | null | undefined} edits
  * @returns {boolean}
  */
@@ -321,7 +442,7 @@ export function getActiveTextLayers(edits, frameIndex) {
 
 /**
  * Whether an export needs GIF transparency: the source already has alpha,
- * or background removal will clear pixels.
+ * or background removal (color key or AI cutout) will clear pixels.
  * @param {{ edits?: ClipEdits | null, hasAlpha?: boolean }} params
  * @returns {boolean}
  */
