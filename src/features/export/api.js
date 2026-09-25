@@ -3,12 +3,16 @@
  * @module features/export/api
  */
 
+import { composeOutputFrameRGBA } from '../../shared/edits/compose.js';
+import { isEditsEmpty } from '../../shared/edits/model.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import {
   applyFrameSkip,
+  areFramesIdentical,
   calculateFrameDelay,
   calculateMaxColors,
   computePaletteSampleStep,
+  getEffectiveEncoderId,
   getEncoderPreset,
   sampledPixelCount,
   sampleFramePixels,
@@ -159,6 +163,20 @@ export async function getFrameRGBA(frame, crop) {
 }
 
 /**
+ * @typedef {(index: number) => Promise<{ data: Uint8ClampedArray, width: number, height: number }>} FrameExtractor
+ *   Extracts the final RGBA of source frame `index` (after frame skip)
+ */
+
+/**
+ * @typedef {Object} PaletteSampleOptions
+ * @property {FrameExtractor} [extract] - How to read frame `index`; defaults
+ *   to getFrameRGBA(frames[index], crop). encodeGif passes its own extractor
+ *   so the sample sees the final pixels (text drawn, background keyed).
+ * @property {boolean} [opaqueOnly=false] - Skip pixels with alpha < 128
+ *   (transparent exports)
+ */
+
+/**
  * Gather a bounded pixel sample from frames spread across the whole clip,
  * for quantizing one global palette up front (#99, paletteInterval 0).
  *
@@ -169,10 +187,12 @@ export async function getFrameRGBA(frame, crop) {
  * @param {import('../capture/types.js').Frame[]} frames - Frames to encode (after frame skip)
  * @param {import('../editor/types.js').CropArea | null} crop
  * @param {AbortSignal} [signal]
+ * @param {PaletteSampleOptions} [options]
  * @returns {Promise<Uint8ClampedArray>} RGBA sample
  * @throws {DOMException} AbortError if cancelled between extractions
  */
-export async function buildPaletteSample(frames, crop, signal) {
+export async function buildPaletteSample(frames, crop, signal, options = {}) {
+  const { extract = (index) => getFrameRGBA(frames[index], crop), opaqueOnly = false } = options;
   const indices = selectPaletteSampleIndices(frames.length);
   /** @type {Uint8ClampedArray | null} */
   let sample = null;
@@ -183,12 +203,12 @@ export async function buildPaletteSample(frames, crop, signal) {
     if (signal?.aborted) {
       throw new DOMException('Encoding cancelled', 'AbortError');
     }
-    const { data, width, height } = await getFrameRGBA(frames[index], crop);
+    const { data, width, height } = await extract(index);
     if (!sample) {
       step = computePaletteSampleStep(width, height, indices.length);
       sample = new Uint8ClampedArray(sampledPixelCount(width, height, step) * 4 * indices.length);
     }
-    offset = sampleFramePixels(data, width, height, step, sample, offset, index);
+    offset = sampleFramePixels(data, width, height, step, sample, offset, index, opaqueOnly);
   }
 
   return sample ? sample.subarray(0, offset) : new Uint8ClampedArray(0);
@@ -221,6 +241,20 @@ export async function checkEncoderStatus() {
  * @property {import('./types.js').ExportSettings} settings - Export settings
  * @property {number} fps - Source FPS for frame delay calculation
  * @property {(progress: { percent: number, current: number, total: number }) => void} onProgress
+ *   Called on the main thread as the worker acknowledges GIF frames;
+ *   current/total count SOURCE frames (after frame skip), and percent is
+ *   monotonic and reaches 100 on success.
+ * @property {import('../../shared/edits/model.js').ClipEdits | null} [edits=null] - Text and
+ *   background removal to burn in (already normalized by the caller)
+ * @property {number} [rangeStart=0] - Absolute clip index of frames[0]; source
+ *   frame k (after frame skip) has absolute index rangeStart + k * frameSkip,
+ *   which is what text frame ranges are evaluated against
+ * @property {boolean} [transparent=false] - Write pixels with alpha < 128 as
+ *   GIF transparency; forces the gifenc encoder (the WASM encoder cannot
+ *   write a transparent index)
+ * @property {boolean} [mergeIdenticalFrames=false] - Collapse runs of
+ *   consecutive byte-identical frames into one GIF frame whose delay covers
+ *   the run (imported clips, whose holds were expanded into repeated slots)
  */
 
 /**
@@ -242,7 +276,17 @@ const DEFAULT_FPS = 30;
 export const MAX_IN_FLIGHT_FRAMES = 4;
 
 export async function encodeGif(params, signal) {
-  const { frames, crop, settings, fps = DEFAULT_FPS, onProgress } = params;
+  const {
+    frames,
+    crop,
+    settings,
+    fps = DEFAULT_FPS,
+    onProgress,
+    edits = null,
+    rangeStart = 0,
+    transparent = false,
+    mergeIdenticalFrames = false,
+  } = params;
 
   // Apply frame skip
   const skippedFrames = applyFrameSkip(frames, settings.frameSkip);
@@ -250,6 +294,9 @@ export async function encodeGif(params, signal) {
   if (skippedFrames.length === 0) {
     throw new Error('No frames to encode');
   }
+  const totalSourceFrames = skippedFrames.length;
+  // applyFrameSkip treats any skip <= 1 as "every frame"
+  const frameStep = Math.max(1, settings.frameSkip);
 
   // Convert centiseconds to milliseconds for gifenc
   const frameDelayCs = calculateFrameDelay(fps, settings.playbackSpeed, settings.frameSkip);
@@ -266,13 +313,33 @@ export async function encodeGif(params, signal) {
   // Calculate max colors based on quality and preset
   const maxColors = calculateMaxColors(settings.quality, settings.encoderPreset);
 
+  // Transparent exports always use gifenc (see getEffectiveEncoderId)
+  const encoderId = getEffectiveEncoderId(settings, transparent);
+
+  // Unedited clips keep the VideoFrame.copyTo fast path; edits render
+  // through the compositor so text and keying match the preview.
+  /** @type {FrameExtractor} */
+  const extractFrame = isEditsEmpty(edits)
+    ? (k) => getFrameRGBA(skippedFrames[k], crop)
+    : (k) => composeOutputFrameRGBA(skippedFrames[k], crop, edits, rangeStart + k * frameStep);
+
   // Create worker manager
   const manager = createEncoderManager();
 
-  // Backpressure bookkeeping: the frame loop waits whenever
+  // Backpressure bookkeeping: frame submission waits whenever
   // (submitted - processed) reaches MAX_IN_FLIGHT_FRAMES and is woken by
-  // PROGRESS events, worker errors, or abort.
+  // PROGRESS events, worker errors, or abort. Both count GIF frames; with
+  // merging, one GIF frame can stand for several source frames.
+  let submittedFrames = 0;
   let processedFrames = 0;
+  /**
+   * For each submitted GIF frame, in submission order: how many source
+   * frames are covered once it is encoded. The worker encodes strictly in
+   * order, so each PROGRESS ack consumes the next entry.
+   * @type {number[]}
+   */
+  const coveredSourceFrames = [];
+  let reportedSourceFrames = 0;
   /** @type {Error | null} */
   let frameError = null;
   /** @type {(() => void) | null} */
@@ -296,14 +363,59 @@ export async function encodeGif(params, signal) {
   };
   signal?.addEventListener('abort', abortHandler);
 
+  /** Throw AbortError, or the worker's frame error, if either happened */
+  const throwIfStopped = () => {
+    if (signal?.aborted) {
+      throw new DOMException('Encoding cancelled', 'AbortError');
+    }
+    if (frameError) {
+      throw frameError;
+    }
+  };
+
+  /** Wait until the in-flight window has room for one more GIF frame */
+  const waitForWindow = async () => {
+    while (
+      submittedFrames - processedFrames >= MAX_IN_FLIGHT_FRAMES &&
+      !signal?.aborted &&
+      !frameError
+    ) {
+      await new Promise((resolve) => {
+        wakeUp = resolve;
+      });
+    }
+  };
+
+  /**
+   * Send one GIF frame to the worker. The buffer is transferred
+   * (detached), so `frame.data` must not be used after this call.
+   * @param {{ data: Uint8ClampedArray, width: number, height: number }} frame
+   * @param {number} runLength - Source frames this GIF frame stands for
+   * @param {number} sourceFramesCovered - Source frames done once it is encoded
+   */
+  const submitFrame = (frame, runLength, sourceFramesCovered) => {
+    const delayMs =
+      runLength === 1
+        ? frameDelayMs
+        : calculateFrameDelay(fps, settings.playbackSpeed, settings.frameSkip, runLength) * 10;
+    // GIF frame index: sequential, so the palette schedule counts GIF frames
+    manager.addFrame(frame.data, frame.width, frame.height, submittedFrames, delayMs);
+    submittedFrames++;
+    coveredSourceFrames.push(sourceFramesCovered);
+  };
+
   try {
     // paletteInterval 0 means one palette for the whole clip; build it
     // from frames sampled across the clip rather than from frame 0 alone.
     // gifsicle quantizes internally per frame, so skip the pre-pass there.
-    const encoderId = settings.encoderId ?? 'gifenc-js';
+    // The sample goes through the same extraction as the frames, so text
+    // colors are in it and keyed-out pixels are not.
     const paletteSample =
-      preset.paletteInterval === 0 && encoderId === 'gifenc-js'
-        ? await buildPaletteSample(skippedFrames, crop, signal)
+      preset.paletteInterval === 0 && (encoderId ?? 'gifenc-js') === 'gifenc-js'
+        ? await buildPaletteSample(skippedFrames, crop, signal, {
+            extract: extractFrame,
+            opaqueOnly: transparent,
+          })
         : undefined;
 
     if (signal?.aborted) {
@@ -312,26 +424,30 @@ export async function encodeGif(params, signal) {
 
     // Initialize worker with selected encoder
     await manager.init({
-      encoderId: settings.encoderId,
+      encoderId,
       width,
       height,
-      totalFrames: skippedFrames.length,
+      totalFrames: totalSourceFrames,
       maxColors,
       frameDelayMs,
       loopCount: settings.loopCount,
       quantizeFormat: preset.format,
       paletteInterval: preset.paletteInterval,
       paletteSample,
+      transparent,
     });
 
-    // Setup progress callback (also releases backpressure window slots)
-    manager.onProgress = ({ percent, frameIndex, totalFrames }) => {
+    // Setup progress callback (also releases backpressure window slots).
+    // Progress is computed here over SOURCE frames: the worker only sees
+    // GIF frames, which merging makes fewer than the source frames.
+    manager.onProgress = () => {
       processedFrames++;
       notify();
+      reportedSourceFrames = Math.max(reportedSourceFrames, coveredSourceFrames.shift() ?? 0);
       onProgress({
-        percent,
-        current: frameIndex + 1,
-        total: totalFrames,
+        percent: Math.round((reportedSourceFrames / totalSourceFrames) * 100),
+        current: reportedSourceFrames,
+        total: totalSourceFrames,
       });
     };
 
@@ -342,51 +458,53 @@ export async function encodeGif(params, signal) {
       notify();
     };
 
+    /**
+     * Merging holds back one frame until the next one shows whether it
+     * repeats (the run grows) or differs (the held run is submitted).
+     * @type {{ frame: { data: Uint8ClampedArray, width: number, height: number }, runLength: number } | null}
+     */
+    let pending = null;
+
     // Extract and send frames to worker with bounded in-flight window
-    for (let i = 0; i < skippedFrames.length; i++) {
-      // Wait until the in-flight window has room (i frames submitted so far)
-      while (i - processedFrames >= MAX_IN_FLIGHT_FRAMES && !signal?.aborted && !frameError) {
-        await new Promise((resolve) => {
-          wakeUp = resolve;
-        });
-      }
+    for (let i = 0; i < totalSourceFrames; i++) {
+      // Wait until the in-flight window has room
+      await waitForWindow();
 
-      // Check for cancellation
-      if (signal?.aborted) {
-        throw new DOMException('Encoding cancelled', 'AbortError');
-      }
+      // Check for cancellation; surface worker-side frame errors
+      throwIfStopped();
 
-      // Surface worker-side frame errors
-      if (frameError) {
-        throw frameError;
-      }
-
-      const frame = skippedFrames[i];
-
-      // Extract RGBA data (handles crop internally)
-      const {
-        data: rgba,
-        width: frameWidth,
-        height: frameHeight,
-      } = await getFrameRGBA(frame, crop);
+      // Extract RGBA data (handles crop and edits internally)
+      const frame = await extractFrame(i);
 
       // Re-check after the await: an abort during extraction has already
       // disposed the manager, and addFrame would throw WorkerError instead
-      // of the AbortError the caller distinguishes cancellation by.
-      if (signal?.aborted) {
-        throw new DOMException('Encoding cancelled', 'AbortError');
+      // of the AbortError the caller distinguishes cancellation by. An
+      // ERROR that arrived meanwhile would otherwise let this frame and
+      // FINISH proceed, returning a GIF silently missing the failed frame.
+      throwIfStopped();
+
+      if (!mergeIdenticalFrames) {
+        submitFrame(frame, 1, i + 1);
+        continue;
       }
 
-      // Re-check worker errors too: an ERROR that arrived while awaiting
-      // getFrameRGBA would otherwise let this frame and FINISH proceed,
-      // returning a GIF silently missing the failed frame.
-      if (frameError) {
-        throw frameError;
+      if (pending && areFramesIdentical(pending.frame, frame)) {
+        pending.runLength++;
+        continue;
       }
+      if (pending) {
+        // The held run ends at source frame i - 1
+        submitFrame(pending.frame, pending.runLength, i);
+      }
+      pending = { frame, runLength: 1 };
+    }
 
-      // Send frame to worker. The buffer is transferred (detached), so
-      // `rgba` must not be reused after this call.
-      manager.addFrame(rgba, frameWidth, frameHeight, i);
+    // Flush the last held run (merging only), respecting the window
+    if (pending) {
+      await waitForWindow();
+      throwIfStopped();
+      submitFrame(pending.frame, pending.runLength, totalSourceFrames);
+      pending = null;
     }
 
     // A frame error that arrived after the last submission must fail the

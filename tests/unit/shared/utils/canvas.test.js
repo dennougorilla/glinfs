@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createFrameThumbnailDataUrl,
   getContext2D,
   isFrameValid,
   isVideoFrameValid,
@@ -185,5 +186,60 @@ describe('renderFramePlaceholder', () => {
     renderFramePlaceholder(ctx, 640, 480, { showMessage: false });
 
     expect(ctx.fillText).not.toHaveBeenCalled();
+  });
+});
+
+describe('createFrameThumbnailDataUrl', () => {
+  /** A drawable 320x160 frame wrapper */
+  function drawableFrame() {
+    return { id: 'f', frame: { closed: false }, timestamp: 0, width: 320, height: 160 };
+  }
+
+  /** Stub a working 2D canvas so the encode call is observable */
+  function stubCanvas() {
+    const drawImage = vi.fn();
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      // @ts-expect-error minimal 2D context stub
+      .mockReturnValue({ drawImage });
+    const toDataURL = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
+      .mockImplementation((type) => `data:${type}`);
+    return {
+      drawImage,
+      toDataURL,
+      restore: () => {
+        getContext.mockRestore();
+        toDataURL.mockRestore();
+      },
+    };
+  }
+
+  it('defaults to a JPEG thumbnail scaled to the max dimension', () => {
+    const stub = stubCanvas();
+    try {
+      expect(createFrameThumbnailDataUrl(drawableFrame())).toBe('data:image/jpeg');
+      expect(stub.toDataURL).toHaveBeenCalledWith('image/jpeg', 0.7);
+      expect(stub.drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 160, 80);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('encodes PNG when asked (keeps transparency)', () => {
+    const stub = stubCanvas();
+    try {
+      expect(createFrameThumbnailDataUrl(drawableFrame(), 80, 'image/png')).toBe('data:image/png');
+      expect(stub.toDataURL).toHaveBeenCalledWith('image/png');
+      expect(stub.drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 80, 40);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('returns null for closed frames', () => {
+    const frame = drawableFrame();
+    frame.frame.closed = true;
+    expect(createFrameThumbnailDataUrl(frame, 160, 'image/png')).toBeNull();
   });
 });

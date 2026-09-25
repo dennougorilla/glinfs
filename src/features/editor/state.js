@@ -3,6 +3,7 @@
  * @module features/editor/state
  */
 
+import { createDefaultEdits, createTextLayer, normalizeEdits } from '../../shared/edits/model.js';
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
 import { clampCropArea, createClip, setFrameRange } from './core.js';
@@ -27,6 +28,9 @@ export function initEditorState(clip) {
     sceneDetectionStatus: 'idle',
     sceneDetectionProgress: 0,
     sceneDetectionError: null,
+    edits: clip.edits ?? createDefaultEdits(),
+    selectedTextId: null,
+    pickingKeyColor: false,
   };
 }
 
@@ -216,6 +220,142 @@ export function setMode(state, mode) {
 }
 
 // ============================================================
+// Edits (text layers, background removal)
+// ============================================================
+
+/**
+ * Frame count of the state's clip (0 without a clip)
+ * @param {import('./types.js').EditorState} state
+ * @returns {number}
+ */
+function clipFrameCount(state) {
+  return state.clip?.frames.length ?? 0;
+}
+
+/**
+ * Replace the edits, normalized against the clip, and mirror them into the
+ * clip (like cropArea) so the export payload and a return from Export see
+ * the same edits. A selection pointing at a removed layer is dropped.
+ * @param {import('./types.js').EditorState} state
+ * @param {unknown} edits
+ * @returns {import('./types.js').EditorState}
+ */
+export function setEdits(state, edits) {
+  if (!state.clip) return state;
+  const normalized = normalizeEdits(edits, clipFrameCount(state));
+  const selectedTextId = normalized.textLayers.some((layer) => layer.id === state.selectedTextId)
+    ? state.selectedTextId
+    : null;
+  return {
+    ...state,
+    edits: normalized,
+    selectedTextId,
+    clip: { ...state.clip, edits: normalized },
+  };
+}
+
+/**
+ * Add a text layer spanning the current selection and select it
+ * @param {import('./types.js').EditorState} state
+ * @param {Partial<import('../../shared/edits/model.js').TextLayer>} [partial]
+ * @returns {import('./types.js').EditorState}
+ */
+export function addTextLayer(state, partial = {}) {
+  if (!state.clip) return state;
+  const layer = createTextLayer(
+    { start: state.selectedRange.start, end: state.selectedRange.end, ...partial },
+    clipFrameCount(state),
+  );
+  const next = setEdits(state, {
+    ...state.edits,
+    textLayers: [...state.edits.textLayers, layer],
+  });
+  return { ...next, selectedTextId: layer.id };
+}
+
+/**
+ * Patch one text layer (values are clamped/validated)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {Partial<import('../../shared/edits/model.js').TextLayer>} patch
+ * @returns {import('./types.js').EditorState}
+ */
+export function updateTextLayer(state, id, patch) {
+  if (!state.edits.textLayers.some((layer) => layer.id === id)) return state;
+  return setEdits(state, {
+    ...state.edits,
+    textLayers: state.edits.textLayers.map((layer) =>
+      layer.id === id ? { ...layer, ...patch, id } : layer,
+    ),
+  });
+}
+
+/**
+ * Remove a text layer (deselects it when selected)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @returns {import('./types.js').EditorState}
+ */
+export function removeTextLayer(state, id) {
+  if (!state.edits.textLayers.some((layer) => layer.id === id)) return state;
+  return setEdits(state, {
+    ...state.edits,
+    textLayers: state.edits.textLayers.filter((layer) => layer.id !== id),
+  });
+}
+
+/**
+ * Move a text layer's center (fractions of the output size, clamped 0..1)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {number} x
+ * @param {number} y
+ * @returns {import('./types.js').EditorState}
+ */
+export function moveTextLayer(state, id, x, y) {
+  return updateTextLayer(state, id, { x: clamp(x, 0, 1), y: clamp(y, 0, 1) });
+}
+
+/**
+ * Select a text layer (null, or an unknown id, deselects)
+ * @param {import('./types.js').EditorState} state
+ * @param {string|null} id
+ * @returns {import('./types.js').EditorState}
+ */
+export function selectTextLayer(state, id) {
+  const exists = id !== null && state.edits.textLayers.some((layer) => layer.id === id);
+  const selectedTextId = exists ? id : null;
+  if (selectedTextId === state.selectedTextId) return state;
+  return { ...state, selectedTextId };
+}
+
+/**
+ * Patch the background removal settings (values are clamped/validated).
+ * Setting a color marks it as chosen (see BackgroundRemoval.colorChosen).
+ * @param {import('./types.js').EditorState} state
+ * @param {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} patch
+ * @returns {import('./types.js').EditorState}
+ */
+export function setBackground(state, patch) {
+  const chosen = patch.color !== undefined ? { colorChosen: true } : {};
+  return setEdits(state, {
+    ...state.edits,
+    background: { ...state.edits.background, ...patch, ...chosen },
+  });
+}
+
+/**
+ * Enter/leave eyedropper mode for the background key color
+ * @param {import('./types.js').EditorState} state
+ * @param {boolean} picking
+ * @returns {import('./types.js').EditorState}
+ */
+export function setPickingKeyColor(state, picking) {
+  if (state.pickingKeyColor === picking) return state;
+  return { ...state, pickingKeyColor: picking };
+}
+
+// ============================================================
 // Scene Detection State Management
 // ============================================================
 
@@ -299,10 +439,11 @@ export function resetSceneDetection(state) {
  * Create editor store
  * @param {import('../capture/types.js').Frame[]} frames
  * @param {number} [fps] - Source FPS (default: 30)
+ * @param {{ hasAlpha?: boolean, edits?: unknown }} [options] - See createClip
  * @returns {ReturnType<typeof createStore<import('./types.js').EditorState>>}
  */
-export function createEditorStore(frames, fps) {
-  const clip = createClip(frames, fps);
+export function createEditorStore(frames, fps, options) {
+  const clip = createClip(frames, fps, options);
   return createStore(initEditorState(clip));
 }
 
@@ -312,5 +453,7 @@ export function createEditorStore(frames, fps) {
  * @returns {ReturnType<typeof createStore<import('./types.js').EditorState>>}
  */
 export function createEditorStoreFromClip(clip) {
-  return createStore(initEditorState(clip));
+  // The clip may come from an older payload (or a test) without edits
+  const edits = normalizeEdits(clip.edits, clip.frames.length);
+  return createStore(initEditorState({ ...clip, hasAlpha: Boolean(clip.hasAlpha), edits }));
 }

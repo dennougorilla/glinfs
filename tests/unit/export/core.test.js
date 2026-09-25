@@ -4,6 +4,7 @@ import {
   createDefaultSettings,
   ENCODER_PRESETS,
   estimateSize,
+  getEffectiveEncoderId,
   getEncoderPreset,
   validateSettings,
 } from '../../../src/features/export/core.js';
@@ -362,5 +363,18 @@ describe('calculateMaxColors', () => {
     const highQuality = calculateMaxColors(1.0, 'quality');
     const lowQuality = calculateMaxColors(0.5, 'quality');
     expect(highQuality).toBeGreaterThan(lowQuality);
+  });
+});
+
+describe('getEffectiveEncoderId', () => {
+  it('keeps the stored encoder for opaque exports', () => {
+    expect(getEffectiveEncoderId({ encoderId: 'gifsicle-wasm' }, false)).toBe('gifsicle-wasm');
+    expect(getEffectiveEncoderId({ encoderId: 'gifenc-js' }, undefined)).toBe('gifenc-js');
+  });
+
+  it('forces gifenc for transparent exports without changing the setting', () => {
+    const settings = { encoderId: 'gifsicle-wasm' };
+    expect(getEffectiveEncoderId(settings, true)).toBe('gifenc-js');
+    expect(settings.encoderId).toBe('gifsicle-wasm');
   });
 });

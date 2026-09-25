@@ -6,11 +6,31 @@
 import { createElement } from '../../../shared/utils/dom.js';
 
 /**
+ * What the Delete key removes: the selected text layer, else the clip
+ * @param {string | null} selectedTextId
+ * @returns {string}
+ */
+export function getDeleteHintLabel(selectedTextId) {
+  return selectedTextId ? ' Delete Text' : ' Delete Clip';
+}
+
+/**
+ * Point the Delete shortcut hint at what the key removes now
+ * @param {ParentNode} container
+ * @param {string | null} selectedTextId
+ */
+export function updateDeleteHint(container, selectedTextId) {
+  const label = container.querySelector('[data-delete-hint]');
+  if (label) label.textContent = getDeleteHintLabel(selectedTextId);
+}
+
+/**
  * Render the status bar
  * @param {{ width: number, height: number }} dimensions - Output dimensions at render time
+ * @param {string | null} [selectedTextId] - Selected text layer at render time
  * @returns {HTMLElement}
  */
-export function renderEditorStatusBar(dimensions) {
+export function renderEditorStatusBar(dimensions, selectedTextId = null) {
   return createElement('div', { className: 'editor-status-bar' }, [
     createElement('div', { className: 'status-section' }, [
       createElement('div', { className: 'shortcuts-hint' }, [
@@ -36,7 +56,9 @@ export function renderEditorStatusBar(dimensions) {
         ]),
         createElement('span', { className: 'shortcut' }, [
           createElement('span', { className: 'kbd' }, ['Del']),
-          ' Delete Clip',
+          createElement('span', { 'data-delete-hint': 'true' }, [
+            getDeleteHintLabel(selectedTextId),
+          ]),
         ]),
         createElement('span', { className: 'shortcut' }, [
           createElement('span', { className: 'kbd' }, ['Shift+C']),

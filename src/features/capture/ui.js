@@ -7,6 +7,7 @@ import { navigate } from '../../shared/router.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { formatDuration } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { IMPORT_ACCEPT_ATTRIBUTE } from '../import/core.js';
 
 /** @constant {string} GitHub repository URL */
 const GITHUB_REPO_URL = 'https://github.com/dennougorilla/glinfs';
@@ -96,6 +97,10 @@ function createHeartIcon() {
  * @property {() => Promise<boolean>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
  * @property {() => import('./types.js').CaptureSettings | null} getSettings - Get current settings
+ * @property {(file: File) => void} [onImportFile] - Open an image file as a clip
+ *   (button, file input and drag-and-drop); omitted = no import controls
+ * @property {() => string | null} [getImportStatus] - Busy label while a file
+ *   is opening ("Opening name…"), else null
  */
 
 /**
@@ -120,9 +125,12 @@ export function renderCaptureScreen(container, state, handlers) {
   // Preview Panel
   const previewPanel = createElement('div', { className: 'capture-preview-panel' });
   const previewWrapper = createElement('div', { className: 'capture-preview-wrapper' });
-  previewWrapper.appendChild(renderVideoPreview(state));
+  previewWrapper.appendChild(renderVideoPreview(state, Boolean(handlers.onImportFile)));
   previewPanel.appendChild(previewWrapper);
   content.appendChild(previewPanel);
+  if (handlers.onImportFile) {
+    setupImportDropZone(previewPanel, handlers.onImportFile, cleanups);
+  }
 
   // Sidebar
   const sidebar = createElement('div', { className: 'capture-sidebar' });
@@ -158,11 +166,75 @@ export function renderCaptureScreen(container, state, handlers) {
 }
 
 /**
+ * Whether a drag carries files (not text or links)
+ * @param {DragEvent} event
+ * @returns {boolean}
+ */
+function isFileDrag(event) {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+/**
+ * Let the user drop an image file anywhere on the preview panel to open it.
+ * A depth counter keeps the highlight steady while the pointer crosses
+ * child elements (each fires its own dragenter/dragleave).
+ * @param {HTMLElement} panel
+ * @param {(file: File) => void} onImportFile
+ * @param {(() => void)[]} cleanups
+ */
+function setupImportDropZone(panel, onImportFile, cleanups) {
+  const overlay = createElement(
+    'div',
+    { className: 'capture-import-drop-overlay', 'aria-hidden': 'true' },
+    [createElement('span', { className: 'capture-import-drop-label' }, ['Drop to open'])],
+  );
+  panel.appendChild(overlay);
+  let depth = 0;
+  const setActive = (active) => panel.classList.toggle('capture-import-dropzone--active', active);
+
+  cleanups.push(
+    on(panel, 'dragenter', (event) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      depth += 1;
+      setActive(true);
+    }),
+  );
+  cleanups.push(
+    on(panel, 'dragover', (event) => {
+      if (!isFileDrag(event)) return;
+      // Without preventDefault the browser never fires 'drop'
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    }),
+  );
+  cleanups.push(
+    on(panel, 'dragleave', (event) => {
+      if (!isFileDrag(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setActive(false);
+    }),
+  );
+  cleanups.push(
+    on(panel, 'drop', (event) => {
+      if (!isFileDrag(event)) return;
+      // Keep the browser from navigating to the dropped file
+      event.preventDefault();
+      depth = 0;
+      setActive(false);
+      const file = event.dataTransfer?.files?.[0];
+      if (file) onImportFile(file);
+    }),
+  );
+}
+
+/**
  * Render video preview area
  * @param {import('./types.js').CaptureState} state
+ * @param {boolean} [importAvailable=false] - Mention opening/dropping a GIF
  * @returns {HTMLElement}
  */
-function renderVideoPreview(state) {
+function renderVideoPreview(state, importAvailable = false) {
   if (state.isSharing && state.stream) {
     const previewClasses = [
       'video-preview',
@@ -197,27 +269,36 @@ function renderVideoPreview(state) {
   }
 
   // Empty state - Glinfs branded
-  return createElement('div', { className: 'empty-state preview-empty' }, [
-    createElement('div', { className: 'empty-state-icon' }, [
-      // Camera/Screen icon SVG
-      createCaptureIcon(),
-    ]),
-    createElement('h2', { className: 'empty-state-title' }, ['Ready to Capture']),
-    createElement('div', { className: 'empty-state-steps' }, [
-      createElement('div', { className: 'empty-state-step' }, [
-        createElement('span', { className: 'empty-state-step-number' }, ['1']),
-        'Click "Select Screen" button',
+  return createElement(
+    'div',
+    { className: 'empty-state preview-empty' },
+    [
+      createElement('div', { className: 'empty-state-icon' }, [
+        // Camera/Screen icon SVG
+        createCaptureIcon(),
       ]),
-      createElement('div', { className: 'empty-state-step' }, [
-        createElement('span', { className: 'empty-state-step-number' }, ['2']),
-        'Choose a screen, window, or tab to capture',
+      createElement('h2', { className: 'empty-state-title' }, ['Ready to Capture']),
+      createElement('div', { className: 'empty-state-steps' }, [
+        createElement('div', { className: 'empty-state-step' }, [
+          createElement('span', { className: 'empty-state-step-number' }, ['1']),
+          'Click "Select Screen" button',
+        ]),
+        createElement('div', { className: 'empty-state-step' }, [
+          createElement('span', { className: 'empty-state-step-number' }, ['2']),
+          'Choose a screen, window, or tab to capture',
+        ]),
+        createElement('div', { className: 'empty-state-step' }, [
+          createElement('span', { className: 'empty-state-step-number' }, ['3']),
+          'Click "Create Clip" to edit your recording',
+        ]),
       ]),
-      createElement('div', { className: 'empty-state-step' }, [
-        createElement('span', { className: 'empty-state-step-number' }, ['3']),
-        'Click "Create Clip" to edit your recording',
-      ]),
-    ]),
-  ]);
+      importAvailable
+        ? createElement('p', { className: 'capture-import-hint' }, [
+            'Editing an existing GIF? Click "Open GIF or image", or drop a GIF here',
+          ])
+        : null,
+    ].filter(Boolean),
+  );
 }
 
 /**
@@ -292,6 +373,10 @@ function renderCaptureActions(state, handlers, cleanups) {
     );
   }
 
+  if (handlers.onImportFile) {
+    actions.appendChild(renderImportControls(handlers, cleanups));
+  }
+
   // Error display (inline with retry hint)
   if (state.error) {
     const errorContainer = createElement(
@@ -310,6 +395,79 @@ function renderCaptureActions(state, handlers, cleanups) {
   }
 
   return actions;
+}
+
+/**
+ * "Open GIF or image" button, its hidden file input and the busy status.
+ * Available whether or not a screen is shared.
+ * @param {CaptureUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderImportControls(handlers, cleanups) {
+  const busyLabel = handlers.getImportStatus?.() ?? null;
+  const wrapper = createElement('div', { className: 'capture-import' });
+
+  const input = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'file',
+      className: 'capture-import-input',
+      accept: IMPORT_ACCEPT_ATTRIBUTE,
+      'data-testid': 'import-file-input',
+      tabindex: '-1',
+      'aria-hidden': 'true',
+    })
+  );
+  const button = createElement(
+    'button',
+    {
+      className: 'btn btn-secondary capture-import-btn',
+      type: 'button',
+      disabled: busyLabel ? 'true' : undefined,
+      'aria-busy': busyLabel ? 'true' : undefined,
+      title: 'Open a GIF, APNG, WebP, PNG or JPEG file in the editor',
+    },
+    ['Open GIF or image'],
+  );
+  const status = createElement(
+    'div',
+    { className: 'capture-import-status', role: 'status', hidden: busyLabel ? undefined : 'true' },
+    [busyLabel ?? ''],
+  );
+
+  cleanups.push(on(button, 'click', () => input.click()));
+  cleanups.push(
+    on(input, 'change', () => {
+      const file = input.files?.[0];
+      // Reset so choosing the same file again still fires 'change'
+      input.value = '';
+      if (file) handlers.onImportFile?.(file);
+    }),
+  );
+
+  wrapper.appendChild(button);
+  wrapper.appendChild(input);
+  wrapper.appendChild(status);
+  return wrapper;
+}
+
+/**
+ * Reflect the import busy state without a full re-render
+ * @param {HTMLElement} container
+ * @param {string | null} busyLabel - "Opening name…" while decoding, null when idle
+ */
+export function updateImportStatus(container, busyLabel) {
+  const button = container.querySelector('.capture-import-btn');
+  const status = container.querySelector('.capture-import-status');
+  if (button) {
+    button.toggleAttribute('disabled', Boolean(busyLabel));
+    if (busyLabel) button.setAttribute('aria-busy', 'true');
+    else button.removeAttribute('aria-busy');
+  }
+  if (status) {
+    status.textContent = busyLabel ?? '';
+    status.toggleAttribute('hidden', !busyLabel);
+  }
 }
 
 /**

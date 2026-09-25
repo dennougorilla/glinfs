@@ -1,11 +1,22 @@
 /**
- * Editor preview panel: base + overlay canvases and crop mouse interaction
+ * Editor preview panel: base + overlay canvases and the overlay's pointer
+ * interaction. Pointer priority on the overlay: (1) eyedropper mode picks
+ * the background key color, (2) a text layer drawn on the current frame is
+ * selected and dragged, (3) otherwise the crop interaction (clicking empty
+ * space also deselects the text layer).
  * @module features/editor/panels/preview
  */
 
+import { isEditableTarget } from '../../../shared/hotkeys.js';
 import { createElement } from '../../../shared/utils/dom.js';
 import { getCursorForHandle, hitTestCropHandle, renderFrameOnly, renderOverlay } from '../api.js';
 import { calculateCropFromDrag, detectBoundaryHit, moveCrop, resizeCropByHandle } from '../core.js';
+import {
+  getOutputRegion,
+  getSelectedTextOverlay,
+  hitTestEditorText,
+  sampleSourcePixel,
+} from '../edits-preview.js';
 
 /**
  * Render the preview panel and draw the initial frame + overlay
@@ -22,7 +33,9 @@ export function renderEditorPreview(state, handlers, frame) {
   const previewWrapper = createElement('div', { className: 'editor-preview-wrapper' });
 
   // Canvas container
-  const canvasContainer = createElement('div', { className: 'editor-canvas-container' });
+  const canvasContainer = createElement('div', {
+    className: `editor-canvas-container${state.pickingKeyColor ? ' editor-bg-picking' : ''}`,
+  });
 
   // Base canvas (frame only)
   const baseCanvas = /** @type {HTMLCanvasElement} */ (
@@ -88,6 +101,11 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
   let activeHandle = null;
   /** @type {import('../types.js').BoundaryHit | null} */
   let boundaryHit = null;
+  /**
+   * Text layer drag in progress (crop dragMode stays null meanwhile)
+   * @type {{ id: string, start: { x: number, y: number }, layerX: number, layerY: number, outW: number, outH: number } | null}
+   */
+  let textDrag = null;
 
   // Get current state and frame via handlers (avoids stale closure)
   const getCurrentState = () => handlers.getState?.();
@@ -130,7 +148,63 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
       hoveredHandle,
       activeHandle,
       boundaryHit,
+      selectedText: getSelectedTextOverlay(ctx, state, frame),
     });
+  }
+
+  /**
+   * Topmost text layer on the current frame under the pointer
+   * @param {{ x: number, y: number }} coords - Frame pixels
+   * @returns {string | null}
+   */
+  function hitTestText(coords) {
+    const state = getCurrentState();
+    const frame = getCurrentFrame();
+    const ctx = overlayCanvas.getContext('2d');
+    if (!state?.edits || !frame || !ctx) return null;
+    return hitTestEditorText(ctx, state, frame, coords);
+  }
+
+  /**
+   * Eyedropper click: sample the SOURCE frame (not the keyed/texted
+   * preview) under the pointer. An already transparent pixel has no color
+   * to remove (its RGB reads as black): stay in the mode and say so.
+   * @param {{ x: number, y: number }} coords
+   */
+  function pickKeyColor(coords) {
+    const frame = getCurrentFrame();
+    if (!frame) return;
+    const pixel = sampleSourcePixel(frame, coords);
+    if (!pixel) {
+      handlers.onSetPickingKeyColor?.(false);
+    } else if (pixel.transparent) {
+      handlers.onPickTransparentArea?.();
+    } else {
+      handlers.onPickKeyColor?.(pixel.color);
+    }
+  }
+
+  /**
+   * Start dragging a text layer
+   * @param {string} id
+   * @param {{ x: number, y: number }} coords
+   */
+  function startTextDrag(id, coords) {
+    const state = getCurrentState();
+    const frame = getCurrentFrame();
+    const layer = state?.edits.textLayers.find((l) => l.id === id);
+    if (!state || !frame || !layer) return;
+    const region = getOutputRegion(frame, state.cropArea);
+    textDrag = {
+      id,
+      start: coords,
+      layerX: layer.x,
+      layerY: layer.y,
+      outW: Math.max(1, region.width),
+      outH: Math.max(1, region.height),
+    };
+    handlers.onSelectText?.(id);
+    overlayCanvas.style.cursor = 'move';
   }
 
   /**
@@ -139,8 +213,30 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    */
   function onMouseDown(e) {
     e.preventDefault();
+    // preventDefault keeps focus where it was; a panel field (e.g. the
+    // caption being typed) would then swallow the editor shortcuts. Working
+    // on the preview means the keyboard belongs to the editor again.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && isEditableTarget(active)) {
+      active.blur();
+    }
     const state = getCurrentState();
     const coords = getFrameCoords(e);
+
+    if (state?.pickingKeyColor) {
+      pickKeyColor(coords);
+      return;
+    }
+
+    const textId = hitTestText(coords);
+    if (textId) {
+      startTextDrag(textId, coords);
+      return;
+    }
+    if (state?.selectedTextId) {
+      handlers.onSelectText?.(null);
+    }
+
     dragStart = coords;
 
     if (state?.cropArea) {
@@ -176,10 +272,23 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     const frame = getCurrentFrame();
     const coords = getFrameCoords(e);
 
+    if (textDrag) {
+      e.preventDefault();
+      const x = textDrag.layerX + (coords.x - textDrag.start.x) / textDrag.outW;
+      const y = textDrag.layerY + (coords.y - textDrag.start.y) / textDrag.outH;
+      handlers.onMoveText?.(textDrag.id, x, y);
+      return;
+    }
+
     if (!dragStart || !dragMode) {
       // Not dragging - update cursor and hover state
+      // Eyedropper and text layers outrank the crop handles (same order
+      // as onMouseDown), so no handle highlights under them
+      const overEdit = Boolean(state?.pickingKeyColor) || hitTestText(coords) !== null;
       let newHoveredHandle = null;
-      if (state?.cropArea) {
+      if (overEdit) {
+        overlayCanvas.style.cursor = state?.pickingKeyColor ? 'crosshair' : 'move';
+      } else if (state?.cropArea) {
         const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
         newHoveredHandle = handle;
         overlayCanvas.style.cursor = getCursorForHandle(handle || 'draw');
@@ -216,7 +325,7 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     if (newCrop) {
       // Update boundary hit detection
       boundaryHit = detectBoundaryHit(newCrop, frame.width, frame.height);
-      handlers.onCropChange(newCrop);
+      handlers.onCropChange(newCrop, { dragging: true });
       // Immediately render overlay with visual feedback
       renderOverlayWithState();
     }
@@ -227,6 +336,12 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    * @param {MouseEvent} e
    */
   function onMouseUp(e) {
+    if (textDrag) {
+      textDrag = null;
+      overlayCanvas.style.cursor = 'move';
+      return;
+    }
+    const wasCropDrag = dragMode !== null;
     dragMode = null;
     dragStart = null;
     initialCrop = null;
@@ -246,6 +361,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     }
 
     renderOverlayWithState();
+    if (wasCropDrag) {
+      handlers.onCropDragEnd?.();
+    }
   }
 
   overlayCanvas.addEventListener('mousedown', onMouseDown);

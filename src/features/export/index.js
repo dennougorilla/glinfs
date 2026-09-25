@@ -12,19 +12,22 @@ import {
   setExportResult,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
+import { composeOutputFrame, snapCanvasAlphaToBinary } from '../../shared/edits/compose.js';
+import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { navigate } from '../../shared/router.js';
 import { updateSetting } from '../../shared/user-settings.js';
-import {
-  getDrawableSource,
-  isVideoFrameValid,
-  renderFramePlaceholder,
-  syncCanvasSize,
-} from '../../shared/utils/canvas.js';
+import { isFrameValid, syncCanvasSize } from '../../shared/utils/canvas.js';
 import { createElement, on, qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { createKeyedRegionCache } from '../editor/edits-preview.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { checkEncoderStatus, downloadBlob, encodeGif, openInNewTab } from './api.js';
-import { applyFrameSkip, generateFilename, getCroppedDimensions } from './core.js';
+import {
+  applyFrameSkip,
+  generateFilename,
+  getCroppedDimensions,
+  getEffectiveEncoderId,
+} from './core.js';
 import {
   cancelEncodingState,
   completeEncoding,
@@ -57,8 +60,33 @@ let frames = [];
 /** @type {import('../editor/types.js').CropArea | null} */
 let cropArea = null;
 
-/** @type {{ frameCount: number, width: number, height: number, duration: number, fps: number }} */
-let clipInfo = { frameCount: 0, width: 0, height: 0, duration: 0, fps: 30 };
+/** @type {import('./ui.js').ExportClipInfo & { fps: number }} */
+let clipInfo = { frameCount: 0, width: 0, height: 0, duration: 0, fps: 30, transparent: false };
+
+/**
+ * Edits to burn in (normalized against the clip), or null for none
+ * @type {import('../../shared/edits/model.js').ClipEdits | null}
+ */
+let edits = null;
+
+/** Absolute clip index of frames[0] (the editor's selected range start) */
+let rangeStart = 0;
+
+/**
+ * Composed + alpha-snapped preview frames of a transparent export, keyed by
+ * absolute frame index (edits and crop are fixed for a mount). Background
+ * removal and the 1-bit snap read every frame back on the main thread; the
+ * first loop fills this (byte-capped admission, like the editor's keyed
+ * cache) and later loops just write the pixels back.
+ */
+const previewFrameCache = createKeyedRegionCache();
+
+/**
+ * Collapse runs of identical frames into one GIF frame. Only imported clips
+ * (which expand a source frame's hold into repeated slots) need it; screen
+ * captures keep today's frame-for-frame output.
+ */
+let mergeIdenticalFrames = false;
 
 /** @type {AbortController | null} */
 let encodingController = null;
@@ -162,6 +190,19 @@ export function initExport() {
   frames = clipPayload.frames.slice(start, end + 1);
   cropArea = editorPayload?.cropArea || null;
   const fps = editorPayload?.fps || DEFAULT_FPS;
+  rangeStart = start;
+  // Cached preview frames belong to one clip, crop and set of edits
+  previewFrameCache.clear();
+
+  // Edits and alpha travel on the editor payload (or its clip). Both are
+  // optional: clips edited before these existed carry neither.
+  const rawEdits = editorPayload.edits ?? editorPayload.clip?.edits;
+  edits = rawEdits ? normalizeEdits(rawEdits, clipPayload.frames.length) : null;
+  const hasAlpha = Boolean(
+    editorPayload.hasAlpha ?? editorPayload.clip?.hasAlpha ?? clipPayload.hasAlpha,
+  );
+  const transparent = requiresTransparency({ edits, hasAlpha });
+  mergeIdenticalFrames = Boolean(clipPayload.sourceName);
 
   if (frames.length === 0) {
     renderEmptyState(container, {
@@ -182,6 +223,7 @@ export function initExport() {
     height: dims.height,
     duration: frames.length / fps,
     fps,
+    transparent,
   };
 
   // Create store
@@ -346,9 +388,12 @@ async function handleExport() {
 
   const state = store.getState();
 
-  // Create encoding job
+  // Create encoding job (transparent exports always run on gifenc)
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
-  const job = createEncodingJob(effectiveFrames.length, state.settings.encoderId);
+  const job = createEncodingJob(
+    effectiveFrames.length,
+    getEffectiveEncoderId(state.settings, clipInfo.transparent),
+  );
 
   // Create AbortController for cancellation support
   encodingController = new AbortController();
@@ -366,6 +411,10 @@ async function handleExport() {
         crop: cropArea,
         settings: state.settings,
         fps: clipInfo.fps,
+        edits,
+        rangeStart,
+        transparent: clipInfo.transparent === true,
+        mergeIdenticalFrames,
         onProgress: (progress) => {
           if (!store) return;
           store.setState((s) => updateProgress(s, progress));
@@ -510,38 +559,56 @@ function handleCreateNew() {
 // ============================================================
 
 /**
- * Render a frame to the preview canvas with crop applied
- * Uses VideoFrame directly for GPU-accelerated rendering
+ * Absolute clip index of the k-th frame the export plays/encodes
+ * (after frame skip): text frame ranges are evaluated against it.
+ * @param {number} k - Index into applyFrameSkip(frames, frameSkip)
+ * @param {number} frameSkip
+ * @returns {number}
+ */
+function absoluteFrameIndex(k, frameSkip) {
+  return rangeStart + k * Math.max(1, frameSkip);
+}
+
+/**
+ * The preview canvas context. Reading it back every frame (background
+ * removal, 1-bit alpha snapping) is fast only when the FIRST getContext call
+ * asks for willReadFrequently, so every caller goes through here.
+ * @param {HTMLCanvasElement} canvas
+ * @returns {CanvasRenderingContext2D | null}
+ */
+function getPreviewContext(canvas) {
+  return canvas.getContext('2d', {
+    willReadFrequently: edits?.background?.enabled === true || clipInfo.transparent === true,
+  });
+}
+
+/**
+ * Draw one preview frame through the encoder's compositor. A transparent
+ * export is then snapped to GIF's 1-bit alpha, the same threshold the
+ * encoder applies, so partial alpha (a text box's opacity, soft edges of an
+ * imported PNG) previews exactly as it will be exported. That readback is
+ * paid once per frame: later loops draw from previewFrameCache.
  * @param {CanvasRenderingContext2D} ctx
  * @param {import('../capture/types.js').Frame} frame
- * @param {import('../editor/types.js').CropArea | null} crop
+ * @param {number} frameIndex - Absolute clip frame index
  */
-function renderCroppedFrame(ctx, frame, crop) {
-  // Handle missing, invalid, or closed frame
-  if (!frame?.frame || !isVideoFrameValid(frame.frame)) {
-    const canvas = ctx.canvas;
-    renderFramePlaceholder(ctx, canvas.width, canvas.height);
+function renderPreviewFrame(ctx, frame, frameIndex) {
+  if (!clipInfo.transparent) {
+    // Opaque exports never read back: nothing to cache
+    composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
     return;
   }
-
-  // Get drawable source (supports both real VideoFrames and mock frames)
-  const source = getDrawableSource(frame);
-  if (!source) {
-    const canvas = ctx.canvas;
-    renderFramePlaceholder(ctx, canvas.width, canvas.height);
+  const cached = previewFrameCache.get(frameIndex);
+  if (cached) {
+    syncCanvasSize(ctx.canvas, cached.width, cached.height);
+    ctx.putImageData(cached, 0, 0);
     return;
   }
-
-  if (crop) {
-    // Set canvas size to crop dimensions
-    syncCanvasSize(ctx.canvas, crop.width, crop.height);
-
-    // Draw cropped region
-    ctx.drawImage(source, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
-  } else {
-    // No crop - draw full frame
-    syncCanvasSize(ctx.canvas, frame.width, frame.height);
-    ctx.drawImage(source, 0, 0);
+  composeOutputFrame(ctx, frame, cropArea, edits, frameIndex);
+  const snapped = snapCanvasAlphaToBinary(ctx);
+  // A closed frame drew the placeholder: never keep that
+  if (snapped && isFrameValid(frame)) {
+    previewFrameCache.set(frameIndex, snapped);
   }
 }
 
@@ -556,14 +623,15 @@ function startPlaybackLoop() {
   if (animationFrameId !== null) return;
   if (!store || !previewCanvas || frames.length === 0) return;
 
-  const ctx = previewCanvas.getContext('2d');
+  const ctx = getPreviewContext(previewCanvas);
   if (!ctx) return;
 
-  // Render first frame immediately
+  // Render first frame immediately. The preview goes through the same
+  // compositor as the encoder, so it shows exactly what will be exported.
   const state = store.getState();
   const effectiveFrames = applyFrameSkip(frames, state.settings.frameSkip);
   if (effectiveFrames.length > 0) {
-    renderCroppedFrame(ctx, effectiveFrames[0], cropArea);
+    renderPreviewFrame(ctx, effectiveFrames[0], absoluteFrameIndex(0, state.settings.frameSkip));
   }
 
   function animate(timestamp) {
@@ -591,10 +659,14 @@ function startPlaybackLoop() {
     const frameDelay = (baseDelay * state.settings.frameSkip) / state.settings.playbackSpeed;
 
     if (timestamp - lastFrameTime >= frameDelay) {
-      const ctx = previewCanvas.getContext('2d');
+      const ctx = getPreviewContext(previewCanvas);
       if (ctx) {
-        const frame = effectiveFrames[currentFrameIndex % effectiveFrames.length];
-        renderCroppedFrame(ctx, frame, cropArea);
+        const k = currentFrameIndex % effectiveFrames.length;
+        renderPreviewFrame(
+          ctx,
+          effectiveFrames[k],
+          absoluteFrameIndex(k, state.settings.frameSkip),
+        );
         currentFrameIndex = (currentFrameIndex + 1) % effectiveFrames.length;
         lastFrameTime = timestamp;
       }
@@ -671,6 +743,10 @@ function cleanup() {
 
   frames = [];
   cropArea = null;
+  edits = null;
+  previewFrameCache.clear();
+  rangeStart = 0;
+  mergeIdenticalFrames = false;
   store = null;
   previewCanvas = null;
   currentFrameIndex = 0;
@@ -702,5 +778,30 @@ function registerTestHooks() {
         ...stateOverrides,
       }));
     };
+
+    // Lets E2E decode the real exported GIF (e.g. with ImageDecoder)
+    window.__TEST_HOOKS__.getExportResultBase64 = async () => {
+      const blob = getExportResult()?.blob ?? store?.getState().job?.result ?? null;
+      return blob ? blobToBase64(blob) : null;
+    };
   }
+}
+
+/**
+ * Base64 of a blob's bytes (no data: prefix). Uses FileReader, which
+ * handles multi-MB GIFs without the argument-count limit of
+ * String.fromCharCode(...bytes).
+ * @param {Blob} blob
+ * @returns {Promise<string>}
+ */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      resolve(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read export result'));
+    reader.readAsDataURL(blob);
+  });
 }

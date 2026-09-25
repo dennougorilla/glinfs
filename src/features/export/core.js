@@ -3,6 +3,7 @@
  * @module features/export/core
  */
 
+import { ALPHA_THRESHOLD } from '../../shared/edits/color-key.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { stratifiedPixelIndices } from './pixel-sampling.js';
 
@@ -176,12 +177,24 @@ export function sampledPixelCount(width, height, step) {
  * @param {Uint8ClampedArray} out - Destination sample buffer
  * @param {number} offset - Byte offset in `out` to start writing at
  * @param {number} seed - PRNG seed for the jitter (same seed, same pixels)
+ * @param {boolean} [opaqueOnly=false] - Skip pixels with alpha < 128 (transparent
+ *   exports: they become the transparent index and must not take palette slots)
  * @returns {number} Byte offset after the last written pixel
  */
-export function sampleFramePixels(rgba, width, height, step, out, offset, seed) {
+export function sampleFramePixels(
+  rgba,
+  width,
+  height,
+  step,
+  out,
+  offset,
+  seed,
+  opaqueOnly = false,
+) {
   let o = offset;
   for (const pixel of stratifiedPixelIndices(width, height, step, seed)) {
     const p = pixel * 4;
+    if (opaqueOnly && rgba[p + 3] < ALPHA_THRESHOLD) continue;
     out[o] = rgba[p];
     out[o + 1] = rgba[p + 1];
     out[o + 2] = rgba[p + 2];
@@ -331,14 +344,22 @@ export function estimateSize(params) {
 
 /**
  * Calculate frame delay from playback speed and source FPS
+ *
+ * `runLength` > 1 is the delay of one GIF frame standing in for that many
+ * consecutive identical source frames (identical-frame merging): the run is
+ * rounded as a whole, so merged holds keep their total duration instead of
+ * accumulating per-frame rounding. runLength 1 computes exactly the same
+ * value as before merging existed (1000 * 1 === 1000).
+ *
  * @param {number} fps - Source FPS
  * @param {number} playbackSpeed - Playback multiplier
  * @param {number} frameSkip - Frame skip factor
+ * @param {number} [runLength=1] - Source frames (after frame skip) this GIF frame covers
  * @returns {number} - Delay in centiseconds (GIF format)
  */
-export function calculateFrameDelay(fps, playbackSpeed, frameSkip) {
+export function calculateFrameDelay(fps, playbackSpeed, frameSkip, runLength = 1) {
   // Base delay in milliseconds
-  const baseDelayMs = 1000 / fps;
+  const baseDelayMs = (1000 * runLength) / fps;
 
   // Adjust for playback speed (faster = shorter delay)
   const speedAdjustedMs = baseDelayMs / playbackSpeed;
@@ -351,6 +372,36 @@ export function calculateFrameDelay(fps, playbackSpeed, frameSkip) {
 
   // Enforce minimum delay
   return Math.max(MIN_DELAY_CS, Math.round(delayCs));
+}
+
+/**
+ * Whether two extracted frames are byte-identical (same size and RGBA).
+ * Compares 4 bytes at a time when both views are 4-byte aligned, and exits
+ * at the first difference.
+ * @param {{ data: Uint8ClampedArray, width: number, height: number }} a
+ * @param {{ data: Uint8ClampedArray, width: number, height: number }} b
+ * @returns {boolean}
+ */
+export function areFramesIdentical(a, b) {
+  if (a.width !== b.width || a.height !== b.height) return false;
+  const x = a.data;
+  const y = b.data;
+  if (x.length !== y.length) return false;
+
+  const aligned = x.byteOffset % 4 === 0 && y.byteOffset % 4 === 0 && x.byteLength % 4 === 0;
+  if (aligned) {
+    const x32 = new Uint32Array(x.buffer, x.byteOffset, x.byteLength / 4);
+    const y32 = new Uint32Array(y.buffer, y.byteOffset, y.byteLength / 4);
+    for (let i = 0; i < x32.length; i++) {
+      if (x32[i] !== y32[i]) return false;
+    }
+    return true;
+  }
+
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] !== y[i]) return false;
+  }
+  return true;
 }
 
 /**
@@ -433,4 +484,18 @@ export function generateFilename(prefix = 'glinfs') {
  */
 export function calculateEffectiveFps(sourceFps, frameSkip, playbackSpeed) {
   return (sourceFps / frameSkip) * playbackSpeed;
+}
+
+/**
+ * The encoder an export actually uses. The WASM encoder cannot write a
+ * transparent index, so transparent exports always use gifenc, whatever the
+ * stored preference says (the preference itself is left untouched). Shared by
+ * encodeGif and the export UI so the selected card, the job label and the
+ * encoder that runs can never disagree.
+ * @param {import('./types.js').ExportSettings} settings
+ * @param {boolean} [transparent]
+ * @returns {import('./encoders/types.js').EncoderId}
+ */
+export function getEffectiveEncoderId(settings, transparent) {
+  return transparent ? 'gifenc-js' : settings.encoderId;
 }

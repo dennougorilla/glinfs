@@ -20,6 +20,7 @@ import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { renderFrameOnly, renderOverlay } from './api.js';
 import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } from './core.js';
+import { updateEditsPanel } from './panels/edits-panel.js';
 import { createFrameGridLauncher } from './panels/frame-grid-launcher.js';
 import { renderEditorLeftSidebar, renderScenesSidebar } from './panels/left-sidebar.js';
 import { renderEditorPreview } from './panels/preview.js';
@@ -33,7 +34,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} onTogglePlay - Toggle playback
  * @property {(frame: number) => void} onFrameChange - Frame changed
  * @property {(range: import('./types.js').FrameRange) => void} onRangeChange - Range changed
- * @property {(crop: import('./types.js').CropArea | null) => void} onCropChange - Crop changed
+ * @property {(crop: import('./types.js').CropArea | null, options?: { dragging?: boolean }) => void} onCropChange - Crop changed (dragging: a preview drag is still in progress)
+ * @property {() => void} [onCropDragEnd] - A crop drag on the preview was released
  * @property {() => void} onToggleGrid - Toggle grid
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
@@ -43,6 +45,16 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} [onDeleteActiveClip] - Active clip delete clicked (#100 round 4)
  * @property {() => import('./types.js').EditorState} [getState] - Get current state
  * @property {() => import('../capture/types.js').Frame} [getFrame] - Get current frame
+ * @property {() => void} [onAddText] - Add a text layer (and select it)
+ * @property {(id: string | null) => void} [onSelectText] - Select a text layer (null deselects)
+ * @property {(id: string, patch: Partial<import('../../shared/edits/model.js').TextLayer>) => void} [onUpdateText] - Patch a text layer
+ * @property {(id: string) => void} [onRemoveText] - Delete a text layer
+ * @property {(id: string, x: number, y: number) => void} [onMoveText] - Move a text layer (output fractions)
+ * @property {(patch: Partial<import('../../shared/edits/model.js').BackgroundRemoval>) => void} [onSetBackground] - Patch background removal
+ * @property {(enabled: boolean) => void} [onToggleBackground] - Turn background removal on/off
+ * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
+ * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
+ * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
  */
 
 /**
@@ -97,10 +109,14 @@ export function renderEditorScreen(container, state, handlers, fps) {
   cleanups.push(...timeline.cleanups);
   screen.appendChild(timeline.element);
 
-  screen.appendChild(renderEditorStatusBar(dimensions));
+  screen.appendChild(renderEditorStatusBar(dimensions, state.selectedTextId));
 
   container.innerHTML = '';
   container.appendChild(screen);
+
+  // Text/Background controls take their values from state (updated in place
+  // on later changes by editor/index.js)
+  updateEditsPanel(screen, state, fps);
 
   // Populate scenes sidebar with thumbnails
   cleanups.push(...renderScenesSidebar(leftSidebar.scenesContainer, state, handlers));
@@ -193,6 +209,15 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       },
     });
 
+  const deleteSelection = () => {
+    const selectedTextId = getCurrentState().selectedTextId;
+    if (selectedTextId) {
+      handlers.onRemoveText?.(selectedTextId);
+    } else {
+      handlers.onDeleteActiveClip?.();
+    }
+  };
+
   const unsubscribers = [
     ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(clipPosition),
     plain(' ', () => handlers.onTogglePlay()),
@@ -201,13 +226,40 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('Home', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
     plain('End', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
     plain('g', () => handlers.onToggleGrid()),
-    plain('Escape', () => handlers.onCropChange(null)),
+    // Escape unwinds the innermost editing mode first: eyedropper, then the
+    // text selection, then the crop
+    plain('Escape', () => {
+      const current = getCurrentState();
+      if (current.pickingKeyColor) {
+        handlers.onSetPickingKeyColor?.(false);
+      } else if (current.selectedTextId) {
+        handlers.onSelectText?.(null);
+      } else {
+        handlers.onCropChange(null);
+      }
+    }),
     plain('f', () => options.onOpenFrameGrid?.()),
-    // Delete the clip being edited (undo toast covers safety, #100 r7)
-    plain('Delete', () => handlers.onDeleteActiveClip?.()),
-    plain('Backspace', () => handlers.onDeleteActiveClip?.()),
+    // Delete the selected text layer, else the clip being edited (undo
+    // toast covers safety, #100 r7) — a selected caption is what the user
+    // is pointing at, never the whole clip
+    plain('Delete', deleteSelection),
+    plain('Backspace', deleteSelection),
     exportShortcut({ ctrl: true }),
     exportShortcut({ meta: true }),
+    // Escape also leaves the eyedropper while a panel control has focus
+    // (the "Pick from preview" toggle itself keeps focus after a click).
+    // Registered last so it is tried before the plain Escape above; it
+    // declines everything else, so typing in fields stays shortcut-free.
+    registerHotkey({
+      key: 'Escape',
+      scope: 'route',
+      allowInEditable: true,
+      handler: (e) => {
+        if (!getCurrentState().pickingKeyColor) return false;
+        e.preventDefault();
+        handlers.onSetPickingKeyColor?.(false);
+      },
+    }),
   ];
 
   return () =>
@@ -228,14 +280,22 @@ export function updateBaseCanvas(canvas, frame) {
 }
 
 /**
- * Update overlay canvas with crop and grid
+ * Update overlay canvas with crop, grid and the selected text layer's bounds
  * @param {HTMLCanvasElement} canvas
  * @param {import('./types.js').CropArea | null} crop
  * @param {number} frameWidth
  * @param {number} frameHeight
  * @param {boolean} showGrid
+ * @param {import('./api.js').SelectedTextOverlay | null} [selectedText]
  */
-export function updateOverlayCanvas(canvas, crop, frameWidth, frameHeight, showGrid) {
+export function updateOverlayCanvas(
+  canvas,
+  crop,
+  frameWidth,
+  frameHeight,
+  showGrid,
+  selectedText = null,
+) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -244,6 +304,7 @@ export function updateOverlayCanvas(canvas, crop, frameWidth, frameHeight, showG
     showCropOverlay: hasCrop,
     showGrid,
     gridDivisions: 3,
+    selectedText,
   });
 }
 

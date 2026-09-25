@@ -3,6 +3,7 @@
  * @module features/editor/core
  */
 
+import { normalizeEdits } from '../../shared/edits/model.js';
 import { formatCompactDuration } from '../../shared/utils/format.js';
 
 /** @type {Object<string, number>} */
@@ -109,9 +110,11 @@ function applyHandleDrag(crop, config, dx, dy) {
  * Create a clip from buffer frames
  * @param {import('../capture/types.js').Frame[]} frames - Source frames
  * @param {number} [fps] - Source FPS (default: 30)
+ * @param {{ hasAlpha?: boolean, edits?: unknown }} [options] - Source alpha flag and
+ *   initial edits (normalized; default: no edits)
  * @returns {import('./types.js').Clip}
  */
-export function createClip(frames, fps = DEFAULT_FPS) {
+export function createClip(frames, fps = DEFAULT_FPS, options = {}) {
   return {
     id: crypto.randomUUID(),
     frames,
@@ -122,6 +125,8 @@ export function createClip(frames, fps = DEFAULT_FPS) {
     cropArea: null,
     createdAt: Date.now(),
     fps,
+    hasAlpha: Boolean(options.hasAlpha),
+    edits: normalizeEdits(options.edits, frames.length),
   };
 }
 

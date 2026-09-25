@@ -207,6 +207,41 @@ describe('mock-frame utilities', () => {
 
       expect(payload.sceneDetectionEnabled).toBe(true);
     });
+
+    it('omits import/alpha/edit fields unless requested', async () => {
+      const { createMockClipPayload } = await import('../../../../src/shared/utils/mock-frame.js');
+
+      const payload = await createMockClipPayload({ frameCount: 2 });
+
+      expect(payload).not.toHaveProperty('hasAlpha');
+      expect(payload).not.toHaveProperty('sourceName');
+      expect(payload).not.toHaveProperty('savedEditorState');
+    });
+
+    it('carries hasAlpha, sourceName and edits (as saved editor state)', async () => {
+      const { createMockClipPayload } = await import('../../../../src/shared/utils/mock-frame.js');
+      const edits = { textLayers: [], background: { enabled: true } };
+
+      const payload = /** @type {any} */ (
+        await createMockClipPayload({
+          frameCount: 4,
+          pattern: 'solid',
+          color: '#00ff00',
+          hasAlpha: true,
+          sourceName: 'in.gif',
+          edits,
+        })
+      );
+
+      expect(payload.frames).toHaveLength(4);
+      expect(payload.hasAlpha).toBe(true);
+      expect(payload.sourceName).toBe('in.gif');
+      expect(payload.savedEditorState).toMatchObject({
+        selectedRange: { start: 0, end: 3 },
+        cropArea: null,
+        edits,
+      });
+    });
   });
 
   describe('createMockEditorPayload', () => {
@@ -251,6 +286,40 @@ describe('mock-frame utilities', () => {
       });
 
       expect(payload.cropArea).toEqual(cropArea);
+    });
+
+    it('puts edits and hasAlpha on the payload and its clip', async () => {
+      const { createMockEditorPayload } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
+      const edits = { textLayers: [], background: { enabled: false } };
+
+      const payload = /** @type {any} */ (
+        await createMockEditorPayload({
+          frameCount: 3,
+          pattern: 'solid',
+          color: '#123456',
+          edits,
+          hasAlpha: true,
+        })
+      );
+
+      expect(payload.edits).toBe(edits);
+      expect(payload.hasAlpha).toBe(true);
+      expect(payload.clip.edits).toBe(edits);
+      expect(payload.clip.hasAlpha).toBe(true);
+      expect(payload.clip.frames).toHaveLength(3);
+    });
+
+    it('omits edits and hasAlpha unless requested', async () => {
+      const { createMockEditorPayload } = await import(
+        '../../../../src/shared/utils/mock-frame.js'
+      );
+
+      const payload = await createMockEditorPayload({ frameCount: 2 });
+
+      expect(payload).not.toHaveProperty('edits');
+      expect(payload.clip).not.toHaveProperty('hasAlpha');
     });
   });
 

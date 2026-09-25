@@ -132,6 +132,17 @@ export function setError(state, error) {
 }
 
 /**
+ * Show a refused/failed file import. Unlike setError it leaves isCapturing
+ * alone: an import never stops a running capture, so the REC badge must stay.
+ * @param {import('./types.js').CaptureState} state
+ * @param {string} error
+ * @returns {import('./types.js').CaptureState}
+ */
+export function setImportError(state, error) {
+  return { ...state, error };
+}
+
+/**
  * Create a capture store
  * @param {Partial<import('./types.js').CaptureSettings>} [settings]
  * @returns {ReturnType<typeof createStore<import('./types.js').CaptureState>>}

@@ -16,6 +16,16 @@ Record your screen with up to 60 FPS. Supports window, tab, or entire screen cap
 ### Edit
 Trim your clip by selecting start and end frames. Crop and zoom to focus on specific areas with preset aspect ratios (1:1, 16:9, 4:3, and more).
 
+### Text and transparent backgrounds
+Add captions in the editor's **Text** panel: type the text, pick the font, size, fill and outline colors, an optional background box and the alignment, then drag the caption into place on the preview. **Start** / **End** (with "Set to playhead") choose which frames show it; **Whole clip** resets that. Captions are burned into the exported GIF.
+
+The **Background** panel removes a solid background: turn on **Remove background** (it picks the most common edge color) or use **Pick from preview** and click the background, then adjust the **Tolerance**. **Edges only** removes the matching color connected to the frame border; **All matching** removes it everywhere. Removed pixels become transparent in the GIF. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
+
+Press Escape to leave the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, open Export, or switch clips in the queue.
+
+### Open existing GIFs and images
+Use **Open GIF or image** on the Capture screen, or drop a file on the preview, to edit an existing GIF, APNG, animated WebP, PNG, JPEG or WebP file with the same trim, crop, text and transparency tools. Frame timing and transparent pixels are kept when you export it again.
+
 ### Export
 Convert to GIF with customizable quality, playback speed, and frame rate settings. Real-time preview before final export.
 
@@ -36,7 +46,8 @@ All processing happens entirely in your browser. Your screen recordings never le
 ## How to Use
 
 1. **Capture** - Click "Start Capture" and select your screen, window, or tab
-2. **Edit** - Use the timeline to trim, and crop tool to focus on specific areas
+   (or click "Open GIF or image" to edit an existing file)
+2. **Edit** - Use the timeline to trim, the crop tool to focus on specific areas, and the Text and Background panels to add captions or remove a background
 3. **Export** - Adjust quality settings and download your GIF
 
 ## Development

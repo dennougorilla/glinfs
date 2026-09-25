@@ -449,3 +449,72 @@
 /* Toggle Button styles live in form-controls.css so the Capture sidebar
    and the Settings screen render the same control (they used to ship
    competing `.btn-toggle` rules). */
+
+/* ============================================================
+   Import (open a GIF / image file) — every rule scoped to the
+   capture screen, every class prefixed capture-import-
+   ============================================================ */
+
+.capture-screen .capture-import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.capture-screen .capture-import-btn {
+  width: 100%;
+}
+
+.capture-screen .capture-import-input {
+  display: none;
+}
+
+.capture-screen .capture-import-status {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-screen .capture-import-status[hidden] {
+  display: none;
+}
+
+.capture-screen .capture-import-hint {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* Drag-and-drop target: the whole preview panel */
+.capture-screen .capture-preview-panel {
+  position: relative;
+}
+
+.capture-screen .capture-import-drop-overlay {
+  position: absolute;
+  inset: var(--space-4);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--color-primary);
+  border-radius: var(--radius-lg);
+  background: rgba(59, 130, 246, 0.12);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.capture-screen .capture-import-dropzone--active .capture-import-drop-overlay {
+  display: flex;
+}
+
+.capture-screen .capture-import-drop-label {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-lg);
+}

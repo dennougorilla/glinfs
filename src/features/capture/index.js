@@ -19,6 +19,8 @@ import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
+import { formatImportBusyLabel } from '../import/core.js';
+import { importFile, isImporting, reportImportBusy } from '../import/index.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
 // Circular with clip-service (it imports getLiveCaptureContext from here);
 // safe because both sides only call the other's hoisted function declarations
@@ -34,11 +36,17 @@ import {
   pauseCapture,
   resumeCapture,
   setError,
+  setImportError,
   startCapture,
   stopCapture,
   updateSettings,
 } from './state.js';
-import { renderCaptureScreen, updateBufferStatus, updateSceneDetectionToggle } from './ui.js';
+import {
+  renderCaptureScreen,
+  updateBufferStatus,
+  updateImportStatus,
+  updateSceneDetectionToggle,
+} from './ui.js';
 
 /** @type {ReturnType<typeof createCaptureStore> | null} */
 let store = null;
@@ -63,6 +71,14 @@ let throttledUpdate = null;
 
 /** @type {(() => void) | null} */
 let storeUnsubscribe = null;
+
+/** Aborts the file import in progress when the screen unmounts */
+/** @type {AbortController | null} */
+let importController = null;
+
+/** Busy label of the import in progress ("Opening name…"), survives re-renders */
+/** @type {string | null} */
+let importBusyLabel = null;
 
 /**
  * Initialize capture feature
@@ -175,7 +191,67 @@ function render(container) {
     onCreateClip: handleCreateClip,
     onSettingsChange: handleSettingsChange,
     getSettings: () => store?.getState()?.settings ?? null,
+    onImportFile: (file) => {
+      void handleImportFile(file);
+    },
+    getImportStatus: () => importBusyLabel,
   });
+}
+
+/**
+ * Open a GIF / image file (button, file input or drop) as the active clip.
+ *
+ * features/import owns decoding, refusals and frame cleanup, and navigates
+ * to the editor on success. This handler only drives the Capture screen's
+ * busy state and shows the refusal inline. Leaving the screen aborts the
+ * decode (cleanup()), which closes every frame it created.
+ *
+ * @param {File} file
+ * @returns {Promise<boolean>} true when the clip opened
+ */
+async function handleImportFile(file) {
+  if (!store) return false;
+  if (isImporting()) {
+    // One import at a time. Refuse here, before this screen's busy state is
+    // replaced, and tell the user why (toast + live region)
+    reportImportBusy();
+    return false;
+  }
+
+  const controller = new AbortController();
+  importController = controller;
+  importBusyLabel = formatImportBusyLabel(file.name);
+
+  const container = qsRequired('#main-content');
+  if (store.getState().error) {
+    // Drop a stale error (e.g. the previous refused import) before retrying
+    store.setState((state) => ({ ...state, error: null }));
+    render(container);
+  } else {
+    updateImportStatus(container, importBusyLabel);
+  }
+
+  const result = await importFile(file, {
+    signal: controller.signal,
+    onProgress: (decoded, total) => {
+      if (importController !== controller) return;
+      importBusyLabel = formatImportBusyLabel(file.name, decoded, total);
+      if (store) updateImportStatus(qsRequired('#main-content'), importBusyLabel);
+    },
+  });
+
+  if (importController === controller) {
+    importController = null;
+    importBusyLabel = null;
+  }
+  // Success navigated to the editor; an abort means the screen is gone
+  if (result.ok || !store || result.reason === 'aborted') return result.ok;
+
+  const message = result.message ?? 'Could not open the file';
+  // Not setError: a refused import must not mark a running capture stopped
+  store.setState((state) => setImportError(state, message));
+  render(qsRequired('#main-content'));
+  return false;
 }
 
 // Note: Frame capture timing is now handled by CaptureWorkerManager
@@ -558,6 +634,14 @@ function handleSettingsChange(newSettings) {
  * - Preserves screen capture state for restoration on return
  */
 function cleanup() {
+  // An import still decoding has nowhere to go once the screen is gone;
+  // aborting makes the importer close every frame it created
+  if (importController) {
+    importController.abort();
+    importController = null;
+  }
+  importBusyLabel = null;
+
   // Cancel pending throttled updates before store = null
   if (throttledUpdate) {
     throttledUpdate.cancel();

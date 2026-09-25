@@ -37,6 +37,9 @@
  * @property {number} [paletteInterval=1] - Palette rebuild schedule (see EncoderPresetConfig)
  * @property {Uint8ClampedArray} [paletteSample] - RGBA pixels sampled across the
  *   clip; with paletteInterval 0 the palette is quantized once from this
+ * @property {boolean} [transparent=false] - Write pixels with alpha < 128 as GIF
+ *   transparency (one palette slot reserved, every frame disposed to background).
+ *   Only encoders with capabilities.supportsTransparency honor it.
  */
 
 /**
@@ -45,6 +48,7 @@
  * @property {Uint8ClampedArray} rgba - RGBA pixel data
  * @property {number} width - Frame width
  * @property {number} height - Frame height
+ * @property {number} [delayMs] - This frame's delay (ms); defaults to config.frameDelayMs
  */
 
 /**
@@ -61,6 +65,7 @@
  * @property {boolean} supportsMaxColors - Supports color count limit
  * @property {boolean} supportsQuantizeFormat - Supports quantization format selection
  * @property {boolean} supportsDithering - Supports dithering option
+ * @property {boolean} supportsTransparency - Can write a transparent color index
  */
 
 /**

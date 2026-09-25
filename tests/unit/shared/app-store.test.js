@@ -228,20 +228,20 @@ describe('validateClipPayload', () => {
     expect(result.errors).toContain('ClipPayload.frames must be an array');
   });
 
-  it('returns invalid for invalid FPS', () => {
+  it.each([0, 61, 12.5, -1, Number.NaN, '30'])('returns invalid for fps %s', (fps) => {
     const payload = {
       frames: [createMockFrame()],
-      fps: 45, // Invalid FPS
+      fps,
       capturedAt: Date.now(),
     };
 
     const result = validateClipPayload(payload);
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain('ClipPayload.fps must be 15, 30, or 60');
+    expect(result.errors).toContain('ClipPayload.fps must be an integer between 1 and 60');
   });
 
-  it('accepts all valid FPS values', () => {
-    for (const fps of [15, 30, 60]) {
+  it('accepts every integer FPS from 1 to 60 (capture rates and imported rates)', () => {
+    for (const fps of [1, 10, 15, 24, 30, 45, 50, 60]) {
       const payload = {
         frames: [createMockFrame()],
         fps,

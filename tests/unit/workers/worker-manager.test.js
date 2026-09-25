@@ -319,8 +319,40 @@ describe('GifEncoderManager', () => {
       expect(mockWorkerInstance?._lastMessage.width).toBe(10);
       expect(mockWorkerInstance?._lastMessage.height).toBe(10);
       expect(mockWorkerInstance?._lastMessage.frameIndex).toBe(0);
+      expect(mockWorkerInstance?._lastMessage.delayMs).toBeUndefined();
 
       // Cleanup
+      manager.dispose();
+    });
+
+    it('forwards the transparent flag at init and a per-frame delay', async () => {
+      const manager = new workerManagerModule.GifEncoderManager();
+      const initPromise = manager.init({
+        width: 2,
+        height: 2,
+        totalFrames: 1,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        transparent: true,
+      });
+
+      await Promise.resolve();
+      expect(mockWorkerInstance?._lastMessage).toMatchObject({
+        command: 'init',
+        transparent: true,
+      });
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await initPromise;
+
+      manager.addFrame(new Uint8ClampedArray(16), 2, 2, 3, 420);
+
+      expect(mockWorkerInstance?._lastMessage).toMatchObject({
+        command: 'add-frame',
+        frameIndex: 3,
+        delayMs: 420,
+      });
+
       manager.dispose();
     });
   });

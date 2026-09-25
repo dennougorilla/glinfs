@@ -12,13 +12,16 @@ import {
   getClipQueue,
   getEditorPayload,
   hasActiveScreenCapture,
+  hasPendingDeletion,
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   setEditorPayload,
+  toSavedEditorState,
   undoDelete,
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
+import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -34,13 +37,28 @@ import {
   getPlaybackFrame,
   getPositionInSelection,
 } from './core.js';
-import { initLiveMonitor } from './live-monitor.js';
 import {
+  createEditorFrameRenderer,
+  detectOutputEdgeColor,
+  getSelectedTextOverlay,
+  previewDependsOnCrop,
+} from './edits-preview.js';
+import { initLiveMonitor } from './live-monitor.js';
+import { updateEditsPanel } from './panels/edits-panel.js';
+import { updateDeleteHint } from './panels/status-bar.js';
+import {
+  addTextLayer,
   clearCrop,
   completeSceneDetection,
   createEditorStore,
   createEditorStoreFromClip,
   goToFrame,
+  moveTextLayer,
+  removeTextLayer,
+  selectTextLayer,
+  setBackground,
+  setEdits,
+  setPickingKeyColor,
   setPlaybackSpeed,
   setSceneDetectionError,
   setSelectedAspectRatio,
@@ -50,12 +68,12 @@ import {
   updateCrop,
   updateRange,
   updateSceneDetectionProgress,
+  updateTextLayer,
 } from './state.js';
 import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './timeline.js';
 import {
   renderEditorScreen,
   showClipsQueueFullBanner,
-  updateBaseCanvas,
   updateClipsPanel,
   updateCropInfoPanel,
   updateOverlayCanvas,
@@ -115,6 +133,19 @@ let clipsQueueUnsubs = [];
 
 /** @type {number | null} Timer hiding the transient queue-full banner */
 let bannerHideTimer = null;
+
+/**
+ * Preview renderer of this editor session (owns the keyed-region cache)
+ * @type {ReturnType<typeof createEditorFrameRenderer> | null}
+ */
+let previewRenderer = null;
+
+/**
+ * A crop drag on the preview is in progress: the preview skips background
+ * removal until the drag is released (re-keying the moving region on every
+ * pointer move would read back and flood-fill it per tick)
+ */
+let cropDragging = false;
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -254,14 +285,19 @@ export function initEditor() {
 
   // Create store - restore from EditorPayload if returning from Export, otherwise create fresh
   if (hasValidEditorPayload) {
-    // Restore state from EditorPayload (preserves selection range, crop area)
-    store = createEditorStoreFromClip(editorPayload.clip);
+    // Restore state from EditorPayload (preserves selection range, crop area,
+    // edits)
+    store = createEditorStoreFromClip({
+      ...editorPayload.clip,
+      edits: editorPayload.edits ?? editorPayload.clip.edits,
+      hasAlpha: editorPayload.hasAlpha ?? editorPayload.clip.hasAlpha ?? clipPayload?.hasAlpha,
+    });
     // Clear EditorPayload after consuming to prevent stale frame references on subsequent navigations
     clearEditorPayload();
     emit('editor:restored', { fromExport: true });
   } else {
     // Create fresh store from ClipPayload
-    store = createEditorStore(frames, fps);
+    store = createEditorStore(frames, fps, { hasAlpha: clipPayload?.hasAlpha });
 
     // Restore editor state saved when this clip was demoted (#95). Consumed
     // here — a later mount must not clobber newer edits with this snapshot.
@@ -272,6 +308,9 @@ export function initEditor() {
     }
   }
 
+  previewRenderer = createEditorFrameRenderer();
+  cropDragging = false;
+
   // Initial render
   render(container);
 
@@ -279,13 +318,8 @@ export function initEditor() {
   // the canvas otherwise stays black until the first (throttled)
   // subscription tick, which reads as a dark flash on every mount/reinit
   // (promote, active-delete succession) (#100 round 6).
-  {
-    const st = store.getState();
-    const firstFrame = st.clip?.frames[st.currentFrame];
-    if (baseCanvas && firstFrame) {
-      updateBaseCanvas(baseCanvas, firstFrame);
-    }
-  }
+  drawPreview(store.getState());
+  drawOverlay(store.getState());
 
   // Dock the live source monitor into the sidebar slot (#100). Mounted
   // after render so the slot exists; owns its own bus subscriptions and
@@ -342,6 +376,9 @@ export function initEditor() {
     sceneDetectionProgress: initialState.sceneDetectionProgress,
     scenes: initialState.scenes,
     selectedRange: initialState.selectedRange,
+    edits: initialState.edits,
+    selectedTextId: initialState.selectedTextId,
+    pickingKeyColor: initialState.pickingKeyColor,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -383,31 +420,48 @@ export function initEditor() {
       }
     }
 
-    // Update base canvas ONLY when frame changes
-    if (frameChanged && state.clip?.frames[state.currentFrame]) {
-      updateBaseCanvas(baseCanvas, state.clip.frames[state.currentFrame]);
+    const cropChanged = state.cropArea !== lastRendered.cropArea;
+    const gridChanged = state.showGrid !== lastRendered.showGrid;
+    const editsChanged = state.edits !== lastRendered.edits;
+    const textSelectionChanged = state.selectedTextId !== lastRendered.selectedTextId;
+    const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
+    const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
+
+    // Update base canvas ONLY when the composed frame changes
+    if (frameChanged || editsChanged || (cropChanged && editsUseCrop)) {
+      drawPreview(state);
     }
 
     if (frameChanged) {
       lastRendered.currentFrame = state.currentFrame;
     }
 
-    const cropChanged = state.cropArea !== lastRendered.cropArea;
-    const gridChanged = state.showGrid !== lastRendered.showGrid;
-
-    // Update overlay ONLY when crop or grid changes
+    // Update overlay ONLY when crop, grid or the selected text box changes
+    // (a frame change can move the selected layer in/out of its range).
     // Note: During drag, setupCropInteraction handles overlay updates directly
-    if (cropChanged || gridChanged) {
-      const frame = state.clip?.frames[state.currentFrame];
-      if (frame) {
-        updateOverlayCanvas(
-          overlayCanvas,
-          state.cropArea,
-          frame.width,
-          frame.height,
-          state.showGrid,
-        );
+    if (
+      cropChanged ||
+      gridChanged ||
+      editsChanged ||
+      textSelectionChanged ||
+      (frameChanged && state.selectedTextId !== null)
+    ) {
+      drawOverlay(state);
+    }
+
+    if (editsChanged || textSelectionChanged || pickingChanged) {
+      updateEditsPanel(container, state, fps);
+      if (textSelectionChanged) {
+        updateDeleteHint(container, state.selectedTextId);
       }
+      if (pickingChanged) {
+        container
+          .querySelector('.editor-canvas-container')
+          ?.classList.toggle('editor-bg-picking', state.pickingKeyColor);
+      }
+      lastRendered.edits = state.edits;
+      lastRendered.selectedTextId = state.selectedTextId;
+      lastRendered.pickingKeyColor = state.pickingKeyColor;
     }
 
     // Update crop info panel when crop changes
@@ -549,6 +603,7 @@ function render(container) {
       onFrameChange: handleFrameChange,
       onRangeChange: handleRangeChange,
       onCropChange: handleCropChange,
+      onCropDragEnd: handleCropDragEnd,
       onToggleGrid: handleToggleGrid,
       onAspectRatioChange: handleAspectRatioChange,
       onSpeedChange: handleSpeedChange,
@@ -556,6 +611,16 @@ function render(container) {
       onPromoteClip: handlePromoteClip,
       onDeleteClip: handleDeleteClip,
       onDeleteActiveClip: handleDeleteActiveClip,
+      onAddText: handleAddText,
+      onSelectText: handleSelectText,
+      onUpdateText: handleUpdateText,
+      onRemoveText: handleRemoveText,
+      onMoveText: handleMoveText,
+      onSetBackground: handleSetBackground,
+      onToggleBackground: handleToggleBackground,
+      onSetPickingKeyColor: handleSetPickingKeyColor,
+      onPickKeyColor: handlePickKeyColor,
+      onPickTransparentArea: handlePickTransparentArea,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -571,6 +636,40 @@ function render(container) {
 
   // Render timeline
   renderTimelineComponent(container);
+}
+
+/**
+ * Draw the current frame with its edits onto the base canvas
+ * @param {import('./types.js').EditorState} state
+ */
+function drawPreview(state) {
+  const frame = state.clip?.frames[state.currentFrame];
+  if (!baseCanvas || !previewRenderer || !frame) return;
+  const ctx = baseCanvas.getContext('2d');
+  if (!ctx) return;
+  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
+    skipKey: cropDragging,
+    transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
+  });
+}
+
+/**
+ * Draw the overlay: crop, grid and the selected text layer's bounds
+ * @param {import('./types.js').EditorState} state
+ */
+function drawOverlay(state) {
+  const frame = state.clip?.frames[state.currentFrame];
+  if (!overlayCanvas || !frame) return;
+  const ctx = overlayCanvas.getContext('2d');
+  if (!ctx) return;
+  updateOverlayCanvas(
+    overlayCanvas,
+    state.cropArea,
+    frame.width,
+    frame.height,
+    state.showGrid,
+    getSelectedTextOverlay(ctx, state, frame),
+  );
 }
 
 /**
@@ -727,12 +826,25 @@ function handleRangeChange(range) {
 /**
  * Handle crop change
  * @param {import('./types.js').CropArea | null} crop
+ * @param {{ dragging?: boolean }} [options] - dragging: a preview drag is
+ *   still moving the crop (background removal waits for its release)
  */
-function handleCropChange(crop) {
+function handleCropChange(crop, options) {
   if (!store) return;
+  cropDragging = options?.dragging === true;
 
   store.setState((state) => (crop ? updateCrop(state, crop) : clearCrop(state)));
   emit('editor:crop', { crop });
+}
+
+/**
+ * A crop drag on the preview was released: key the final region once. The
+ * flag is not store state, so nothing else would redraw the preview.
+ */
+function handleCropDragEnd() {
+  if (!store || !cropDragging) return;
+  cropDragging = false;
+  drawPreview(store.getState());
 }
 
 /**
@@ -810,6 +922,8 @@ function handleExport() {
     cropArea: state.cropArea,
     clip: state.clip, // For returning to Editor with preserved state
     fps: state.clip.fps,
+    edits: state.edits,
+    hasAlpha: state.clip.hasAlpha === true,
   });
 
   const selectedCount = state.selectedRange.end - state.selectedRange.start + 1;
@@ -818,6 +932,178 @@ function handleExport() {
     frameCount: selectedCount,
     fps: state.clip.fps,
   });
+}
+
+// ============================================================
+// Edits (text layers, background removal)
+// ============================================================
+
+/**
+ * Apply the Text/Background panels immediately (the store subscription is
+ * throttled; a newly added layer's controls must exist before focusing them)
+ */
+function syncEditsPanelNow() {
+  if (!store) return;
+  const container = document.querySelector('#main-content');
+  if (container) {
+    const state = store.getState();
+    updateEditsPanel(container, state, getClipFps(state.clip));
+  }
+}
+
+/** Add a text layer over the current selection, select it and focus its text */
+function handleAddText() {
+  if (!store) return;
+  store.setState((state) => addTextLayer(state));
+  syncEditsPanelNow();
+  const input = document.getElementById('text-layer-text');
+  if (input instanceof HTMLTextAreaElement) {
+    input.focus();
+    input.select();
+  }
+  emit('editor:text', { action: 'add' });
+}
+
+/** @param {string | null} id */
+function handleSelectText(id) {
+  if (!store) return;
+  store.setState((state) => selectTextLayer(state, id));
+}
+
+/**
+ * @param {string} id
+ * @param {Partial<import('../../shared/edits/model.js').TextLayer>} patch
+ */
+function handleUpdateText(id, patch) {
+  if (!store) return;
+  store.setState((state) => updateTextLayer(state, id, patch));
+}
+
+/**
+ * Delete a text layer (the Delete key or the list's × button), with an Undo
+ * toast like a clip deletion: the layer and its styling/timing come back at
+ * the same position in the stack.
+ * @param {string} id
+ */
+function handleRemoveText(id) {
+  if (!store) return;
+  const before = store.getState();
+  const index = before.edits.textLayers.findIndex((layer) => layer.id === id);
+  if (index === -1) return;
+  const layer = before.edits.textLayers[index];
+  const clipFrames = before.clip?.frames;
+
+  store.setState((state) => removeTextLayer(state, id));
+  announce('Text layer deleted');
+  if (hasPendingDeletion()) {
+    // The toast's action slot holds a clip deletion's Undo, and a new action
+    // toast would replace it: never make a deleted clip unrecoverable
+    showToast('Text layer deleted');
+    return;
+  }
+  showToast('Text layer deleted', {
+    actionLabel: 'Undo',
+    onAction: () => restoreTextLayer(layer, index, clipFrames),
+  });
+}
+
+/**
+ * Undo a text layer deletion: re-insert it at its old stack position and
+ * select it. A no-op once the editor shows another clip (or none).
+ * @param {import('../../shared/edits/model.js').TextLayer} layer
+ * @param {number} index
+ * @param {unknown} clipFrames - Frames of the clip the layer belonged to
+ */
+function restoreTextLayer(layer, index, clipFrames) {
+  if (!store) return;
+  const state = store.getState();
+  if (!state.clip || state.clip.frames !== clipFrames) return;
+  if (state.edits.textLayers.some((l) => l.id === layer.id)) return;
+  const textLayers = [...state.edits.textLayers];
+  textLayers.splice(Math.min(index, textLayers.length), 0, layer);
+  store.setState((s) => selectTextLayer(setEdits(s, { ...s.edits, textLayers }), layer.id));
+  announce('Text layer restored');
+}
+
+/**
+ * @param {string} id
+ * @param {number} x - Center X as a fraction of the output width
+ * @param {number} y - Center Y as a fraction of the output height
+ */
+function handleMoveText(id, x, y) {
+  if (!store) return;
+  store.setState((state) => moveTextLayer(state, id, x, y));
+}
+
+/** @param {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} patch */
+function handleSetBackground(patch) {
+  if (!store) return;
+  store.setState((state) => setBackground(state, patch));
+}
+
+/**
+ * Turn background removal on/off. Turning it on before any key color was
+ * chosen keys out the most common opaque border color of the current
+ * output. A border that is already transparent has no such color: the
+ * current key color stays and the user is pointed at the eyedropper.
+ * @param {boolean} enabled
+ */
+function handleToggleBackground(enabled) {
+  if (!store) return;
+  /** @type {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} */
+  const patch = { enabled };
+  const state = store.getState();
+  if (enabled && !state.edits.background.colorChosen) {
+    const frame = state.clip?.frames[state.currentFrame];
+    const detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
+    if (detected) {
+      patch.color = detected;
+    } else if (state.clip?.hasAlpha) {
+      announce('The edges are already transparent. Pick the color to remove from the preview.');
+    }
+  }
+  store.setState((state) => setBackground(state, patch));
+}
+
+/** @param {boolean} picking */
+function handleSetPickingKeyColor(picking) {
+  if (!store) return;
+  store.setState((state) => setPickingKeyColor(state, picking));
+  if (picking) {
+    announce('Click the background in the preview to pick its color');
+  }
+}
+
+/**
+ * The eyedropper picked a key color: use it, enable removal, leave the mode
+ * @param {string} color - '#rrggbb'
+ */
+function handlePickKeyColor(color) {
+  if (!store) return;
+  store.setState((state) =>
+    setPickingKeyColor(setBackground(state, { color, enabled: true }), false),
+  );
+  announce(`Background color ${color} removed`);
+}
+
+/**
+ * The eyedropper hit a pixel that is already transparent: there is no color
+ * to remove there, so nothing changes and the mode stays on for another try
+ */
+function handlePickTransparentArea() {
+  announce('That area is already transparent. Click a colored area to remove it.');
+}
+
+/**
+ * Store the session's state on the active clip payload when it is still the
+ * clip being edited, so leaving the editor (Capture, Settings, Export,
+ * opening another file — which demotes the clip with it) keeps the work
+ */
+function saveEditorStateToClip() {
+  const state = store?.getState();
+  const clipPayload = getClipPayload();
+  if (!state?.clip || !clipPayload || clipPayload.frames !== state.clip.frames) return;
+  clipPayload.savedEditorState = toSavedEditorState(state);
 }
 
 // ============================================================
@@ -850,6 +1136,9 @@ function restoreSavedEditorState(saved, frameCount) {
     }
     if (typeof saved.currentFrame === 'number') {
       newState = goToFrame(newState, saved.currentFrame);
+    }
+    if (saved.edits) {
+      newState = setEdits(newState, normalizeEdits(saved.edits, frameCount));
     }
     return newState;
   });
@@ -906,10 +1195,7 @@ function swapPromotedClip(id) {
 
   const state = store.getState();
   const result = promoteQueuedClip(id, {
-    selectedRange: state.selectedRange,
-    cropArea: state.cropArea,
-    playbackSpeed: state.playbackSpeed,
-    currentFrame: state.currentFrame,
+    ...toSavedEditorState(state),
     scenes: state.scenes,
   });
   if (!result) return false;
@@ -1005,6 +1291,8 @@ function handleDeleteActiveClip() {
   const successor = getClipQueue()[0] ?? null;
   const successorNeedsDecode = successor !== null && successor.status !== 'raw';
 
+  // Undo restores the clip from its payload: carry the edits with it
+  saveEditorStateToClip();
   if (!deleteActiveClip()) return;
   showToast('Clip deleted', { actionLabel: 'Undo', onAction: handleUndoDelete });
 
@@ -1228,6 +1516,13 @@ async function startSceneDetectionAsync(frames) {
 function cleanup() {
   stopPlayback();
 
+  // Before anything is torn down: keep this session's work on the clip
+  saveEditorStateToClip();
+  if (previewRenderer) {
+    previewRenderer.clear();
+    previewRenderer = null;
+  }
+
   if (liveMonitorCleanup) {
     liveMonitorCleanup();
     liveMonitorCleanup = null;
@@ -1311,10 +1606,12 @@ function registerTestHooks() {
   if (typeof window !== 'undefined' && window.__TEST_HOOKS__) {
     window.__TEST_HOOKS__.setEditorState = (stateOverrides) => {
       if (!store) return;
-      store.setState((currentState) => ({
-        ...currentState,
-        ...stateOverrides,
-      }));
+      const { edits, ...rest } = stateOverrides ?? {};
+      store.setState((currentState) => {
+        const merged = { ...currentState, ...rest };
+        // Edits are normalized and mirrored into the clip like real edits
+        return edits === undefined ? merged : setEdits(merged, edits);
+      });
     };
     window.__TEST_HOOKS__.getEditorState = () => {
       const state = store?.getState();
@@ -1327,7 +1624,13 @@ function registerTestHooks() {
         playbackSpeed: state.playbackSpeed,
         cropArea: state.cropArea,
         frameCount: state.clip?.frames?.length ?? 0,
+        edits: state.edits,
+        selectedTextId: state.selectedTextId,
+        pickingKeyColor: state.pickingKeyColor,
+        hasAlpha: state.clip?.hasAlpha === true,
       };
     };
+    // Keyed-background cache counters: readbacks must not grow on text-only edits
+    window.__TEST_HOOKS__.getEditorPreviewStats = () => previewRenderer?.stats() ?? null;
   }
 }
