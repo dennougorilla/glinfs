@@ -9,13 +9,20 @@
  * - composeEditorFrame: full source frame with the edits applied inside the
  *   output region (editor preview, which draws the crop as an overlay)
  *
- * Order: draw the (cropped) source → key out the background → draw the text
- * layers active on the frame. Text is drawn after keying so a caption that
- * happens to contain the key color is never removed.
+ * Order: draw the (cropped) source → remove the background → draw the text
+ * layers active on the frame. Text is drawn after the removal so a caption
+ * that happens to contain the key color is never removed.
+ *
+ * Background removal is the color key, or — with the 'ai' method — the
+ * frame's final AI cutout mask from an optional `maskSource` (same place in
+ * the pipeline). A frame the mask source has no mask for is drawn without
+ * removal (it has not been analyzed yet); the export refuses such frames
+ * before it starts (see encodeGif).
  *
  * @module shared/edits/compose
  */
 
+import { applyMaskToRegion } from '../masks/mask-ops.js';
 import {
   getDrawableSource,
   isFrameValid,
@@ -23,13 +30,24 @@ import {
   syncCanvasSize,
 } from '../utils/canvas.js';
 import { applyColorKey, snapAlphaToBinary } from './color-key.js';
-import { getActiveTextLayers } from './model.js';
+import { getActiveTextLayers, isAiCutoutActive, isColorKeyActive } from './model.js';
 import { drawTextLayer } from './text-render.js';
 
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} Context2D */
 /** @typedef {import('../../features/capture/types.js').Frame} Frame */
 /** @typedef {import('../../features/editor/types.js').CropArea} CropArea */
 /** @typedef {import('./model.js').ClipEdits} ClipEdits */
+/** @typedef {import('../masks/final-masks.js').MaskSource} MaskSource */
+/** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
+
+/**
+ * Removes the background from the RGBA pixels of an output region, in place
+ * @callback RemovalStep
+ * @param {Uint8ClampedArray} data - RGBA of the region
+ * @param {number} width - Region width as the caller measured it
+ * @param {number} height - Region height as the caller measured it
+ * @returns {void}
+ */
 
 /**
  * Output size for a frame and crop
@@ -99,18 +117,69 @@ export function drawTextLayersInRegion(ctx, region, layers) {
 }
 
 /**
- * Key out the background of a canvas region in place (readback, key, write)
+ * The background removal a frame needs, or null when it needs none (removal
+ * off, or the AI method without a final mask for this frame).
+ *
+ * The color key receives the region size exactly as callers always passed
+ * it; the AI mask is applied to the pixel grid the readback really returned
+ * (getImageData truncates a fractional crop size).
+ *
+ * @param {Frame} frame
+ * @param {Rect} sourceRegion - Output region in SOURCE pixels (crop, or the whole frame)
+ * @param {ClipEdits | null | undefined} edits
+ * @param {number} frameIndex - Absolute clip frame index
+ * @param {MaskSource | null | undefined} maskSource
+ * @returns {RemovalStep | null}
+ */
+export function getRemovalStep(frame, sourceRegion, edits, frameIndex, maskSource) {
+  const background = edits?.background;
+  if (isColorKeyActive(background)) {
+    return (data, width, height) => {
+      applyColorKey(data, width, height, background);
+    };
+  }
+  if (!isAiCutoutActive(background)) return null;
+  const mask = maskSource?.getFinalMask(frameIndex) ?? null;
+  if (!mask) return null;
+  return (data, width, height) => {
+    applyMaskToRegion(
+      data,
+      Math.floor(width),
+      Math.floor(height),
+      mask.bits,
+      mask.width,
+      mask.height,
+      sourceRegion,
+      frame.width,
+      frame.height,
+    );
+  };
+}
+
+/**
+ * Output region in source pixels: the crop, else the whole frame
+ * @param {Frame} frame
+ * @param {CropArea | null | undefined} crop
+ * @returns {Rect}
+ */
+function getSourceRegion(frame, crop) {
+  if (crop) return { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
+  return { x: 0, y: 0, width: frame.width, height: frame.height };
+}
+
+/**
+ * Remove the background of a canvas region in place (readback, remove, write)
  * @param {Context2D} ctx
  * @param {number} x
  * @param {number} y
  * @param {number} width
  * @param {number} height
- * @param {import('./model.js').BackgroundRemoval} background
+ * @param {RemovalStep} remove
  */
-function keyCanvasRegion(ctx, x, y, width, height, background) {
+function removeInCanvasRegion(ctx, x, y, width, height, remove) {
   if (width <= 0 || height <= 0) return;
   const image = ctx.getImageData(x, y, width, height);
-  applyColorKey(image.data, width, height, background);
+  remove(image.data, width, height);
   ctx.putImageData(image, x, y);
 }
 
@@ -124,9 +193,10 @@ function keyCanvasRegion(ctx, x, y, width, height, background) {
  * @param {Frame | null | undefined} frame
  * @param {CropArea | null | undefined} crop
  * @param {ClipEdits | null | undefined} edits
- * @param {number} frameIndex - Absolute clip frame index (for text ranges)
+ * @param {number} frameIndex - Absolute clip frame index (for text ranges and masks)
+ * @param {MaskSource | null} [maskSource] - Final AI masks (method 'ai')
  */
-export function composeOutputFrame(ctx, frame, crop, edits, frameIndex) {
+export function composeOutputFrame(ctx, frame, crop, edits, frameIndex, maskSource = null) {
   const { width, height } = getOutputSize(frame, crop, ctx.canvas);
   const source = isFrameValid(frame) ? getDrawableSource(/** @type {Frame} */ (frame)) : null;
   if (!source) {
@@ -138,8 +208,16 @@ export function composeOutputFrame(ctx, frame, crop, edits, frameIndex) {
   ctx.clearRect(0, 0, width, height);
   drawSourceRegion(ctx, source, crop);
 
-  if (edits?.background?.enabled) {
-    keyCanvasRegion(ctx, 0, 0, width, height, edits.background);
+  const validFrame = /** @type {Frame} */ (frame);
+  const remove = getRemovalStep(
+    validFrame,
+    getSourceRegion(validFrame, crop),
+    edits,
+    frameIndex,
+    maskSource,
+  );
+  if (remove) {
+    removeInCanvasRegion(ctx, 0, 0, width, height, remove);
   }
   drawTextLayers(ctx, getActiveTextLayers(edits, frameIndex), width, height);
 }
@@ -209,9 +287,9 @@ export function __resetComposeCacheForTests() {
  * Export extraction path: the composed output of one frame as RGBA.
  *
  * Avoids redundant readbacks: without active text the (keyed) buffer from a
- * single getImageData is returned directly; with the key disabled the frame
- * and text are drawn and read back once. Only text over a keyed frame needs
- * the key written back before drawing the text.
+ * single getImageData is returned directly; without removal the frame and
+ * text are drawn and read back once. Only text over a keyed frame needs
+ * the removal written back before drawing the text.
  *
  * The returned buffer is fresh on every call (ImageData.data), so callers
  * may transfer it.
@@ -219,11 +297,12 @@ export function __resetComposeCacheForTests() {
  * @param {Frame} frame
  * @param {CropArea | null | undefined} crop
  * @param {ClipEdits | null | undefined} edits
- * @param {number} frameIndex - Absolute clip frame index (for text ranges)
+ * @param {number} frameIndex - Absolute clip frame index (for text ranges and masks)
+ * @param {MaskSource | null} [maskSource] - Final AI masks (method 'ai')
  * @returns {Promise<{ data: Uint8ClampedArray, width: number, height: number }>}
  * @throws {Error} When the frame's VideoFrame is missing or closed
  */
-export async function composeOutputFrameRGBA(frame, crop, edits, frameIndex) {
+export async function composeOutputFrameRGBA(frame, crop, edits, frameIndex, maskSource = null) {
   const source = isFrameValid(frame) ? getDrawableSource(frame) : null;
   if (!source) {
     throw new Error('Invalid frame: VideoFrame is missing or closed');
@@ -233,20 +312,19 @@ export async function composeOutputFrameRGBA(frame, crop, edits, frameIndex) {
   const ctx = getRgbaContext(width, height);
   drawSourceRegion(ctx, source, crop);
 
-  const background = edits?.background;
-  const keyEnabled = background?.enabled === true;
+  const remove = getRemovalStep(frame, getSourceRegion(frame, crop), edits, frameIndex, maskSource);
   const layers = getActiveTextLayers(edits, frameIndex);
 
   if (layers.length === 0) {
     const image = ctx.getImageData(0, 0, width, height);
-    if (keyEnabled) {
-      applyColorKey(image.data, width, height, background);
+    if (remove) {
+      remove(image.data, width, height);
     }
     return { data: image.data, width, height };
   }
 
-  if (keyEnabled) {
-    keyCanvasRegion(ctx, 0, 0, width, height, background);
+  if (remove) {
+    removeInCanvasRegion(ctx, 0, 0, width, height, remove);
   }
   drawTextLayers(ctx, layers, width, height);
   const image = ctx.getImageData(0, 0, width, height);
@@ -265,9 +343,10 @@ export async function composeOutputFrameRGBA(frame, crop, edits, frameIndex) {
  * @param {Frame | null | undefined} frame
  * @param {CropArea | null | undefined} crop
  * @param {ClipEdits | null | undefined} edits
- * @param {number} frameIndex - Absolute clip frame index (for text ranges)
+ * @param {number} frameIndex - Absolute clip frame index (for text ranges and masks)
+ * @param {MaskSource | null} [maskSource] - Final AI masks (method 'ai')
  */
-export function composeEditorFrame(ctx, frame, crop, edits, frameIndex) {
+export function composeEditorFrame(ctx, frame, crop, edits, frameIndex, maskSource = null) {
   const width = frame?.width || ctx.canvas.width;
   const height = frame?.height || ctx.canvas.height;
   const source = isFrameValid(frame) ? getDrawableSource(/** @type {Frame} */ (frame)) : null;
@@ -282,8 +361,15 @@ export function composeEditorFrame(ctx, frame, crop, edits, frameIndex) {
 
   const region = crop ?? { x: 0, y: 0, width, height };
 
-  if (edits?.background?.enabled) {
-    keyCanvasRegion(ctx, region.x, region.y, region.width, region.height, edits.background);
+  const remove = getRemovalStep(
+    /** @type {Frame} */ (frame),
+    region,
+    edits,
+    frameIndex,
+    maskSource,
+  );
+  if (remove) {
+    removeInCanvasRegion(ctx, region.x, region.y, region.width, region.height, remove);
   }
 
   drawTextLayersInRegion(ctx, region, getActiveTextLayers(edits, frameIndex));
