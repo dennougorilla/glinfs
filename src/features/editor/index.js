@@ -20,7 +20,7 @@ import {
   validateClipPayload,
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
-import { normalizeEdits } from '../../shared/edits/model.js';
+import { normalizeEdits, requiresTransparency } from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -650,6 +650,7 @@ function drawPreview(state) {
   if (!ctx) return;
   previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
     skipKey: cropDragging,
+    transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
   });
 }
 

@@ -177,6 +177,46 @@ describe('createEditorFrameRenderer', () => {
     expect(fresh.stats().readbacks).toBe(1);
   });
 
+  it('snaps the output region to 1-bit alpha for a transparent export, once per frame', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    const soft = (/** @type {string} */ id, /** @type {number} */ alpha) =>
+      frame(id, [200, 100, 50, alpha]);
+    const crop = /** @type {any} */ ({ x: 2, y: 1, width: 10, height: 8, aspectRatio: 'free' });
+    const noKey = createDefaultEdits();
+
+    // A source with alpha, removal off: soft alpha inside the region snaps
+    renderer.render(ctx, soft('a', 100), crop, noKey, 0, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(0);
+    // ...outside the output region the source is left alone
+    expect(ctx.pixelAt(15, 5)[3]).toBe(100);
+    renderer.render(ctx, soft('b', 200), crop, noKey, 1, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(255);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Revisits and text edits come from the cache
+    const withText = { ...noKey, textLayers: [createTextLayer({ text: 'x' }, 2)] };
+    renderer.render(ctx, soft('a', 100), crop, withText, 0, { transparent: true });
+    expect(renderer.stats().readbacks).toBe(2);
+
+    // A crop drag skips the snap without touching the cache
+    renderer.render(ctx, soft('a', 100), null, noKey, 0, { transparent: true, skipKey: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(100);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Opaque export: no snap, no readback, cache freed
+    renderer.render(ctx, soft('a', 100), crop, noKey, 0);
+    expect(ctx.pixelAt(5, 5)[3]).toBe(100);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 0 });
+
+    // With removal on, the key and the snap share one readback per frame
+    const keyed = edits({ color: '#000000', tolerance: 0 });
+    renderer.render(ctx, soft('a', 100), crop, keyed, 0, { transparent: true });
+    renderer.render(ctx, soft('a', 100), crop, keyed, 0, { transparent: true });
+    expect(ctx.pixelAt(5, 5)[3]).toBe(0);
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+  });
+
   it('frees the cache when removal is off and draws through composeEditorFrame', () => {
     const renderer = createEditorFrameRenderer();
     const ctx = createFakeContext(20, 10);

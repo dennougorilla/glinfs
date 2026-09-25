@@ -14,6 +14,13 @@
  * Text is drawn on top of the (cached) keyed region on every draw, so
  * text-only edits never read pixels back.
  *
+ * When the export will be transparent (removal on, or a source with alpha)
+ * the cached region's alpha is also snapped to GIF's 1 bit, so soft source
+ * edges preview as they export. Text drawn over transparent pixels (a
+ * see-through caption box, anti-aliased glyph edges) is NOT snapped here —
+ * that would take a readback on every text edit; the export preview shows
+ * the exact 1-bit result.
+ *
  * @module features/editor/edits-preview
  */
 
@@ -21,6 +28,7 @@ import {
   ALPHA_THRESHOLD,
   applyColorKey,
   findOpaqueEdgeColor,
+  snapAlphaToBinary,
   toHexColor,
 } from '../../shared/edits/color-key.js';
 import { composeEditorFrame } from '../../shared/edits/compose.js';
@@ -69,13 +77,16 @@ function getFramePixelKey(frame) {
 
 /**
  * Parameters a keyed region depends on (besides the frame)
- * @param {BackgroundRemoval} background
+ * @param {BackgroundRemoval | null} background - null when removal is off
  * @param {Rect} region
+ * @param {boolean} snap - Alpha snapped to 1 bit
  * @returns {string}
  */
-function getKeyParamsKey(background, region) {
-  const { color, tolerance, mode } = background;
-  return `${color}|${tolerance}|${mode}|${region.x},${region.y},${region.width},${region.height}`;
+function getKeyParamsKey(background, region, snap) {
+  const key = background
+    ? `${background.color}|${background.tolerance}|${background.mode}`
+    : 'no-key';
+  return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}`;
 }
 
 /**
@@ -184,33 +195,41 @@ export function createEditorFrameRenderer(options = {}) {
      * @param {CropArea | null | undefined} crop
      * @param {ClipEdits | null | undefined} edits
      * @param {number} frameIndex - Absolute clip frame index (text ranges)
-     * @param {{ skipKey?: boolean }} [options] - skipKey: draw without
-     *   background removal and leave the cache alone (a crop drag in
-     *   progress moves the region on every pointer move; keying each move
-     *   would read back and flood-fill the whole region per tick and drop
-     *   every cached frame — the drag's release keys once instead)
+     * @param {{ skipKey?: boolean, transparent?: boolean }} [options]
+     *   - skipKey: draw without background removal (or alpha snapping) and
+     *     leave the cache alone (a crop drag in progress moves the region on
+     *     every pointer move; keying each move would read back and
+     *     flood-fill the whole region per tick and drop every cached frame
+     *     — the drag's release keys once instead)
+     *   - transparent: the export is a transparent GIF (removal on, or a
+     *     source with alpha): the output region's alpha is snapped to 1 bit
+     *     like the encoder does, in the same cached pass as the key, so a
+     *     soft source edge previews as it will export. Opaque clips never
+     *     read back for this.
      */
     render(ctx, frame, crop, edits, frameIndex, options = {}) {
-      if (options.skipKey && edits?.background?.enabled) {
+      const background = edits?.background;
+      const keyOn = background?.enabled === true;
+      const snap = options.transparent === true;
+      if (options.skipKey && (keyOn || snap)) {
         composeEditorFrame(
           ctx,
           frame,
           crop,
-          { ...edits, background: { ...edits.background, enabled: false } },
+          keyOn ? { ...edits, background: { ...background, enabled: false } } : edits,
           frameIndex,
         );
         return;
       }
-      const background = edits?.background;
       const source =
-        background?.enabled && isFrameValid(frame)
+        (keyOn || snap) && isFrameValid(frame)
           ? getDrawableSource(/** @type {Frame} */ (frame))
           : null;
-      if (!background?.enabled) {
+      if (!keyOn && !snap) {
         // Keyed pixels are useless without the key: free them
         cache.clear();
       }
-      if (!source || !frame || !background) {
+      if (!source || !frame) {
         composeEditorFrame(ctx, frame, crop, edits, frameIndex);
         return;
       }
@@ -221,7 +240,7 @@ export function createEditorFrameRenderer(options = {}) {
 
       const region = getOutputRegion(frame, crop);
       if (region.width > 0 && region.height > 0) {
-        cache.sync(getKeyParamsKey(background, region));
+        cache.sync(getKeyParamsKey(keyOn ? background : null, region, snap));
         const key = getFramePixelKey(frame);
         let keyed = cache.get(key);
         if (!keyed) {
@@ -229,7 +248,12 @@ export function createEditorFrameRenderer(options = {}) {
           readbacks++;
           // The ImageData's own size: a crop can carry fractional values
           // (centered aspect-ratio crops), which getImageData truncates
-          applyColorKey(keyed.data, keyed.width, keyed.height, background);
+          if (keyOn) {
+            applyColorKey(keyed.data, keyed.width, keyed.height, background);
+          }
+          if (snap) {
+            snapAlphaToBinary(keyed.data);
+          }
           cache.set(key, keyed);
         }
         ctx.putImageData(keyed, region.x, region.y);
