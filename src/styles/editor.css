@@ -2103,6 +2103,12 @@
   outline-offset: -2px;
 }
 
+/* Keyboard picks: the focused preview shows a solid ring (and the marker) */
+.editor-screen .editor-ai-picking .editor-canvas-overlay:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: -3px;
+}
+
 .editor-screen .editor-ai-preview-note {
   position: absolute;
   left: var(--space-3);

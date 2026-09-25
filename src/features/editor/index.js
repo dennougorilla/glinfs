@@ -55,6 +55,7 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
+import { setOverlayPickMode } from './panels/preview.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import {
   addAiPick,
@@ -557,6 +558,7 @@ export function initEditor() {
         container
           .querySelector('.editor-canvas-container')
           ?.classList.toggle('editor-ai-picking', state.aiPickTool !== null);
+        updateOverlayPickMode(container, state.aiPickTool, lastRendered.aiPickTool);
       }
       lastRendered.edits = state.edits;
       lastRendered.selectedTextId = state.selectedTextId;
@@ -1266,12 +1268,39 @@ function handleSetAiParams(patch) {
   store.setState((state) => setAiParams(state, patch));
 }
 
-/** @param {import('../../shared/edits/model.js').PickMode | null} tool */
-function handleSetAiPickTool(tool) {
+/**
+ * @param {import('../../shared/edits/model.js').PickMode | null} tool
+ * @param {{ fromKeyboard?: boolean }} [options] - fromKeyboard: the toggle
+ *   was switched with the keyboard, so the keyboard pick target (the
+ *   preview) takes focus
+ */
+function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
   store.setState((state) => setAiPickTool(state, tool));
-  if (tool) {
+  if (tool && options.fromKeyboard && overlayCanvas) {
+    setOverlayPickMode(overlayCanvas, true);
+    overlayCanvas.focus();
+  } else if (tool) {
     announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
+  }
+}
+
+/**
+ * Follow the pick tool on the preview overlay: focusable (keyboard picks)
+ * while a tool is on. When the tool ends while the overlay has focus (a
+ * pick was placed, or Escape), focus goes back to the tool's toggle
+ * instead of staying on a control that is no longer focusable.
+ * @param {ParentNode} container
+ * @param {import('../../shared/edits/model.js').PickMode | null} tool
+ * @param {import('../../shared/edits/model.js').PickMode | null} previousTool
+ */
+function updateOverlayPickMode(container, tool, previousTool) {
+  if (!overlayCanvas) return;
+  const hadFocus = document.activeElement === overlayCanvas;
+  setOverlayPickMode(overlayCanvas, tool !== null);
+  if (tool === null && hadFocus && previousTool) {
+    const toggle = container.querySelector(`#ai-pick-${previousTool}`);
+    if (toggle instanceof HTMLElement) toggle.focus();
   }
 }
 

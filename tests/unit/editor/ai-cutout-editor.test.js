@@ -428,6 +428,67 @@ describe('AI cutout in the mounted editor', () => {
     expect(document.activeElement?.id).toBe('ai-analyze');
   });
 
+  it('keyboard picks: the focused preview moves a marker with the arrows and picks on Enter', async () => {
+    mount();
+    await chooseAi();
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    await settle();
+
+    const overlay = /** @type {HTMLCanvasElement} */ ($('.editor-canvas-overlay'));
+    expect(overlay.hasAttribute('tabindex')).toBe(false);
+
+    // Switching the toggle from the keyboard sends focus to the preview
+    const keep = /** @type {HTMLInputElement} */ ($('#ai-pick-keep'));
+    keep.focus();
+    keep.matches = (/** @type {string} */ selector) => selector === ':focus-visible';
+    check('ai-pick-keep');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBe('keep');
+    expect(overlay.tabIndex).toBe(0);
+    expect(overlay.getAttribute('aria-label')).toContain('Arrow keys move the marker');
+    expect(document.activeElement).toBe(overlay);
+    expect($('#ai-pick-status').textContent).toContain('arrow keys');
+
+    /** @param {string} key @param {boolean} [shiftKey] */
+    const key = (key, shiftKey = false) => {
+      const event = new KeyboardEvent('keydown', {
+        key,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      overlay.dispatchEvent(event);
+      return event;
+    };
+    // The arrows move the marker, not the playhead
+    expect(key('ArrowRight', true).defaultPrevented).toBe(true);
+    key('ArrowDown');
+    key('ArrowDown');
+    expect(getEditorState()?.currentFrame).toBe(2);
+    key('Enter');
+    await settle();
+    const [pick] = getEditorState()?.edits.background.ai.picks ?? [];
+    expect(pick).toMatchObject({ frame: 2, mode: 'keep' });
+    expect(pick.x).toBeCloseTo(0.6, 5);
+    expect(pick.y).toBeCloseTo(0.54, 5);
+    // The tool ends: focus goes back to its toggle, the preview leaves the tab order
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect(document.activeElement).toBe(keep);
+    expect(overlay.hasAttribute('tabindex')).toBe(false);
+
+    // Escape on the focused preview leaves the tool the same way
+    check('ai-pick-remove');
+    await settle();
+    overlay.focus();
+    press('Escape');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect(document.activeElement?.id).toBe('ai-pick-remove');
+  });
+
   it('parameter controls patch the AI edits', async () => {
     mount(2);
     await chooseAi();
