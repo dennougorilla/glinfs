@@ -59,7 +59,7 @@ export const IMPORT_ACCEPT_ATTRIBUTE = [
 ].join(',');
 
 /**
- * @typedef {'unsupported-type'|'file-too-large'|'empty-file'|'too-many-frames'|'decode-failed'|'aborted'|'queue-full'|'memory-budget'} ImportErrorCode
+ * @typedef {'unsupported-type'|'file-too-large'|'empty-file'|'too-many-frames'|'decode-failed'|'aborted'|'queue-full'|'memory-budget'|'busy'} ImportErrorCode
  */
 
 /**
