@@ -88,6 +88,14 @@ describe('applyColorKey', () => {
     expect(alphaMap(rgba, width)).toEqual(['##']);
   });
 
+  it('is a no-op when the AI cutout is the active method, and keys without a method', () => {
+    const { rgba, width, height } = fromMap(['gg'], { g: GREEN });
+    expect(applyColorKey(rgba, width, height, bg({ method: 'ai' }))).toBe(0);
+    expect(alphaMap(rgba, width)).toEqual(['##']);
+    expect(applyColorKey(rgba, width, height, bg({ method: 'color' }))).toBe(2);
+    expect(alphaMap(rgba, width)).toEqual(['..']);
+  });
+
   it('connected mode clears only key pixels reachable from the border', () => {
     const { rgba, width, height } = fromMap(['ggggg', 'grrrg', 'grgrg', 'grrrg', 'ggggg'], {
       g: GREEN,
