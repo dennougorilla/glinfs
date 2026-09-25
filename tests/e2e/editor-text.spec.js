@@ -206,6 +206,26 @@ test.describe('Editor text layers', () => {
     );
   });
 
+  test('deleting a layer from the list with the keyboard keeps focus in the list', async ({
+    page,
+  }) => {
+    await page.locator('#text-add').click();
+    await page.locator('#text-layer-text').fill('A');
+    await page.locator('#text-add').click();
+    await page.locator('#text-layer-text').fill('B');
+    await expect(page.locator('#text-layer-list .editor-text-item')).toHaveCount(2);
+
+    await page.locator('#text-layer-list .editor-text-item-delete').first().focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await readEditorState(page))?.edits.textLayers).toHaveLength(1);
+    await expect(page.locator('#text-layer-list .editor-text-item-select')).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#text-layer-list .editor-text-item-delete')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#text-add')).toBeFocused();
+  });
+
   test('a caption deleted with Backspace after dragging it comes back with Undo', async ({
     page,
   }) => {
@@ -225,7 +245,7 @@ test.describe('Editor text layers', () => {
     await expect
       .poll(async () => (await readEditorState(page))?.edits.textLayers[0].y)
       .toBeCloseTo(0.5, 1);
-    const [layer] = /** @type {any} */ (await readEditorState(page))?.edits.textLayers;
+    const [layer] = /** @type {any} */ (await readEditorState(page)).edits.textLayers;
 
     await page.keyboard.press('Backspace');
     await expect.poll(async () => (await readEditorState(page))?.edits.textLayers).toHaveLength(0);
