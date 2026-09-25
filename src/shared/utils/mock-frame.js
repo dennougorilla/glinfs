@@ -370,8 +370,13 @@ export async function createMockFrames(count, options = {}) {
  * @param {15 | 30 | 60} [options.fps=30] - FPS setting
  * @param {number} [options.width=640] - Frame width
  * @param {number} [options.height=480] - Frame height
- * @param {'gradient' | 'checkerboard' | 'numbered'} [options.pattern='numbered'] - Visual pattern
+ * @param {'gradient' | 'checkerboard' | 'solid' | 'numbered'} [options.pattern='numbered'] - Visual pattern
+ * @param {string} [options.color] - Base color for the pattern (any CSS color)
  * @param {boolean} [options.sceneDetectionEnabled=false] - Enable scene detection
+ * @param {boolean} [options.hasAlpha] - Mark the clip as having transparent pixels
+ * @param {string|null} [options.sourceName] - Mark the clip as imported from this file
+ * @param {import('../edits/model.js').ClipEdits} [options.edits] - Edits the editor
+ *   restores on mount (carried as savedEditorState.edits, like a demoted clip)
  * @returns {Promise<import('../app-store.js').ClipPayload>} Mock ClipPayload
  */
 export async function createMockClipPayload(options = {}) {
@@ -381,17 +386,40 @@ export async function createMockClipPayload(options = {}) {
     width = 640,
     height = 480,
     pattern = 'numbered',
+    color,
     sceneDetectionEnabled = false,
+    hasAlpha,
+    sourceName,
+    edits,
   } = options;
 
-  const frames = await createMockFrames(frameCount, { width, height, pattern, fps });
+  const frames = await createMockFrames(frameCount, {
+    width,
+    height,
+    pattern,
+    fps,
+    ...(color ? { color } : {}),
+  });
 
-  return {
+  /** @type {import('../app-store.js').ClipPayload & Record<string, unknown>} */
+  const payload = {
     frames,
     fps: /** @type {15 | 30 | 60} */ (fps),
     capturedAt: Date.now(),
     sceneDetectionEnabled,
   };
+  if (hasAlpha !== undefined) payload.hasAlpha = hasAlpha;
+  if (sourceName !== undefined) payload.sourceName = sourceName;
+  if (edits !== undefined) {
+    payload.savedEditorState = /** @type {any} */ ({
+      selectedRange: { start: 0, end: frameCount - 1 },
+      cropArea: null,
+      playbackSpeed: 1,
+      currentFrame: 0,
+      edits,
+    });
+  }
+  return payload;
 }
 
 /**
@@ -404,6 +432,10 @@ export async function createMockClipPayload(options = {}) {
  * @param {number} [options.height=480] - Frame height
  * @param {{ start: number, end: number }} [options.selectedRange] - Selected frame range
  * @param {import('../../features/editor/types.js').CropArea | null} [options.cropArea=null] - Crop area
+ * @param {'gradient' | 'checkerboard' | 'solid' | 'numbered'} [options.pattern='numbered'] - Visual pattern
+ * @param {string} [options.color] - Base color for the pattern (any CSS color)
+ * @param {import('../edits/model.js').ClipEdits} [options.edits] - Edits to export
+ * @param {boolean} [options.hasAlpha] - Source has transparent pixels
  * @returns {Promise<import('../app-store.js').EditorPayload>} Mock EditorPayload
  */
 export async function createMockEditorPayload(options = {}) {
@@ -414,12 +446,27 @@ export async function createMockEditorPayload(options = {}) {
     height = 480,
     selectedRange,
     cropArea = null,
+    pattern = 'numbered',
+    color,
+    edits,
+    hasAlpha,
   } = options;
 
-  const frames = await createMockFrames(frameCount, { width, height, pattern: 'numbered', fps });
+  const frames = await createMockFrames(frameCount, {
+    width,
+    height,
+    pattern,
+    fps,
+    ...(color ? { color } : {}),
+  });
   const range = selectedRange || { start: 0, end: frameCount - 1 };
 
-  return {
+  /** @type {Record<string, unknown>} */
+  const extras = {};
+  if (edits !== undefined) extras.edits = edits;
+  if (hasAlpha !== undefined) extras.hasAlpha = hasAlpha;
+
+  return /** @type {import('../app-store.js').EditorPayload} */ ({
     selectedRange: range,
     cropArea,
     clip: {
@@ -429,9 +476,11 @@ export async function createMockEditorPayload(options = {}) {
       createdAt: Date.now(),
       selectedRange: range,
       cropArea,
+      ...extras,
     },
     fps,
-  };
+    ...extras,
+  });
 }
 
 /**

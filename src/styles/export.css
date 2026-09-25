@@ -946,6 +946,53 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   TRANSPARENCY (background removal / sources with alpha)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Checkerboard behind the preview so transparent pixels read as such
+   (opaque clips cover it completely) */
+.export-screen .export-canvas {
+  background-color: #c8c8c8;
+  background-image:
+    linear-gradient(45deg, #8c8c8c 25%, transparent 25%),
+    linear-gradient(-45deg, #8c8c8c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #8c8c8c 75%),
+    linear-gradient(-45deg, transparent 75%, #8c8c8c 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+/* The WASM encoder cannot write a transparent index */
+.export-screen .encoder-card.export-transparency-encoder-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.export-screen .encoder-card.export-transparency-encoder-disabled:hover {
+  border-color: var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+.export-screen .export-transparency-encoder-note {
+  padding-left: calc(16px + var(--space-3));
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.export-screen .export-transparency-badge {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background-color: var(--color-panel);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    ENCODER-SPECIFIC SETTINGS
    ═══════════════════════════════════════════════════════════════════════════ */
 

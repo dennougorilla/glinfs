@@ -151,7 +151,12 @@ if (IS_TEST_MODE) {
      * @param {15|30|60} [options.fps=30] - FPS
      * @param {number} [options.width=640] - Frame width
      * @param {number} [options.height=480] - Frame height
-     * @param {'gradient'|'checkerboard'|'numbered'} [options.pattern='numbered'] - Visual pattern
+     * @param {'gradient'|'checkerboard'|'solid'|'numbered'} [options.pattern='numbered'] - Visual pattern
+     * @param {string} [options.color] - Pattern base color (e.g. '#00ff00' with pattern 'solid')
+     * @param {boolean} [options.hasAlpha] - Mark the clip as having transparent pixels
+     * @param {string|null} [options.sourceName] - Mark the clip as imported from this file
+     * @param {import('./shared/edits/model.js').ClipEdits} [options.edits] - Edits the
+     *   editor restores on mount (as savedEditorState.edits)
      * @returns {Promise<void>}
      *
      * @example
@@ -174,6 +179,14 @@ if (IS_TEST_MODE) {
      * @param {15|30|60} [options.fps=30] - FPS
      * @param {{ start: number, end: number }} [options.selectedRange] - Selected range
      * @param {Object} [options.cropArea=null] - Crop area
+     * @param {'gradient'|'checkerboard'|'solid'|'numbered'} [options.pattern='numbered'] - Visual
+     *   pattern of both the editor payload's and the clip payload's frames
+     * @param {string} [options.color] - Pattern base color
+     * @param {import('./shared/edits/model.js').ClipEdits} [options.edits] - Edits to export
+     *   (on the editor payload)
+     * @param {boolean} [options.hasAlpha] - Source has transparent pixels
+     * @param {string|null} [options.sourceName] - Mark the clip payload as imported
+     *   (enables identical-frame merging on export)
      * @returns {Promise<void>}
      *
      * @example
@@ -188,8 +201,10 @@ if (IS_TEST_MODE) {
       const defaults = getDefaultMockOptions();
       const editorPayload = await createMockEditorPayload({ ...defaults, ...options });
 
-      // Also inject clip payload since export reads from both
-      const clipPayload = await createMockClipPayload({ ...defaults, ...options });
+      // Also inject clip payload since export reads from both. Edits belong
+      // to the editor payload here, not to the clip's saved editor state.
+      const { edits: _edits, ...clipOptions } = options;
+      const clipPayload = await createMockClipPayload({ ...defaults, ...clipOptions });
       setClipPayload(clipPayload);
       setEditorPayload(editorPayload);
 

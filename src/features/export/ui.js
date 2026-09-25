@@ -47,6 +47,32 @@ const ENCODER_OPTIONS = [
  * @property {() => void} onCreateNew - Start new capture, releasing current frames
  */
 
+/**
+ * Clip facts the export screen displays
+ * @typedef {Object} ExportClipInfo
+ * @property {number} frameCount
+ * @property {number} width
+ * @property {number} height
+ * @property {number} duration - Seconds
+ * @property {boolean} [transparent] - The GIF will have transparent pixels
+ *   (source alpha or background removal); only the JavaScript encoder can
+ *   write them
+ */
+
+/** Note shown on the disabled WASM encoder card for transparent exports */
+export const TRANSPARENT_ENCODER_NOTE = 'Transparent GIFs use the JavaScript encoder';
+
+/**
+ * The encoder an export will actually use: transparent exports always use
+ * gifenc (see encodeGif), whatever the stored preference says.
+ * @param {import('./types.js').ExportSettings} settings
+ * @param {boolean} [transparent]
+ * @returns {import('./encoders/types.js').EncoderId}
+ */
+export function getEffectiveEncoderId(settings, transparent) {
+  return transparent ? 'gifenc-js' : settings.encoderId;
+}
+
 /** @type {readonly [1, 2, 3, 4, 5]} */
 const FRAME_SKIP_OPTIONS = /** @type {const} */ ([1, 2, 3, 4, 5]);
 
@@ -58,7 +84,7 @@ const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  * @param {HTMLElement} container
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
- * @param {{ frameCount: number, width: number, height: number, duration: number }} clipInfo
+ * @param {ExportClipInfo} clipInfo
  * @returns {{ cleanup: () => void, canvas: HTMLCanvasElement | null }} Cleanup function and canvas element
  */
 export function renderExportScreen(container, state, handlers, clipInfo) {
@@ -151,6 +177,19 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
         ]),
       ]),
       createElement('div', { className: 'export-status-section' }, [
+        ...(clipInfo.transparent
+          ? [
+              createElement(
+                'div',
+                {
+                  className: 'status-item export-transparency-badge',
+                  'data-testid': 'export-transparency-badge',
+                  title: 'Removed or transparent pixels stay transparent in the GIF',
+                },
+                ['Transparent background'],
+              ),
+            ]
+          : []),
         createElement('div', { className: 'status-item' }, [
           'Size: ',
           createElement('span', { className: 'value' }, [
@@ -242,25 +281,40 @@ export function updatePreviewPlaybackUI(container, isPlaying) {
 
 /**
  * Render encoder selection cards
+ *
+ * Transparent exports can only be written by the JavaScript encoder: the
+ * WASM card is shown disabled with a note, and the JS card shows as
+ * selected, without touching the stored preference.
+ *
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
  * @param {(() => void)[]} cleanups
+ * @param {boolean} [transparent]
  * @returns {HTMLElement}
  */
-function renderEncoderSelection(state, handlers, cleanups) {
+function renderEncoderSelection(state, handlers, cleanups, transparent = false) {
   const group = createElement('div', { className: 'settings-group encoder-selection-group' }, [
     createElement('div', { className: 'settings-group-title' }, ['Select Encoder']),
   ]);
 
   const cardsContainer = createElement('div', { className: 'encoder-cards' });
+  const effectiveEncoderId = getEffectiveEncoderId(state.settings, transparent);
 
   for (const encoder of ENCODER_OPTIONS) {
-    const isSelected = state.settings.encoderId === encoder.id;
+    const isSelected = effectiveEncoderId === encoder.id;
+    const isDisabled = transparent && encoder.isWasm;
     const card = createElement(
       'div',
       {
-        className: `encoder-card ${isSelected ? 'selected' : ''}`,
+        className: [
+          'encoder-card',
+          isSelected && 'selected',
+          isDisabled && 'export-transparency-encoder-disabled',
+        ]
+          .filter(Boolean)
+          .join(' '),
         'data-encoder-id': encoder.id,
+        ...(isDisabled ? { 'aria-disabled': 'true' } : {}),
       },
       [
         createElement('div', { className: 'encoder-card-header' }, [
@@ -279,16 +333,30 @@ function renderEncoderSelection(state, handlers, cleanups) {
           ]),
         ]),
         createElement('div', { className: 'encoder-card-description' }, [encoder.description]),
+        ...(isDisabled
+          ? [
+              createElement(
+                'div',
+                {
+                  className: 'export-transparency-encoder-note',
+                  'data-testid': 'export-transparency-encoder-note',
+                },
+                [TRANSPARENT_ENCODER_NOTE],
+              ),
+            ]
+          : []),
       ],
     );
 
-    cleanups.push(
-      on(card, 'click', () => {
-        handlers.onSettingsChange({
-          encoderId: /** @type {import('./encoders/types.js').EncoderId} */ (encoder.id),
-        });
-      }),
-    );
+    if (!isDisabled) {
+      cleanups.push(
+        on(card, 'click', () => {
+          handlers.onSettingsChange({
+            encoderId: /** @type {import('./encoders/types.js').EncoderId} */ (encoder.id),
+          });
+        }),
+      );
+    }
 
     cardsContainer.appendChild(card);
   }
@@ -514,7 +582,7 @@ function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
  * Render settings panel
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
- * @param {{ frameCount: number }} clipInfo
+ * @param {ExportClipInfo} clipInfo
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
  */
@@ -539,10 +607,10 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   const content = createElement('div', { className: 'settings-content' });
 
   // 1. Encoder selection (always visible)
-  content.appendChild(renderEncoderSelection(state, handlers, cleanups));
+  content.appendChild(renderEncoderSelection(state, handlers, cleanups, clipInfo.transparent));
 
-  // 2. Encoder-specific settings (dynamic based on selected encoder)
-  if (state.settings.encoderId === 'gifenc-js') {
+  // 2. Encoder-specific settings (dynamic based on the encoder in effect)
+  if (getEffectiveEncoderId(state.settings, clipInfo.transparent) === 'gifenc-js') {
     content.appendChild(renderGifencSettings(state, handlers, cleanups));
   } else {
     content.appendChild(renderGifsicleSettings());
