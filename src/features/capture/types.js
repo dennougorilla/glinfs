@@ -11,6 +11,9 @@
  * @property {number} timestamp - Capture time (VideoFrame.timestamp in microseconds)
  * @property {number} width - Frame width in pixels (from VideoFrame.codedWidth)
  * @property {number} height - Frame height in pixels (from VideoFrame.codedHeight)
+ * @property {string} [sharedKey] - Frames with the same key share pixel memory
+ *   (clone() slots of one decoded image, see features/import); memory
+ *   estimates count each key once
  */
 
 /**

@@ -93,18 +93,26 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {import('../features/editor/types.js').CropArea|null} cropArea
  * @property {number} playbackSpeed
  * @property {number} currentFrame
+ * @property {import('./edits/model.js').ClipEdits} [edits] - Text/background edits
  */
 
 /**
  * @typedef {Object} ClipPayload
  * @property {import('../features/capture/types.js').Frame[]} frames - Captured frames
- * @property {15|30|60} fps - Capture FPS setting
+ * @property {number} fps - Clip FPS: the capture setting (15/30/60) or, for an
+ *   imported file, the rate chosen from its frame delays (integer 1..60)
  * @property {number} capturedAt - Timestamp when clip was created
  * @property {boolean} [sceneDetectionEnabled] - Whether to run scene detection in editor
  * @property {import('../features/scene-detection/types.js').Scene[]} [scenes] - Pre-computed scenes from capture
  * @property {string} [id] - Stable clip identity across promote/demote round-trips
  * @property {string|null} [thumbnailDataUrl] - Small preview retained for queue display
  * @property {SavedEditorState|null} [savedEditorState] - State to restore; consumed by the editor on mount
+ * @property {boolean} [hasAlpha] - The clip has transparent pixels (imported
+ *   GIF/PNG/WebP). Such clips are never codec-compressed (VP8/VP9 drop alpha)
+ *   and their queue thumbnails are PNG
+ * @property {string|null} [sourceName] - File name of an imported clip; absent
+ *   or null for screen captures
+ * @property {string[]|null} [previewFrames] - Pre-baked hover-skim thumbnails
  */
 
 /**
@@ -120,7 +128,7 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {import('./clip-codec.js').SerializedChunk[]} chunks
  * @property {import('./clip-codec.js').EncodedClipConfig} config
  * @property {number} byteLength - Total compressed payload bytes
- * @property {{id: string, timestamp: number, width: number, height: number}[]} frameMeta
+ * @property {{id: string, timestamp: number, width: number, height: number, sharedKey?: string}[]} frameMeta
  */
 
 /**
@@ -133,8 +141,10 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {number} frameCount - Frame count, stable across compression
  * @property {CompressedClip|null} compressed - Compressed bytes ('compressed'/'decoding' only)
  * @property {number} [byteLengthMB] - Compressed size in MB (set once compressed)
- * @property {15|30|60} fps - Capture FPS
+ * @property {number} fps - Clip FPS (see ClipPayload.fps)
  * @property {number} capturedAt - Timestamp when clip was created
+ * @property {boolean} [hasAlpha] - Carried with the clip; never compressed when true
+ * @property {string|null} [sourceName] - Imported file name (null for captures)
  * @property {boolean} [sceneDetectionEnabled] - Scene detection flag carried with the clip
  * @property {import('../features/scene-detection/types.js').Scene[]} [scenes] - Scenes carried with the clip
  * @property {SavedEditorState|null} [savedEditorState] - Editor state saved at demote time
@@ -160,6 +170,8 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {import('../features/editor/types.js').CropArea|null} cropArea - Crop region
  * @property {import('../features/editor/types.js').Clip} clip - Full clip data (for state restoration)
  * @property {number} fps - FPS for export timing
+ * @property {import('./edits/model.js').ClipEdits} [edits] - Text/background edits to burn in
+ * @property {boolean} [hasAlpha] - Source clip has transparent pixels
  */
 
 /**
@@ -382,12 +394,32 @@ function ensureClipIdentity(payload) {
   if (!payload.id) {
     payload.id = generateClipId();
   }
+  // JPEG has no alpha channel: transparent areas of an alpha clip would bake
+  // to black in the queue list, so those thumbnails are PNG
+  const mimeType = getThumbnailMimeType(payload);
   if (payload.thumbnailDataUrl === undefined) {
-    payload.thumbnailDataUrl = createFrameThumbnailDataUrl(payload.frames?.[0]);
+    payload.thumbnailDataUrl = createFrameThumbnailDataUrl(
+      payload.frames?.[0],
+      THUMBNAIL_MAX_DIMENSION,
+      mimeType,
+    );
   }
   if (payload.previewFrames === undefined) {
-    payload.previewFrames = buildPreviewFrames(payload.frames);
+    payload.previewFrames = buildPreviewFrames(payload.frames, mimeType);
   }
+}
+
+/** Longest edge of queue thumbnails (px) */
+const THUMBNAIL_MAX_DIMENSION = 160;
+
+/**
+ * Image format for a clip's queue thumbnails: PNG keeps transparency for
+ * alpha clips, JPEG (smaller) for everything else.
+ * @param {{ hasAlpha?: boolean }} payload
+ * @returns {'image/png'|'image/jpeg'}
+ */
+export function getThumbnailMimeType(payload) {
+  return payload?.hasAlpha ? 'image/png' : 'image/jpeg';
 }
 
 /** Number of pre-baked skim thumbnails per clip (hover preview, #100 v3) */
@@ -403,19 +435,40 @@ const PREVIEW_FRAME_COUNT = 10;
  * decoding compressed chunks on hover.
  *
  * @param {import('../features/capture/types.js').Frame[]|null|undefined} frames
+ * @param {'image/png'|'image/jpeg'} [mimeType='image/jpeg']
  * @returns {string[]|null}
  */
-function buildPreviewFrames(frames) {
+function buildPreviewFrames(frames, mimeType = 'image/jpeg') {
   if (!frames || frames.length < 2) return null;
   const n = Math.min(PREVIEW_FRAME_COUNT, frames.length);
   /** @type {string[]} */
   const urls = [];
   for (let k = 0; k < n; k++) {
     const index = Math.round((k * (frames.length - 1)) / (n - 1));
-    const url = createFrameThumbnailDataUrl(frames[index]);
+    const url = createFrameThumbnailDataUrl(frames[index], THUMBNAIL_MAX_DIMENSION, mimeType);
     if (url) urls.push(url);
   }
   return urls.length > 1 ? urls : null;
+}
+
+/**
+ * Keep only the editor-state fields worth restoring on promote (the caller
+ * may pass a larger object, e.g. with scenes).
+ * @param {SavedEditorState} editorState
+ * @returns {SavedEditorState}
+ */
+function toSavedEditorState(editorState) {
+  /** @type {SavedEditorState} */
+  const saved = {
+    selectedRange: editorState.selectedRange,
+    cropArea: editorState.cropArea,
+    playbackSpeed: editorState.playbackSpeed,
+    currentFrame: editorState.currentFrame,
+  };
+  if (editorState.edits !== undefined) {
+    saved.edits = editorState.edits;
+  }
+  return saved;
 }
 
 /**
@@ -435,16 +488,13 @@ function activeToQueueEntry(active, editorState) {
     compressed: null,
     fps: active.fps,
     capturedAt: active.capturedAt,
+    hasAlpha: active.hasAlpha === true,
+    sourceName: active.sourceName ?? null,
     sceneDetectionEnabled: active.sceneDetectionEnabled,
     // Scenes detected while editing supersede whatever the payload carried
     scenes: editorState?.scenes?.length ? editorState.scenes : active.scenes,
     savedEditorState: editorState
-      ? {
-          selectedRange: editorState.selectedRange,
-          cropArea: editorState.cropArea,
-          playbackSpeed: editorState.playbackSpeed,
-          currentFrame: editorState.currentFrame,
-        }
+      ? toSavedEditorState(editorState)
       : (active.savedEditorState ?? null),
     thumbnailDataUrl: active.thumbnailDataUrl ?? null,
     previewFrames: active.previewFrames ?? null,
@@ -519,15 +569,18 @@ function maybeCompressEntry(entry) {
   const codec = clipCodec;
   if (!codec?.isCompressionAvailable()) return;
   if (entry.status !== 'raw' || !entry.frames || entry.frames.length === 0) return;
+  // VP8/VP9 have no alpha channel: compressing a transparent clip would
+  // silently turn its transparent pixels opaque. Alpha clips stay raw.
+  if (entry.hasAlpha) return;
 
   const wrappers = entry.frames;
   // Identity metadata survives on this side; the VideoFrames themselves move
-  const frameMeta = wrappers.map((f) => ({
-    id: f.id,
-    timestamp: f.timestamp,
-    width: f.width,
-    height: f.height,
-  }));
+  const frameMeta = wrappers.map((f) => {
+    /** @type {CompressedClip['frameMeta'][number]} */
+    const meta = { id: f.id, timestamp: f.timestamp, width: f.width, height: f.height };
+    if (f.sharedKey !== undefined) meta.sharedKey = f.sharedKey;
+    return meta;
+  });
   const videoFrames = wrappers.map((f) => f.frame);
 
   entry.status = 'compressing';
@@ -568,13 +621,20 @@ function maybeCompressEntry(entry) {
         return;
       }
       if (result.frames.length === frameMeta.length) {
-        entry.frames = result.frames.map((vf, i) => ({
-          id: frameMeta[i].id,
-          frame: vf,
-          timestamp: frameMeta[i].timestamp,
-          width: frameMeta[i].width,
-          height: frameMeta[i].height,
-        }));
+        // The SAME VideoFrames come back (clones still share pixels), so the
+        // sharedKey memory accounting stays valid
+        entry.frames = result.frames.map((vf, i) => {
+          /** @type {import('../features/capture/types.js').Frame} */
+          const wrapper = {
+            id: frameMeta[i].id,
+            frame: vf,
+            timestamp: frameMeta[i].timestamp,
+            width: frameMeta[i].width,
+            height: frameMeta[i].height,
+          };
+          if (frameMeta[i].sharedKey !== undefined) wrapper.sharedKey = frameMeta[i].sharedKey;
+          return wrapper;
+        });
         entry.status = 'raw';
         emitQueueChanged('compress-error');
       } else {
@@ -659,6 +719,9 @@ export async function prepareQueuedClipForPromote(id) {
     return { ok: false, reason: 'not-found' };
   }
 
+  // sharedKey is deliberately NOT restored: decoded frames are independent
+  // pixel buffers (repeated slots no longer share memory), so counting each
+  // one individually is the honest memory estimate
   const meta = compressed.frameMeta;
   entry.frames = result.frames.map((vf, i) => ({
     id: meta[i]?.id ?? `${entry.id}-decoded-${i}`,
@@ -715,6 +778,8 @@ export function enqueueClip(payload) {
     compressed: null,
     fps: payload.fps,
     capturedAt: payload.capturedAt,
+    hasAlpha: payload.hasAlpha === true,
+    sourceName: payload.sourceName ?? null,
     sceneDetectionEnabled: payload.sceneDetectionEnabled,
     scenes: payload.scenes,
     savedEditorState: payload.savedEditorState ?? null,
@@ -779,6 +844,8 @@ export function promoteQueuedClip(id, currentEditorState = null) {
     frames: entry.frames,
     fps: entry.fps,
     capturedAt: entry.capturedAt,
+    hasAlpha: entry.hasAlpha === true,
+    sourceName: entry.sourceName ?? null,
     sceneDetectionEnabled: entry.sceneDetectionEnabled,
     scenes: entry.scenes,
     thumbnailDataUrl: entry.thumbnailDataUrl,
@@ -1033,8 +1100,10 @@ export function validateClipPayload(payload) {
     errors.push('ClipPayload.frames cannot be empty');
   }
 
-  if (typeof p.fps !== 'number' || ![15, 30, 60].includes(p.fps)) {
-    errors.push('ClipPayload.fps must be 15, 30, or 60');
+  // Capture offers 15/30/60; imported files pick any integer rate from their
+  // frame delays (features/import/core.js chooseImportFps)
+  if (typeof p.fps !== 'number' || !Number.isInteger(p.fps) || p.fps < 1 || p.fps > 60) {
+    errors.push('ClipPayload.fps must be an integer between 1 and 60');
   }
 
   if (typeof p.capturedAt !== 'number') {

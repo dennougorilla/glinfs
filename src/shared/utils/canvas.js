@@ -192,11 +192,15 @@ export function renderFramePlaceholder(ctx, width, height, options = {}) {
  * Never throws: environments without a 2D canvas (jsdom) and closed/invalid
  * frames both yield null, and callers render a placeholder instead.
  *
+ * Clips with transparency pass 'image/png': JPEG has no alpha channel, so
+ * transparent areas would bake to black.
+ *
  * @param {import('../../features/capture/types.js').Frame | null | undefined} frame
  * @param {number} [maxDimension=160] - Longest edge of the thumbnail
+ * @param {'image/jpeg' | 'image/png'} [mimeType='image/jpeg'] - Output format
  * @returns {string | null} dataURL, or null if the frame cannot be drawn
  */
-export function createFrameThumbnailDataUrl(frame, maxDimension = 160) {
+export function createFrameThumbnailDataUrl(frame, maxDimension = 160, mimeType = 'image/jpeg') {
   try {
     if (!frame?.width || !frame?.height) return null;
     const source = getDrawableSource(frame);
@@ -211,7 +215,9 @@ export function createFrameThumbnailDataUrl(frame, maxDimension = 160) {
     if (!ctx) return null;
 
     ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.7);
+    return mimeType === 'image/png'
+      ? canvas.toDataURL('image/png')
+      : canvas.toDataURL('image/jpeg', 0.7);
   } catch {
     return null;
   }

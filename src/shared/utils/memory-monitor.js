@@ -93,12 +93,24 @@ export function estimateBufferMemory(frameCount, width, height) {
  * multiplies them, so an optimistic estimate would hide real memory
  * pressure until the tab dies.
  *
- * @param {Array<{width?: number, height?: number}>} frames - Frames with pixel dimensions
+ * Frames that share pixels carry the same `sharedKey` (an imported GIF's
+ * held frame becomes several slots holding clones of ONE decoded
+ * VideoFrame): each distinct key is counted once, so repeated slots do not
+ * inflate the estimate. Frames without a key count individually.
+ *
+ * @param {Array<{width?: number, height?: number, sharedKey?: string}>} frames - Frames with pixel dimensions
  * @returns {number} - Estimated MB
  */
 export function estimateFramesMemoryMB(frames) {
   let bytes = 0;
+  /** @type {Set<string>} */
+  const seenKeys = new Set();
   for (const frame of frames) {
+    const key = frame?.sharedKey;
+    if (key !== undefined && key !== null) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
     bytes += (frame?.width ?? 0) * (frame?.height ?? 0) * 4;
   }
   return bytes / (1024 * 1024);
