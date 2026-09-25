@@ -58,6 +58,7 @@ function createWorkerError(message, code, context) {
  * @property {import('../features/export/encoders/types.js').QuantizeFormat} [quantizeFormat] - Quantization format
  * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
+ * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
  */
 
 /**
@@ -207,6 +208,7 @@ export class GifEncoderManager {
           quantizeFormat: config.quantizeFormat,
           paletteInterval: config.paletteInterval,
           paletteSample: config.paletteSample,
+          transparent: config.transparent,
         });
 
         // The sample can be ~1MB; transfer it (detaching the caller's copy)
@@ -251,8 +253,9 @@ export class GifEncoderManager {
    * @param {number} width - Frame width
    * @param {number} height - Frame height
    * @param {number} frameIndex - Frame index
+   * @param {number} [delayMs] - This frame's delay (ms); omitted = init's frameDelayMs
    */
-  addFrame(rgba, width, height, frameIndex) {
+  addFrame(rgba, width, height, frameIndex, delayMs) {
     if (!this.worker || !this._isInitialized) {
       throw createWorkerError(
         'Worker not initialized. Call init() first.',
@@ -261,7 +264,7 @@ export class GifEncoderManager {
       );
     }
 
-    const { message, transfer } = createAddFrameMessage(rgba, width, height, frameIndex);
+    const { message, transfer } = createAddFrameMessage(rgba, width, height, frameIndex, delayMs);
     this.worker.postMessage(message, transfer);
   }
 

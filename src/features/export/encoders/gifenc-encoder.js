@@ -5,6 +5,7 @@
  */
 
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
+import { ALPHA_THRESHOLD } from '../../../shared/edits/color-key.js';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
@@ -24,6 +25,7 @@ const METADATA = {
     supportsMaxColors: true,
     supportsQuantizeFormat: true,
     supportsDithering: true,
+    supportsTransparency: true,
   },
 };
 
@@ -102,12 +104,16 @@ export const PALETTE_STALENESS = /** @type {const} */ ({
  * How well a mapped frame fits its palette, at pixels (x, y) with
  * x % 4 === y % 4: 1 in 4 pixels, in every row and every column.
  * @param {Uint8ClampedArray} rgba - Source frame
- * @param {Uint8Array} index - applyPalette output for `rgba`
+ * @param {Uint8Array} index - applyPalette output for `rgba` (before any
+ *   transparent-index override)
  * @param {number[][]} palette
  * @param {number} width
+ * @param {boolean} [skipTransparent=false] - Ignore pixels with alpha < 128
+ *   (transparent exports: they are written as the transparent index, so
+ *   their RGB never needs a palette color)
  * @returns {PaletteFit}
  */
-export function measurePalette(rgba, index, palette, width) {
+export function measurePalette(rgba, index, palette, width, skipTransparent = false) {
   const flat = new Uint8Array(palette.length * 3);
   for (let i = 0; i < palette.length; i++) {
     flat[i * 3] = palette[i][0];
@@ -124,6 +130,7 @@ export function measurePalette(rgba, index, palette, width) {
     for (let x = y & 3; x < width; x += 4) {
       const i = row + x;
       const p = i * 4;
+      if (skipTransparent && rgba[p + 3] < ALPHA_THRESHOLD) continue;
       const c = index[i] * 3;
       const e =
         Math.abs(rgba[p] - flat[c]) +
@@ -152,6 +159,47 @@ export function isPaletteStale(fit, baseline) {
 }
 
 /**
+ * The opaque pixels (alpha >= 128) of an RGBA buffer, compacted. Returns the
+ * input itself when every pixel is opaque, so fully opaque frames of a
+ * transparent export cost one scan and no copy.
+ * @param {Uint8ClampedArray} rgba
+ * @returns {Uint8ClampedArray}
+ */
+export function opaquePixels(rgba) {
+  let opaque = 0;
+  for (let p = 3; p < rgba.length; p += 4) {
+    if (rgba[p] >= ALPHA_THRESHOLD) opaque++;
+  }
+  if (opaque * 4 === rgba.length) return rgba;
+
+  const out = new Uint8ClampedArray(opaque * 4);
+  let o = 0;
+  for (let p = 0; p < rgba.length; p += 4) {
+    if (rgba[p + 3] >= ALPHA_THRESHOLD) {
+      out[o] = rgba[p];
+      out[o + 1] = rgba[p + 1];
+      out[o + 2] = rgba[p + 2];
+      out[o + 3] = rgba[p + 3];
+      o += 4;
+    }
+  }
+  return out;
+}
+
+/**
+ * Palette size to quantize to. Transparent exports reserve one slot of the
+ * (at most 256-entry) color table for the transparent index, which is
+ * appended after the quantized colors.
+ * @param {number} maxColors
+ * @param {boolean} transparent
+ * @returns {number}
+ */
+export function paletteColorCount(maxColors, transparent) {
+  if (!transparent) return maxColors;
+  return Math.max(2, Math.min(255, maxColors - 1));
+}
+
+/**
  * Create gifenc encoder
  * @returns {EncoderInterface}
  */
@@ -171,6 +219,28 @@ export function createGifencEncoder() {
   /** Consecutive early (staleness) rebuilds; >= perFrameAfter quantizes every frame */
   let earlyRebuilds = 0;
 
+  /** Transparent export (config.transparent): pixels with alpha < 128 become the transparent index */
+  let transparent = false;
+
+  /**
+   * Quantize a palette from RGBA pixels. In transparent mode only opaque
+   * pixels vote (cleared pixels would otherwise take palette slots) and one
+   * slot stays free for the transparent index; with no opaque pixel at all
+   * the palette is a single black entry.
+   * @param {Uint8ClampedArray} rgba
+   * @param {EncoderConfig} cfg
+   * @returns {number[][]}
+   */
+  const buildPalette = (rgba, cfg) => {
+    const format = cfg.quantizeFormat || 'rgb565';
+    if (!transparent) {
+      return quantize(rgba, cfg.maxColors, { format });
+    }
+    const pixels = opaquePixels(rgba);
+    if (pixels.length === 0) return [[0, 0, 0]];
+    return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
+  };
+
   return {
     metadata: METADATA,
 
@@ -183,13 +253,17 @@ export function createGifencEncoder() {
       encoder = GIFEncoder();
       baseline = { error: 0, tail: 0 };
       earlyRebuilds = 0;
+      transparent = encoderConfig.transparent === true;
       // A clip-wide sample yields one global palette up front, so later
-      // scenes are not forced onto frame 0's colors (#99).
-      palette = encoderConfig.paletteSample?.length
-        ? quantize(encoderConfig.paletteSample, encoderConfig.maxColors, {
-            format: encoderConfig.quantizeFormat || 'rgb565',
-          })
+      // scenes are not forced onto frame 0's colors (#99). In transparent
+      // mode only its opaque pixels count; a sample without any falls back
+      // to the first frame's palette.
+      const sample = encoderConfig.paletteSample?.length
+        ? transparent
+          ? opaquePixels(encoderConfig.paletteSample)
+          : encoderConfig.paletteSample
         : null;
+      palette = sample?.length ? buildPalette(sample, encoderConfig) : null;
     },
 
     /**
@@ -216,7 +290,7 @@ export function createGifencEncoder() {
       // front, like quality, without the staleness measurement.
       const perFrame = !scheduled && earlyRebuilds >= PALETTE_STALENESS.perFrameAfter;
       if (scheduled || perFrame) {
-        palette = quantize(rgba, config.maxColors, { format });
+        palette = buildPalette(rgba, config);
       }
 
       // Map pixels to palette indices with same format
@@ -227,7 +301,7 @@ export function createGifencEncoder() {
       // schedule. Interval 0 keeps its clip-wide palette: rebuilding from
       // one frame would replace it with a worse, single-scene palette.
       if (interval > 1 && !perFrame) {
-        const fit = measurePalette(rgba, index, palette, width);
+        const fit = measurePalette(rgba, index, palette, width, transparent);
         if (scheduled) {
           baseline = fit;
           // Per-frame mode ends at a scheduled rebuild, but one more stale
@@ -235,20 +309,41 @@ export function createGifencEncoder() {
           const { perFrameAfter } = PALETTE_STALENESS;
           earlyRebuilds = earlyRebuilds >= perFrameAfter ? perFrameAfter - 1 : 0;
         } else if (isPaletteStale(fit, baseline)) {
-          palette = quantize(rgba, config.maxColors, { format });
+          palette = buildPalette(rgba, config);
           index = applyPalette(rgba, palette, format);
-          baseline = measurePalette(rgba, index, palette, width);
+          baseline = measurePalette(rgba, index, palette, width, transparent);
           earlyRebuilds++;
         } else {
           earlyRebuilds = 0;
         }
       }
 
-      // Write frame
+      const delay = frameData.delayMs ?? config.frameDelayMs;
+
+      if (!transparent) {
+        encoder.writeFrame(index, width, height, {
+          palette,
+          delay,
+          repeat: config.loopCount,
+        });
+        return;
+      }
+
+      // Transparent export: the reserved slot right after the quantized
+      // colors is the transparent index. Every frame (even a fully opaque
+      // one) is disposed to the background, so a later frame's transparent
+      // pixels never reveal an earlier frame.
+      const transparentIndex = palette.length;
+      for (let i = 0, p = 3; i < index.length; i++, p += 4) {
+        if (rgba[p] < ALPHA_THRESHOLD) index[i] = transparentIndex;
+      }
       encoder.writeFrame(index, width, height, {
-        palette,
-        delay: config.frameDelayMs,
+        palette: [...palette, [0, 0, 0]],
+        delay,
         repeat: config.loopCount,
+        transparent: true,
+        transparentIndex,
+        dispose: 2,
       });
     },
 
@@ -274,6 +369,7 @@ export function createGifencEncoder() {
       encoder = null;
       config = null;
       palette = null;
+      transparent = false;
     },
   };
 }
