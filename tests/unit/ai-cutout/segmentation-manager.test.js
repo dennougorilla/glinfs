@@ -456,9 +456,9 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
   });
 
-  it('refuses a VideoFrame that reports a null format (how browsers expose a closed one)', async () => {
+  it('refuses a VideoFrame with a zero coded size (how browsers expose a closed one)', async () => {
     const { manager, createBitmap } = createHarness();
-    const frame = { ...makeFrame('a'), frame: { format: null } };
+    const frame = { ...makeFrame('a'), frame: { codedWidth: 0, codedHeight: 0 } };
     const error = await manager.analyzeFrames([/** @type {any} */ (frame)]).catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.FRAME_UNAVAILABLE);
     expect(createBitmap).not.toHaveBeenCalled();

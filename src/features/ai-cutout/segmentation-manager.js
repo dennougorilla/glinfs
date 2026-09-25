@@ -506,8 +506,9 @@ export class SegmentationManager {
    */
   async #submitFrame(jobId, { key, frame }, clipId) {
     const source = getDrawableSource(frame);
-    // A closed VideoFrame has no `closed` flag in browsers; it reports a null format
-    if (!source || /** @type {{ format?: unknown }} */ (source).format === null) {
+    // A closed VideoFrame has no `closed` flag in browsers; close() zeroes its
+    // coded size (format can be null for open GPU-backed frames, so not that)
+    if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
       throw new SegmentationError(
         SegmentationErrorCode.FRAME_UNAVAILABLE,
         `Frame ${frame.id} has no pixels (its VideoFrame is closed)`,
