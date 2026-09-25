@@ -25,6 +25,7 @@ import {
   isFrameAnalyzed,
   isWasmAllowed,
   peekClipMaskSource,
+  pickFindsCharacter,
   setWasmAllowed,
   TYPICAL_FRAME_MS,
 } from '../../../src/features/editor/ai-cutout.js';
@@ -166,6 +167,28 @@ describe('AI cutout helpers', () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('tells whether a pick lands on a character of the frame', () => {
+    const store = createMaskStore();
+    const clip = /** @type {any[]} */ (frames(3));
+    // Left half foreground on frame 1 only; frame 2 not analyzed
+    store.set('f0', mask(new Array(8).fill(0)));
+    store.set('f1', mask([200, 200, 0, 0, 200, 200, 0, 0]));
+    const at = (/** @type {number} */ frameIndex, /** @type {number} */ x, over = {}) =>
+      pickFindsCharacter({
+        frames: clip,
+        ai: { ...ai, smoothing: false, ...over },
+        frameIndex,
+        point: { x, y: 0.5 },
+        maskStore: store,
+      });
+    expect(at(1, 0.1)).toBe(true);
+    expect(at(1, 0.9)).toBe(false);
+    expect(at(0, 0.1)).toBe(false);
+    expect(at(2, 0.1)).toBe(false);
+    // The build's smoothing averages frame 1 with its empty neighbour
+    expect(at(1, 0.1, { smoothing: true })).toBe(false);
   });
 
   it('keys builds on the parameters, not the masks', () => {

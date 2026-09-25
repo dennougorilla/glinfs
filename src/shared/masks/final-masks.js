@@ -21,6 +21,7 @@
 
 import {
   createPickTracker,
+  findPickedComponent,
   labelComponents,
   morphMask,
   packMask,
@@ -202,6 +203,21 @@ export function createFrameBinarySource({ frameCount, getProb, ai }) {
       return thresholdMask(source, ai.threshold, binary);
     },
   };
+}
+
+/**
+ * Whether a pick on a frame lands on (or within the snap radius of) a
+ * character, judged on the same binary mask a build tracks the pick on
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
+ * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
+ * @returns {boolean}
+ */
+export function pickFindsComponent(options, pick) {
+  const source = createFrameBinarySource(options);
+  const bin = source?.binaryAt(pick.frame);
+  if (!source || !bin) return false;
+  const comps = labelComponents(bin, source.width, source.height);
+  return findPickedComponent(comps, source.width, source.height, pick) !== 0;
 }
 
 /**

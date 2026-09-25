@@ -9,6 +9,8 @@ import {
   clearAiPicks,
   createAiCutoutStatus,
   createEditorStore,
+  PICK_NEEDS_ANALYSIS_NOTICE,
+  PICK_NO_CHARACTER_NOTICE,
   removeAiPick,
   setAiParams,
   setAiPickTool,
@@ -112,6 +114,18 @@ describe('AI cutout editor state', () => {
     expect(state).toMatchObject({ aiPickTool: null, pickingKeyColor: true });
     // Leaving a tool leaves the eyedropper alone
     expect(setAiPickTool(state, null).pickingKeyColor).toBe(true);
+  });
+
+  it('leaving the pick tool or taking the eyedropper ends a refused-pick notice, not others', () => {
+    for (const notice of [PICK_NEEDS_ANALYSIS_NOTICE, PICK_NO_CHARACTER_NOTICE]) {
+      const refused = updateAiCutoutStatus(setAiPickTool(makeState(), 'keep'), { notice });
+      expect(setAiPickTool(refused, null).aiCutout.notice).toBe('');
+      expect(setPickingKeyColor(refused, true).aiCutout.notice).toBe('');
+    }
+    const outcome = updateAiCutoutStatus(setAiPickTool(makeState(), 'keep'), {
+      notice: 'Analyzed 3 frames.',
+    });
+    expect(setAiPickTool(outcome, null).aiCutout.notice).toBe('Analyzed 3 frames.');
   });
 
   it('updateAiCutoutStatus merges and keeps identity when nothing changes', () => {

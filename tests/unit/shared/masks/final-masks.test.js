@@ -6,6 +6,7 @@ import {
   createFinalMaskCache,
   edgeRadiusInMaskPixels,
   getAiParamsKey,
+  pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
   morphMask,
@@ -200,6 +201,24 @@ describe('buildFinalMasks', () => {
     }
   });
 
+  it('ignores a keep pick that hit no character instead of emptying every frame', async () => {
+    /** @type {Rect[]} */
+    const rects = [
+      [4, 4, 8, 8],
+      [24, 4, 8, 8],
+    ];
+    const result = await buildFinalMasks({
+      frameCount: 3,
+      getProb: () => probOf(W, H, rects),
+      // Bottom right: background, far from both characters
+      ai: aiOf({ smoothing: true, picks: [{ frame: 1, x: 0.95, y: 0.95, mode: 'keep' }] }),
+      ...noYield,
+    });
+    for (let f = 0; f < 3; f++) {
+      expect(result.masks[f], `frame ${f}`).toEqual(packMask(binaryOf(W, H, rects), W, H));
+    }
+  });
+
   it('removes a picked character and leaves unanalyzed frames without a mask', async () => {
     /** @type {Rect} */
     const a = [4, 4, 8, 8];
@@ -355,6 +374,41 @@ describe('buildFinalMasks', () => {
       buildFinalMasks({ frameCount: 5, getProb, ai: aiOf(), signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(getProb).not.toHaveBeenCalled();
+  });
+});
+
+describe('pickFindsComponent', () => {
+  const W = 40;
+  const H = 20;
+  /** @type {Rect} */
+  const rect = [4, 4, 8, 8];
+
+  it('finds a character under the pick or within the snap radius, never on background', () => {
+    const options = { frameCount: 2, getProb: () => probOf(W, H, [rect]), ai: aiOf() };
+    expect(pickFindsComponent(options, { frame: 1, x: 8 / W, y: 8 / H })).toBe(true);
+    // One pixel right of the square (x = 12), inside the ~2% snap radius
+    expect(pickFindsComponent(options, { frame: 1, x: 12.5 / W, y: 8 / H })).toBe(true);
+    expect(pickFindsComponent(options, { frame: 1, x: 0.9, y: 0.9 })).toBe(false);
+  });
+
+  it('judges the frame on the mask the build uses (threshold, smoothing), and needs an analysis', () => {
+    // Frame 1 flickers: the square is only there, so smoothing averages it away
+    const getProb = (/** @type {number} */ f) =>
+      f === 3 ? null : probOf(W, H, f === 1 ? [rect] : []);
+    const pick = { frame: 1, x: 8 / W, y: 8 / H };
+    expect(pickFindsComponent({ frameCount: 4, getProb, ai: aiOf() }, pick)).toBe(true);
+    expect(
+      pickFindsComponent({ frameCount: 4, getProb, ai: aiOf({ smoothing: true }) }, pick),
+    ).toBe(false);
+    expect(
+      pickFindsComponent({ frameCount: 4, getProb, ai: aiOf({ threshold: 0.95 }) }, pick),
+    ).toBe(false);
+    expect(pickFindsComponent({ frameCount: 4, getProb, ai: aiOf() }, { ...pick, frame: 3 })).toBe(
+      false,
+    );
+    expect(pickFindsComponent({ frameCount: 2, getProb: () => null, ai: aiOf() }, pick)).toBe(
+      false,
+    );
   });
 });
 

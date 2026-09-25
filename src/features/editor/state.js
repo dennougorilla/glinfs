@@ -473,13 +473,17 @@ export function setAiPickTool(state, tool) {
 export const PICK_NEEDS_ANALYSIS_NOTICE =
   'This frame is not analyzed yet. Analyze it, then pick again.';
 
+/** Notice shown when a pick lands on background (no character under or near it) */
+export const PICK_NO_CHARACTER_NOTICE = 'No character here. Click on a character.';
+
 /**
- * Drop the refused-pick notice (other notices, e.g. an analysis outcome, stay)
+ * Drop a refused-pick notice (other notices, e.g. an analysis outcome, stay)
  * @param {import('./types.js').EditorState} state
  * @returns {import('./types.js').EditorState}
  */
 function clearPickNotice(state) {
-  if (state.aiCutout?.notice !== PICK_NEEDS_ANALYSIS_NOTICE) return state;
+  const notice = state.aiCutout?.notice;
+  if (notice !== PICK_NEEDS_ANALYSIS_NOTICE && notice !== PICK_NO_CHARACTER_NOTICE) return state;
   return { ...state, aiCutout: { ...state.aiCutout, notice: '' } };
 }
 

@@ -207,6 +207,38 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     await expect(page.locator('#ai-pick-keep')).toBeFocused();
   });
 
+  test('a pick on the background is refused with a notice; a pick on a character then lands', async ({
+    page,
+  }) => {
+    await analyzeDiscClip(page);
+    const middle = FRAME_COUNT / 2;
+    await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
+    await page.locator('label[for="ai-pick-keep"]').click();
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+
+    // Top middle: black background, far from both discs
+    const background = await editorFramePointToViewport(page, 120, 12);
+    await page.mouse.click(background.x, background.y);
+    await expect(page.locator('#ai-notice')).toHaveText('No character here. Click on a character.');
+    await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+    const edits = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits);
+    expect(edits.background.ai.picks).toEqual([]);
+    // Nothing changed: both discs are still cut out
+    expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
+    expect(await editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(255);
+
+    // The tool is still on: a click on disc A adds the pick and ends the notice
+    const onDisc = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
+    await page.mouse.click(onDisc.x, onDisc.y);
+    await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
+    await expect(page.locator('#ai-pick-keep')).not.toBeChecked();
+    await expect(page.locator('#ai-notice')).not.toContainText('No character here');
+    await waitForAiMasks(page);
+    await expect.poll(() => editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(0);
+    expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
+  });
+
   test('threshold and edge change the exported coverage in the expected direction', async ({
     page,
   }) => {

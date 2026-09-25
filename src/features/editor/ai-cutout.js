@@ -11,7 +11,11 @@
  * (asked once, valid for the editor and the export).
  */
 
-import { createFinalMaskCache, getAiParamsKey } from '../../shared/masks/final-masks.js';
+import {
+  createFinalMaskCache,
+  getAiParamsKey,
+  pickFindsComponent,
+} from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, frameKey } from '../ai-cutout/segmentation-manager.js';
@@ -189,6 +193,28 @@ export function getAnalysisCoverage(frames, range, maskStore = getSharedMaskStor
  */
 export function isFrameAnalyzed(frame, maskStore = getSharedMaskStore()) {
   return Boolean(frame) && maskStore.has(frameKey(/** @type {Frame} */ (frame)));
+}
+
+/**
+ * Whether a pick on a clip frame lands on a character: the frame's binary
+ * mask (same threshold and smoothing as the final-mask build) has a
+ * component under the point or within the pick snap radius. A pick that
+ * misses would be ignored by the build, so the editor refuses it instead.
+ * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, point: { x: number, y: number }, maskStore?: MaskStore }} options
+ *   point: fractions of the source frame
+ * @returns {boolean}
+ */
+export function pickFindsCharacter({
+  frames,
+  ai,
+  frameIndex,
+  point,
+  maskStore = getSharedMaskStore(),
+}) {
+  return pickFindsComponent(
+    { frameCount: frames.length, getProb: getClipProbSource(frames, maskStore), ai },
+    { frame: frameIndex, x: point.x, y: point.y },
+  );
 }
 
 /**
