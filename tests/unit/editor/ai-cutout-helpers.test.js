@@ -201,8 +201,8 @@ describe('AI cutout helpers', () => {
 
   it('describes each progress phase', () => {
     const base = {
-      loadedBytes: 50 * 1024 * 1024,
-      totalBytes: 200 * 1024 * 1024,
+      loadedBytes: 50_000_000,
+      totalBytes: 200_000_000,
       framesDone: 3,
       framesTotal: 12,
       remainingMs: 9000,
@@ -210,6 +210,15 @@ describe('AI cutout helpers', () => {
     expect(describeAnalysisProgress({ ...base, phase: 'downloading' })).toBe(
       'Downloading the model: 50.0 MB of 200.0 MB (25%)',
     );
+    // Decimal megabytes, like the "176 MB" of the README and credits
+    expect(
+      describeAnalysisProgress({
+        ...base,
+        phase: 'downloading',
+        loadedBytes: 12_000_000,
+        totalBytes: 176_069_933,
+      }),
+    ).toBe('Downloading the model: 12.0 MB of 176.1 MB (6%)');
     expect(describeAnalysisProgress({ ...base, phase: 'downloading', fromCache: true })).toContain(
       'cache',
     );
