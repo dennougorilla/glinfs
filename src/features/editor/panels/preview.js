@@ -1,10 +1,16 @@
 /**
  * Editor preview panel: base + overlay canvases and the overlay's pointer
- * interaction. Pointer priority on the overlay: (1) an AI pick tool adds a
- * Keep/Remove pick at the clicked point, (2) eyedropper mode picks the
- * background key color, (3) a text layer drawn on the current frame is
- * selected and dragged, (4) otherwise the crop interaction (clicking empty
- * space also deselects the text layer).
+ * interaction. Pointer priority on the overlay: (1) the mask brush paints a
+ * touch-up stroke, (2) an AI pick tool adds a Keep/Remove pick at the
+ * clicked point, (3) eyedropper mode picks the background key color, (4) a
+ * text layer drawn on the current frame is selected and dragged, (5)
+ * otherwise the crop interaction (clicking empty space also deselects the
+ * text layer).
+ *
+ * The brush uses pointer events (captured, with coalesced events for a
+ * smooth path) and a circular cursor element sized to the brush; the other
+ * tools use mouse events, which the brush's handled pointerdown suppresses
+ * (and which also return early while the brush is on).
  * @module features/editor/panels/preview
  */
 
@@ -25,6 +31,16 @@ const CROP_OVERLAY_LABEL = 'Crop overlay';
 /** Overlay name while a pick tool is on (it is then keyboard-focusable) */
 export const PICK_OVERLAY_LABEL =
   'Pick position. Arrow keys move the marker (Shift for bigger steps), Enter picks the character under it, Escape cancels.';
+
+/**
+ * Whether the mask brush owns the preview's pointer: the brush is on and
+ * background removal is on (touch-ups do nothing without it)
+ * @param {import('../types.js').EditorState | null | undefined} state
+ * @returns {boolean}
+ */
+export function isBrushActive(state) {
+  return Boolean(state?.brush?.on && state.edits?.background?.enabled);
+}
 
 /** Marker step per arrow key press, as a fraction of the frame (Shift: big) */
 export const PICK_MARKER_STEP = /** @type {const} */ ({ small: 0.02, big: 0.1 });
@@ -97,7 +113,15 @@ export function renderEditorPreview(state, handlers, frame) {
   const canvasContainer = createElement('div', {
     className: `editor-canvas-container${state.pickingKeyColor ? ' editor-bg-picking' : ''}${
       state.aiPickTool ? ' editor-ai-picking' : ''
-    }`,
+    }${isBrushActive(state) ? ' editor-brush-painting' : ''}`,
+  });
+
+  // Circular brush cursor (a DOM element: the overlay canvas is redrawn on
+  // every edit and would erase a cursor drawn into it)
+  const brushCursor = createElement('div', {
+    className: 'editor-brush-cursor',
+    'aria-hidden': 'true',
+    hidden: 'true',
   });
 
   // AI cutout status of the current frame (e.g. not analyzed yet); filled
@@ -143,10 +167,11 @@ export function renderEditorPreview(state, handlers, frame) {
   }
 
   // Setup crop mouse interaction on overlay canvas
-  cleanups.push(setupCropInteraction(overlayCanvas, baseCanvas, handlers, frame));
+  cleanups.push(setupCropInteraction(overlayCanvas, baseCanvas, handlers, frame, brushCursor));
 
   canvasContainer.appendChild(baseCanvas);
   canvasContainer.appendChild(overlayCanvas);
+  canvasContainer.appendChild(brushCursor);
   canvasContainer.appendChild(aiNote);
   previewWrapper.appendChild(canvasContainer);
   previewPanel.appendChild(previewWrapper);
@@ -160,9 +185,10 @@ export function renderEditorPreview(state, handlers, frame) {
  * @param {HTMLCanvasElement} baseCanvas - Base canvas for coordinate reference
  * @param {import('../ui.js').EditorUIHandlers} handlers
  * @param {import('../../capture/types.js').Frame} initialFrame
+ * @param {HTMLElement} brushCursor - Circular brush cursor element
  * @returns {() => void} Cleanup function
  */
-function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame) {
+function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame, brushCursor) {
   /** @type {import('../types.js').HandlePosition} */
   let dragMode = null;
   /** @type {{ x: number, y: number } | null} */
@@ -182,6 +208,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
   let textDrag = null;
   /** Keyboard pick marker, fractions of the source frame (see onKeyDown) */
   const pickMarker = { x: 0.5, y: 0.5 };
+  /** Pointer painting the brush stroke in progress (null: none) */
+  let brushPointer = null;
 
   // Get current state and frame via handlers (avoids stale closure)
   const getCurrentState = () => handlers.getState?.();
@@ -201,6 +229,112 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
       x: Math.round((e.clientX - rect.left) * scaleX),
       y: Math.round((e.clientY - rect.top) * scaleY),
     };
+  }
+
+  /**
+   * Pointer position as fractions of the SOURCE frame (unrounded, clamped
+   * to the frame: a captured stroke may leave the preview)
+   * @param {{ clientX: number, clientY: number }} e
+   * @returns {{ x: number, y: number }}
+   */
+  function getSourceFraction(e) {
+    const rect = baseCanvas.getBoundingClientRect();
+    const clamp01 = (/** @type {number} */ v) => Math.min(1, Math.max(0, v));
+    return {
+      x: rect.width > 0 ? clamp01((e.clientX - rect.left) / rect.width) : 0.5,
+      y: rect.height > 0 ? clamp01((e.clientY - rect.top) / rect.height) : 0.5,
+    };
+  }
+
+  /**
+   * Move/size the brush cursor to the pointer, or hide it when the brush
+   * is off or the pointer left the preview (and is not painting)
+   * @param {PointerEvent | null} e - null hides
+   */
+  function updateBrushCursor(e) {
+    const state = getCurrentState();
+    const frame = getCurrentFrame();
+    if (!e || !isBrushActive(state) || !frame || !state) {
+      brushCursor.hidden = true;
+      return;
+    }
+    const container = brushCursor.parentElement;
+    const rect = baseCanvas.getBoundingClientRect();
+    if (!container || rect.width <= 0 || frame.width <= 0) return;
+    const box = container.getBoundingClientRect();
+    const radiusPx = state.brush.radius * Math.min(frame.width, frame.height);
+    const diameter = Math.max(4, 2 * radiusPx * (rect.width / frame.width));
+    brushCursor.style.width = `${diameter}px`;
+    brushCursor.style.height = `${diameter}px`;
+    brushCursor.style.left = `${e.clientX - box.left}px`;
+    brushCursor.style.top = `${e.clientY - box.top}px`;
+    brushCursor.classList.toggle('editor-brush-cursor--restore', state.brush.mode === 'restore');
+    brushCursor.hidden = false;
+  }
+
+  /**
+   * Start a brush stroke (the brush outranks every other preview tool)
+   * @param {PointerEvent} e
+   */
+  function onPointerDown(e) {
+    if (!isBrushActive(getCurrentState()) || e.button !== 0 || brushPointer !== null) return;
+    e.preventDefault();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && isEditableTarget(active)) {
+      active.blur();
+    }
+    brushPointer = e.pointerId;
+    try {
+      overlayCanvas.setPointerCapture(e.pointerId);
+    } catch {
+      // Not capturable (synthetic pointer): the stroke still works over the preview
+    }
+    overlayCanvas.style.cursor = 'none';
+    updateBrushCursor(e);
+    handlers.onBrushStrokeStart?.(getSourceFraction(e));
+  }
+
+  /** @param {PointerEvent} e */
+  function onPointerMove(e) {
+    if (brushPointer === null) {
+      if (isBrushActive(getCurrentState())) {
+        overlayCanvas.style.cursor = 'none';
+        updateBrushCursor(e);
+      } else if (!brushCursor.hidden) {
+        updateBrushCursor(null);
+      }
+      return;
+    }
+    if (e.pointerId !== brushPointer) return;
+    updateBrushCursor(e);
+    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    const events = coalesced.length > 0 ? coalesced : [e];
+    handlers.onBrushStrokeMove?.(events.map(getSourceFraction));
+  }
+
+  /**
+   * End the stroke of this pointer (released, cancelled or capture lost)
+   * @param {PointerEvent} e
+   */
+  function onPointerEnd(e) {
+    if (brushPointer === null || e.pointerId !== brushPointer) return;
+    brushPointer = null;
+    if (e.type === 'pointerup') {
+      handlers.onBrushStrokeMove?.([getSourceFraction(e)]);
+    }
+    try {
+      if (overlayCanvas.hasPointerCapture?.(e.pointerId)) {
+        overlayCanvas.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Already released
+    }
+    handlers.onBrushStrokeEnd?.();
+  }
+
+  /** @param {PointerEvent} _e */
+  function onPointerLeave(_e) {
+    if (brushPointer === null) updateBrushCursor(null);
   }
 
   /**
@@ -344,6 +478,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
       active.blur();
     }
     const state = getCurrentState();
+    // The brush paints through pointer events (see onPointerDown)
+    if (isBrushActive(state) || brushPointer !== null) return;
     const coords = getFrameCoords(e);
 
     if (state?.aiPickTool) {
@@ -403,6 +539,10 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    */
   function onMouseMove(e) {
     const state = getCurrentState();
+    if (brushPointer !== null || (isBrushActive(state) && !textDrag && !dragMode)) {
+      overlayCanvas.style.cursor = 'none';
+      return;
+    }
     const frame = getCurrentFrame();
     const coords = getFrameCoords(e);
 
@@ -472,6 +612,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
    * @param {MouseEvent} e
    */
   function onMouseUp(e) {
+    if (brushPointer !== null || (isBrushActive(getCurrentState()) && !textDrag && !dragMode)) {
+      return;
+    }
     if (textDrag) {
       textDrag = null;
       overlayCanvas.style.cursor = 'move';
@@ -502,6 +645,12 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
     }
   }
 
+  overlayCanvas.addEventListener('pointerdown', onPointerDown);
+  overlayCanvas.addEventListener('pointermove', onPointerMove);
+  overlayCanvas.addEventListener('pointerup', onPointerEnd);
+  overlayCanvas.addEventListener('pointercancel', onPointerEnd);
+  overlayCanvas.addEventListener('lostpointercapture', onPointerEnd);
+  overlayCanvas.addEventListener('pointerleave', onPointerLeave);
   overlayCanvas.addEventListener('mousedown', onMouseDown);
   overlayCanvas.addEventListener('mousemove', onMouseMove);
   window.addEventListener('mouseup', onMouseUp);
@@ -511,6 +660,12 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame)
   overlayCanvas.addEventListener('blur', renderOverlayWithState);
 
   return () => {
+    overlayCanvas.removeEventListener('pointerdown', onPointerDown);
+    overlayCanvas.removeEventListener('pointermove', onPointerMove);
+    overlayCanvas.removeEventListener('pointerup', onPointerEnd);
+    overlayCanvas.removeEventListener('pointercancel', onPointerEnd);
+    overlayCanvas.removeEventListener('lostpointercapture', onPointerEnd);
+    overlayCanvas.removeEventListener('pointerleave', onPointerLeave);
     overlayCanvas.removeEventListener('mousedown', onMouseDown);
     overlayCanvas.removeEventListener('mousemove', onMouseMove);
     window.removeEventListener('mouseup', onMouseUp);

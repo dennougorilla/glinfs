@@ -11,8 +11,9 @@
  * the keyed output region (ImageData) is stored under the frame's pixel
  * identity and simply written back on later draws. The cache holds one
  * parameter set at a time (key color, tolerance, mode — or, for the AI
- * cutout, the mask source's version — and the region) and is dropped
- * whenever those change.
+ * cutout, the mask source's version — the touch-up strokes and the region)
+ * and is dropped whenever those change. Touch-ups apply per frame range, so
+ * with any stroke the cache is keyed per frame index.
  *
  * AI cutout masks come from the optional `maskSource` render option (see
  * shared/masks/final-masks.js). A frame it has no mask for previews without
@@ -49,6 +50,7 @@ import {
   requiresTransparency,
 } from '../../shared/edits/model.js';
 import { hitTestTextLayers, layoutTextLayer } from '../../shared/edits/text-render.js';
+import { getTouchUpsSignature } from '../../shared/edits/touch-ups.js';
 import { getDrawableSource, isFrameValid, syncCanvasSize } from '../../shared/utils/canvas.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
@@ -94,7 +96,8 @@ export function getOutputRegion(frame, crop) {
  * Cache identity of a frame's keyed region. Imported holds are clones of
  * one decoded frame (same sharedKey) and key out identically with the color
  * key. An AI mask belongs to a clip frame index (tracking can select
- * differently on two holds), so the index is part of the identity there.
+ * differently on two holds), and so do touch-ups (a "this frame" stroke
+ * differs between two holds), so the index is part of the identity there.
  * @param {Frame} frame
  * @param {number} frameIndex
  * @param {boolean} perIndex - The removal depends on the frame index
@@ -112,16 +115,17 @@ function getFramePixelKey(frame, frameIndex, perIndex) {
  * @param {Rect} region
  * @param {boolean} snap - Alpha snapped to 1 bit
  * @param {MaskSource | null} maskSource - AI cutout masks
+ * @param {string} touchUps - Signature of the touch-up strokes ('' for none)
  * @returns {string}
  */
-function getKeyParamsKey(background, region, snap, maskSource) {
+function getKeyParamsKey(background, region, snap, maskSource, touchUps) {
   let key = 'no-key';
   if (isAiCutoutActive(background)) {
     key = `ai|${maskSource ? maskSource.version : 'no-masks'}`;
   } else if (background) {
     key = `${background.color}|${background.tolerance}|${background.mode}`;
   }
-  return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}`;
+  return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}|${touchUps}`;
 }
 
 /**
@@ -256,8 +260,18 @@ export function createEditorFrameRenderer(options = {}) {
       const region = getOutputRegion(frame, crop);
       if (region.width > 0 && region.height > 0) {
         const ai = keyOn && isAiCutoutActive(background);
-        cache.sync(getKeyParamsKey(keyOn ? background : null, region, snap, maskSource));
-        const key = getFramePixelKey(frame, frameIndex, ai);
+        // Touch-ups apply only while removal is on (see getActiveTouchUps)
+        const touchUps = keyOn ? (edits?.touchUps ?? []) : [];
+        cache.sync(
+          getKeyParamsKey(
+            keyOn ? background : null,
+            region,
+            snap,
+            maskSource,
+            getTouchUpsSignature(touchUps),
+          ),
+        );
+        const key = getFramePixelKey(frame, frameIndex, ai || touchUps.length > 0);
         let keyed = cache.get(key);
         if (!keyed) {
           keyed = ctx.getImageData(region.x, region.y, region.width, region.height);

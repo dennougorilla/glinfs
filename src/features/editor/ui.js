@@ -64,6 +64,13 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)
  * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
  * @property {() => void} [onClearAiPicks] - Remove every pick
+ * @property {(patch: Partial<import('./types.js').BrushState>) => void} [onSetBrush] - Mask brush on/off, mode, size, scope
+ * @property {(point: { x: number, y: number }) => void} [onBrushStrokeStart] - A brush stroke starts (fractions of the source frame)
+ * @property {(points: { x: number, y: number }[]) => void} [onBrushStrokeMove] - More points of the stroke in progress
+ * @property {() => void} [onBrushStrokeEnd] - The stroke in progress ends (it is added)
+ * @property {() => void} [onUndoTouchUp] - Remove the last stroke
+ * @property {() => void} [onClearTouchUpsOnFrame] - Take the current frame out of every stroke
+ * @property {() => void} [onClearAllTouchUps] - Remove every stroke
  */
 
 /**
@@ -236,11 +243,13 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('Home', () => handlers.onFrameChange(getCurrentState().selectedRange.start)),
     plain('End', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
     plain('g', () => handlers.onToggleGrid()),
-    // Escape unwinds the innermost editing mode first: a pick tool, the
-    // eyedropper, then the text selection, then the crop
+    // Escape unwinds the innermost editing mode first: the brush, a pick
+    // tool, the eyedropper, then the text selection, then the crop
     plain('Escape', () => {
       const current = getCurrentState();
-      if (current.aiPickTool) {
+      if (current.brush?.on) {
+        handlers.onSetBrush?.({ on: false });
+      } else if (current.aiPickTool) {
         handlers.onSetAiPickTool?.(null);
       } else if (current.pickingKeyColor) {
         handlers.onSetPickingKeyColor?.(false);
@@ -258,8 +267,8 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('Backspace', deleteSelection),
     exportShortcut({ ctrl: true }),
     exportShortcut({ meta: true }),
-    // Escape also leaves a pick tool or the eyedropper while a panel
-    // control has focus (their toggles keep focus after a click).
+    // Escape also leaves the brush, a pick tool or the eyedropper while a
+    // panel control has focus (their toggles keep focus after a click).
     // Registered last so it is tried before the plain Escape above; it
     // declines everything else, so typing in fields stays shortcut-free.
     registerHotkey({
@@ -268,6 +277,11 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       allowInEditable: true,
       handler: (e) => {
         const current = getCurrentState();
+        if (current.brush?.on) {
+          e.preventDefault();
+          handlers.onSetBrush?.({ on: false });
+          return;
+        }
         if (current.aiPickTool) {
           e.preventDefault();
           handlers.onSetAiPickTool?.(null);

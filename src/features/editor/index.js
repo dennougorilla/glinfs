@@ -22,12 +22,14 @@ import {
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
 import {
+  createLayerId,
   EDIT_LIMITS,
   isAiCutoutActive,
   isColorKeyActive,
   normalizeEdits,
   requiresTransparency,
 } from '../../shared/edits/model.js';
+import { touchUpRadiusPx } from '../../shared/edits/touch-ups.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -57,16 +59,22 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
-import { setOverlayPickMode } from './panels/preview.js';
+import { isBrushActive, setOverlayPickMode } from './panels/preview.js';
 import { updateDeleteHint } from './panels/status-bar.js';
+import { TOUCH_UP_NEEDS_REMOVAL } from './panels/touch-up-panel.js';
 import {
   addAiPick,
   addTextLayer,
+  addTouchUp,
+  canClearTouchUpsOnFrame,
   clearAiPicks,
+  clearAllTouchUps,
   clearCrop,
+  clearTouchUpsOnFrame,
   completeSceneDetection,
   createEditorStore,
   createEditorStoreFromClip,
+  getBrushStrokeRange,
   goToFrame,
   moveTextLayer,
   PICK_NEEDS_ANALYSIS_NOTICE,
@@ -78,6 +86,7 @@ import {
   setAiPickTool,
   setBackground,
   setBackgroundMethod,
+  setBrush,
   setEdits,
   setPickingKeyColor,
   setPlaybackSpeed,
@@ -87,6 +96,7 @@ import {
   startSceneDetection,
   toggleGrid,
   togglePlayback,
+  undoTouchUp,
   updateAiCutoutStatus,
   updateCrop,
   updateRange,
@@ -198,6 +208,16 @@ let exportDialog = null;
  * editor mount that shows a clip opens it (see initExportRoute)
  */
 let pendingExportDialog = false;
+
+/**
+ * The mask brush stroke being painted: previewed live (drawPreview adds it
+ * to the edits) and added to the edits when the pointer is released
+ * @type {{ stroke: import('../../shared/edits/model.js').TouchUp, tail: { x: number, y: number } | null, minDistancePx: number, width: number, height: number } | null}
+ */
+let brushStroke = null;
+
+/** @type {number | null} requestAnimationFrame of the live stroke preview */
+let brushDrawFrameId = null;
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -501,6 +521,7 @@ export function initEditor() {
     pickingKeyColor: initialState.pickingKeyColor,
     aiPickTool: initialState.aiPickTool,
     aiCutout: initialState.aiCutout,
+    brush: initialState.brush,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -549,6 +570,9 @@ export function initEditor() {
     const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
     const pickToolChanged = state.aiPickTool !== lastRendered.aiPickTool;
     const aiChanged = state.aiCutout !== lastRendered.aiCutout;
+    const brushChanged = state.brush !== lastRendered.brush;
+    // The Touch up section counts the strokes on the current frame
+    const touchUpFrameChanged = frameChanged && state.edits.touchUps.length > 0;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
     // The analysis coverage shown in the panel depends on the selection
@@ -587,6 +611,8 @@ export function initEditor() {
       pickingChanged ||
       pickToolChanged ||
       aiChanged ||
+      brushChanged ||
+      touchUpFrameChanged ||
       (selectionChanged && state.edits.background.method === 'ai')
     ) {
       updateEditsPanel(container, state, fps);
@@ -604,11 +630,17 @@ export function initEditor() {
           ?.classList.toggle('editor-ai-picking', state.aiPickTool !== null);
         updateOverlayPickMode(container, state.aiPickTool, lastRendered.aiPickTool);
       }
+      if (brushChanged || editsChanged) {
+        container
+          .querySelector('.editor-canvas-container')
+          ?.classList.toggle('editor-brush-painting', isBrushActive(state));
+      }
       lastRendered.edits = state.edits;
       lastRendered.selectedTextId = state.selectedTextId;
       lastRendered.pickingKeyColor = state.pickingKeyColor;
       lastRendered.aiPickTool = state.aiPickTool;
       lastRendered.aiCutout = state.aiCutout;
+      lastRendered.brush = state.brush;
     }
 
     // Update crop info panel when crop changes
@@ -808,6 +840,13 @@ function render(container) {
       onAiPick: handleAiPick,
       onRemoveAiPick: handleRemoveAiPick,
       onClearAiPicks: handleClearAiPicks,
+      onSetBrush: handleSetBrush,
+      onBrushStrokeStart: handleBrushStrokeStart,
+      onBrushStrokeMove: handleBrushStrokeMove,
+      onBrushStrokeEnd: handleBrushStrokeEnd,
+      onUndoTouchUp: handleUndoTouchUp,
+      onClearTouchUpsOnFrame: handleClearTouchUpsOnFrame,
+      onClearAllTouchUps: handleClearAllTouchUps,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -834,7 +873,11 @@ function drawPreview(state) {
   if (!baseCanvas || !previewRenderer || !frame) return;
   const ctx = baseCanvas.getContext('2d');
   if (!ctx) return;
-  previewRenderer.render(ctx, frame, state.cropArea, state.edits, state.currentFrame, {
+  // A stroke being painted previews live on top of the stored ones
+  const edits = brushStroke
+    ? { ...state.edits, touchUps: [...state.edits.touchUps, brushStroke.stroke] }
+    : state.edits;
+  previewRenderer.render(ctx, frame, state.cropArea, edits, state.currentFrame, {
     skipKey: cropDragging,
     transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
     maskSource: isAiCutoutActive(state.edits.background) ? (aiSession?.maskSource ?? null) : null,
@@ -1512,6 +1555,172 @@ function startAiCutoutSession() {
   }
 }
 
+// ============================================================
+// Touch-ups (mask brush)
+// ============================================================
+
+/**
+ * Mask brush tool: on/off, mode, size, scope
+ * @param {Partial<import('./types.js').BrushState>} patch
+ */
+function handleSetBrush(patch) {
+  if (!store) return;
+  const before = store.getState();
+  store.setState((state) => setBrush(state, patch));
+  const after = store.getState();
+  if (patch.on === true && !after.brush.on) {
+    announce(TOUCH_UP_NEEDS_REMOVAL);
+  } else if (after.brush.on && !before.brush.on) {
+    announce(
+      `Brush on. Paint on the preview to ${after.brush.mode === 'erase' ? 'erase' : 'restore'}. Press Escape to stop.`,
+    );
+  } else if (!after.brush.on && before.brush.on) {
+    announce('Brush off');
+  }
+}
+
+/** Draw the live stroke preview on the next animation frame (coalesced) */
+function scheduleBrushDraw() {
+  if (brushDrawFrameId !== null) return;
+  brushDrawFrameId = window.requestAnimationFrame(() => {
+    brushDrawFrameId = null;
+    if (store) drawPreview(store.getState());
+  });
+}
+
+/**
+ * A brush stroke starts on the preview: playback pauses (a stroke belongs
+ * to the frame on screen) and the stroke takes the brush's settings and
+ * the frame range of its scope now
+ * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ */
+function handleBrushStrokeStart(point) {
+  if (!store) return;
+  const state = store.getState();
+  const frame = state.clip?.frames[state.currentFrame];
+  if (!isBrushActive(state) || !frame) return;
+  if (state.edits.touchUps.length >= EDIT_LIMITS.touchUps.max) {
+    announce(
+      `The limit of ${EDIT_LIMITS.touchUps.max} strokes is reached. Undo or clear strokes to paint more.`,
+    );
+    return;
+  }
+  if (state.isPlaying) {
+    stopPlayback();
+    store.setState((s) => setPlaying(s, false));
+  }
+  const current = store.getState();
+  const { mode, radius } = current.brush;
+  brushStroke = {
+    stroke: { id: createLayerId(), mode, radius, points: [point], ...getBrushStrokeRange(current) },
+    tail: null,
+    // Points closer than a quarter of the radius add nothing a round brush
+    // does not already cover
+    minDistancePx: Math.max(1, touchUpRadiusPx(radius, frame.width, frame.height) / 4),
+    width: frame.width,
+    height: frame.height,
+  };
+  scheduleBrushDraw();
+}
+
+/**
+ * More points of the stroke being painted (coalesced pointer events),
+ * thinned out as they arrive
+ * @param {{ x: number, y: number }[]} points - Fractions of the SOURCE frame
+ */
+function handleBrushStrokeMove(points) {
+  if (!brushStroke) return;
+  const { stroke, minDistancePx, width, height } = brushStroke;
+  const minSq = minDistancePx * minDistancePx;
+  let added = false;
+  for (const point of points) {
+    const last = stroke.points[stroke.points.length - 1];
+    const dx = (point.x - last.x) * width;
+    const dy = (point.y - last.y) * height;
+    if (dx * dx + dy * dy >= minSq) {
+      stroke.points.push(point);
+      brushStroke.tail = null;
+      added = true;
+    } else {
+      brushStroke.tail = point;
+    }
+  }
+  if (added) scheduleBrushDraw();
+}
+
+/** The stroke being painted ends: add it to the edits */
+function handleBrushStrokeEnd() {
+  const pending = brushStroke;
+  brushStroke = null;
+  if (brushDrawFrameId !== null) {
+    window.cancelAnimationFrame(brushDrawFrameId);
+    brushDrawFrameId = null;
+  }
+  if (!store || !pending) return;
+  const { stroke, tail } = pending;
+  const last = stroke.points[stroke.points.length - 1];
+  // The pointer's final position, unless the path already ends there
+  const moved = tail !== null && (tail.x !== last.x || tail.y !== last.y);
+  const points = moved ? [...stroke.points, tail] : [...stroke.points];
+  const before = store.getState();
+  store.setState((state) => addTouchUp(state, { ...stroke, points }));
+  if (store.getState() === before) {
+    // Not added (limit reached meanwhile): drop the live preview
+    drawPreview(before);
+  }
+}
+
+/** Remove the most recent stroke */
+function handleUndoTouchUp() {
+  if (!store) return;
+  const before = store.getState();
+  store.setState(undoTouchUp);
+  if (store.getState() !== before) announce('Last stroke undone');
+}
+
+/**
+ * Take the current frame out of every stroke: only this frame changes (a
+ * stroke over the selection keeps its other frames)
+ */
+function handleClearTouchUpsOnFrame() {
+  if (!store) return;
+  const state = store.getState();
+  if (!canClearTouchUpsOnFrame(state, state.currentFrame)) {
+    announce(
+      `Clearing this frame would split strokes past the limit of ${EDIT_LIMITS.touchUps.max}. Undo or clear some strokes first.`,
+    );
+    return;
+  }
+  store.setState((s) => clearTouchUpsOnFrame(s, s.currentFrame));
+  if (store.getState() !== state) announce('Touch-ups cleared on this frame');
+}
+
+/** Remove every stroke, with an Undo toast */
+function handleClearAllTouchUps() {
+  if (!store) return;
+  const before = store.getState();
+  const removed = before.edits.touchUps;
+  if (removed.length === 0) return;
+  const clipFrames = before.clip?.frames;
+  store.setState(clearAllTouchUps);
+  announce('All touch-ups cleared');
+  if (hasPendingDeletion()) {
+    // Never replace a clip deletion's Undo (see handleRemoveText)
+    showToast('All touch-ups cleared');
+    return;
+  }
+  showToast('All touch-ups cleared', {
+    actionLabel: 'Undo',
+    onAction: () => {
+      const state = store?.getState();
+      if (!store || !state?.clip || state.clip.frames !== clipFrames) return;
+      if (state.edits.touchUps.length > 0) return;
+      store.setState((s) => setEdits(s, { ...s.edits, touchUps: removed }));
+      announce('Touch-ups restored');
+    },
+  });
+}
+
 /** @param {boolean} picking */
 function handleSetPickingKeyColor(picking) {
   if (!store) return;
@@ -1974,6 +2183,11 @@ function cleanup() {
   }
   stopPlayback();
   deletedClipOnScreen = null;
+  brushStroke = null;
+  if (brushDrawFrameId !== null) {
+    window.cancelAnimationFrame(brushDrawFrameId);
+    brushDrawFrameId = null;
+  }
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();
@@ -2100,6 +2314,7 @@ function registerTestHooks() {
         hasAlpha: state.clip?.hasAlpha === true,
         aiPickTool: state.aiPickTool,
         aiCutout: state.aiCutout,
+        brush: state.brush,
       };
     };
     // Keyed-background cache counters: readbacks must not grow on text-only edits

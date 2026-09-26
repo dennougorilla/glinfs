@@ -245,6 +245,43 @@ describe('createEditorFrameRenderer', () => {
     expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
   });
 
+  it('touch-ups: re-key when the strokes change, per frame index, matching composeEditorFrame', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    // A green solid frame keys out entirely; the stroke restores a disc on frame 2 only
+    const stroke = {
+      id: 's1',
+      mode: 'restore',
+      radius: 0.2,
+      points: [{ x: 0.5, y: 0.5 }],
+      start: 2,
+      end: 2,
+    };
+    const e = { ...edits(), touchUps: [stroke] };
+
+    // Holds of one decoded frame: frame 1 and frame 2 must not share keyed pixels
+    renderer.render(ctx, frame('c1', GREEN, 'shared'), null, e, 1);
+    expect(ctx.pixelAt(10, 5)[3]).toBe(0);
+    renderer.render(ctx, frame('c2', GREEN, 'shared'), null, e, 2);
+    expect(ctx.pixelAt(10, 5)).toEqual(GREEN);
+    expect(ctx.pixelAt(0, 0)[3]).toBe(0);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    const expected = createFakeContext(20, 10);
+    composeEditorFrame(expected, frame('c2', GREEN, 'shared'), null, e, 2);
+    expect(Array.from(allPixels(ctx))).toEqual(Array.from(allPixels(expected)));
+
+    // Same strokes (a new array after an unrelated edit): from the cache
+    renderer.render(ctx, frame('c2', GREEN, 'shared'), null, { ...e, touchUps: [stroke] }, 2);
+    expect(renderer.stats().readbacks).toBe(2);
+
+    // Another stroke: every frame is keyed again
+    const more = { ...e, touchUps: [stroke, { ...stroke, id: 's2', start: 1, end: 1 }] };
+    renderer.render(ctx, frame('c1', GREEN, 'shared'), null, more, 1);
+    expect(ctx.pixelAt(10, 5)).toEqual(GREEN);
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+  });
+
   it('frees the cache when removal is off and draws through composeEditorFrame', () => {
     const renderer = createEditorFrameRenderer();
     const ctx = createFakeContext(20, 10);
