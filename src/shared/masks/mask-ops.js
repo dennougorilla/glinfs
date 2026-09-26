@@ -772,3 +772,59 @@ export function applyMaskToRegion(
   }
   return cleared;
 }
+
+/**
+ * The keep/remove decision a final mask makes for an output region, without
+ * touching any pixels: 1 (remove) where the mask is 0, 0 (keep) where it is
+ * 1. Same sampling as applyMaskToRegion (each region pixel samples the mask
+ * pixel under its center), so clearing the decided pixels gives exactly
+ * applyMaskToRegion's result; the decision can be changed in between (see
+ * shared/edits/touch-ups.js).
+ *
+ * @param {number} regionW - Pixel columns of the region
+ * @param {number} regionH - Pixel rows of the region
+ * @param {Uint8Array} finalMask - Packed bits (see PackedMask)
+ * @param {number} maskW
+ * @param {number} maskH
+ * @param {{ x: number, y: number, width: number, height: number }} regionInSourcePx
+ * @param {number} sourceW
+ * @param {number} sourceH
+ * @param {Uint8Array} [out] - Reused output (at least regionW * regionH)
+ * @returns {Uint8Array} 1 = remove, per region pixel (all 0 for degenerate sizes)
+ */
+export function decideMaskRemoval(
+  regionW,
+  regionH,
+  finalMask,
+  maskW,
+  maskH,
+  regionInSourcePx,
+  sourceW,
+  sourceH,
+  out,
+) {
+  const size = Math.max(0, regionW) * Math.max(0, regionH);
+  const decision = out && out.length >= size ? out : new Uint8Array(size);
+  if (regionW <= 0 || regionH <= 0 || maskW <= 0 || maskH <= 0 || sourceW <= 0 || sourceH <= 0) {
+    decision.fill(0, 0, size);
+    return decision;
+  }
+  const region = regionInSourcePx;
+  const scaleX = (region.width || regionW) / regionW;
+  const scaleY = (region.height || regionH) / regionH;
+  const cols = new Int32Array(regionW);
+  for (let x = 0; x < regionW; x++) {
+    const sx = region.x + (x + 0.5) * scaleX;
+    cols[x] = Math.min(maskW - 1, Math.max(0, Math.floor((sx * maskW) / sourceW)));
+  }
+  for (let y = 0; y < regionH; y++) {
+    const sy = region.y + (y + 0.5) * scaleY;
+    const maskRow = Math.min(maskH - 1, Math.max(0, Math.floor((sy * maskH) / sourceH))) * maskW;
+    const row = y * regionW;
+    for (let x = 0; x < regionW; x++) {
+      const i = maskRow + cols[x];
+      decision[row + x] = (finalMask[i >> 3] >> (7 - (i & 7))) & 1 ? 0 : 1;
+    }
+  }
+  return decision;
+}
