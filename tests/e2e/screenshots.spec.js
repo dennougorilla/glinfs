@@ -12,11 +12,12 @@
  *   app renders an "Invalid Clip Data" error screen instead.
  * - export encoding/complete/error state-injection tests were removed:
  *   setExportState does not trigger a re-render, so they captured the idle
- *   screen. The real encode flow is covered in export-preview.spec.js.
+ *   screen. The real encode flow is covered in export-dialog.spec.js.
  */
 
 import { expect, test } from '@playwright/test';
 import {
+  exportDialog,
   gotoCapture,
   gotoEditorWithClip,
   gotoExportWithClip,
@@ -96,14 +97,15 @@ test.describe('Editor Screen States', () => {
 });
 
 // ============================================================
-// Export Screen Tests
+// Export Dialog Tests
 // ============================================================
 
-test.describe('Export Screen States', () => {
-  test('export-settings: settings panel visible state', async ({ page }) => {
+test.describe('Export Dialog States', () => {
+  test('export-settings: settings view visible state', async ({ page }) => {
     await gotoExportWithClip(page, { frameCount: 30, fps: 30 });
 
-    await expect(page.locator('.export-settings-panel')).toBeVisible();
-    await expect(page.locator('.btn-export-main')).toBeEnabled();
+    const dialog = exportDialog(page);
+    await expect(dialog.locator('#export-settings')).toBeVisible();
+    await expect(dialog.locator('#export-start')).toBeEnabled();
   });
 });

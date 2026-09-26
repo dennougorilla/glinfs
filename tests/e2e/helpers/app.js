@@ -60,38 +60,55 @@ export async function pauseEditorPlayback(page) {
 }
 
 /**
- * Load the export screen with an injected mock editor payload
- *
- * `pattern`/`color` style both payloads' frames (the export reads the clip
- * payload's), `edits`/`hasAlpha` go on the editor payload, and `sourceName`
- * marks the clip as imported (identical-frame merging on export).
- *
+ * The Export GIF dialog (a modal over the editor). Scope dialog assertions
+ * to it: the editor underneath stays in the DOM.
  * @param {import('@playwright/test').Page} page
- * @param {{ frameCount?: number, fps?: number, width?: number, height?: number, selectedRange?: { start: number, end: number }, cropArea?: object | null, pattern?: 'gradient' | 'checkerboard' | 'solid' | 'numbered', color?: string, edits?: object, hasAlpha?: boolean, sourceName?: string }} [options]
  */
-export async function gotoExportWithClip(page, options = {}) {
-  await gotoCapture(page);
-
-  await page.evaluate(async (opts) => {
-    await window.__TEST_HOOKS__.injectMockEditorPayload(opts);
-  }, options);
-
-  await page.evaluate(() => {
-    location.hash = '#/export';
-  });
-
-  // `.export-screen` alone is ambiguous (the "No clip data available" error
-  // screen uses it too); the canvas only exists when a payload actually loaded.
-  await page.waitForSelector('.export-canvas', { state: 'visible' });
+export function exportDialog(page) {
+  return page.getByRole('dialog', { name: 'Export GIF' });
 }
 
 /**
- * Click Export on the export screen and wait for the complete screen
+ * Open the editor on an injected mock clip, then its Export dialog
+ *
+ * `pattern`/`color` style the clip's frames; `selectedRange`, `cropArea`,
+ * `edits` and `playbackSpeed` are restored by the editor (saved editor
+ * state, like a clip coming back from the queue); `hasAlpha` and
+ * `sourceName` (imported: identical-frame merging on export) go on the clip.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{ frameCount?: number, fps?: number, width?: number, height?: number, selectedRange?: { start: number, end: number }, cropArea?: object | null, pattern?: 'gradient' | 'checkerboard' | 'solid' | 'numbered', color?: string, edits?: object, hasAlpha?: boolean, sourceName?: string, playbackSpeed?: number }} [options]
+ */
+export async function gotoExportWithClip(page, options = {}) {
+  await gotoEditorWithClip(page, options);
+  await exportFromEditor(page);
+}
+
+/**
+ * Click Export in the dialog and wait for its result view
  * @param {import('@playwright/test').Page} page
  */
 export async function exportGifAndWait(page) {
-  await page.locator('.btn-export-main').click();
-  await expect(page.locator('.export-complete-v2')).toBeVisible({ timeout: 60000 });
+  const dialog = exportDialog(page);
+  await dialog.locator('#export-start').click();
+  await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 60000 });
+}
+
+/**
+ * Close the Export dialog ("Back to editing" on the result, else Close) and
+ * wait for the editor underneath
+ * @param {import('@playwright/test').Page} page
+ */
+export async function closeExportDialog(page) {
+  const dialog = exportDialog(page);
+  const back = dialog.locator('#export-back-to-editing');
+  if (await back.isVisible()) {
+    await back.click();
+  } else {
+    await dialog.getByRole('button', { name: 'Close' }).click();
+  }
+  await expect(dialog).toHaveCount(0);
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
 }
 
 /**
@@ -103,9 +120,9 @@ export async function exportGifAndWait(page) {
  */
 
 /**
- * Decode the GIF the export screen just produced, in the page, with
+ * Decode the GIF the Export dialog just produced, in the page, with
  * ImageDecoder — the same decoder a browser uses to show it. Requires the
- * export screen to still be mounted (the result is dropped on leave).
+ * dialog to still show the result (the result is dropped when it closes).
  * @param {import('@playwright/test').Page} page
  * @returns {Promise<DecodedGifFrame[]>}
  */
@@ -143,12 +160,12 @@ export async function decodeExportedGif(page) {
 }
 
 /**
- * Leave the editor for the export screen through its toolbar button
+ * Open the Export dialog through the editor's toolbar button
  * @param {import('@playwright/test').Page} page
  */
 export async function exportFromEditor(page) {
   await page.getByRole('button', { name: 'Export as GIF' }).click();
-  await page.waitForSelector('.export-canvas', { state: 'visible' });
+  await expect(exportDialog(page).locator('#export-start')).toBeVisible();
 }
 
 /**

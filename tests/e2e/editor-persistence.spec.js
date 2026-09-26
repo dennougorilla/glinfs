@@ -1,6 +1,6 @@
 /**
  * E2E: clip edits (text layers, background removal) survive every way of
- * leaving and re-entering the editor: Capture and back, Export and back,
+ * leaving and re-entering the editor: Capture and back, the Export dialog,
  * a queue demote/promote round trip (raw and codec-compressed entries), and
  * opening another file while the edited clip is active.
  * @module tests/e2e/editor-persistence.spec
@@ -8,7 +8,12 @@
 
 import { expect, test } from '@playwright/test';
 import gifenc from 'gifenc';
-import { exportFromEditor, gotoEditorWithClip, pauseEditorPlayback } from './helpers/app.js';
+import {
+  closeExportDialog,
+  exportFromEditor,
+  gotoEditorWithClip,
+  pauseEditorPlayback,
+} from './helpers/app.js';
 
 const { GIFEncoder } = gifenc;
 
@@ -150,16 +155,24 @@ test.describe('Editor edits persistence', () => {
       .toMatchObject({ enabled: true, color: '#00ff00' });
   });
 
-  test('survives Editor -> Export -> Editor', async ({ page }) => {
+  test('survives the Export dialog, and a remount after it', async ({ page }) => {
     await addEdits(page, 'Exported');
 
     await exportFromEditor(page);
-    // The export screen sees the edits: removal makes it transparent
+    // The dialog sees the edits: removal makes it transparent
     await expect(page.getByTestId('export-transparency-badge')).toBeVisible();
-    await page.getByRole('button', { name: 'Back to editor' }).click();
-    await page.waitForSelector('.editor-canvas', { state: 'visible' });
-
+    await closeExportDialog(page);
     await expectEdits(page, 'Exported');
+
+    // Closing dropped the payload the dialog was opened for, so the next
+    // mount restores the clip's own saved state (not a stale snapshot)
+    await page.locator('#text-layer-text').fill('After export');
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.textLayers[0].text)
+      .toBe('After export');
+    await goToCaptureScreen(page);
+    await goToEditorScreen(page);
+    await expectEdits(page, 'After export');
   });
 
   test('survives a queue demote/promote round trip (raw and compressed)', async ({ page }) => {

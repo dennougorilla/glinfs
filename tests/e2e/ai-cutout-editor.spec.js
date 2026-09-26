@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   chooseAiCutout,
+  closeExportDialog,
   decodeExportedGif,
   discClip,
   editorFramePointToViewport,
@@ -90,8 +91,7 @@ async function exportAndSample(page, extraPoints = () => []) {
     bg: gifPixel(frame, 5, 5)[3],
     extra: extraPoints(f).map(({ x, y }) => gifPixel(frame, x, y)[3]),
   }));
-  await page.locator('.export-toolbar button[aria-label="Back to editor"]').click();
-  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+  await closeExportDialog(page);
   await pauseEditorPlayback(page);
   return alpha;
 }
