@@ -112,6 +112,23 @@
  * @property {import('../../shared/edits/model.js').PickMode | null} aiPickTool - AI pick
  *   tool: the next preview click adds a Keep/Remove pick (null = off)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
+ * @property {BrushState} brush - Mask brush tool (not persisted; the strokes live in
+ *   edits.touchUps)
+ */
+
+/**
+ * What one mask brush stroke applies to: the current frame, or the IN..OUT
+ * selection at the time of the stroke
+ * @typedef {'frame'|'selection'} BrushScope
+ */
+
+/**
+ * Mask brush tool of an editor session
+ * @typedef {Object} BrushState
+ * @property {boolean} on - Painting on the preview (only while background removal is on)
+ * @property {import('../../shared/edits/model.js').TouchUpMode} mode - Erase or restore
+ * @property {number} radius - Fraction of the source frame's shorter side
+ * @property {BrushScope} scope - What a new stroke applies to
  */
 
 /**

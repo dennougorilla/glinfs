@@ -17,6 +17,8 @@
  * @module shared/edits/touch-ups
  */
 
+import { createLayerId } from './model.js';
+
 /** @typedef {import('./model.js').TouchUp} TouchUp */
 /** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
 
@@ -194,4 +196,35 @@ export function getTouchUpsSignature(strokes) {
     .join(',');
   signatures.set(strokes, signature);
   return signature;
+}
+
+/**
+ * The strokes with one frame taken out of their ranges ("Clear on this
+ * frame"): a stroke only on that frame goes, one starting or ending there
+ * shrinks, and one spanning it is split in two around it (the second part
+ * gets a new id and stays right after the first, so the paint order is
+ * kept). Strokes not covering the frame are untouched.
+ * @param {readonly TouchUp[]} strokes
+ * @param {number} frameIndex - Absolute clip frame index
+ * @param {() => string} [newId]
+ * @returns {TouchUp[]} A new array (may be longer than the input)
+ */
+export function removeTouchUpsFromFrame(strokes, frameIndex, newId = createLayerId) {
+  /** @type {TouchUp[]} */
+  const out = [];
+  for (const stroke of strokes) {
+    if (stroke.start > frameIndex || stroke.end < frameIndex) {
+      out.push(stroke);
+    } else if (stroke.start === frameIndex && stroke.end === frameIndex) {
+      // Only on this frame: gone
+    } else if (stroke.start === frameIndex) {
+      out.push({ ...stroke, start: frameIndex + 1 });
+    } else if (stroke.end === frameIndex) {
+      out.push({ ...stroke, end: frameIndex - 1 });
+    } else {
+      out.push({ ...stroke, end: frameIndex - 1 });
+      out.push({ ...stroke, id: newId(), start: frameIndex + 1 });
+    }
+  }
+  return out;
 }
