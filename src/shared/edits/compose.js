@@ -13,6 +13,13 @@
  * layers active on the frame. Text is drawn after the removal so a caption
  * that happens to contain the key color is never removed.
  *
+ * Removal with touch-ups (mask brush strokes active on the frame) runs in
+ * three steps: the color key or the AI mask DECIDES which pixels go, the
+ * strokes change that decision (erase → remove, restore → keep, in source
+ * coordinates mapped to the output region), then the decided pixels are
+ * cleared. A frame without active touch-ups takes the one-step path
+ * (applyColorKey / applyMaskToRegion), which clears exactly the same pixels.
+ *
  * Background removal is the color key, or — with the 'ai' method — the
  * frame's final AI cutout mask from an optional `maskSource` (same place in
  * the pipeline). A frame the mask source has no mask for is drawn without
@@ -22,16 +29,27 @@
  * @module shared/edits/compose
  */
 
-import { applyMaskToRegion } from '../masks/mask-ops.js';
+import { applyMaskToRegion, decideMaskRemoval } from '../masks/mask-ops.js';
 import {
   getDrawableSource,
   isFrameValid,
   renderFramePlaceholder,
   syncCanvasSize,
 } from '../utils/canvas.js';
-import { applyColorKey, snapAlphaToBinary } from './color-key.js';
-import { getActiveTextLayers, isAiCutoutActive, isColorKeyActive } from './model.js';
+import {
+  applyColorKey,
+  clearDecidedPixels,
+  decideColorKey,
+  snapAlphaToBinary,
+} from './color-key.js';
+import {
+  getActiveTextLayers,
+  getActiveTouchUps,
+  isAiCutoutActive,
+  isColorKeyActive,
+} from './model.js';
 import { drawTextLayer } from './text-render.js';
+import { applyTouchUpsToDecision } from './touch-ups.js';
 
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} Context2D */
 /** @typedef {import('../../features/capture/types.js').Frame} Frame */
@@ -160,12 +178,29 @@ export function drawTextLayersInRegion(ctx, region, layers) {
 }
 
 /**
+ * Decision buffer of the AI path with touch-ups, reused and grown only for
+ * a larger region (removal steps run synchronously, one at a time)
+ */
+let aiDecisionScratch = new Uint8Array(0);
+
+/**
+ * @param {number} size
+ * @returns {Uint8Array}
+ */
+function getAiDecisionScratch(size) {
+  if (aiDecisionScratch.length < size) aiDecisionScratch = new Uint8Array(size);
+  return aiDecisionScratch;
+}
+
+/**
  * The background removal a frame needs, or null when it needs none (removal
  * off, or the AI method without a final mask for this frame).
  *
  * The color key receives the region size exactly as callers always passed
  * it; the AI mask is applied to the pixel grid the readback really returned
- * (getImageData truncates a fractional crop size).
+ * (getImageData truncates a fractional crop size). With touch-ups active on
+ * the frame both decide on that pixel grid, the strokes change the
+ * decision, and only then are pixels cleared.
  *
  * @param {Frame} frame
  * @param {Rect} sourceRegion - Output region in SOURCE pixels (crop, or the whole frame)
@@ -176,7 +211,18 @@ export function drawTextLayersInRegion(ctx, region, layers) {
  */
 export function getRemovalStep(frame, sourceRegion, edits, frameIndex, maskSource) {
   const background = edits?.background;
+  const touchUps = getActiveTouchUps(edits, frameIndex);
   if (isColorKeyActive(background)) {
+    if (touchUps.length > 0) {
+      return (data, width, height) => {
+        const w = Math.floor(width);
+        const h = Math.floor(height);
+        const decision = decideColorKey(data, w, h, background);
+        if (!decision) return;
+        applyTouchUpsToDecision(decision, w, h, touchUps, sourceRegion, frame.width, frame.height);
+        clearDecidedPixels(data, decision, w * h);
+      };
+    }
     return (data, width, height) => {
       applyColorKey(data, width, height, background);
     };
@@ -184,6 +230,26 @@ export function getRemovalStep(frame, sourceRegion, edits, frameIndex, maskSourc
   if (!isAiCutoutActive(background)) return null;
   const mask = maskSource?.getFinalMask(frameIndex) ?? null;
   if (!mask) return null;
+  if (touchUps.length > 0) {
+    return (data, width, height) => {
+      const w = Math.floor(width);
+      const h = Math.floor(height);
+      if (w <= 0 || h <= 0) return;
+      const decision = decideMaskRemoval(
+        w,
+        h,
+        mask.bits,
+        mask.width,
+        mask.height,
+        sourceRegion,
+        frame.width,
+        frame.height,
+        getAiDecisionScratch(w * h),
+      );
+      applyTouchUpsToDecision(decision, w, h, touchUps, sourceRegion, frame.width, frame.height);
+      clearDecidedPixels(data, decision, w * h);
+    };
+  }
   return (data, width, height) => {
     applyMaskToRegion(
       data,
