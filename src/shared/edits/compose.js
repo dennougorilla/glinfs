@@ -4,7 +4,7 @@
  * Renders a source frame with the clip's edits applied (crop, background
  * removal, text). Three entry points share one order of operations so every
  * surface shows the same pixels:
- * - composeOutputFrame: output-sized canvas (export preview)
+ * - composeOutputFrame: output-sized canvas
  * - composeOutputFrameRGBA: output-sized RGBA buffer (export encoder)
  * - composeEditorFrame: full source frame with the edits applied inside the
  *   output region (editor preview, which draws the crop as an overlay)
