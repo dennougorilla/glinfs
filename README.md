@@ -28,13 +28,13 @@ The analysis needs WebGPU to be fast (under a second per frame on a recent GPU).
 
 Once frames are analyzed, adjust **Threshold** (higher keeps less), **Smooth between frames** and **Edge** (grow or shrink the cutout by up to 8 pixels). **Keep** and **Remove** pick tools: click a character in the preview to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it. Picks are listed with their time and can be removed one by one or with **Clear picks**. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
 
-Press Escape to leave a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, open Export, or switch clips in the queue.
+Press Escape to leave a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, export, or switch clips in the queue.
 
 ### Open existing GIFs and images
 Use **Open GIF or image** on the Capture screen, or drop a file on the preview, to edit an existing GIF, APNG, animated WebP, PNG, JPEG or WebP file with the same trim, crop, text and transparency tools. Frame timing and transparent pixels are kept when you export it again.
 
 ### Export
-Convert to GIF with customizable quality, playback speed, and frame rate settings. Real-time preview before final export.
+Press **Export** in the editor (or Ctrl/Cmd+E) to open the Export GIF dialog over it. Choose the encoder, quality, frame rate, loop count and output scale; the GIF plays at the editor's playback speed (0.25x to 4x). Set a **Target size** in MB to fit an upload limit: the export lowers the colors, then the frame rate, then the scale until the GIF fits. The finished GIF is shown with its size, dimensions and frame count, ready to download or open in a new tab.
 
 ## Privacy
 
@@ -55,7 +55,7 @@ All processing happens entirely in your browser. Your screen recordings never le
 1. **Capture** - Click "Start Capture" and select your screen, window, or tab
    (or click "Open GIF or image" to edit an existing file)
 2. **Edit** - Use the timeline to trim, the crop tool to focus on specific areas, and the Text and Background panels to add captions or remove a background
-3. **Export** - Adjust quality settings and download your GIF
+3. **Export** - Press Export in the editor, adjust the settings in the dialog and download your GIF
 
 ## Development
 

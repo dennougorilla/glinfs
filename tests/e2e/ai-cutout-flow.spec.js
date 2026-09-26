@@ -184,7 +184,7 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     }, N - 1);
     await exportFromEditor(page);
     await expect(page.locator('#export-ai-note')).toHaveText(
-      `6 of ${N} frames are not analyzed yet. Export analyzes them first (they preview without the cutout).`,
+      `6 of ${N} frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).`,
     );
 
     await holdFramesAfter(page, 2);

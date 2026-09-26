@@ -153,7 +153,7 @@ describe('Export with the AI cutout', () => {
     await flush();
     expect($('#export-ai-note')?.hidden).toBe(false);
     expect($('#export-ai-note')?.textContent).toBe(
-      '2 of 4 frames are not analyzed yet. Export analyzes them first (they preview without the cutout).',
+      '2 of 4 frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).',
     );
 
     $('#export-start')?.click();
