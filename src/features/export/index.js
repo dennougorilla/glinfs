@@ -48,6 +48,7 @@ import {
   buildClipMaskSourceSettled,
   describeAnalysisError,
   estimateRemainingMs,
+  getAiModelId,
   isAbortError,
   isWasmAllowed,
   peekClipMaskSource,
@@ -654,7 +655,11 @@ function updateMissingMasksNote() {
   const exported = getExportedIndices(getPlannedFrameSkips(store.getState().settings))
     .map((index) => clipFrames[index])
     .filter(Boolean);
-  const missing = collectPendingFrames(exported, getSharedMaskStore()).length;
+  const missing = collectPendingFrames(
+    exported,
+    getSharedMaskStore(),
+    getAiModelId(edits?.background.ai),
+  ).length;
   updateExportAiNote(session.body, missing, exported.length);
 }
 
@@ -688,10 +693,12 @@ function showAiPrep(next) {
  */
 async function prepareAiMasks(frameSkips, signal) {
   const maskStore = getSharedMaskStore();
+  const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
+  const modelId = getAiModelId(ai);
   const exported = getExportedIndices(frameSkips)
     .map((index) => clipFrames[index])
     .filter(Boolean);
-  const pending = collectPendingFrames(exported, maskStore);
+  const pending = collectPendingFrames(exported, maskStore, modelId);
   if (pending.length > 0) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: pending.length });
     if (clipId !== undefined) maskStore.touchClip(clipId);
@@ -700,6 +707,7 @@ async function prepareAiMasks(frameSkips, signal) {
     await getSegmentationManager().analyzeFrames(exported, {
       signal,
       clipId,
+      modelId,
       allowWasm: isWasmAllowed(),
       onProgress(progress) {
         if (signal.aborted) return;
@@ -726,7 +734,6 @@ async function prepareAiMasks(frameSkips, signal) {
       },
     });
   }
-  const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;
   showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });

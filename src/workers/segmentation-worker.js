@@ -6,9 +6,13 @@
  * ORT loads only here, so the main bundle never carries it. The WebGPU
  * build (`onnxruntime-web/webgpu`, ORT's native WebGPU execution provider)
  * also contains the CPU/WASM provider, so one binary serves both:
- * - WebGPU when an adapter exists and a WebGPU session can be created;
+ * - WebGPU when an adapter exists and a WebGPU session can be created AND
+ *   survives a warm-up run (see features/ai-cutout/session-init.js);
  * - WASM only when the caller allowed it (GitHub Pages cannot send
  *   COOP/COEP, so it is single-threaded and very slow).
+ * One worker runs one model (the spec in its 'init' message: file, input
+ * and output names, preprocessing); the manager starts a new worker to
+ * switch models.
  * The document CSP does not apply here (a worker takes its policy from its
  * own response), which matters because ORT's WebGPU glue uses `new Function`.
  *
@@ -25,7 +29,7 @@ import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url
 import * as ort from 'onnxruntime-web/webgpu';
 import { loadModelBytes } from '../features/ai-cutout/model-loader.js';
 import {
-  computeLetterbox,
+  computeInputGeometry,
   probabilityToMask,
   rgbaToChw,
 } from '../features/ai-cutout/preprocess.js';
@@ -34,6 +38,7 @@ import {
   SegmentationErrorCode,
   toErrorPayload,
 } from '../features/ai-cutout/protocol.js';
+import { createModelSession, runModel } from '../features/ai-cutout/session-init.js';
 
 /** @typedef {import('../features/ai-cutout/model-config.js').ModelSpec} ModelSpec */
 
@@ -155,40 +160,20 @@ async function initialize(spec, allowWasm) {
   });
 
   const createStart = performance.now();
-  /** @type {unknown} */
-  let webgpuError = null;
-  if (adapter) {
-    try {
-      ort.env.webgpu.adapter = adapter;
-      session = await ort.InferenceSession.create(loaded.bytes, {
-        executionProviders: ['webgpu'],
-        graphOptimizationLevel: 'all',
-      });
-      backend = 'webgpu';
-    } catch (error) {
-      webgpuError = error;
-    }
-  }
-  if (!session) {
-    if (!allowWasm) {
-      const detail = webgpuError instanceof Error ? `: ${webgpuError.message}` : '';
-      throw new SegmentationError(
-        SegmentationErrorCode.WEBGPU_UNAVAILABLE,
-        `The model could not start on WebGPU${detail}`,
-      );
-    }
-    try {
-      session = await ort.InferenceSession.create(loaded.bytes, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
-      backend = 'wasm';
-    } catch (error) {
-      throw new SegmentationError(
-        SegmentationErrorCode.MODEL_INIT_FAILED,
-        `The model could not be loaded: ${error instanceof Error ? error.message : error}`,
-      );
-    }
+  // Allocated here so the warm-up reuses the buffer every frame fills later
+  getInputContext(spec.inputSize);
+  const created = await createModelSession({
+    ort: /** @type {any} */ (ort),
+    bytes: loaded.bytes,
+    spec,
+    adapter,
+    allowWasm,
+    warmupInput: /** @type {Float32Array} */ (inputTensorData),
+  });
+  session = /** @type {any} */ (created.session);
+  backend = created.backend;
+  if (created.webgpuError) {
+    console.warn(`[segmentation] ${created.webgpuError}; running on WASM`);
   }
 
   model = spec;
@@ -198,7 +183,11 @@ async function initialize(spec, allowWasm) {
     adapter: backend === 'webgpu' ? describeAdapter(adapter) : null,
     fromCache: loaded.fromCache,
     cached: loaded.cached,
-    timings: { loadMs, createMs: performance.now() - createStart },
+    timings: {
+      loadMs,
+      createMs: performance.now() - createStart,
+      warmupMs: created.warmupMs,
+    },
   });
 }
 
@@ -225,9 +214,16 @@ async function segment(request) {
   if (!session || !model) throw new Error('Model not initialized');
   const start = performance.now();
   const size = model.inputSize;
-  const letterbox = computeLetterbox(request.sourceWidth, request.sourceHeight, size);
+  const { preprocess } = model;
+  const geometry = computeInputGeometry(
+    preprocess.resize,
+    request.sourceWidth,
+    request.sourceHeight,
+    size,
+  );
 
-  // Letterbox: black (zero) padding, frame scaled into the centred rectangle
+  // Black (zero) canvas, frame scaled into the input rectangle: the centred
+  // letterbox rectangle, or the whole square for a stretch
   const ctx = getInputContext(size);
   ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = '#000';
@@ -235,23 +231,23 @@ async function segment(request) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   if (!request.bitmap) throw new Error('Frame bitmap missing');
-  ctx.drawImage(request.bitmap, letterbox.padX, letterbox.padY, letterbox.width, letterbox.height);
+  ctx.drawImage(request.bitmap, geometry.padX, geometry.padY, geometry.width, geometry.height);
   request.bitmap.close();
   request.bitmap = null;
   const rgba = ctx.getImageData(0, 0, size, size).data;
-  const inputData = rgbaToChw(rgba, size, size, /** @type {Float32Array} */ (inputTensorData));
+  const inputData = rgbaToChw(
+    rgba,
+    size,
+    size,
+    /** @type {Float32Array} */ (inputTensorData),
+    preprocess,
+  );
 
   const inferenceStart = performance.now();
-  const input = new ort.Tensor('float32', inputData, [1, 3, size, size]);
-  const outputs = await session.run({ [model.inputName]: input });
-  const output = outputs[model.outputName];
-  const probability = /** @type {Float32Array} */ (await output.getData());
+  const probability = await runModel(/** @type {any} */ (ort), session, model, inputData);
   const inferenceMs = performance.now() - inferenceStart;
-  for (const tensor of Object.values(outputs)) {
-    tensor.dispose();
-  }
 
-  const mask = probabilityToMask(probability, letterbox, request.maskWidth, request.maskHeight);
+  const mask = probabilityToMask(probability, geometry, request.maskWidth, request.maskHeight);
   post(
     {
       type: 'mask',

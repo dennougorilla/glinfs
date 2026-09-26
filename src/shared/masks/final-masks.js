@@ -116,7 +116,9 @@ export function edgeRadiusInMaskPixels(edge, maskWidth, sourceWidth) {
  */
 export function getAiParamsKey(ai) {
   const picks = (ai.picks ?? []).map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`).join(',');
-  return `${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}`;
+  // The model is part of the key: the shared cache must never hand one
+  // model's cutout to the other (edits without a model mean 'anime')
+  return `${ai.model ?? 'anime'}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}`;
 }
 
 /**

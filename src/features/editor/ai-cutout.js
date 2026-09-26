@@ -3,9 +3,11 @@
  * @module features/editor/ai-cutout
  *
  * Connects the clip's frames to the segmentation manager's probability
- * masks (mask store, keyed by `frame.sharedKey ?? frame.id`) and to the
- * final-mask builder. One final-mask cache serves both screens, so the
- * export reuses the masks the editor already built for the same inputs.
+ * masks (mask store, keyed by model and `frame.sharedKey ?? frame.id`) and
+ * to the final-mask builder. The model is `ai.model` of the clip's edits:
+ * every lookup reads that model's masks only. One final-mask cache serves
+ * both screens, so the export reuses the masks the editor already built for
+ * the same inputs.
  *
  * Also holds the user's "Run without WebGPU" choice for the page session
  * (asked once, valid for the editor and the export).
@@ -17,8 +19,14 @@ import {
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import {
+  DEFAULT_MODEL_ID,
+  formatModelSize,
+  getModelEntry,
+  isModelId,
+} from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { collectPendingFrames, frameKey } from '../ai-cutout/segmentation-manager.js';
+import { collectPendingFrames, maskKey } from '../ai-cutout/segmentation-manager.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
 /** @typedef {import('../ai-cutout/mask-store.js').MaskStore} MaskStore */
@@ -27,8 +35,26 @@ import { collectPendingFrames, frameKey } from '../ai-cutout/segmentation-manage
 /** @typedef {import('../../shared/edits/model.js').AiCutout} AiCutout */
 /** @typedef {ReturnType<typeof createFinalMaskCache>} FinalMaskCache */
 
-/** What the first analysis downloads (176 MB model + ~27 MB ONNX Runtime) */
-export const DOWNLOAD_SIZE_LABEL = 'about 200 MB';
+/** ONNX Runtime's WebAssembly binary, downloaded once for every model (26.8 MB) */
+export const RUNTIME_SIZE_LABEL = 'about 27 MB';
+
+/**
+ * The model an AiCutout uses (edits from before the general model have none)
+ * @param {{ model?: string } | null | undefined} ai
+ * @returns {string}
+ */
+export function getAiModelId(ai) {
+  return isModelId(ai?.model) ? /** @type {string} */ (ai?.model) : DEFAULT_MODEL_ID;
+}
+
+/**
+ * Download size of a model as shown next to its name ("176 MB")
+ * @param {string} modelId
+ * @returns {string}
+ */
+export function getModelSizeLabel(modelId) {
+  return formatModelSize(getModelEntry(modelId).bytes);
+}
 
 /**
  * Typical time per frame, used for the time-left estimate before the first
@@ -65,15 +91,16 @@ export function setWasmAllowed(allowed = true) {
 }
 
 /**
- * Probability mask lookup by clip frame index
+ * Probability mask lookup by clip frame index, for one model
  * @param {Frame[]} frames - The whole clip
  * @param {MaskStore} maskStore
+ * @param {string} [modelId]
  * @returns {(frameIndex: number) => import('../ai-cutout/preprocess.js').ProbabilityMask | null}
  */
-export function getClipProbSource(frames, maskStore) {
+export function getClipProbSource(frames, maskStore, modelId = DEFAULT_MODEL_ID) {
   return (frameIndex) => {
     const frame = frames[frameIndex];
-    return frame ? maskStore.get(frameKey(frame)) : null;
+    return frame ? maskStore.get(maskKey(frame, modelId)) : null;
   };
 }
 
@@ -96,7 +123,7 @@ function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
   return {
     ...paramsInputs({ frames, ai, clipId }),
     storeVersion: maskStore.version,
-    getProb: getClipProbSource(frames, maskStore),
+    getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
   };
 }
 
@@ -170,35 +197,42 @@ export function getBuildParamsKey(frames, ai, clipId) {
 }
 
 /**
- * Analysis coverage of a clip and its selection
+ * Analysis coverage of a clip and its selection by one model
  * @param {Frame[]} frames - The whole clip
  * @param {{ start: number, end: number }} range - Selection (inclusive)
- * @param {MaskStore} [maskStore]
+ * @param {{ modelId?: string, maskStore?: MaskStore }} [options]
  * @returns {{ selectionFrames: Frame[], pendingInSelection: number, analyzedInClip: number, clipFrames: number }}
  *   pendingInSelection counts distinct frames (holds share one analysis)
  */
-export function getAnalysisCoverage(frames, range, maskStore = getSharedMaskStore()) {
+export function getAnalysisCoverage(
+  frames,
+  range,
+  { modelId = DEFAULT_MODEL_ID, maskStore = getSharedMaskStore() } = {},
+) {
   const selectionFrames = frames.slice(range.start, range.end + 1);
   let analyzedInClip = 0;
   for (const frame of frames) {
-    if (maskStore.has(frameKey(frame))) analyzedInClip++;
+    if (maskStore.has(maskKey(frame, modelId))) analyzedInClip++;
   }
   return {
     selectionFrames,
-    pendingInSelection: collectPendingFrames(selectionFrames, maskStore).length,
+    pendingInSelection: collectPendingFrames(selectionFrames, maskStore, modelId).length,
     analyzedInClip,
     clipFrames: frames.length,
   };
 }
 
 /**
- * Whether a frame has a probability mask
+ * Whether a frame has a probability mask from one model
  * @param {Frame | null | undefined} frame
- * @param {MaskStore} [maskStore]
+ * @param {{ modelId?: string, maskStore?: MaskStore }} [options]
  * @returns {boolean}
  */
-export function isFrameAnalyzed(frame, maskStore = getSharedMaskStore()) {
-  return Boolean(frame) && maskStore.has(frameKey(/** @type {Frame} */ (frame)));
+export function isFrameAnalyzed(
+  frame,
+  { modelId = DEFAULT_MODEL_ID, maskStore = getSharedMaskStore() } = {},
+) {
+  return Boolean(frame) && maskStore.has(maskKey(/** @type {Frame} */ (frame), modelId));
 }
 
 /**
@@ -218,7 +252,11 @@ export function pickFindsCharacter({
   maskStore = getSharedMaskStore(),
 }) {
   return pickFindsComponent(
-    { frameCount: frames.length, getProb: getClipProbSource(frames, maskStore), ai },
+    {
+      frameCount: frames.length,
+      getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+      ai,
+    },
     { frame: frameIndex, x: point.x, y: point.y },
   );
 }
@@ -279,7 +317,7 @@ export function describeAnalysisError(error) {
 
 /**
  * Decimal megabytes (10^6 bytes) with one decimal, the unit of the "176 MB"
- * model size in the README and credits
+ * model sizes in the README and credits
  * @param {number} bytes
  * @returns {string}
  */

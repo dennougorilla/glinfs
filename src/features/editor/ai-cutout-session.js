@@ -25,6 +25,7 @@ import {
   buildClipMaskSource,
   describeAnalysisError,
   estimateRemainingMs,
+  getAiModelId,
   getBuildParamsKey,
   getSharedFinalMaskCache,
   isAbortError,
@@ -232,8 +233,9 @@ export function createAiCutoutSession(options) {
   };
 
   /**
-   * Analyze frames that have no mask yet (the selection). Finished masks are
-   * kept on cancel or failure; a second call only does the rest.
+   * Analyze frames that have no mask yet from the clip's model (the
+   * selection). Finished masks are kept on cancel or failure; a second call
+   * only does the rest.
    * @param {Frame[]} frames
    * @returns {Promise<void>}
    */
@@ -242,6 +244,7 @@ export function createAiCutoutSession(options) {
     const controller = new AbortController();
     analysisController = controller;
     const clipId = getClipId();
+    const modelId = getAiModelId(getState()?.edits.background.ai);
     if (clipId !== undefined) maskStore.touchClip(clipId);
     /** @type {number | null} */
     let analyzingSince = null;
@@ -260,6 +263,7 @@ export function createAiCutoutSession(options) {
       const result = await manager.analyzeFrames(frames, {
         signal: controller.signal,
         clipId,
+        modelId,
         allowWasm: isWasmAllowed(),
         onProgress(progress) {
           if (disposed || analysisController !== controller) return;

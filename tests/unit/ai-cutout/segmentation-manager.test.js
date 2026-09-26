@@ -7,17 +7,34 @@ import {
   frameKey,
   getSegmentationManager,
   MAX_FRAMES_IN_FLIGHT,
+  maskKey,
   setDevModelOverride,
 } from '../../../src/features/ai-cutout/segmentation-manager.js';
 
 const SPEC = {
+  id: 'anime',
   url: '/glinfs/models/isnetis.onnx',
   bytes: 176_069_933,
   sha256: 'f'.repeat(64),
   inputName: 'img',
   outputName: 'mask',
   inputSize: 1024,
+  preprocess: { resize: 'letterbox', scale: 1 / 255, mean: [0, 0, 0], std: [1, 1, 1] },
 };
+
+const GENERAL_SPEC = {
+  id: 'general',
+  url: '/glinfs/models/isnet-general-use.onnx',
+  bytes: 178_648_008,
+  sha256: 'e'.repeat(64),
+  inputName: 'input_image',
+  outputName: 'output_image',
+  inputSize: 1024,
+  preprocess: { resize: 'stretch', scale: 1 / 255, mean: [0.5, 0.5, 0.5], std: [1, 1, 1] },
+};
+
+/** @param {string} modelId */
+const specFor = (modelId) => (modelId === 'general' ? GENERAL_SPEC : SPEC);
 
 /** Wait for queued promise callbacks and microtasks. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -121,7 +138,7 @@ function createHarness(workerOptions = {}, managerOptions = {}) {
     maskStore,
     createWorker,
     createBitmap,
-    getModelSpec: () => SPEC,
+    getModelSpec: specFor,
     ...managerOptions,
   });
   return { manager, maskStore, workers, bitmaps, createWorker, createBitmap };
@@ -131,14 +148,20 @@ afterEach(() => {
   setDevModelOverride(null);
 });
 
-describe('frameKey / collectPendingFrames', () => {
+describe('frameKey / maskKey / collectPendingFrames', () => {
   it('keys frames by sharedKey, else id', () => {
     expect(frameKey(makeFrame('a'))).toBe('a');
     expect(frameKey(makeFrame('b', { sharedKey: 'src' }))).toBe('src');
   });
 
+  it('keys masks by model and frame (the anime model by default)', () => {
+    expect(maskKey(makeFrame('a'))).toBe('anime:a');
+    expect(maskKey(makeFrame('a'), 'general')).toBe('general:a');
+    expect(maskKey(makeFrame('h', { sharedKey: 'src' }), 'general')).toBe('general:src');
+  });
+
   it('keeps one frame per key and skips keys already stored', () => {
-    const store = { has: (key) => key === 'done' };
+    const store = { has: (key) => key === 'anime:done' };
     const frames = [
       makeFrame('done'),
       makeFrame('a'),
@@ -146,14 +169,20 @@ describe('frameKey / collectPendingFrames', () => {
       makeFrame('b'),
       makeFrame('b'),
     ];
-    expect(collectPendingFrames(frames, store).map((p) => p.key)).toEqual(['a', 'b']);
+    expect(collectPendingFrames(frames, store).map((p) => p.key)).toEqual(['anime:a', 'anime:b']);
+    // Another model's masks do not count
+    expect(collectPendingFrames(frames, store, 'general').map((p) => p.key)).toEqual([
+      'general:done',
+      'general:a',
+      'general:b',
+    ]);
   });
 });
 
 describe('SegmentationManager.analyzeFrames', () => {
   it('does nothing — no worker, no download — when every mask exists', async () => {
     const { manager, maskStore, createWorker } = createHarness();
-    maskStore.set('a', { data: new Uint8Array(1), width: 1, height: 1 });
+    maskStore.set('anime:a', { data: new Uint8Array(1), width: 1, height: 1 });
     const result = await manager.analyzeFrames([makeFrame('a')]);
     expect(result).toEqual({ analyzed: 0, skipped: 1, backend: null });
     expect(createWorker).not.toHaveBeenCalled();
@@ -187,10 +216,14 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(transfers.every((p) => p.transfer?.[0] === p.msg.bitmap)).toBe(true);
     expect(bitmaps.every((b) => b.close.mock.calls.length === 0)).toBe(true);
 
-    expect(maskStore.keysForClip('clip-1').sort()).toEqual(['f0', 'f1', 'f3']);
-    expect(maskStore.get('f3')).toMatchObject({ width: 480, height: 640 });
+    expect(maskStore.keysForClip('clip-1').sort()).toEqual(['anime:f0', 'anime:f1', 'anime:f3']);
+    expect(maskStore.get('anime:f3')).toMatchObject({ width: 480, height: 640 });
     expect(manager.backend).toBe('webgpu');
-    expect(manager.readyInfo).toMatchObject({ backend: 'webgpu', modelBytes: SPEC.bytes });
+    expect(manager.readyInfo).toMatchObject({
+      modelId: 'anime',
+      backend: 'webgpu',
+      modelBytes: SPEC.bytes,
+    });
 
     const analyzing = onProgress.mock.calls.map(([p]) => p).filter((p) => p.phase === 'analyzing');
     expect(analyzing.map((p) => p.framesDone)).toEqual([0, 1, 2, 3]);
@@ -265,10 +298,28 @@ describe('SegmentationManager.analyzeFrames', () => {
     await manager.analyzeFrames([makeFrame('a')]);
     expect(workers[0].posted[0].msg).toEqual({
       type: 'init',
-      model: { ...SPEC, sha256: 'abc', bytes: 170 },
+      model: { ...SPEC, sha256: 'abc', bytes: 170, fetchAllOutputs: false },
       allowWasm: true,
     });
     expect(manager.readyInfo?.modelBytes).toBe(170);
+  });
+
+  it('applies a per-model DEV override (one stub per model)', async () => {
+    setDevModelOverride({
+      sha256: 'all',
+      models: { general: { sha256: 'gen', bytes: 302 } },
+      fetchAllOutputs: true,
+    });
+    const { manager, workers } = createHarness();
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'general' });
+    expect(workers[0].posted[0].msg.model).toEqual({
+      ...GENERAL_SPEC,
+      sha256: 'gen',
+      bytes: 302,
+      fetchAllOutputs: true,
+    });
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
+    expect(workers[1].posted[0].msg.model).toMatchObject({ id: 'anime', sha256: 'all' });
   });
 
   it('rejects with the init error code, terminates the worker and retries fresh', async () => {
@@ -369,8 +420,8 @@ describe('SegmentationManager.analyzeFrames', () => {
     await flush();
     // Every request of the job settled: it is forgotten
     expect(manager.cancelledJobCount).toBe(0);
-    expect(maskStore.has('f0')).toBe(true);
-    expect(maskStore.has('f1')).toBe(false);
+    expect(maskStore.has('anime:f0')).toBe(true);
+    expect(maskStore.has('anime:f1')).toBe(false);
     expect(worker.segments).toHaveLength(2);
     expect(worker.terminated).toBe(false);
   });
@@ -391,7 +442,7 @@ describe('SegmentationManager.analyzeFrames', () => {
     manager.forgetClip('clip-a');
     worker.mask(running);
     await flush();
-    expect(maskStore.has('a0')).toBe(false);
+    expect(maskStore.has('anime:a0')).toBe(false);
     expect(maskStore.keysForClip('clip-a')).toEqual([]);
 
     // Other clips still store their masks
@@ -399,7 +450,7 @@ describe('SegmentationManager.analyzeFrames', () => {
     await flush();
     worker.mask(worker.segments.at(-1));
     await other;
-    expect(maskStore.keysForClip('clip-b')).toEqual(['b0']);
+    expect(maskStore.keysForClip('clip-b')).toEqual(['anime:b0']);
   });
 
   it('closes a bitmap that finishes creating after the job was cancelled', async () => {
@@ -557,6 +608,80 @@ describe('SegmentationManager.analyzeFrames', () => {
     old.mask(stale);
     old.crash();
     expect(maskStore.size).toBe(0);
+  });
+});
+
+describe('SegmentationManager with more than one model', () => {
+  it('keeps each model’s masks apart and reuses them when switching back', async () => {
+    const { manager, maskStore, workers, createWorker } = createHarness();
+    const frames = [makeFrame('a'), makeFrame('b')];
+
+    await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
+    expect(manager.loadedModelId).toBe('anime');
+    expect(workers[0].posted[0].msg.model).toEqual(SPEC);
+
+    // The general model analyzes the same frames: a new worker for its spec
+    const general = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'general' });
+    expect(general).toMatchObject({ analyzed: 2, skipped: 0 });
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].posted[0].msg.model).toEqual(GENERAL_SPEC);
+    expect(manager.readyInfo).toMatchObject({ modelId: 'general', modelBytes: GENERAL_SPEC.bytes });
+    expect(maskStore.keysForClip('c').sort()).toEqual([
+      'anime:a',
+      'anime:b',
+      'general:a',
+      'general:b',
+    ]);
+
+    // Back to the anime model: its masks are still there, nothing to do
+    const back = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
+    expect(back).toEqual({ analyzed: 0, skipped: 2, backend: null });
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(manager.loadedModelId).toBe('general');
+  });
+
+  it('tells which model is busy while an analysis is queued or running', async () => {
+    const { manager, workers } = createHarness({ autoMask: false });
+    const listener = vi.fn();
+    const unsubscribe = manager.onBusyChange(listener);
+    const run = manager.analyzeFrames([makeFrame('a')], { modelId: 'general' });
+    expect(manager.isModelBusy('general')).toBe(true);
+    expect(manager.isModelBusy('anime')).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // A busy model is never unloaded
+    await flush();
+    expect(manager.unloadModel('general')).toBe(false);
+    expect(workers[0].terminated).toBe(false);
+
+    workers[0].mask(workers[0].segments[0]);
+    await run;
+    await flush();
+    expect(manager.isModelBusy('general')).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    // Idle: unloading stops the worker; another model is left alone
+    expect(manager.unloadModel('anime')).toBe(false);
+    expect(manager.unloadModel('general')).toBe(true);
+    expect(workers[0].terminated).toBe(true);
+    expect(manager.loadedModelId).toBeNull();
+    unsubscribe();
+    await manager.analyzeFrames([], { modelId: 'anime' });
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts a failed analysis as done', async () => {
+    const { manager } = createHarness(
+      {},
+      {
+        createWorker: () => {
+          throw new Error('no workers');
+        },
+      },
+    );
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'general' }).catch(() => undefined);
+    await flush();
+    expect(manager.isModelBusy('general')).toBe(false);
   });
 });
 
