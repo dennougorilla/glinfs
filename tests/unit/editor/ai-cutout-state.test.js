@@ -44,6 +44,7 @@ describe('AI cutout editor state', () => {
     state = setAiParams(state, { threshold: 0.7 });
     state = setAiParams(state, { edge: 3, smoothing: false });
     expect(state.edits.background.ai).toEqual({
+      model: 'anime',
       threshold: 0.7,
       smoothing: false,
       edge: 3,
@@ -51,6 +52,19 @@ describe('AI cutout editor state', () => {
     });
     // Mirrored into the clip like every edit
     expect(state.clip?.edits).toBe(state.edits);
+  });
+
+  it('switching the model keeps the parameters and the picks', () => {
+    let state = makeState();
+    state = addAiPick(state, { frame: 2, x: 0.5, y: 0.5, mode: 'keep' });
+    state = setAiParams(state, { threshold: 0.7 });
+    state = setAiParams(state, { model: 'general' });
+    expect(state.edits.background.ai).toMatchObject({
+      model: 'general',
+      threshold: 0.7,
+      picks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
+    });
+    expect(state.clip?.edits.background.ai.model).toBe('general');
   });
 
   it('clamps parameters through normalization', () => {

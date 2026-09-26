@@ -13,6 +13,12 @@
 /** @typedef {'left'|'center'|'right'} TextAlign */
 /** @typedef {'connected'|'global'} BackgroundMode */
 /** @typedef {'color'|'ai'} BackgroundMethod */
+
+/**
+ * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
+ * keeps AI_MODELS equal to the registry's ids)
+ * @typedef {'anime'|'general'} AiModel
+ */
 /** @typedef {'keep'|'remove'} PickMode */
 
 /**
@@ -47,6 +53,11 @@
 /**
  * AI cutout parameters (used when BackgroundRemoval.method is 'ai')
  * @typedef {Object} AiCutout
+ * @property {AiModel} model     - which segmentation model's masks to use.
+ *   Edits saved before the general model existed have none and mean
+ *   'anime'. Switching the model keeps the other parameters and the picks
+ *   (a pick is a position: it selects whatever the new model finds there,
+ *   and is ignored where that model finds nothing)
  * @property {number} threshold  - foreground probability cut-off, 0.05..0.95
  * @property {boolean} smoothing - average each frame's probability with its
  *   neighbours before thresholding (steadier edges between frames)
@@ -95,6 +106,9 @@ export const BACKGROUND_METHODS = /** @type {const} */ (['color', 'ai']);
 /** @type {readonly PickMode[]} */
 export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 
+/** @type {readonly AiModel[]} */
+export const AI_MODELS = /** @type {const} */ (['anime', 'general']);
+
 /** Numeric ranges enforced by normalizeEdits */
 export const EDIT_LIMITS = /** @type {const} */ ({
   size: { min: 0.02, max: 0.5 },
@@ -125,6 +139,7 @@ const TEXT_LAYER_DEFAULTS = /** @type {const} */ ({
 
 /** Defaults for the AI cutout parameters (picks default to none) */
 const AI_DEFAULTS = /** @type {const} */ ({
+  model: 'anime',
   threshold: 0.5,
   smoothing: true,
   edge: 0,
@@ -315,6 +330,8 @@ function normalizeAiCutout(ai, frameCount) {
   const { aiThreshold, aiEdge, aiPicks } = EDIT_LIMITS;
   const picks = Array.isArray(a.picks) ? a.picks : [];
   return {
+    // Edits from before the general model have no model: they used the anime one
+    model: normalizeEnum(a.model, AI_MODELS, AI_DEFAULTS.model),
     threshold: clampNumber(a.threshold, aiThreshold.min, aiThreshold.max, AI_DEFAULTS.threshold),
     smoothing: typeof a.smoothing === 'boolean' ? a.smoothing : AI_DEFAULTS.smoothing,
     edge: Math.round(clampNumber(a.edge, aiEdge.min, aiEdge.max, AI_DEFAULTS.edge)),

@@ -25,26 +25,41 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # AI cutout model (176 MB, too large for git): restored from the cache
-      # or downloaded from its pinned Hugging Face commit. The cache key is
-      # the pinned SHA-256 (src/features/ai-cutout/model-config.js and
-      # scripts/fetch-models.mjs; a unit test keeps all three in sync).
-      - name: Restore AI cutout model
+      # AI cutout models (about 176 + 179 MB, too large for the repository):
+      # restored from the cache or downloaded from their pinned Hugging Face
+      # commits. The cache key holds every pinned SHA-256
+      # (src/features/ai-cutout/model-registry.js, which the fetch script
+      # reads; a unit test keeps this file in sync with it).
+      - name: Restore AI cutout models
         uses: actions/cache@v4
         with:
-          path: public/models/isnetis.onnx
-          key: ai-model-isnetis-sha256-f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
-      # Verifies size and SHA-256 of a restored copy too; any mismatch
+          path: |
+            public/models/isnetis.onnx
+            public/models/isnet-general-use.onnx
+          key: ai-models-sha256-f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99-60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+      # Verifies size and SHA-256 of restored copies too; any mismatch
       # re-downloads, and a mismatching download fails the job
-      - name: Fetch AI cutout model
+      - name: Fetch AI cutout models
         run: npm run models:fetch
       - run: npm run build
-      - name: Verify the model in the Pages artifact
+      - name: Verify the models in the Pages artifact
         run: |
-          expected=f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
-          actual=$(sha256sum dist/models/isnetis.onnx | cut -d' ' -f1)
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::dist/models/isnetis.onnx SHA-256 is $actual, expected $expected"
+          check() {
+            actual=$(sha256sum "dist/models/$1" | cut -d' ' -f1)
+            if [ "$actual" != "$2" ]; then
+              echo "::error::dist/models/$1 SHA-256 is $actual, expected $2"
+              exit 1
+            fi
+          }
+          check isnetis.onnx f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
+          check isnet-general-use.onnx 60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+      # GitHub Pages rejects artifacts of 1 GB or more
+      - name: Check the Pages artifact size
+        run: |
+          bytes=$(du -sb dist | cut -f1)
+          echo "Pages artifact: $bytes bytes"
+          if [ "$bytes" -ge 1000000000 ]; then
+            echo "::error::dist is $bytes bytes; GitHub Pages artifacts must stay under 1 GB"
             exit 1
           fi
       - uses: actions/upload-pages-artifact@v3

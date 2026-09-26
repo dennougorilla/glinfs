@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 /**
- * Download the AI cutout model into public/models/ and verify it.
+ * Download the AI cutout models into public/models/ and verify them.
  *
  *   npm run models:fetch            download (skipped when a verified copy exists)
- *   npm run models:fetch -- --check verify the existing file only, never download
+ *   npm run models:fetch -- --check verify the existing files only, never download
  *
- * The model (skytnt anime-segmentation isnetis.onnx, Apache-2.0, 176 MB) is
- * too large for git, so it is fetched from a PINNED Hugging Face commit and
+ * The models (src/features/ai-cutout/model-registry.js: the anime and the
+ * general IS-Net, Apache-2.0, about 176 and 179 MB) are too large for the
+ * repository, so each one is fetched from a PINNED Hugging Face commit and
  * checked against a pinned size and SHA-256. Any mismatch deletes the file
  * and exits non-zero, so a deploy can never ship a different model.
  *
- * The pins are duplicated from src/features/ai-cutout/model-config.js (this
- * script must not depend on Vite's import.meta.env);
- * tests/unit/ai-cutout/model-config.test.js keeps both in sync.
+ * The pins come straight from the registry (plain data without Vite
+ * imports); tests/unit/ai-cutout/model-config.test.js checks that the Pages
+ * deploy workflow uses the same hashes and file names.
  */
 
 import { createHash } from 'node:crypto';
@@ -22,28 +23,29 @@ import { dirname, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { MODEL_REGISTRY } from '../src/features/ai-cutout/model-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * @typedef {Object} ModelPin
- * @property {string} fileName
+ * @property {string} fileName - Local file name under the output directory
  * @property {string} repo - Hugging Face repository
  * @property {string} revision - Pinned commit hash (never a branch)
+ * @property {string} [path] - File path inside the repository (default: fileName)
  * @property {number} bytes - Exact size
  * @property {string} sha256 - Lowercase hex SHA-256
  */
 
 /** @type {ModelPin[]} */
-export const MODELS = [
-  {
-    fileName: 'isnetis.onnx',
-    repo: 'skytnt/anime-seg',
-    revision: '493cb60893f47441b26ec4fb9a306bce9e342982',
-    bytes: 176_069_933,
-    sha256: 'f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99',
-  },
-];
+export const MODELS = MODEL_REGISTRY.map((entry) => ({
+  fileName: entry.fileName,
+  repo: entry.source.repo,
+  revision: entry.source.revision,
+  path: entry.source.path,
+  bytes: entry.bytes,
+  sha256: entry.sha256,
+}));
 
 /** Default output directory, served by Vite from publicDir */
 export const DEFAULT_OUT_DIR = resolve(__dirname, '../public/models');
@@ -53,7 +55,7 @@ export const DEFAULT_OUT_DIR = resolve(__dirname, '../public/models');
  * @returns {string}
  */
 export function sourceUrl(pin) {
-  return `https://huggingface.co/${pin.repo}/resolve/${pin.revision}/${pin.fileName}`;
+  return `https://huggingface.co/${pin.repo}/resolve/${pin.revision}/${pin.path ?? pin.fileName}`;
 }
 
 /**
