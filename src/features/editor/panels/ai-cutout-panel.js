@@ -5,11 +5,16 @@
  * Built once; updateAiCutoutSection() patches it in place from the editor
  * state (AI parameters and picks in the edits, runtime status in
  * state.aiCutout) and the clip's analysis coverage. What shows, in order:
- * what the analysis does (one-time download, frames stay on the device), a
+ * the model choice (Anime / General, each with its download size), what the
+ * analysis does (one-time download, frames stay on the device), a
  * WebGPU warning with the explicit slow option, "Analyze selection",
  * progress with Cancel, an error with Retry, and once any frame is
  * analyzed: threshold, smoothing, edge, the Keep/Remove pick tools and the
  * pick list.
+ *
+ * Everything analysis-related (coverage, Analyze, controls) reflects the
+ * chosen model's masks only; switching models keeps threshold, smoothing,
+ * edge and picks (see handleSetAiModel in index.js).
  *
  * Toggles are checkboxes (see edits-panel.js): Space on a focused toggle
  * flips it instead of toggling playback.
@@ -18,11 +23,14 @@
 import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
+import { getModelEntry, MODEL_REGISTRY } from '../../ai-cutout/model-registry.js';
 import {
-  DOWNLOAD_SIZE_LABEL,
   describeAnalysisProgress,
+  getAiModelId,
   getAnalysisCoverage,
   getAnalysisFraction,
+  getModelSizeLabel,
+  RUNTIME_SIZE_LABEL,
 } from '../ai-cutout.js';
 
 /** @typedef {import('../../../shared/edits/model.js').CutoutPick} CutoutPick */
@@ -52,6 +60,17 @@ export function isAnalysisRunning(phase) {
 export function formatEdge(edge) {
   if (edge === 0) return '0 px';
   return `${edge > 0 ? '+' : '−'}${Math.abs(edge)} px`;
+}
+
+/**
+ * What the analysis does with this model (the intro line)
+ * @param {string} modelId
+ * @returns {string}
+ */
+export function getAiIntro(modelId) {
+  const { label } = getModelEntry(modelId);
+  const subject = modelId === 'general' ? 'the people, pets and objects' : 'the characters';
+  return `Finds ${subject} in every frame with the ${label} model, which runs in this browser. The first analysis with it downloads ${getModelSizeLabel(modelId)} once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time); your frames never leave this device.`;
 }
 
 /**
@@ -115,7 +134,7 @@ export function renderAiCutoutSection(handlers) {
   // --- Method switch ---
   const methods = /** @type {const} */ ([
     { value: 'color', id: 'ai-method-color', label: 'Color' },
-    { value: 'ai', id: 'ai-method-ai', label: 'AI cutout (anime)' },
+    { value: 'ai', id: 'ai-method-ai', label: 'AI cutout' },
   ]);
   const methodSwitch = createElement(
     'fieldset',
@@ -143,9 +162,44 @@ export function renderAiCutoutSection(handlers) {
     ],
   );
 
+  // --- Model choice ---
+  const modelSwitch = createElement(
+    'fieldset',
+    { className: 'editor-text-fieldset editor-ai-model', id: 'ai-model' },
+    [
+      createElement('legend', { className: 'editor-text-field-label' }, ['Model']),
+      createElement(
+        'div',
+        { className: 'editor-text-segmented' },
+        MODEL_REGISTRY.map((entry) => {
+          const id = `ai-model-${entry.id}`;
+          const input = /** @type {HTMLInputElement} */ (
+            createElement('input', {
+              type: 'radio',
+              name: 'ai-model',
+              id,
+              value: entry.id,
+              'aria-describedby': 'ai-model-note',
+            })
+          );
+          cleanups.push(
+            on(input, 'change', () => {
+              if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
+            }),
+          );
+          return createElement('label', { className: 'editor-text-segment', for: id }, [
+            input,
+            createElement('span', {}, [`${entry.label} (${getModelSizeLabel(entry.id)})`]),
+          ]);
+        }),
+      ),
+      createElement('p', { className: 'editor-ai-note', id: 'ai-model-note' }),
+    ],
+  );
+
   // --- Explanation and WebGPU warning ---
   const intro = createElement('p', { className: 'editor-ai-intro', id: 'ai-intro' }, [
-    `Finds the characters in every frame with an anime model that runs in this browser. The first analysis downloads ${DOWNLOAD_SIZE_LABEL} once; your frames never leave this device.`,
+    getAiIntro('anime'),
   ]);
 
   const wasmBtn = createElement(
@@ -319,7 +373,18 @@ export function renderAiCutoutSection(handlers) {
   const section = createElement(
     'div',
     { className: 'editor-ai-section', id: 'ai-section', hidden: 'true' },
-    [intro, warning, wasmNote, analyzeBtn, coverage, progress, errorBox, notice, controls],
+    [
+      modelSwitch,
+      intro,
+      warning,
+      wasmNote,
+      analyzeBtn,
+      coverage,
+      progress,
+      errorBox,
+      notice,
+      controls,
+    ],
   );
 
   return { methodSwitch, section, cleanups };
@@ -456,7 +521,23 @@ export function updateAiCutoutSection(root, state, fps) {
 
   const running = isAnalysisRunning(status.phase);
   const frames = state.clip?.frames ?? [];
-  const cover = getAnalysisCoverage(frames, state.selectedRange);
+  const modelId = getAiModelId(background.ai);
+  const cover = getAnalysisCoverage(frames, state.selectedRange, { modelId });
+
+  // Model: one analysis runs with the model it started with
+  for (const entry of MODEL_REGISTRY) {
+    const input = /** @type {HTMLInputElement} */ (q(section, `#ai-model-${entry.id}`));
+    setChecked(input, entry.id === modelId);
+    input.disabled = running;
+  }
+  const model = getModelEntry(modelId);
+  setText(
+    q(section, '#ai-model-note'),
+    running
+      ? 'The model can be changed when the analysis ends or is cancelled.'
+      : `${model.description}. Each model keeps its own analysis; threshold, edge and picks stay when you switch.`,
+  );
+  setText(q(section, '#ai-intro'), getAiIntro(modelId));
 
   // WebGPU warning: known missing adapter, or an analysis stopped on it
   const noWebgpu = status.webgpu === false || status.needsWasmChoice;

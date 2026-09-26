@@ -2096,6 +2096,12 @@
   color: var(--color-recording);
 }
 
+/* Model choice: disabled while an analysis runs */
+.editor-screen .editor-ai-model input:disabled + span {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .editor-screen .editor-ai-section button:focus-visible,
 .editor-screen .editor-ai-section input:focus-visible,
 .editor-screen .editor-ai-method input:focus-visible + span {
