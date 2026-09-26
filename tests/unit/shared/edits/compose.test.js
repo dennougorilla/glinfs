@@ -212,6 +212,42 @@ describe('composeOutputFrameRGBA', () => {
     expect(ctx.names().filter((n) => n === 'clearRect')).toHaveLength(1);
   });
 
+  it('draws a scaled output at the smaller size, then keys and draws text at that size', async () => {
+    const crop = { x: 4, y: 2, width: 12, height: 8, aspectRatio: 'free' };
+    const result = await composeOutputFrameRGBA(
+      solidFrame(20, 20),
+      crop,
+      makeEdits({ key: true, text: true }),
+      4,
+      null,
+      0.5,
+    );
+    expect([result.width, result.height]).toEqual([6, 4]);
+    expect(result.data).toHaveLength(6 * 4 * 4);
+    const { ctx } = contexts[0];
+    // The crop rectangle drawn into the 6x4 output with high-quality smoothing
+    expect(ctx.calls.find((c) => c.name === 'drawImage')?.args.slice(1)).toEqual([
+      4, 2, 12, 8, 0, 0, 6, 4,
+    ]);
+    expect(ctx.imageSmoothingQuality).toBe('high');
+    // Keyed at the output size; the text lands in the middle of the 6x4 output
+    expect(ctx.calls.find((c) => c.name === 'getImageData')?.args).toEqual([0, 0, 6, 4]);
+    expect(Array.from(result.data.subarray(0, 4))).toEqual([0, 0, 0, 0]);
+    expect(Array.from(result.data.subarray((2 * 6 + 3) * 4, (2 * 6 + 3) * 4 + 4))).toEqual([
+      255, 0, 0, 255,
+    ]);
+  });
+
+  it('draws the full-size source unscaled with default smoothing at scale 1', async () => {
+    await composeOutputFrameRGBA(solidFrame(8, 8), null, makeEdits({ key: true }), 0, null, 0.5);
+    await composeOutputFrameRGBA(solidFrame(8, 8), null, makeEdits({ key: true }), 0, null, 1);
+    const { ctx } = contexts[0];
+    const draws = ctx.calls.filter((c) => c.name === 'drawImage');
+    expect(draws.at(-1)?.args.slice(1)).toEqual([0, 0]);
+    // The cached context is reset from the previous scaled frame
+    expect(ctx.imageSmoothingQuality).toBe('low');
+  });
+
   it('rejects a closed or missing frame', async () => {
     const closed = solidFrame(4, 4);
     closed.frame.closed = true;

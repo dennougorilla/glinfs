@@ -93,6 +93,49 @@ function drawTextLayers(ctx, layers, outW, outH) {
 }
 
 /**
+ * Output size at an output scale: each side scaled and rounded, never below
+ * 1 pixel. Scale 1 (or anything outside (0, 1)) returns the size unchanged.
+ * @param {number} width
+ * @param {number} height
+ * @param {number} scale - Output scale (0 < scale <= 1)
+ * @returns {{ width: number, height: number }}
+ */
+export function scaleOutputSize(width, height, scale) {
+  if (!(scale > 0) || scale >= 1) return { width, height };
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+/**
+ * Draw the source frame's output region scaled into an already-sized,
+ * cleared canvas of width x height. At scale 1 this is exactly
+ * drawSourceRegion (no resampling, default smoothing), so unscaled exports
+ * stay byte-identical; smaller outputs are resampled with high-quality
+ * smoothing. The smoothing quality is set on every call because the cached
+ * composition context keeps its state from one frame to the next.
+ * @param {Context2D} ctx
+ * @param {CanvasImageSource} source
+ * @param {Frame} frame
+ * @param {CropArea | null | undefined} crop
+ * @param {number} width - Output width (scaled)
+ * @param {number} height - Output height (scaled)
+ * @param {number} scale
+ */
+function drawScaledSourceRegion(ctx, source, frame, crop, width, height, scale) {
+  if (!(scale > 0) || scale >= 1) {
+    ctx.imageSmoothingQuality = 'low';
+    drawSourceRegion(ctx, source, crop);
+    return;
+  }
+  const region = getSourceRegion(frame, crop);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, region.x, region.y, region.width, region.height, 0, 0, width, height);
+}
+
+/**
  * Draw text layers into an output region of a larger canvas (the editor
  * shows the full frame; the region is the crop), clipped to that region and
  * translated so (0, 0) is its top-left corner. The single implementation of
@@ -291,6 +334,13 @@ export function __resetComposeCacheForTests() {
  * text are drawn and read back once. Only text over a keyed frame needs
  * the removal written back before drawing the text.
  *
+ * An output scale below 1 draws the (cropped) source already scaled down,
+ * then removes the background and draws the text at that size: the color
+ * key runs on the output pixels, AI masks are sampled through the region
+ * mapping (applyMaskToRegion handles an output smaller than its source
+ * rectangle) and text sizes are fractions of the output, so every edit
+ * renders at the smaller size as it would at full size.
+ *
  * The returned buffer is fresh on every call (ImageData.data), so callers
  * may transfer it.
  *
@@ -299,18 +349,27 @@ export function __resetComposeCacheForTests() {
  * @param {ClipEdits | null | undefined} edits
  * @param {number} frameIndex - Absolute clip frame index (for text ranges and masks)
  * @param {MaskSource | null} [maskSource] - Final AI masks (method 'ai')
+ * @param {number} [scale=1] - Output scale (0 < scale <= 1)
  * @returns {Promise<{ data: Uint8ClampedArray, width: number, height: number }>}
  * @throws {Error} When the frame's VideoFrame is missing or closed
  */
-export async function composeOutputFrameRGBA(frame, crop, edits, frameIndex, maskSource = null) {
+export async function composeOutputFrameRGBA(
+  frame,
+  crop,
+  edits,
+  frameIndex,
+  maskSource = null,
+  scale = 1,
+) {
   const source = isFrameValid(frame) ? getDrawableSource(frame) : null;
   if (!source) {
     throw new Error('Invalid frame: VideoFrame is missing or closed');
   }
 
-  const { width, height } = getOutputSize(frame, crop, { width: 0, height: 0 });
+  const full = getOutputSize(frame, crop, { width: 0, height: 0 });
+  const { width, height } = scaleOutputSize(full.width, full.height, scale);
   const ctx = getRgbaContext(width, height);
-  drawSourceRegion(ctx, source, crop);
+  drawScaledSourceRegion(ctx, source, frame, crop, width, height, scale);
 
   const remove = getRemovalStep(frame, getSourceRegion(frame, crop), edits, frameIndex, maskSource);
   const layers = getActiveTextLayers(edits, frameIndex);

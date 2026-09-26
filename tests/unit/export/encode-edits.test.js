@@ -511,3 +511,114 @@ describe('buildPaletteSample options', () => {
     expect(opaque.length).toBe(2 * 8 * 4);
   });
 });
+
+describe('output scale, color cap and explicit frame indices', () => {
+  /** @param {number} textStart @param {number} textEnd */
+  function textEdits(textStart, textEnd) {
+    const edits = createDefaultEdits();
+    edits.textLayers.push(createTextLayer({ text: 'Hi', start: textStart, end: textEnd }, 100));
+    return edits;
+  }
+
+  beforeEach(() => {
+    composeMock.impl = async (
+      /** @type {any} */ _frame,
+      /** @type {any} */ _crop,
+      /** @type {any} */ _edits,
+      /** @type {number} */ _index,
+      /** @type {any} */ _masks,
+      /** @type {number} */ scale = 1,
+    ) => {
+      const width = Math.max(1, Math.round(W * scale));
+      const height = Math.max(1, Math.round(H * scale));
+      return { data: new Uint8ClampedArray(width * height * 4), width, height };
+    };
+  });
+
+  it('renders a scaled export through the compositor at the smaller size, even without edits', async () => {
+    const frames = framesOf([1, 2]);
+    await encodeGif({
+      frames,
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+      scale: 0.5,
+    });
+    expect(manager.initConfig).toMatchObject({ width: 2, height: 2 });
+    const calls = vi.mocked(composeOutputFrameRGBA).mock.calls;
+    expect(calls.map((c) => c[5])).toEqual([0.5, 0.5]);
+    expect(frames[0].frame.copyTo).not.toHaveBeenCalled();
+    expect(manager.frames.map((f) => [f.width, f.height])).toEqual([
+      [2, 2],
+      [2, 2],
+    ]);
+  });
+
+  it('keeps the copyTo fast path at scale 1', async () => {
+    const frames = framesOf([1, 2]);
+    await encodeGif({
+      frames,
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+      scale: 1,
+    });
+    expect(composeOutputFrameRGBA).not.toHaveBeenCalled();
+    expect(frames[0].frame.copyTo).toHaveBeenCalled();
+    expect(manager.initConfig).toMatchObject({ width: W, height: H });
+  });
+
+  it('caps the palette with maxColors instead of the quality-derived count', async () => {
+    await encodeGif({
+      frames: framesOf([1]),
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+      maxColors: 32,
+    });
+    expect(manager.initConfig.maxColors).toBe(32);
+
+    installManager();
+    await encodeGif({
+      frames: framesOf([1]),
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+    });
+    expect(manager.initConfig.maxColors).toBe(179);
+  });
+
+  it('encodes explicit frames with their own absolute indices, without frame skip', async () => {
+    const frames = framesOf([1, 2, 3]);
+    await encodeGif({
+      frames,
+      frameIndices: [4, 11, 30],
+      crop: null,
+      settings: { ...SETTINGS, frameSkip: 3 },
+      fps: 30,
+      onProgress: vi.fn(),
+      edits: textEdits(0, 99),
+    });
+    const calls = vi.mocked(composeOutputFrameRGBA).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual(frames);
+    expect(calls.map((c) => c[3])).toEqual([4, 11, 30]);
+    expect(manager.frames).toHaveLength(3);
+  });
+
+  it('refuses frame indices that do not match the frames', async () => {
+    await expect(
+      encodeGif({
+        frames: framesOf([1, 2]),
+        frameIndices: [0],
+        crop: null,
+        settings: SETTINGS,
+        fps: 30,
+        onProgress: vi.fn(),
+      }),
+    ).rejects.toThrow('frameIndices must give one index per frame');
+  });
+});

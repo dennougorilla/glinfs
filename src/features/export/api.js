@@ -16,6 +16,7 @@ import {
   getEffectiveEncoderId,
   getEncoderPreset,
   getExportedFrameIndices,
+  getScaledDimensions,
   sampledPixelCount,
   sampleFramePixels,
   selectPaletteSampleIndices,
@@ -261,6 +262,15 @@ export async function checkEncoderStatus() {
  *   Final AI cutout masks, looked up by absolute clip index. Required when
  *   the edits use the 'ai' background method: every exported frame must
  *   have a mask, or encodeGif refuses to start (MissingCutoutMasksError).
+ * @property {number} [scale=1] - Output scale (0 < scale <= 1). Below 1 every
+ *   frame goes through the compositor at the smaller size (the copyTo fast
+ *   path only applies at full size)
+ * @property {number} [maxColors] - Palette size cap overriding the one
+ *   derived from quality and preset (the target-size ladder lowers it)
+ * @property {number[]} [frameIndices] - Absolute clip index of each entry
+ *   of `frames`. When given, `frames` are encoded as they are (no frame skip
+ *   is applied) and text ranges and masks are looked up by these indices —
+ *   the size estimator encodes a sparse sample of the export this way.
  */
 
 /**
@@ -314,59 +324,80 @@ export async function encodeGif(params, signal) {
     transparent = false,
     mergeIdenticalFrames = false,
     maskSource = null,
+    scale = 1,
+    maxColors: maxColorsOverride,
+    frameIndices = null,
   } = params;
 
-  // Apply frame skip
-  const skippedFrames = applyFrameSkip(frames, settings.frameSkip);
+  // Apply frame skip (an explicit index list is already the frames to encode)
+  const skippedFrames = frameIndices ? frames : applyFrameSkip(frames, settings.frameSkip);
 
   if (skippedFrames.length === 0) {
     throw new Error('No frames to encode');
   }
+  if (frameIndices && frameIndices.length !== frames.length) {
+    throw new Error('frameIndices must give one index per frame');
+  }
+
+  // applyFrameSkip treats any skip <= 1 as "every frame"
+  const frameStep = Math.max(1, settings.frameSkip);
+  /** Absolute clip index of the k-th encoded frame @param {number} k */
+  const absoluteIndex = (k) => (frameIndices ? frameIndices[k] : rangeStart + k * frameStep);
 
   // An AI cutout export needs every exported frame's mask up front: a
   // frame without one would silently keep its background
   if (isAiCutoutActive(edits?.background)) {
-    const exported = getExportedFrameIndices(frames.length, settings.frameSkip, rangeStart);
+    const exported = frameIndices
+      ? [...frameIndices]
+      : getExportedFrameIndices(frames.length, settings.frameSkip, rangeStart);
     const missing = findFramesMissingMasks(exported, maskSource);
     if (missing.length > 0) {
       throw new MissingCutoutMasksError(missing, exported.length);
     }
   }
   const totalSourceFrames = skippedFrames.length;
-  // applyFrameSkip treats any skip <= 1 as "every frame"
-  const frameStep = Math.max(1, settings.frameSkip);
 
   // Convert centiseconds to milliseconds for gifenc
   const frameDelayCs = calculateFrameDelay(fps, settings.playbackSpeed, settings.frameSkip);
   const frameDelayMs = frameDelayCs * 10;
 
-  // Determine output dimensions
+  // Determine output dimensions (after the output scale)
   const firstFrame = skippedFrames[0];
-  const width = crop ? crop.width : firstFrame.width;
-  const height = crop ? crop.height : firstFrame.height;
+  const { width, height } = getScaledDimensions(
+    crop ? crop.width : firstFrame.width,
+    crop ? crop.height : firstFrame.height,
+    scale,
+  );
+  const scaled = scale > 0 && scale < 1;
 
   // Get encoder preset configuration
   const preset = getEncoderPreset(settings.encoderPreset);
 
-  // Calculate max colors based on quality and preset
-  const maxColors = calculateMaxColors(settings.quality, settings.encoderPreset);
+  // Calculate max colors based on quality and preset (or the caller's cap)
+  const maxColors =
+    typeof maxColorsOverride === 'number' && maxColorsOverride > 0
+      ? Math.min(256, Math.max(2, Math.round(maxColorsOverride)))
+      : calculateMaxColors(settings.quality, settings.encoderPreset);
 
   // Transparent exports always use gifenc (see getEffectiveEncoderId)
   const encoderId = getEffectiveEncoderId(settings, transparent);
 
-  // Unedited clips keep the VideoFrame.copyTo fast path; edits render
-  // through the compositor so text, keying and AI masks match the preview.
+  // Unedited full-size clips keep the VideoFrame.copyTo fast path; edits
+  // and scaled output render through the compositor so text, keying and AI
+  // masks match the editor preview at any size.
   /** @type {FrameExtractor} */
-  const extractFrame = isEditsEmpty(edits)
-    ? (k) => getFrameRGBA(skippedFrames[k], crop)
-    : (k) =>
-        composeOutputFrameRGBA(
-          skippedFrames[k],
-          crop,
-          edits,
-          rangeStart + k * frameStep,
-          maskSource,
-        );
+  const extractFrame =
+    isEditsEmpty(edits) && !scaled
+      ? (k) => getFrameRGBA(skippedFrames[k], crop)
+      : (k) =>
+          composeOutputFrameRGBA(
+            skippedFrames[k],
+            crop,
+            edits,
+            absoluteIndex(k),
+            maskSource,
+            scale,
+          );
 
   // Create worker manager
   const manager = createEncoderManager();
