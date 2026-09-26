@@ -28,7 +28,10 @@ The analysis needs WebGPU to be fast (under a second per frame on a recent GPU).
 
 Once frames are analyzed, adjust **Threshold** (higher keeps less), **Smooth between frames** and **Edge** (grow or shrink the cutout by up to 8 pixels). **Keep** and **Remove** pick tools: click a character in the preview to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it. Picks are listed with their time and can be removed one by one or with **Clear picks**. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
 
-Press Escape to leave a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, export, or switch clips in the queue.
+### Touch up
+The **Touch up** section of the **Background** panel fixes what either method got wrong. Turn on **Brush** and paint on the preview: **Erase** makes the painted pixels transparent, **Restore** brings back the original pixels there. **Size** sets the brush (the circle on the preview shows it). Each stroke applies to **This frame** or to the **Selection** (the frames between IN and OUT when you paint it). **Undo last stroke**, **Clear on this frame** and **Clear all** take strokes away again. Touch-ups apply only while background removal is on; turning removal off keeps them for later.
+
+Press Escape to leave the brush, a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, export, or switch clips in the queue.
 
 ### Open existing GIFs and images
 Use **Open GIF or image** on the Capture screen, or drop a file on the preview, to edit an existing GIF, APNG, animated WebP, PNG, JPEG or WebP file with the same trim, crop, text and transparency tools. Frame timing and transparent pixels are kept when you export it again.
