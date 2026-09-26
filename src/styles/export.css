@@ -1,963 +1,539 @@
-/* Export Screen - Professional Layout */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Export GIF dialog (src/features/export/ui.js)
 
-.export-screen {
+   A modal over the editor. Every rule is scoped under the dialog's own root
+   (.export-dialog-backdrop / .export-dialog) and every class is prefixed
+   export-, so nothing here can restyle another screen (generic class names
+   used to leak between feature stylesheets).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.export-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(9, 9, 11, 0.72);
+  backdrop-filter: blur(2px);
+  animation: export-dialog-fade 120ms ease-out;
+}
+
+@keyframes export-dialog-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.export-dialog-backdrop .export-dialog {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  width: min(820px, 100%);
+  max-height: 100%;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text);
   overflow: hidden;
 }
 
-/* Toolbar */
-.export-toolbar {
-  flex-shrink: 0;
-  height: var(--toolbar-height);
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+.export-dialog .export-dialog-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-5);
-  background: var(--color-panel);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.export-toolbar-left,
-.export-toolbar-right {
-  display: flex;
-  align-items: center;
   gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-header);
 }
 
-.export-title {
-  font-size: var(--font-size-md);
+.export-dialog .export-dialog-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
   font-weight: 600;
+}
+
+.export-dialog .export-dialog-title:focus {
+  outline: none;
+}
+
+.export-dialog .export-dialog-title:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.export-dialog .export-dialog-close {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.export-dialog .export-dialog-close:hover:not(:disabled) {
+  background: var(--hover-overlay);
   color: var(--color-text);
 }
 
-/* Main Content */
-.export-content {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-  min-height: 0;
+.export-dialog .export-dialog-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-/* Preview Panel */
-.export-preview-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-bg);
-  overflow: hidden;
-  min-width: 0;
+.export-dialog .export-dialog-close:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
-.export-preview-wrapper {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-10);
-  min-height: 0;
-  min-width: 0;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   CANVAS PREVIEW - Matches Editor Pattern
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Canvas container - mirrors editor-canvas-container */
-.export-canvas-container {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background: var(--color-canvas-bg);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  box-shadow: var(--shadow-lg);
-}
-
-/* Preview canvas */
-.export-canvas {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-}
-
-/* Play/Pause overlay button */
-.export-preview-play-btn {
-  position: absolute;
-  bottom: var(--space-4);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: var(--radius-full);
-  color: white;
-  font-size: 20px;
-  cursor: pointer;
-  opacity: 0;
-  transition: all var(--transition-normal);
-  z-index: 10;
-}
-
-.export-canvas-container:hover .export-preview-play-btn {
-  opacity: 1;
-}
-
-.export-preview-play-btn:hover {
-  background: rgba(59, 130, 246, 0.8);
-  transform: translateX(-50%) scale(1.1);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
-}
-
-.export-preview-play-btn:active {
-  transform: translateX(-50%) scale(1);
-}
-
-.export-preview-play-btn.playing {
-  /* Subtle indicator when playing */
-}
-
-/* Size indicator */
-.export-preview-size {
-  position: absolute;
-  bottom: var(--space-4);
-  right: var(--space-4);
-  padding: var(--space-1) var(--space-3);
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.8);
-  opacity: 0;
-  transition: opacity var(--transition-normal);
-  z-index: 5;
-}
-
-.export-canvas-container:hover .export-preview-size {
-  opacity: 1;
-}
-
-/* Settings Panel */
-.export-settings-panel {
-  flex-shrink: 0;
-  width: var(--sidebar-width);
-  display: flex;
-  flex-direction: column;
-  background: var(--color-panel);
-  border-left: 1px solid var(--color-border);
-  overflow: hidden;
-}
-
-/* Everything below is scoped to the export settings panel on purpose.
-   These generic names (.settings-header, .setting-row, …) are also used by
-   the Settings screen and the Capture sidebar, and export.css loads after
-   capture.css: unscoped, they silently restyled both. The Capture sidebar
-   was rendering its rows stacked (flex-direction: column) because of the
-   .setting-row rule below, and the Settings screen inherited this header's
-   uppercase treatment. */
-.export-settings-panel .settings-header {
-  flex-shrink: 0;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  padding: 0 var(--space-5);
-  background: var(--color-panel-header);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.export-settings-panel .settings-title {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.export-settings-panel .settings-content {
+.export-dialog .export-dialog-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* ── Shared pieces ────────────────────────────────────────────────────── */
+
+.export-dialog .export-view {
   padding: var(--space-5);
 }
 
-/* Settings Group */
-.export-settings-panel .settings-group {
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-5);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.export-settings-panel .settings-group:last-child {
-  margin-bottom: 0;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.export-settings-panel .settings-group-title {
-  font-size: var(--font-size-xs);
+.export-dialog .export-view-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-lg);
   font-weight: 600;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: var(--space-4);
 }
 
-/* Setting Row */
-.export-settings-panel .setting-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-}
-
-.export-settings-panel .setting-row:last-child {
-  margin-bottom: 0;
-}
-
-.export-settings-panel .setting-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.export-settings-panel .setting-label {
-  font-size: var(--font-size-sm);
+.export-dialog .export-text {
+  margin: 0 0 var(--space-4);
   color: var(--color-text-secondary);
-}
-
-.export-settings-panel .setting-value {
   font-size: var(--font-size-sm);
-  font-family: var(--font-mono);
-  color: var(--color-primary);
-  font-weight: 500;
+  line-height: var(--line-height-normal);
 }
 
-/* Checkbox Row */
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  background: var(--color-bg-tertiary);
+.export-dialog .export-hint {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.export-dialog .export-note {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
-  cursor: pointer;
+  background: var(--color-primary-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
 }
 
-.checkbox-row:hover {
-  background: var(--color-surface);
+.export-dialog .export-note--warning {
+  background: var(--color-selection-bg);
+  color: var(--color-selection-handle);
 }
 
-.checkbox-row label {
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
-  cursor: pointer;
+.export-dialog .export-note[hidden] {
+  display: none;
 }
 
-/* Estimated Size */
-.estimated-size {
-  padding: var(--space-5);
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-lg);
-  text-align: center;
+.export-dialog .export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   margin-top: var(--space-4);
 }
 
-.estimated-size-label {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: var(--space-2);
+.export-dialog .export-actions button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.estimated-size-value {
-  font-size: var(--font-size-2xl);
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: var(--color-text);
+.export-dialog .export-actions--secondary {
+  margin-top: var(--space-2);
 }
 
-/* Actions */
-.export-settings-panel .settings-actions {
-  flex-shrink: 0;
+/* ── Settings ─────────────────────────────────────────────────────────── */
+
+.export-dialog .export-summary {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-5);
-  border-top: 1px solid var(--color-border);
-}
-
-.btn-export-main {
-  width: 100%;
-  height: var(--control-height-lg);
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  background: var(--gradient-glinfs);
-  color: white;
-  border-radius: var(--radius-lg);
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
-  transition: all var(--transition-normal);
-}
-
-.btn-export-main:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
-}
-
-.btn-export-main:active:not(:disabled) {
-  transform: translateY(0);
-  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
-}
-
-/* Progress State */
-.export-progress {
-  display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: var(--space-10);
-  text-align: center;
-}
-
-.progress-icon {
-  width: 72px;
-  height: 72px;
-  margin-bottom: var(--space-5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 40px;
-  animation: spin 1.5s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.progress-title {
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: var(--space-8);
-}
-
-.progress-bar-container {
-  width: 100%;
-  max-width: 400px;
-  margin-bottom: var(--space-5);
-}
-
-.progress-bar {
-  height: 8px;
-  background: var(--color-surface);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
-
-.progress-bar-fill {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: var(--radius-full);
-  transition: width var(--transition-normal);
-  will-change: width;
-}
-
-.progress-info {
-  display: flex;
-  justify-content: space-between;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-  margin-top: var(--space-3);
-}
-
-.progress-info .percent {
-  font-family: var(--font-mono);
-  color: var(--color-primary);
-  font-weight: 500;
-}
-
-.progress-time {
-  font-size: var(--font-size-base);
-  color: var(--color-text-muted);
-  margin-bottom: var(--space-8);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   COMPLETE STATE V2 - Enhanced UI with GIF Preview
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.export-complete-v2 {
-  display: grid;
-  grid-template-columns: 1fr 380px;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  animation: completeSlideIn 0.4s ease-out;
-}
-
-@keyframes completeSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Left: GIF Preview Section */
-.complete-preview-section {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-8);
-  background: var(--color-bg);
-  position: relative;
-  overflow: hidden;
-}
-
-.complete-preview-section::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 30% 30%, rgba(34, 197, 94, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 70% 70%, rgba(59, 130, 246, 0.06) 0%, transparent 50%);
-  pointer-events: none;
-}
-
-.complete-preview-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: var(--radius-lg);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    0 20px 50px -10px rgba(0, 0, 0, 0.5),
-    0 0 80px -20px rgba(34, 197, 94, 0.2);
-  animation: previewFadeIn 0.5s ease-out 0.2s both;
-}
-
-@keyframes previewFadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Right: Info Section */
-.complete-info-section {
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-8);
-  background: var(--color-panel);
-  border-left: 1px solid var(--color-border);
-  overflow-y: auto;
-}
-
-/* Header with animated checkmark */
-.complete-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  margin-bottom: var(--space-8);
-  padding-bottom: var(--space-6);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.complete-icon-ring {
-  flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.1) 100%);
-  border: 2px solid var(--color-success);
-  border-radius: var(--radius-full);
-  animation: ringPulse 2s ease-in-out infinite;
-}
-
-@keyframes ringPulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
-  }
-}
-
-.complete-icon-check {
-  width: 24px;
-  height: 24px;
-  color: var(--color-success);
-  animation: checkDraw 0.4s ease-out 0.3s both;
-}
-
-.complete-icon-check svg {
-  width: 100%;
-  height: 100%;
-}
-
-@keyframes checkDraw {
-  from {
-    opacity: 0;
-    transform: scale(0.5);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.complete-header-text {
-  flex: 1;
-}
-
-.complete-header-text .complete-title {
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-  color: var(--color-text);
-  margin-bottom: var(--space-1);
-  letter-spacing: -0.02em;
-}
-
-.complete-header-text .complete-subtitle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-/* Stats */
-.complete-stats {
-  display: flex;
-  gap: var(--space-3);
-  margin-bottom: var(--space-6);
-}
-
-.complete-stat-card {
-  flex: 1;
-  padding: var(--space-4);
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-lg);
-  text-align: center;
-  border: 1px solid var(--color-border);
-  transition: all var(--transition-normal);
-  min-width: 0;
-}
-
-.complete-stat-card:hover {
-  border-color: rgba(34, 197, 94, 0.5);
-  background: rgba(34, 197, 94, 0.08);
-  transform: translateY(-1px);
-}
-
-.complete-stat-card.complete-stat-primary {
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(34, 197, 94, 0.05) 100%);
-  border-color: rgba(34, 197, 94, 0.3);
-}
-
-.complete-stat-card .stat-value {
-  font-size: var(--font-size-2xl);
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: var(--color-text);
-  letter-spacing: -0.02em;
-}
-
-.complete-stat-card .stat-label {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-top: var(--space-1);
-}
-
-/* Primary Actions */
-.complete-primary-actions {
+  gap: var(--space-2) var(--space-3);
   margin-bottom: var(--space-4);
 }
 
-.btn-download-large {
-  width: 100%;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-  color: white;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  border: none;
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition: all var(--transition-normal);
-  box-shadow:
-    0 4px 12px rgba(34, 197, 94, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-.btn-download-large svg {
-  width: 20px;
-  height: 20px;
-  stroke-width: 2.5;
-}
-
-.btn-download-large:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 8px 20px rgba(34, 197, 94, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-.btn-download-large:active {
-  transform: translateY(0);
-  box-shadow:
-    0 2px 8px rgba(34, 197, 94, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-/* Secondary Actions */
-.complete-secondary-actions {
-  display: flex;
-  gap: var(--space-3);
-  margin-bottom: var(--space-6);
-}
-
-.btn-action-secondary {
-  flex: 1;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all var(--transition-normal);
-  min-width: 0;
-}
-
-.btn-action-secondary svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  opacity: 0.7;
-  transition: all var(--transition-fast);
-}
-
-.btn-action-secondary span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.btn-action-secondary:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-text-muted);
-  color: var(--color-text);
-}
-
-.btn-action-secondary:hover svg {
-  opacity: 1;
-}
-
-.btn-action-secondary:active {
-  transform: scale(0.98);
-  background: var(--color-surface-active);
-}
-
-/* Back to Editor link */
-.complete-back-link {
-  margin-top: auto;
-  padding-top: var(--space-6);
-  border-top: 1px solid var(--color-border);
-}
-
-.btn-text-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: color var(--transition-fast);
-}
-
-.btn-text-link:hover {
-  color: var(--color-primary);
-}
-
-/* Responsive: Stack on smaller screens */
-@media (max-width: 900px) {
-  .export-complete-v2 {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr auto;
-  }
-
-  .complete-preview-section {
-    min-height: 300px;
-  }
-
-  .complete-info-section {
-    border-left: none;
-    border-top: 1px solid var(--color-border);
-    max-height: 400px;
-  }
-}
-
-/* Legacy support - keep old styles for backwards compatibility */
-.export-complete {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: var(--space-10);
-  text-align: center;
-}
-
-.complete-icon {
-  width: 72px;
-  height: 72px;
-  margin-bottom: var(--space-5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-success);
-  border-radius: var(--radius-full);
-  font-size: 36px;
-  color: white;
-}
-
-.file-info {
-  display: flex;
-  gap: var(--space-8);
-  margin-bottom: var(--space-8);
-  padding: var(--space-5);
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-}
-
-.file-info-item {
-  text-align: center;
-}
-
-.file-info-label {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: var(--space-2);
-}
-
-.file-info-value {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
+.export-dialog .export-summary-line {
+  margin: 0;
   font-family: var(--font-mono);
-  color: var(--color-text);
-}
-
-.complete-actions {
-  display: flex;
-  gap: var(--space-4);
-}
-
-.btn-download {
-  height: var(--control-height-lg);
-  padding: 0 var(--space-8);
-  background: var(--color-success);
-  color: white;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  border-radius: var(--radius-lg);
-}
-
-.btn-download:hover:not(:disabled) {
-  background: #16a34a;
-}
-
-/* Error State - Uses shared .error-screen styles from global.css */
-
-/* Status Bar */
-.export-status-bar {
-  flex-shrink: 0;
-  height: var(--statusbar-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 var(--space-5);
-  background: var(--color-panel-header);
-  border-top: 1px solid var(--color-border);
   font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
-.export-status-section {
-  display: flex;
-  align-items: center;
+.export-dialog .export-badge {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-accent-muted);
+  color: var(--color-accent-hover);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+}
+
+.export-dialog .export-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
 }
 
-.status-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+@media (max-width: 720px) {
+  .export-dialog .export-columns {
+    grid-template-columns: 1fr;
+  }
 }
 
-.status-item .value {
-  font-family: var(--font-mono);
+.export-dialog .export-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.export-dialog .export-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.export-dialog .export-field {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) 1fr;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.export-dialog .export-field > .export-hint {
+  grid-column: 2;
+  margin-top: 0;
+}
+
+.export-dialog .export-field-label {
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-/* (Old preview states removed - now using Canvas-based preview) */
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   ENCODER SELECTION CARDS
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.encoder-selection-group {
-  padding-bottom: var(--space-4);
+.export-dialog .export-field-value {
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
 }
 
-.encoder-cards {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+.export-dialog .export-range {
+  grid-column: 1 / -1;
+  width: 100%;
 }
 
-.encoder-card {
+.export-dialog .export-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.export-dialog .export-check {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-bg-tertiary);
-  border: 2px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.export-dialog .export-check label {
   cursor: pointer;
-  transition: all var(--transition-normal);
 }
 
-.encoder-card:hover {
-  border-color: var(--color-text-muted);
-  background: var(--color-surface);
+.export-dialog .export-check .export-hint {
+  flex-basis: 100%;
+  margin: 0 0 0 26px;
 }
 
-.encoder-card.selected {
-  border-color: var(--color-primary);
-  background: rgba(59, 130, 246, 0.08);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+.export-dialog .export-checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
 }
 
-.encoder-card:focus-visible {
+.export-dialog .export-checkbox:focus-visible,
+.export-dialog .export-number:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
-.encoder-card-header {
-  display: flex;
+.export-dialog .export-target {
+  grid-template-columns: auto auto;
+  justify-content: space-between;
+}
+
+.export-dialog .export-target-amount {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
-.encoder-card-radio {
-  font-size: 16px;
+.export-dialog .export-number {
+  width: 88px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.export-dialog .export-number:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.export-dialog .export-unit {
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
-  line-height: 1;
 }
 
-.encoder-card.selected .encoder-card-radio {
-  color: var(--color-primary);
+/* Encoder cards: a real radio group, the card is the radio's label */
+.export-dialog .export-encoder-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.encoder-card-info {
+.export-dialog .export-encoder-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.export-dialog .export-encoder-card:hover {
+  border-color: var(--color-surface-hover);
+}
+
+.export-dialog .export-encoder-card--selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+}
+
+.export-dialog .export-encoder-card:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.export-dialog .export-encoder-card--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.export-dialog .export-encoder-card--disabled:hover {
+  border-color: var(--color-border);
+}
+
+.export-dialog .export-encoder-radio {
+  grid-row: 1 / span 3;
+  margin: 2px 0 0;
+  accent-color: var(--color-primary);
+}
+
+.export-dialog .export-encoder-radio:focus-visible {
+  outline: none;
+}
+
+.export-dialog .export-encoder-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 1;
 }
 
-.encoder-card-name {
+.export-dialog .export-encoder-name {
   font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--color-text);
 }
 
-.encoder-card-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 6px;
+.export-dialog .export-encoder-badge {
+  padding: 0 6px;
   border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
-.encoder-card-badge.js {
-  background: rgba(234, 179, 8, 0.15);
-  color: #ca8a04;
+.export-dialog .export-encoder-badge--js {
+  background: var(--color-selection-bg);
+  color: var(--color-selection-handle);
 }
 
-.encoder-card-badge.wasm {
-  background: rgba(168, 85, 247, 0.15);
-  color: #a855f7;
+.export-dialog .export-encoder-badge--wasm {
+  background: var(--color-highlight-muted);
+  color: #c4b5fd;
 }
 
-.encoder-card-description {
+.export-dialog .export-encoder-description {
+  grid-column: 2;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
-  padding-left: calc(16px + var(--space-3));
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   TRANSPARENCY (background removal / sources with alpha)
-   ═══════════════════════════════════════════════════════════════════════════ */
+.export-dialog .export-encoder-note {
+  grid-column: 2;
+  font-size: var(--font-size-xs);
+  color: var(--color-selection-handle);
+}
 
-/* Checkerboard behind the preview so transparent pixels read as such
-   (opaque clips cover it completely) */
-.export-screen .export-canvas {
-  background-color: #c8c8c8;
+/* Footer: estimate + primary action */
+.export-dialog .export-footer {
+  position: sticky;
+  bottom: calc(-1 * var(--space-5));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: var(--space-5) calc(-1 * var(--space-5)) calc(-1 * var(--space-5));
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.export-dialog .export-estimate {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.export-dialog .export-start {
+  min-width: 140px;
+}
+
+.export-dialog .export-start:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Progress (encoding, AI preparation) ──────────────────────────────── */
+
+.export-dialog .export-progress,
+.export-dialog .export-ai-prep,
+.export-dialog .export-error {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-5);
+}
+
+.export-dialog .export-progress-text {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.export-dialog .export-progress-text[hidden] {
+  display: none;
+}
+
+.export-dialog .export-progress-bar {
+  width: 100%;
+  height: 8px;
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.export-dialog .export-progress-bar::-webkit-progress-bar {
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+}
+
+.export-dialog .export-progress-bar::-webkit-progress-value {
+  background: var(--color-primary);
+  border-radius: var(--radius-full);
+  transition: width var(--transition-normal);
+}
+
+.export-dialog .export-progress-bar::-moz-progress-bar {
+  background: var(--color-primary);
+  border-radius: var(--radius-full);
+}
+
+.export-dialog .export-progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.export-dialog .export-progress-percent {
+  font-family: var(--font-mono);
+  color: var(--color-primary);
+}
+
+/* ── Result ───────────────────────────────────────────────────────────── */
+
+.export-dialog .export-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .export-dialog .export-result {
+    grid-template-columns: 1fr;
+  }
+}
+
+.export-dialog .export-result-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  max-height: 60vh;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  /* Checkerboard so transparent pixels read as transparent */
+  background-color: #2a2a2e;
   background-image:
-    linear-gradient(45deg, #8c8c8c 25%, transparent 25%),
-    linear-gradient(-45deg, #8c8c8c 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #8c8c8c 75%),
-    linear-gradient(-45deg, transparent 75%, #8c8c8c 75%);
+    linear-gradient(45deg, #3a3a3f 25%, transparent 25%),
+    linear-gradient(-45deg, #3a3a3f 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #3a3a3f 75%),
+    linear-gradient(-45deg, transparent 75%, #3a3a3f 75%);
   background-size: 16px 16px;
   background-position:
     0 0,
@@ -966,181 +542,44 @@
     -8px 0;
 }
 
-/* The WASM encoder cannot write a transparent index */
-.export-screen .encoder-card.export-transparency-encoder-disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+.export-dialog .export-result-img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(60vh - 2 * var(--space-3));
+  object-fit: contain;
+  image-rendering: auto;
 }
 
-.export-screen .encoder-card.export-transparency-encoder-disabled:hover {
-  border-color: var(--color-border);
-  background: var(--color-bg-tertiary);
-}
-
-.export-screen .export-transparency-encoder-note {
-  padding-left: calc(16px + var(--space-3));
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  font-style: italic;
-}
-
-.export-screen .export-transparency-badge {
-  padding: 1px var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  background-color: var(--color-panel);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   ENCODER-SPECIFIC SETTINGS
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.encoder-settings-section {
-  animation: settingsFadeIn 0.2s ease-out;
-}
-
-@keyframes settingsFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Gifsicle info box */
-.encoder-info-box {
-  display: flex;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(168, 85, 247, 0.04) 100%);
-  border: 1px solid rgba(168, 85, 247, 0.2);
-  border-radius: var(--radius-lg);
-}
-
-.encoder-info-icon {
-  font-size: 20px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.encoder-info-content {
-  flex: 1;
-}
-
-.encoder-info-title {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0 0 var(--space-1) 0;
-}
-
-.encoder-info-description {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+.export-dialog .export-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
   margin: 0;
-  line-height: 1.5;
 }
 
-/* Setting description and hint */
-.setting-description {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+.export-dialog .export-fact {
   padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-  margin-top: var(--space-2);
 }
 
-.setting-hint {
-  font-size: var(--font-size-xs);
+.export-dialog .export-fact dt {
+  font-size: var(--font-size-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--color-text-muted);
-  margin-top: var(--space-2);
-  padding-left: calc(var(--space-3) + 16px);
 }
 
-/* Live monitor column for the encoding/complete/error states (#100 round 4):
-   same right-side spot as the settings panel's slot; disappears entirely
-   when no capture session is live */
-.export-screen .export-live-column {
-  flex-shrink: 0;
-  width: 280px;
-  background: var(--color-panel);
-  border-left: 1px solid var(--color-border);
-}
-
-.export-screen .export-live-column:has(.live-monitor-slot[hidden]) {
-  display: none;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   AI cutout: preparation before encoding, and the settings note
-   Scoped under .export-screen; every class is prefixed export-ai-
-   ───────────────────────────────────────────────────────────────────────────── */
-
-.export-screen .export-ai-prep {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-4);
-  width: 100%;
-  height: 100%;
-  max-width: 480px;
-  margin: 0 auto;
-  padding: var(--space-10) var(--space-6);
-  text-align: center;
-}
-
-.export-screen .export-ai-title {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.export-screen .export-ai-text,
-.export-screen .export-ai-progress-text {
-  margin: 0;
+.export-dialog .export-fact dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  line-height: 1.5;
-  color: var(--color-text-secondary);
-}
-
-.export-screen .export-ai-progress-text {
   color: var(--color-text);
-  font-variant-numeric: tabular-nums;
 }
 
-.export-screen .export-ai-progress-bar {
-  width: 100%;
-  max-width: 400px;
-  height: 8px;
-  accent-color: var(--color-primary);
-}
-
-.export-screen .export-ai-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-3);
-}
-
-.export-screen .export-ai-actions button:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-}
-
-.export-screen .export-ai-note {
-  margin: 0 var(--space-4) var(--space-3);
-  font-size: var(--font-size-xs);
-  line-height: 1.4;
-  color: var(--color-text-secondary);
-}
-
-.export-screen .export-ai-note[hidden] {
-  display: none;
+@media (prefers-reduced-motion: reduce) {
+  .export-dialog-backdrop {
+    animation: none;
+  }
 }

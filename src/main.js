@@ -9,9 +9,9 @@ import { initCapture } from './features/capture/index.js';
 import {
   deleteActiveClipFromAnywhere,
   initEditor,
+  initExportRoute,
   promoteClipFromQueue,
 } from './features/editor/index.js';
-import { initExport } from './features/export/index.js';
 import { initLoading } from './features/loading/index.js';
 import { initSettings } from './features/settings/index.js';
 import {
@@ -104,7 +104,7 @@ if (IS_TEST_MODE) {
     setCaptureState: null,
     /** Set editor state (available after editor init) */
     setEditorState: null,
-    /** Set export state (available after export init) */
+    /** Set export state (available while the Export dialog is open) */
     setExportState: null,
 
     // ============================================================
@@ -157,6 +157,10 @@ if (IS_TEST_MODE) {
      * @param {string|null} [options.sourceName] - Mark the clip as imported from this file
      * @param {import('./shared/edits/model.js').ClipEdits} [options.edits] - Edits the
      *   editor restores on mount (as savedEditorState.edits)
+     * @param {{ start: number, end: number }} [options.selectedRange] - Selection the
+     *   editor restores on mount (savedEditorState)
+     * @param {Object|null} [options.cropArea] - Crop the editor restores on mount
+     * @param {number} [options.playbackSpeed] - Speed the editor restores on mount
      * @returns {Promise<void>}
      *
      * @example
@@ -171,8 +175,10 @@ if (IS_TEST_MODE) {
     },
 
     /**
-     * Create and inject a mock EditorPayload (Editor → Export)
-     * Use this to test Export without going through Editor
+     * Create and inject a mock EditorPayload: the editor restores it on its
+     * next mount (range, crop, edits, speed), so `#/export` then opens the
+     * editor with the Export dialog for exactly this state. The editor
+     * payload shares the clip payload's frames, like a real one.
      *
      * @param {Object} options - Options
      * @param {number} [options.frameCount=30] - Number of frames
@@ -187,6 +193,7 @@ if (IS_TEST_MODE) {
      * @param {boolean} [options.hasAlpha] - Source has transparent pixels
      * @param {string|null} [options.sourceName] - Mark the clip payload as imported
      *   (enables identical-frame merging on export)
+     * @param {number} [options.playbackSpeed] - The editor's playback speed (the GIF speed)
      * @returns {Promise<void>}
      *
      * @example
@@ -199,12 +206,16 @@ if (IS_TEST_MODE) {
      */
     injectMockEditorPayload: async (options = {}) => {
       const defaults = getDefaultMockOptions();
-      const editorPayload = await createMockEditorPayload({ ...defaults, ...options });
 
-      // Also inject clip payload since export reads from both. Edits belong
-      // to the editor payload here, not to the clip's saved editor state.
-      const { edits: _edits, ...clipOptions } = options;
+      // The clip payload owns the frames; edits belong to the editor
+      // payload here, not to the clip's saved editor state
+      const { edits: _edits, playbackSpeed: _speed, ...clipOptions } = options;
       const clipPayload = await createMockClipPayload({ ...defaults, ...clipOptions });
+      const editorPayload = await createMockEditorPayload({
+        ...defaults,
+        ...options,
+        frames: clipPayload.frames,
+      });
       setClipPayload(clipPayload);
       setEditorPayload(editorPayload);
 
@@ -267,7 +278,8 @@ if (IS_TEST_MODE) {
 const routes = {
   '/capture': initCapture,
   '/editor': initEditor,
-  '/export': initExport,
+  // Not a screen: opens the editor with the Export dialog (or Capture)
+  '/export': initExportRoute,
   '/loading': initLoading,
   '/settings': initSettings,
 };

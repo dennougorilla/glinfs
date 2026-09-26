@@ -13,12 +13,18 @@
  * @typedef {Object} ExportSettings
  * @property {number} quality - 0.1 to 1.0 (affects color quantization)
  * @property {1|2|3|4|5} frameSkip - Use every Nth frame
- * @property {number} playbackSpeed - 0.25 to 4.0
+ * @property {number} playbackSpeed - 0.25 to 4.0. The export dialog sets it
+ *   from the editor's playback speed (the editor speed IS the GIF speed);
+ *   the stored user setting of the same name is only the default speed of a
+ *   new clip
  * @property {boolean} dithering - Enable dithering for smoother gradients
  * @property {number} loopCount - 0 for infinite, 1+ for specific count
  * @property {boolean} openInNewTab - Open result in new tab vs download
  * @property {EncoderPreset} encoderPreset - Selected encoder preset
  * @property {import('./encoders/types.js').EncoderId} encoderId - Selected encoder
+ * @property {number} [scale=1] - Output scale (1, 0.75, 0.5, 1/3 or 0.25)
+ * @property {number | null} [targetSizeMB=null] - Aim for a GIF at or under
+ *   this size (MB = 1024 * 1024 bytes); null for no target
  */
 
 /**
@@ -53,12 +59,6 @@
  */
 
 /**
- * Canvas preview state for real-time playback
- * @typedef {Object} PreviewState
- * @property {boolean} isPlaying - Whether preview is currently playing
- */
-
-/**
  * Export feature state
  * @typedef {Object} ExportState
  * @property {boolean} isDialogOpen - Export dialog visible
@@ -66,7 +66,6 @@
  * @property {EncodingJob|null} job - Active encoding job
  * @property {number} estimatedSizeMB - Estimated output size
  * @property {import('./encoders/types.js').EncoderId|'unavailable'} encoderStatus - Active encoder ID or unavailable
- * @property {PreviewState} preview - Preview state
  */
 
 export {};

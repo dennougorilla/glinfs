@@ -55,12 +55,17 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  * @typedef {Object} ExportSettingsPrefs
  * @property {number} quality - Color quantization quality (0.1-1.0)
  * @property {1|2|3|4|5} frameSkip - Frame skip rate
- * @property {number} playbackSpeed - Playback speed multiplier (0.25-4.0)
+ * @property {number} playbackSpeed - Playback speed a new clip starts with
+ *   (0.25-4.0); each clip then keeps its own editor speed, which is the GIF's
+ *   speed
  * @property {boolean} dithering - Dithering enabled
  * @property {number} loopCount - Loop count (0 = infinite)
  * @property {boolean} openInNewTab - Open result in new tab
  * @property {'quality'|'balanced'|'fast'} encoderPreset - Encoder quality preset
  * @property {'gifenc-js'|'gifsicle-wasm'} encoderId - Encoder to use
+ * @property {number} [scale] - Output scale chosen in the export dialog
+ * @property {number|null} [targetSizeMB] - Target file size chosen in the
+ *   export dialog (null = off)
  */
 
 /**
@@ -86,6 +91,8 @@ const DEFAULT_SETTINGS = {
     openInNewTab: false,
     encoderPreset: 'balanced',
     encoderId: 'gifenc-js',
+    scale: 1,
+    targetSizeMB: null,
   },
   thumbnailQuality: 'auto', // 'auto' | 'low' | 'standard' | 'high' | 'ultra'
 };
@@ -175,8 +182,10 @@ export const SETTINGS_METADATA = {
           { value: 5, label: 'Every 5th frame' },
         ],
       },
+      // The editor's speed is the GIF's speed; this is only where a new clip
+      // starts (each clip keeps its own speed afterwards)
       playbackSpeed: {
-        label: 'Playback Speed',
+        label: 'Default Speed (new clips)',
         type: 'range',
         min: 0.25,
         max: 4.0,

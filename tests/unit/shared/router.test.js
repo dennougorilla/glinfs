@@ -6,6 +6,7 @@ import {
   initRouter,
   navigate,
   onRouteChange,
+  redirect,
 } from '../../../src/shared/router.js';
 
 describe('Router', () => {
@@ -385,6 +386,23 @@ describe('Router', () => {
       // Re-init must tear down the mounted route's session (timers,
       // subscriptions) instead of silently dropping its cleanup.
       expect(cleanup).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe('redirect', () => {
+    it('replaces the current history entry instead of adding one', async () => {
+      const editor = vi.fn();
+      initRouter({ '/capture': vi.fn(), '/editor': editor, '/export': vi.fn() });
+      navigate('/export');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const length = window.history.length;
+
+      redirect('/editor', { from: 'export' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(window.location.hash).toBe('#/editor?from=export');
+      expect(window.history.length).toBe(length);
+      expect(getCurrentRoute()).toBe('/editor');
+      expect(editor).toHaveBeenCalled();
     });
   });
 });

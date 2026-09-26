@@ -84,6 +84,28 @@ describe('initSettings back navigation', () => {
     expect(window.location.hash).toBe('#/editor');
   });
 
+  it('goes back to the editor when the previous route was the #/export redirect', async () => {
+    const { initRouter, navigate } = await import('../../../src/shared/router.js');
+
+    initRouter({
+      '/capture': vi.fn(),
+      '/editor': vi.fn(),
+      // Mounts nothing, like the redirect that normally moves on at once
+      '/export': vi.fn(),
+      '/settings': initSettings,
+    });
+
+    navigate('/export');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    navigate('/settings');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    document.querySelector('.settings-header button').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(window.location.hash).toBe('#/editor');
+  });
+
   it('falls back to /capture when settings is entered directly', async () => {
     const { initRouter } = await import('../../../src/shared/router.js');
 

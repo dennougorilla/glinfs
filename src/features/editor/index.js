@@ -29,14 +29,16 @@ import {
   requiresTransparency,
 } from '../../shared/edits/model.js';
 import { announce } from '../../shared/live-region.js';
-import { navigate } from '../../shared/router.js';
+import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
+import { loadSettings } from '../../shared/user-settings.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import { getSharedFinalMaskCache, isFrameAnalyzed, pickFindsCharacter } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
@@ -79,6 +81,7 @@ import {
   setEdits,
   setPickingKeyColor,
   setPlaybackSpeed,
+  setPlaying,
   setSceneDetectionError,
   setSelectedAspectRatio,
   startSceneDetection,
@@ -184,8 +187,34 @@ let aiEditsUnsubscribe = null;
  */
 let deletedClipOnScreen = null;
 
+/**
+ * The Export GIF dialog open over this editor, or null
+ * @type {import('../export/index.js').ExportDialogHandle | null}
+ */
+let exportDialog = null;
+
+/**
+ * `#/export` asked for the editor with the Export dialog open: the next
+ * editor mount that shows a clip opens it (see initExportRoute)
+ */
+let pendingExportDialog = false;
+
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
+
+/**
+ * The default speed of a new clip: the user setting `export.playbackSpeed`
+ * (kept only for this since the editor speed became the GIF speed)
+ * @returns {number}
+ */
+function getDefaultClipSpeed() {
+  try {
+    const speed = Number(loadSettings().export.playbackSpeed);
+    return Number.isFinite(speed) && speed > 0 ? speed : 1;
+  } catch {
+    return 1;
+  }
+}
 
 // Probability masks belong to clips. When a clip's frames are released for
 // good (its deletion's Undo window ended, or a fresh session drained
@@ -266,6 +295,8 @@ export function initEditor() {
   if (!hasValidEditorPayload) {
     const validation = validateClipPayload(clipPayload);
     if (!validation.valid) {
+      // Nothing to export either: drop a pending `#/export` request
+      pendingExportDialog = false;
       /** @type {(() => void)[]} */
       const cleanups = [];
 
@@ -317,6 +348,7 @@ export function initEditor() {
   const fps = hasValidEditorPayload ? editorPayload.clip.fps : clipPayload?.fps || DEFAULT_FPS;
 
   if (frames.length === 0) {
+    pendingExportDialog = false;
     /** @type {(() => void)[]} */
     const cleanups = [];
 
@@ -369,12 +401,21 @@ export function initEditor() {
       edits: editorPayload.edits ?? editorPayload.clip.edits,
       hasAlpha: editorPayload.hasAlpha ?? editorPayload.clip.hasAlpha ?? clipPayload?.hasAlpha,
     });
+    const payloadSpeed = editorPayload.playbackSpeed;
+    store.setState((state) =>
+      setPlaybackSpeed(
+        state,
+        typeof payloadSpeed === 'number' && payloadSpeed > 0 ? payloadSpeed : getDefaultClipSpeed(),
+      ),
+    );
     // Clear EditorPayload after consuming to prevent stale frame references on subsequent navigations
     clearEditorPayload();
     emit('editor:restored', { fromExport: true });
   } else {
-    // Create fresh store from ClipPayload
+    // Create fresh store from ClipPayload. A new clip starts at the default
+    // speed; a clip's saved speed (below) wins.
     store = createEditorStore(frames, fps, { hasAlpha: clipPayload?.hasAlpha });
+    store.setState((state) => setPlaybackSpeed(state, getDefaultClipSpeed()));
 
     // Restore editor state saved when this clip was demoted (#95). Consumed
     // here — a later mount must not clobber newer edits with this snapshot.
@@ -683,7 +724,38 @@ export function initEditor() {
     }
   }
 
+  // `#/export` deep link: the editor with the Export dialog open
+  if (pendingExportDialog) {
+    pendingExportDialog = false;
+    handleExport();
+  }
+
   return cleanup;
+}
+
+/**
+ * Route handler of `#/export`, which is no longer a screen: with a clip to
+ * edit (the active one, an editor payload, or a queued one the editor
+ * adopts) it opens the editor with the Export dialog open; otherwise it
+ * goes to Capture. Redirects replace the history entry, so Back never lands
+ * on `#/export` again.
+ * @returns {(nextRoute: import('../../shared/router.js').Route) => void}
+ */
+export function initExportRoute() {
+  const hasClip =
+    (getEditorPayload()?.clip?.frames?.length ?? 0) > 0 ||
+    validateClipPayload(getClipPayload()).valid ||
+    getClipQueue().length > 0;
+  if (hasClip) {
+    pendingExportDialog = true;
+    redirect('/editor');
+  } else {
+    redirect('/capture');
+  }
+  return (nextRoute) => {
+    // Went somewhere else before the editor mounted: forget the request
+    if (nextRoute !== '/editor') pendingExportDialog = false;
+  };
 }
 
 /**
@@ -1040,32 +1112,67 @@ function handleSpeedChange(speed) {
 }
 
 /**
- * Handle export
+ * Open the Export GIF dialog over the editor (Export button, Ctrl/Cmd+E,
+ * `#/export`).
  *
  * SIMPLIFIED MODEL:
- * - Stores only selection range and crop settings in EditorPayload
- * - Export reads frames directly from clipPayload using selectedRange
- * - No frame cloning or ownership tracking needed
+ * - The editor payload carries what defines the GIF's content — range,
+ *   crop, edits and the playback speed (the editor speed IS the GIF speed);
+ *   the dialog reads frames from its clip (the frames on screen)
+ * - No frame cloning or ownership tracking needed; the dialog clears the
+ *   payload when it closes
+ * - Playback pauses while the dialog is open and resumes afterwards if it
+ *   was playing
  */
 function handleExport() {
-  if (!store) return;
+  if (!store || exportDialog) return;
 
   const state = store.getState();
   if (!state.clip) return;
 
-  // Store editor settings (NOT frames) for Export
-  // Export will read frames from clipPayload using selectedRange
+  const activePayload = getClipPayload();
+  const showsActiveClip = activePayload?.frames === state.clip.frames;
   setEditorPayload({
     selectedRange: state.selectedRange,
     cropArea: state.cropArea,
-    clip: state.clip, // For returning to Editor with preserved state
+    clip: state.clip,
     fps: state.clip.fps,
     edits: state.edits,
     hasAlpha: state.clip.hasAlpha === true,
+    playbackSpeed: state.playbackSpeed,
+    clipId: getActiveClipId(),
+    sourceName: showsActiveClip ? (activePayload?.sourceName ?? null) : null,
   });
 
-  const selectedCount = state.selectedRange.end - state.selectedRange.start + 1;
+  const sessionStore = store;
+  const wasPlaying = state.isPlaying;
+  if (wasPlaying) {
+    stopPlayback();
+    store.setState((s) => setPlaying(s, false));
+  }
 
+  const opener = document.activeElement;
+  exportDialog = openExportDialog({
+    opener,
+    onClose: () => {
+      exportDialog = null;
+      if (wasPlaying && store === sessionStore && !sessionStore.getState().isPlaying) {
+        sessionStore.setState((s) => setPlaying(s, true));
+        startPlayback();
+      }
+    },
+  });
+  if (!exportDialog) {
+    // Nothing to export (empty selection): leave the editor as it was
+    clearEditorPayload();
+    if (wasPlaying) {
+      store.setState((s) => setPlaying(s, true));
+      startPlayback();
+    }
+    return;
+  }
+
+  const selectedCount = state.selectedRange.end - state.selectedRange.start + 1;
   emit('editor:export-ready', {
     frameCount: selectedCount,
     fps: state.clip.fps,
@@ -1858,6 +1965,13 @@ async function startSceneDetectionAsync(frames) {
  * - Frames are only closed when a new clip is created
  */
 function cleanup() {
+  // The Export dialog lives over this editor: close it first (aborting a
+  // running export) so nothing of it outlives the mount
+  if (exportDialog) {
+    const dialog = exportDialog;
+    exportDialog = null;
+    dialog.close({ restoreFocus: false });
+  }
   stopPlayback();
   deletedClipOnScreen = null;
 

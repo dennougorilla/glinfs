@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getExportState, initExport } from '../../../src/features/export/index.js';
+import { getExportState, openExportDialog } from '../../../src/features/export/index.js';
 import {
   getExportResult,
   resetAppStore,
@@ -16,8 +16,8 @@ vi.mock('../../../src/features/export/api.js', async (importOriginal) => {
   };
 });
 
-/** @type {(() => void) | null} */
-let exportCleanup = null;
+/** @type {import('../../../src/features/export/index.js').ExportDialogHandle | null} */
+let dialog = null;
 
 /**
  * @param {number} count
@@ -50,12 +50,12 @@ function injectPayloads(frames, selectedRange) {
 }
 
 /**
- * Every visit to the Export screen starts a new export session. A GIF encoded
- * on an earlier visit must never come back as this visit's "complete" state:
- * that left the user staring at the previous GIF with no Export button unless
- * they happened to return through "Adjust & Re-export".
+ * Every opening of the Export dialog starts a new export session. A GIF
+ * encoded in an earlier opening must never come back as this one's result:
+ * that used to leave the user staring at the previous GIF with no Export
+ * button.
  */
-describe('Export result is scoped to a single visit', () => {
+describe('Export result is scoped to a single opening of the dialog', () => {
   beforeEach(() => {
     resetAppStore();
     localStorage.clear();
@@ -64,18 +64,18 @@ describe('Export result is scoped to a single visit', () => {
   });
 
   afterEach(() => {
-    exportCleanup?.();
-    exportCleanup = null;
+    dialog?.close();
+    dialog = null;
     resetAppStore();
     document.body.innerHTML = '';
     delete window.__TEST_HOOKS__;
     vi.restoreAllMocks();
   });
 
-  it('drops the saved result when leaving the screen', () => {
+  it('drops the saved result when the dialog closes', () => {
     const frames = createFrames(6);
     injectPayloads(frames, { start: 0, end: 5 });
-    exportCleanup = initExport();
+    dialog = openExportDialog();
 
     setExportResult({
       blob: new Blob(['gif-a'], { type: 'image/gif' }),
@@ -83,13 +83,13 @@ describe('Export result is scoped to a single visit', () => {
       completedAt: 1,
     });
 
-    exportCleanup();
-    exportCleanup = null;
+    dialog?.close();
+    dialog = null;
 
     expect(getExportResult()).toBeNull();
   });
 
-  it('opens on the settings panel even when a result survived, and discards it', () => {
+  it('opens on the settings even when a result survived, and discards it', () => {
     const frames = createFrames(6);
     const range = { start: 0, end: 5 };
 
@@ -102,18 +102,19 @@ describe('Export result is scoped to a single visit', () => {
     });
 
     injectPayloads(frames, range);
-    exportCleanup = initExport();
+    dialog = openExportDialog();
 
     expect(getExportState()?.job).toBeNull();
-    expect(document.querySelector('.export-settings-panel')).not.toBeNull();
-    expect(document.querySelector('.export-complete-v2')).toBeNull();
+    expect(getExportResult()).toBeNull();
+    expect(document.querySelector('#export-settings')).not.toBeNull();
+    expect(document.querySelector('#export-result')).toBeNull();
   });
 
   it('does not restore a result after the selection changed either', () => {
     const frames = createFrames(6);
     injectPayloads(frames, { start: 0, end: 5 });
-    exportCleanup = initExport();
-    exportCleanup();
+    dialog = openExportDialog();
+    dialog?.close();
 
     setExportResult({
       blob: new Blob(['gif-a'], { type: 'image/gif' }),
@@ -123,7 +124,7 @@ describe('Export result is scoped to a single visit', () => {
 
     // Same clip, narrower selection — must re-encode, not resurrect
     injectPayloads(frames, { start: 1, end: 3 });
-    exportCleanup = initExport();
+    dialog = openExportDialog();
 
     expect(getExportState()?.job).toBeNull();
   });

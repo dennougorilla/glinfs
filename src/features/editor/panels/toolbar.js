@@ -130,7 +130,8 @@ export function renderEditorToolbar(state, handlers, fps) {
   ]);
   playbackControls.appendChild(timeDisplay);
 
-  // Toolbar right - Export button
+  // Toolbar right - Export button (opens the Export GIF dialog over the
+  // editor)
   const toolbarRight = createElement('div', { className: 'editor-toolbar-right' });
   const exportBtn = createElement(
     'button',
@@ -138,15 +139,12 @@ export function renderEditorToolbar(state, handlers, fps) {
       className: 'btn btn-primary',
       type: 'button',
       'aria-label': 'Export as GIF',
+      'aria-haspopup': 'dialog',
+      title: 'Export GIF (Ctrl/Cmd+E)',
     },
     ['Export →'],
   );
-  cleanups.push(
-    on(exportBtn, 'click', () => {
-      handlers.onExport();
-      navigate('/export');
-    }),
-  );
+  cleanups.push(on(exportBtn, 'click', () => handlers.onExport()));
   toolbarRight.appendChild(exportBtn);
 
   toolbar.appendChild(toolbarLeft);

@@ -1,11 +1,15 @@
 /**
  * Step Indicator Utility
  * Unified logic for updating the step indicator across all screens.
+ *
+ * The flow has two steps, Capture → Edit. Exporting is an action of the
+ * editor (its Export button opens the Export GIF dialog over it), so there
+ * is no Export step to navigate to.
  * @module shared/utils/step-indicator
  */
 
 /**
- * @typedef {'capture' | 'editor' | 'export'} StepName
+ * @typedef {'capture' | 'editor'} StepName
  */
 
 /**
@@ -13,16 +17,15 @@
  * @property {boolean} [hasFrames] - Whether captured frames exist (for capture screen)
  * @property {boolean} [isCapturing] - Whether a screen capture session is running in the
  *   background (i.e. active but on a route other than /capture). Surfaced as a pulsing
- *   dot on the Capture step so background recording isn't invisible while editing/exporting.
+ *   dot on the Capture step so background recording isn't invisible while editing.
  */
 
 /**
  * Update step indicator in the header
  *
  * Step state logic:
- * - Capture: active when on capture, completed when on editor/export
- * - Editor: active when on editor, completed when on export, disabled if no frames (on capture)
- * - Export: active when on export, disabled otherwise
+ * - Capture: active when on capture, completed when on editor
+ * - Editor: active when on editor, disabled if no frames (on capture)
  *
  * @param {StepName} currentStep - The current active step
  * @param {StepContext} [context={}] - Optional context for conditional states
@@ -47,36 +50,23 @@ export function updateStepIndicator(currentStep, context = {}) {
     if (stepName === currentStep) {
       step.classList.add('step--active');
     } else if (stepName === 'capture') {
-      // Capture is completed if we're on editor or export
-      if (currentStep === 'editor' || currentStep === 'export') {
+      // Capture is completed once we're editing
+      if (currentStep === 'editor') {
         step.classList.add('step--completed');
       }
     } else if (stepName === 'editor') {
-      // Editor is completed if we're on export, disabled if no frames (on capture)
-      if (currentStep === 'export') {
-        step.classList.add('step--completed');
-      } else if (currentStep === 'capture' && !hasFrames) {
-        step.classList.add('step--disabled');
-      }
-    } else if (stepName === 'export') {
-      // Export is always disabled unless we're on export
-      if (currentStep !== 'export') {
+      // Editor is disabled on capture until frames exist
+      if (currentStep === 'capture' && !hasFrames) {
         step.classList.add('step--disabled');
       }
     }
   });
 
-  // Update connectors based on progress
+  // The capture -> editor connector is completed while editing
   connectors.forEach((connector, index) => {
-    connector.classList.remove('step-connector--completed');
-
-    // First connector (capture -> editor): completed when on editor or export
-    if (index === 0 && (currentStep === 'editor' || currentStep === 'export')) {
-      connector.classList.add('step-connector--completed');
-    }
-    // Second connector (editor -> export): completed when on export
-    if (index === 1 && currentStep === 'export') {
-      connector.classList.add('step-connector--completed');
-    }
+    connector.classList.toggle(
+      'step-connector--completed',
+      index === 0 && currentStep === 'editor',
+    );
   });
 }

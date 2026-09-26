@@ -201,6 +201,22 @@ export function navigate(route, params) {
 }
 
 /**
+ * Navigate to a route REPLACING the current history entry, for routes that
+ * only forward elsewhere (e.g. `#/export` → `#/editor`): Back then skips
+ * the forwarding route instead of bouncing forward again.
+ * @param {Route} route - Target route
+ * @param {Record<string, string>} [params] - Optional query params
+ */
+export function redirect(route, params) {
+  let hash = route;
+  if (params) {
+    hash = `${route}?${new URLSearchParams(params).toString()}`;
+  }
+  const { pathname, search } = window.location;
+  window.location.replace(`${pathname}${search}#${hash}`);
+}
+
+/**
  * Get current route
  * @returns {Route} Current route
  */
