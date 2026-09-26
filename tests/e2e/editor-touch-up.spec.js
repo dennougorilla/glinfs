@@ -8,20 +8,30 @@
  * strokes change one frame, "Selection" strokes every frame in IN..OUT;
  * Undo, Clear on this frame and Clear all take strokes away again. The
  * brush only works while background removal is on and Escape leaves it
- * before anything else.
+ * before anything else. Over the AI cutout (stub model on the WASM
+ * fallback, two-disc clip) the same strokes erase a kept character and
+ * restore removed background.
  * @module tests/e2e/editor-touch-up.spec
  */
 
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
+  chooseAiCutout,
   decodeExportedGif,
+  discClip,
   editorFramePointToViewport,
   editorPreviewAlpha,
   exportFromEditor,
   exportGifAndWait,
   gifPixel,
   gotoCapture,
+  gotoCaptureWithStubModel,
+  injectDiscClip,
   pauseEditorPlayback,
+  serveStubModel,
+  waitForAiMasks,
 } from './helpers/app.js';
 
 const WIDTH = 160;
@@ -95,11 +105,12 @@ async function enableColorKey(page) {
 }
 
 /**
- * Switch the brush on with a mode and scope, at a 12 px radius
+ * Switch the brush on with a mode and scope, at radius 0.1 of the shorter
+ * side (12 px on the 120 px tall square clip)
  * @param {import('@playwright/test').Page} page
- * @param {{ mode: 'erase' | 'restore', scope: 'frame' | 'selection' }} options
+ * @param {{ mode: 'erase' | 'restore', scope: 'frame' | 'selection', diameter?: string }} options
  */
-async function useBrush(page, { mode, scope }) {
+async function useBrush(page, { mode, scope, diameter = '24 px' }) {
   const toggle = page.locator('#touchup-brush');
   if (!(await toggle.isChecked())) {
     await page.locator('label[for="touchup-brush"]').click();
@@ -111,7 +122,7 @@ async function useBrush(page, { mode, scope }) {
   await expect
     .poll(async () => (await readEditorState(page))?.brush)
     .toMatchObject({ on: true, mode, scope, radius: 0.1 });
-  await expect(page.locator('#touchup-size-value')).toHaveText('24 px');
+  await expect(page.locator('#touchup-size-value')).toHaveText(diameter);
 }
 
 /**
@@ -143,12 +154,15 @@ async function goToFrame(page, frame) {
   await expect.poll(async () => (await readEditorState(page))?.currentFrame).toBe(frame);
 }
 
-/** @param {import('@playwright/test').Page} page */
-async function exportAndDecode(page) {
+/**
+ * @param {import('@playwright/test').Page} page
+ * @param {number} [frameCount]
+ */
+async function exportAndDecode(page, frameCount = FRAME_COUNT) {
   await exportFromEditor(page);
   await exportGifAndWait(page);
   const frames = await decodeExportedGif(page);
-  expect(frames).toHaveLength(FRAME_COUNT);
+  expect(frames).toHaveLength(frameCount);
   return frames;
 }
 
@@ -302,5 +316,56 @@ test.describe('Mask brush (touch up)', () => {
     await page.locator('#background-enabled').uncheck();
     await expect.poll(async () => (await readEditorState(page))?.brush.on).toBe(false);
     expect((await readEditorState(page))?.edits.touchUps).toHaveLength(1);
+  });
+});
+
+const STUB_MODEL = readFileSync(new URL('../fixtures/models/stub-seg.onnx', import.meta.url));
+const STUB_SHA256 = createHash('sha256').update(STUB_MODEL).digest('hex');
+
+test.describe('Mask brush over the AI cutout (stub model, WASM fallback)', () => {
+  // Compiles ONNX Runtime's WASM binary in a fresh context
+  test.describe.configure({ timeout: 240_000 });
+
+  test('Erase removes part of a kept character on one frame; Restore brings back background on all', async ({
+    page,
+  }) => {
+    const count = 4;
+    const { discA, discB } = discClip;
+    await serveStubModel(page, STUB_MODEL);
+    await gotoCaptureWithStubModel(page, {
+      sha256: STUB_SHA256,
+      bytes: STUB_MODEL.length,
+      allowWasm: true,
+    });
+    await injectDiscClip(page, { count });
+    await pauseEditorPlayback(page);
+    await chooseAiCutout(page);
+    await page.locator('#ai-analyze').click();
+    await expect(page.locator('#ai-coverage')).toHaveText(`${count} of ${count} frames analyzed`, {
+      timeout: 60_000,
+    });
+    await waitForAiMasks(page);
+
+    // Touch-ups work over the AI method like over the color key
+    await goToFrame(page, 0);
+    await useBrush(page, { mode: 'erase', scope: 'frame', diameter: '32 px' });
+    await paint(page, discA(0).x - 4, discA(0).x + 4, discA(0).y);
+    await expect.poll(() => editorPreviewAlpha(page, discA(0).x, discA(0).y)).toBe(0);
+    await useBrush(page, { mode: 'restore', scope: 'selection', diameter: '32 px' });
+    await paint(page, 110, 130, 20);
+    await expect.poll(() => editorPreviewAlpha(page, 120, 20)).toBe(255);
+    // Painting never rebuilt the AI masks (strokes live outside the AI settings)
+    expect((await readEditorState(page))?.aiCutout.building).toBe(false);
+
+    const frames = await exportAndDecode(page, count);
+    expect(gifPixel(frames[0], discA(0).x, discA(0).y)[3]).toBe(0);
+    for (const [f, frame] of frames.entries()) {
+      if (f > 0)
+        expect(gifPixel(frame, discA(f).x, discA(f).y), `frame ${f}`).toEqual([255, 255, 255, 255]);
+      // Disc B stays; the restored background is the original black
+      expect(gifPixel(frame, discB(f).x, discB(f).y)[3]).toBe(255);
+      expect(gifPixel(frame, 120, 20)).toEqual([0, 0, 0, 255]);
+      expect(gifPixel(frame, 5, 5)[3]).toBe(0);
+    }
   });
 });
