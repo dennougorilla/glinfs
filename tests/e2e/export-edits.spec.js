@@ -6,7 +6,12 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { decodeExportedGif, exportGifAndWait, gotoExportWithClip } from './helpers/app.js';
+import {
+  decodeExportedGif,
+  exportDialog,
+  exportGifAndWait,
+  gotoExportWithClip,
+} from './helpers/app.js';
 
 const WIDTH = 160;
 const HEIGHT = 120;
@@ -128,6 +133,49 @@ test.describe('Export with edits', () => {
       }
       expect(partialAlpha).toBe(0);
       expect(countNear(frame, WHOLE, [0, 255, 0])).toBe(0);
+    }
+  });
+
+  test('a scaled export removes the background without a halo of it around what stays', async ({
+    page,
+  }) => {
+    // Green and white 32px tiles, green keyed. At 33 % the tile edges fall
+    // between output pixels: keying after scaling would leave green-white
+    // blends at every edge, keying first leaves only white.
+    await gotoExportWithClip(page, {
+      frameCount: 2,
+      fps: 10,
+      width: WIDTH,
+      height: HEIGHT,
+      pattern: 'checkerboard',
+      color: '#00ff00',
+      edits: {
+        textLayers: [],
+        background: { enabled: true, color: '#00ff00', tolerance: 10, mode: 'global' },
+      },
+    });
+    await exportDialog(page).getByLabel('Scale').selectOption({ label: '33 % (53×40)' });
+
+    await exportGifAndWait(page);
+    const frames = await decodeExportedGif(page);
+    expect(frames).toHaveLength(2);
+    for (const frame of frames) {
+      expect([frame.width, frame.height]).toEqual([53, 40]);
+      let opaque = 0;
+      let transparent = 0;
+      let tinted = 0;
+      for (let i = 0; i < frame.rgba.length; i += 4) {
+        const p = frame.rgba.slice(i, i + 4);
+        if (p[3] === 0) {
+          transparent++;
+        } else {
+          opaque++;
+          if (colorDistance(p, [255, 255, 255]) > 40) tinted++;
+        }
+      }
+      expect(opaque).toBeGreaterThan(500);
+      expect(transparent).toBeGreaterThan(500);
+      expect(tinted).toBe(0);
     }
   });
 

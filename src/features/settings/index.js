@@ -29,14 +29,8 @@ export function initSettings() {
   // away from settings would otherwise change what getPreviousRoute()
   // reports before onBack runs.
   const previousRoute = getPreviousRoute();
-  // `#/export` only forwards (to the editor with the Export dialog, or to
-  // Capture): going back to the editor is where it led
   const backRoute =
-    previousRoute === '/export'
-      ? '/editor'
-      : previousRoute && previousRoute !== '/settings'
-        ? previousRoute
-        : FALLBACK_BACK_ROUTE;
+    previousRoute && previousRoute !== '/settings' ? previousRoute : FALLBACK_BACK_ROUTE;
 
   const handlers = {
     onBack: () => {

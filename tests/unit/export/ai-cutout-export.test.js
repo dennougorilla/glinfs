@@ -35,7 +35,7 @@ import {
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
 import { getSharedFinalMaskCache, setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
 import { encodeGif } from '../../../src/features/export/api.js';
-import { openExportDialog } from '../../../src/features/export/index.js';
+import { getExportState, openExportDialog } from '../../../src/features/export/index.js';
 import { describeAiPreparation } from '../../../src/features/export/ui.js';
 import { resetAppStore, setClipPayload, setEditorPayload } from '../../../src/shared/app-store.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
@@ -341,29 +341,91 @@ describe('Export with the AI cutout', () => {
     expect(document.activeElement?.id).toBe('export-ai-cancel');
   });
 
-  it('with a target size, prepares every frame any rung of the ladder may export', async () => {
-    // Range 0..9, frame skip 2 chosen: the ladder also tries skip 3, whose
-    // frames (3, 9) skip 2 never touches
+  /**
+   * encodeGif answers: sample encodes (frameIndices given) at `sampleBytes`
+   * for their frame skip, full encodes small enough for any target
+   * @param {Record<number, number>} sampleBytes
+   */
+  function encodeBySkip(sampleBytes) {
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      params.frameIndices
+        ? /** @type {any} */ ({ size: sampleBytes[params.settings.frameSkip] ?? 100 })
+        : new Blob([new Uint8Array(10)], { type: 'image/gif' }),
+    );
+  }
+
+  it('with a target size, analyzes the samples it estimates and only the rung it encodes', async () => {
+    // Range 0..9, frame skip 2 chosen: the ladder could also try skip 3,
+    // whose frames (3, 9) skip 2 never touches
     updateSetting('export', 'frameSkip', 2);
     updateSetting('export', 'targetSizeMB', 5);
     inject({ count: 10, range: { start: 0, end: 9 } });
+    encodeBySkip({});
     dialog = openExportDialog();
     await flush();
-    expect($('#export-ai-note')?.textContent).toMatch(/^7 of 7 frames/);
+    // The note counts the frames of the settings (the ladder's first rung)
+    expect($('#export-ai-note')?.textContent).toMatch(/^5 of 5 frames/);
 
     $('#export-start')?.click();
-    await flush();
-    await flush();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+    // The first rung fits: its sample is every frame it exports, so the
+    // encode needs no more analysis, and 3 and 9 are never analyzed
+    expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
     const [analyzed] = fake.analyzeFrames.mock.calls[0];
-    expect(analyzed.map((/** @type {any} */ f) => f.id)).toEqual([
-      'x0',
-      'x2',
-      'x3',
-      'x4',
-      'x6',
-      'x8',
-      'x9',
+    expect(analyzed.map((/** @type {any} */ f) => f.id)).toEqual(['x0', 'x2', 'x4', 'x6', 'x8']);
+    expect(getSharedMaskStore().has('x3')).toBe(false);
+    expect(getSharedMaskStore().has('x9')).toBe(false);
+  });
+
+  it('with a target size, prepares a later rung when the ladder gets to it', async () => {
+    updateSetting('export', 'frameSkip', 2);
+    updateSetting('export', 'targetSizeMB', 5);
+    inject({ count: 10, range: { start: 0, end: 9 } });
+    // Every skip-2 rung is estimated over the target; skip 3 fits
+    encodeBySkip({ 2: 50_000_000 });
+    dialog = openExportDialog();
+    await flush();
+
+    $('#export-start')?.click();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+    const analyzed = fake.analyzeFrames.mock.calls.map((/** @type {any} */ [frames]) =>
+      frames.map((/** @type {any} */ f) => f.id),
+    );
+    expect(analyzed).toEqual([
+      ['x0', 'x2', 'x4', 'x6', 'x8'],
+      ['x0', 'x3', 'x6', 'x9'],
     ]);
+    const full = vi
+      .mocked(encodeGif)
+      .mock.calls.map(([params]) => params)
+      .filter((params) => !params.frameIndices);
+    expect(full).toHaveLength(1);
+    expect(full[0].settings.frameSkip).toBe(3);
+    for (const index of [0, 3, 6, 9]) {
+      expect(full[0].maskSource?.getFinalMask(index)).not.toBeNull();
+    }
+  });
+
+  it('with a target size, a failed analysis mid-way shows the AI error, and Back the settings', async () => {
+    updateSetting('export', 'frameSkip', 2);
+    updateSetting('export', 'targetSizeMB', 5);
+    inject({ count: 10, range: { start: 0, end: 9 } });
+    encodeBySkip({ 2: 50_000_000 });
+    const analyze = fake.analyzeFrames.getMockImplementation();
+    fake.analyzeFrames.mockImplementationOnce(analyze);
+    fake.analyzeFrames.mockRejectedValueOnce(
+      new SegmentationError(SegmentationErrorCode.HASH_MISMATCH, 'bad'),
+    );
+    dialog = openExportDialog();
+    await flush();
+
+    $('#export-start')?.click();
+    await vi.waitFor(() =>
+      expect($('#export-ai-prep')?.textContent).toContain('could not be prepared'),
+    );
+    expect(getExportState()?.job).toBeNull();
+    $('#export-ai-back')?.click();
+    expect($('#export-settings')).not.toBeNull();
   });
 
   it('describes the build step', () => {

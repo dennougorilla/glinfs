@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BYTES_PER_MB,
   buildSizeLadder,
   describeRung,
   exportToTargetSize,
   extrapolateGifSize,
+  formatFileSize,
   GIF_FILE_OVERHEAD,
-  getLadderFrameSkips,
   planTargetSize,
   SIZE_LADDER,
 } from '../../../src/features/export/size-planner.js';
@@ -63,11 +64,6 @@ describe('buildSizeLadder', () => {
   it('keeps a user frame skip above the ladder', () => {
     const rungs = buildSizeLadder({ maxColors: 32, frameSkip: 5, scale: 0.25 });
     expect(rungs).toEqual([{ maxColors: 32, frameSkip: 5, scale: 0.25 }]);
-  });
-
-  it('lists the frame skips the ladder uses', () => {
-    expect(getLadderFrameSkips(buildSizeLadder(FULL))).toEqual([1, 2, 3]);
-    expect(getLadderFrameSkips(buildSizeLadder({ ...FULL, frameSkip: 4 }))).toEqual([4]);
   });
 });
 
@@ -243,5 +239,21 @@ describe('describeRung', () => {
     expect(describeRung({ maxColors: 32, frameSkip: 5, scale: 0.25 })).toBe(
       '32 colors · every 5th frame · 25 %',
     );
+  });
+});
+
+describe('decimal file sizes', () => {
+  it('uses 1 MB = 1,000,000 bytes, as upload limits do', () => {
+    expect(BYTES_PER_MB).toBe(1_000_000);
+  });
+
+  it('formats sizes in decimal units', () => {
+    expect(formatFileSize(0)).toBe('0 B');
+    expect(formatFileSize(999)).toBe('999 B');
+    expect(formatFileSize(1_000)).toBe('1.0 KB');
+    expect(formatFileSize(950_000)).toBe('950.0 KB');
+    expect(formatFileSize(10_000_000)).toBe('10.0 MB');
+    expect(formatFileSize(10_200_000)).toBe('10.2 MB');
+    expect(formatFileSize(2_500_000_000)).toBe('2.5 GB');
   });
 });

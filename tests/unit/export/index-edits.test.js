@@ -13,6 +13,7 @@ import {
 } from '../../../src/shared/app-store.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
 import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
+import { GifEncoderManager } from '../../../src/workers/worker-manager.js';
 
 /**
  * Export dialog wiring for edits, transparency, imported clips, the editor
@@ -298,6 +299,34 @@ describe('export dialog: the editor speed is the GIF speed', () => {
     expect(/** @type {HTMLElement} */ ($('#export-speed-note')).hidden).toBe(true);
   });
 
+  it('judges an imported clip by its merged holds, not by its frame slots', () => {
+    // 50 fps slots in holds of 5 (one decoded frame each): at 2x a slot
+    // would want 1 cs, but each merged GIF frame lasts 5 cs
+    const holdFrames = Array.from({ length: 20 }, (_, index) => ({
+      id: String(index),
+      sharedKey: `k${Math.floor(index / 5)}`,
+      timestamp: index,
+      width: 16,
+      height: 12,
+    }));
+    setClipPayload(
+      /** @type {any} */ ({ frames: holdFrames, fps: 50, capturedAt: 0, sourceName: 'a.gif' }),
+    );
+    setEditorPayload(
+      /** @type {any} */ ({
+        selectedRange: { start: 0, end: 19 },
+        cropArea: null,
+        clip: { frames: holdFrames, fps: 50 },
+        fps: 50,
+        playbackSpeed: 2,
+      }),
+    );
+    dialog = openExportDialog();
+    expect(/** @type {HTMLElement} */ ($('#export-speed-note')).hidden).toBe(true);
+    // 20 slots at 50 fps = 0.4 s, at 2x
+    expect($('#export-summary')?.textContent).toBe('16×12 · 4 frames · 0.20s at 2×');
+  });
+
   it('does not show the note at speeds GIF can play', () => {
     inject({ editorExtras: { playbackSpeed: 1.5 } });
     dialog = openExportDialog();
@@ -387,10 +416,46 @@ describe('export dialog: target size', () => {
     expect(samples[0].mergeIdenticalFrames).toBe(false);
     expect(full).toHaveLength(1);
     expect(full[0]).toMatchObject({ maxColors: 32, scale: 1 });
-    expect(full[0].settings.encoderId).toBe('gifenc-js');
+    // encodeGif derives the JavaScript encoder from the target in the settings
+    expect(full[0].settings.targetSizeMB).toBe(1);
+    expect(getExportState()?.job?.encoder).toBe('gifenc-js');
     expect($('#export-result-target')?.textContent).toBe(
       'Fits the 1.0 MB target with 32 colors · every frame · 100 %.',
     );
+  });
+
+  it('composes each sample once per frame rate and scale, and runs every encode on one encoder', async () => {
+    inject({ count: 30 });
+    updateSetting('export', 'targetSizeMB', 1);
+    const dispose = vi.spyOn(GifEncoderManager.prototype, 'dispose');
+    // Only the 50 % sample fits
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      params.frameIndices
+        ? /** @type {any} */ ({ size: params.scale === 0.5 ? 100 : 50_000_000 })
+        : new Blob([new Uint8Array(900_000)], { type: 'image/gif' }),
+    );
+    dialog = openExportDialog();
+    clickExport();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+
+    const calls = vi.mocked(encodeGif).mock.calls.map(([params]) => params);
+    const samples = calls.filter((params) => params.frameIndices);
+    const full = calls.filter((params) => !params.frameIndices);
+    const key = (/** @type {any} */ p) => `${p.settings.frameSkip}:${p.scale}`;
+    // 103 (the quality's cap), 64 and 32 colors at every frame, then fewer
+    // frames, then smaller
+    expect(samples.map(key)).toEqual(['1:1', '1:1', '1:1', '2:1', '3:1', '3:0.75', '3:0.5']);
+    // The rungs that only lower the colors re-quantize the same composed
+    // frames; every other frame rate or scale composes its own
+    const caches = samples.map((params) => params.frameCache);
+    expect(caches.slice(1, 3).every((cache) => cache === caches[0])).toBe(true);
+    expect(new Set(caches).size).toBe(5);
+    // One encoder worker for the whole export, released at the end
+    const encoder = samples[0].encoderManager;
+    expect(encoder).toBeInstanceOf(GifEncoderManager);
+    expect([...samples, ...full].every((params) => params.encoderManager === encoder)).toBe(true);
+    expect(dispose.mock.contexts).toContain(encoder);
+    dispose.mockRestore();
   });
 
   it('steps down a rung when the real GIF is still too big, and says so when nothing fits', async () => {
@@ -413,6 +478,24 @@ describe('export dialog: target size', () => {
     // First rung, then two retries one rung further down each
     expect(full.map((params) => params.maxColors)).toEqual([103, 64, 32]);
     expect($('#export-result-target')?.textContent).toMatch(/^Could not get under 1\.0 MB/);
+  });
+
+  it('checks and shows the target in decimal megabytes (1 MB = 1,000,000 bytes)', async () => {
+    inject({ count: 30 });
+    updateSetting('export', 'targetSizeMB', 10);
+    // Estimates fit; every real GIF is 10.2 million bytes: over a 10 MB
+    // upload limit, though under 10 MiB
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      params.frameIndices
+        ? new Blob([new Uint8Array(100)])
+        : new Blob([new Uint8Array(10_200_000)], { type: 'image/gif' }),
+    );
+    dialog = openExportDialog();
+    clickExport();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+
+    expect($('#export-result-target')?.textContent).toMatch(/^Could not get under 10\.0 MB/);
+    expect($('#export-result-size')?.textContent).toContain('10.2 MB');
   });
 
   it('shows the estimating step while it plans', async () => {

@@ -302,6 +302,42 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(workers[0].segments).toHaveLength(3);
   });
 
+  it('a call waiting behind another rejects as soon as it is aborted', async () => {
+    const { manager, workers } = createHarness({ autoMask: false });
+    const running = manager.analyzeFrames([makeFrame('a'), makeFrame('b')]);
+    await flush();
+    const controller = new AbortController();
+    const queued = manager.analyzeFrames([makeFrame('c')], { signal: controller.signal });
+    let settled = false;
+    queued.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    controller.abort();
+    await flush();
+    // Rejected while the first call still runs, without touching the worker
+    expect(settled).toBe(true);
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    const worker = workers[0];
+    expect(worker.segments.map((s) => s.requestId)).toHaveLength(2);
+
+    // Calls still run one after another: a later call waits for the first
+    const later = manager.analyzeFrames([makeFrame('d')]);
+    await flush();
+    expect(worker.segments).toHaveLength(2);
+    for (const segment of worker.segments) worker.mask(segment);
+    await expect(running).resolves.toMatchObject({ analyzed: 2 });
+    await flush();
+    expect(worker.segments).toHaveLength(3);
+    worker.mask(worker.segments[2]);
+    await expect(later).resolves.toMatchObject({ analyzed: 1 });
+  });
+
   it('asks the worker for WASM only when allowed', async () => {
     const { manager, workers } = createHarness({ backend: 'wasm' });
     const result = await manager.analyzeFrames([makeFrame('a')], { allowWasm: true });

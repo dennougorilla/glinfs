@@ -18,12 +18,16 @@ vi.mock('../../../src/features/export/api.js', async (importOriginal) => {
 import { getEditorState, initEditor, initExportRoute } from '../../../src/features/editor/index.js';
 import { isExportDialogOpen } from '../../../src/features/export/index.js';
 import {
+  enqueueClip,
   getClipPayload,
+  getClipQueue,
   getEditorPayload,
+  registerClipCodec,
   releaseAllFramesAndReset,
   setClipPayload,
   setEditorPayload,
 } from '../../../src/shared/app-store.js';
+import { on as onBus } from '../../../src/shared/bus.js';
 import { countHotkeys } from '../../../src/shared/hotkeys.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
 
@@ -171,6 +175,26 @@ describe('Export dialog from the editor', () => {
     expect(document.getElementById('app')?.hasAttribute('inert')).toBe(false);
   });
 
+  it('does not restart playback on the editor it is torn down with', () => {
+    mountEditor();
+    expect(getEditorState()?.isPlaying).toBe(true);
+    exportButton().click();
+    expect(getEditorState()?.isPlaying).toBe(false);
+
+    // Closing the dialog as part of the teardown must not resume playback
+    // (a new animation-frame loop) on the editor going away
+    vi.mocked(requestAnimationFrame).mockClear();
+    const playing = vi.fn();
+    const off = onBus('editor:playback', playing);
+    cleanup?.();
+    cleanup = null;
+    off();
+
+    expect(isExportDialogOpen()).toBe(false);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    expect(playing).not.toHaveBeenCalled();
+  });
+
   describe('speed', () => {
     it('starts a new clip at the stored default speed', () => {
       updateSetting('export', 'playbackSpeed', 1.5);
@@ -241,6 +265,99 @@ describe('Export dialog from the editor', () => {
     it('goes to Capture without a clip', () => {
       initExportRoute();
       expect(window.location.hash).toBe('#/capture');
+    });
+
+    /**
+     * Queue one clip that must be decoded before the editor can show it
+     * (the editor then takes its "Opening clip…" path)
+     * @param {() => Promise<any>} decode
+     */
+    async function enqueueCompressedClip(decode) {
+      registerClipCodec({
+        isCompressionAvailable: () => true,
+        encode: async () => ({
+          ok: true,
+          chunks: [{ type: 'key', timestamp: 0, duration: null, data: new ArrayBuffer(16) }],
+          config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
+          byteLength: 16,
+        }),
+        decode,
+      });
+      enqueueClip(
+        /** @type {any} */ ({ frames: createTestFrames(2), fps: 10, capturedAt: 0, id: 'clip-q' }),
+      );
+      await vi.waitFor(() => expect(getClipQueue()[0]?.status).toBe('compressed'));
+    }
+
+    it('forgets the request when the editor is left while a clip is still opening', async () => {
+      try {
+        await enqueueCompressedClip(() => new Promise(() => {}));
+        const routeCleanup = initExportRoute();
+        routeCleanup('/editor');
+        const openingCleanup = /** @type {() => void} */ (initEditor());
+        expect(document.querySelector('.editor-clip-opening')).not.toBeNull();
+        expect(isExportDialogOpen()).toBe(false);
+        // The user goes elsewhere before the clip opened
+        openingCleanup();
+      } finally {
+        registerClipCodec(null);
+      }
+
+      // A later, unrelated editor mount does not open the dialog
+      mountEditor();
+      expect(isExportDialogOpen()).toBe(false);
+    });
+
+    it('opens the dialog once a clip that had to be decoded is on screen', async () => {
+      const decoded = () =>
+        Array.from({ length: 2 }, (_, i) => ({
+          codedWidth: 10,
+          codedHeight: 10,
+          timestamp: i,
+          closed: false,
+          close: vi.fn(),
+          clone() {
+            return { ...this };
+          },
+        }));
+      try {
+        await enqueueCompressedClip(async () => ({ ok: true, frames: decoded() }));
+        const routeCleanup = initExportRoute();
+        routeCleanup('/editor');
+        cleanup = /** @type {() => void} */ (initEditor());
+        expect(isExportDialogOpen()).toBe(false);
+        await vi.waitFor(() => expect(isExportDialogOpen()).toBe(true));
+      } finally {
+        registerClipCodec(null);
+      }
+    });
+
+    it('forgets the request when the clip cannot be opened', async () => {
+      try {
+        await enqueueCompressedClip(async () => ({ ok: false, error: 'bad' }));
+        const routeCleanup = initExportRoute();
+        routeCleanup('/editor');
+        const openingCleanup = /** @type {() => void} */ (initEditor());
+        await vi.waitFor(() => expect(window.location.hash).toBe('#/capture'));
+        openingCleanup();
+      } finally {
+        registerClipCodec(null);
+      }
+
+      mountEditor();
+      expect(isExportDialogOpen()).toBe(false);
+    });
+
+    it('forgets the request when the editor mount fails', () => {
+      setClipPayload(/** @type {any} */ ({ frames: createTestFrames(), fps: 30, capturedAt: 0 }));
+      const routeCleanup = initExportRoute();
+      routeCleanup('/editor');
+      document.body.innerHTML = '';
+      expect(() => initEditor()).toThrow();
+
+      document.body.innerHTML = '<div id="app"><main id="main-content"></main></div>';
+      mountEditor();
+      expect(isExportDialogOpen()).toBe(false);
     });
 
     it('forgets the request when the next route is not the editor', () => {

@@ -8,8 +8,10 @@
  * frame rate, loop, scale, target size) live here.
  *
  * Views: settings → AI preparation (frames without a mask are analyzed
- * first) → encoding → result, or error. While the AI preparation or the
- * encode runs, Cancel is the only way out: Close and Escape are disabled.
+ * first) → encoding → result, or error. A target size prepares the frames
+ * of each ladder rung when it gets to that rung, so the AI preparation can
+ * also show between its steps. While the AI preparation or the encode
+ * runs, Cancel is the only way out: Close and Escape are disabled.
  *
  * SIMPLIFIED MODEL (unchanged from the export screen this replaces):
  * - Frames come from the editor payload's clip (the clip on screen), sliced
@@ -41,6 +43,7 @@ import { showToast } from '../../shared/toast.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import { on } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
+import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
@@ -83,7 +86,6 @@ import {
   describeRung,
   exportToTargetSize,
   extrapolateGifSize,
-  getLadderFrameSkips,
 } from './size-planner.js';
 import {
   completeEncoding,
@@ -197,8 +199,11 @@ let resultInfo = null;
  */
 let mergeIdenticalFrames = false;
 
-/** @type {Map<number, number>} GIF frame count per frame skip (merge estimate) */
-const gifFrameCounts = new Map();
+/**
+ * Estimated merged runs per frame skip (identical-frame merging only)
+ * @type {Map<number, { count: number, runLengths: number[] }>}
+ */
+const mergedRunsBySkip = new Map();
 
 /** @type {AbortController | null} */
 let encodingController = null;
@@ -265,7 +270,7 @@ export function openExportDialog(options = {}) {
   aiPrep = null;
   sizeStep = null;
   resultInfo = null;
-  gifFrameCounts.clear();
+  mergedRunsBySkip.clear();
 
   // Edits and alpha travel on the editor payload (or its clip). Both are
   // optional: clips edited before these existed carry neither.
@@ -493,7 +498,12 @@ function render(options = {}) {
  */
 function computeFacts(state) {
   const settings = state.settings;
-  const speedLimit = getSpeedLimitInfo(clipInfo.fps, clipInfo.speed, settings.frameSkip);
+  const speedLimit = getSpeedLimitInfo(
+    clipInfo.fps,
+    clipInfo.speed,
+    settings.frameSkip,
+    mergeIdenticalFrames ? getMergedRuns(settings.frameSkip).runLengths : undefined,
+  );
   return {
     output: getScaledDimensions(clipInfo.width, clipInfo.height, settings.scale ?? 1),
     gifFrames: countGifFrames(settings.frameSkip),
@@ -512,12 +522,25 @@ function computeFacts(state) {
 function countGifFrames(frameSkip) {
   const skip = Math.max(1, frameSkip);
   if (!mergeIdenticalFrames) return Math.ceil(frames.length / skip);
-  const cached = gifFrameCounts.get(skip);
-  if (cached !== undefined) return cached;
-  const indices = getExportedFrameIndices(frames.length, skip, rangeStart);
-  const count = estimateMergedRuns(indices, clipFrames, edits).count;
-  gifFrameCounts.set(skip, count);
-  return count;
+  return getMergedRuns(skip).count;
+}
+
+/**
+ * Estimated runs identical-frame merging leaves at this frame skip (cached
+ * for the dialog: the frames and edits do not change while it is open)
+ * @param {number} frameSkip
+ * @returns {{ count: number, runLengths: number[] }}
+ */
+function getMergedRuns(frameSkip) {
+  const skip = Math.max(1, frameSkip);
+  let runs = mergedRunsBySkip.get(skip);
+  if (!runs) {
+    const indices = getExportedFrameIndices(frames.length, skip, rangeStart);
+    const { count, runLengths } = estimateMergedRuns(indices, clipFrames, edits);
+    runs = { count, runLengths };
+    mergedRunsBySkip.set(skip, runs);
+  }
+  return runs;
 }
 
 /**
@@ -587,7 +610,7 @@ function closeDialog({ restoreFocus }) {
   resultInfo = null;
   rangeStart = 0;
   mergeIdenticalFrames = false;
-  gifFrameCounts.clear();
+  mergedRunsBySkip.clear();
 
   if (restoreFocus) restoreOpenerFocus(closing.opener);
   emit('export:closed', {});
@@ -614,28 +637,12 @@ function restoreOpenerFocus(opener) {
 // ============================================================
 
 /**
- * Absolute clip indices an export encodes for any of these frame skips
- * (a target size may use several)
- * @param {number[]} frameSkips
- * @returns {number[]} Ascending, unique
+ * Clip frames at these absolute indices (holes skipped)
+ * @param {number[]} indices
+ * @returns {import('../capture/types.js').Frame[]}
  */
-function getExportedIndices(frameSkips) {
-  const set = new Set();
-  for (const skip of frameSkips) {
-    for (const index of getExportedFrameIndices(frames.length, skip, rangeStart)) set.add(index);
-  }
-  return [...set].sort((a, b) => a - b);
-}
-
-/**
- * Frame skips the next export may use: the setting, or every rung's with a
- * target size
- * @param {import('./types.js').ExportSettings} settings
- * @returns {number[]}
- */
-function getPlannedFrameSkips(settings) {
-  const rungs = getSizeLadder(settings);
-  return rungs ? getLadderFrameSkips(rungs) : [settings.frameSkip];
+function framesAt(indices) {
+  return indices.map((index) => clipFrames[index]).filter(Boolean);
 }
 
 /**
@@ -651,12 +658,15 @@ function getSizeLadder(settings) {
   });
 }
 
-/** Tell the user how many exported frames still need the analysis */
+/**
+ * Tell the user how many frames an export with these settings still needs
+ * the analysis for (a target size prepares each rung it tries as it goes,
+ * and its first rung exports these frames)
+ */
 function updateMissingMasksNote() {
   if (!store || !session || !clipInfo.aiCutout) return;
-  const exported = getExportedIndices(getPlannedFrameSkips(store.getState().settings))
-    .map((index) => clipFrames[index])
-    .filter(Boolean);
+  const { frameSkip } = store.getState().settings;
+  const exported = framesAt(getExportedFrameIndices(frames.length, frameSkip, rangeStart));
   const missing = collectPendingFrames(
     exported,
     getSharedMaskStore(),
@@ -685,21 +695,19 @@ function showAiPrep(next) {
 }
 
 /**
- * Final masks for every frame the export may encode: analyze those that
- * have no mask yet (with progress; the manager reuses the loaded model),
- * then build the masks over the whole clip (picks may lie outside the
- * export range).
- * @param {number[]} frameSkips
+ * Final masks for the frames an encode needs: analyze those that have no
+ * mask yet (with progress; the manager reuses the loaded model), then build
+ * the masks over the whole clip (picks may lie outside the export range).
+ * Once everything is analyzed this only returns the memoized masks.
+ * @param {number[]} indices - Absolute clip indices the encode reads
  * @param {AbortSignal} signal
  * @returns {Promise<import('../../shared/masks/final-masks.js').MaskSource>}
  */
-async function prepareAiMasks(frameSkips, signal) {
+async function prepareAiMasks(indices, signal) {
   const maskStore = getSharedMaskStore();
   const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
   const modelId = getAiModelId(ai);
-  const exported = getExportedIndices(frameSkips)
-    .map((index) => clipFrames[index])
-    .filter(Boolean);
+  const exported = framesAt(indices);
   const pending = collectPendingFrames(exported, maskStore, modelId);
   if (pending.length > 0) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: pending.length });
@@ -843,16 +851,43 @@ function patchSettingsText() {
 }
 
 /**
+ * The AI cutout could not be prepared for an encode (not a cancel): the
+ * dialog shows the AI preparation's error or no-WebGPU choice
+ */
+class AiPreparationError extends Error {
+  /** @param {unknown} cause */
+  constructor(cause) {
+    super(cause instanceof Error ? cause.message : 'The AI cutout could not be prepared');
+    this.name = 'AiPreparationError';
+    this.cause = cause;
+  }
+}
+
+/**
+ * What the estimates of one export share
+ * @typedef {Object} RungEstimator
+ * @property {Omit<import('./api.js').EncodeParams, 'settings' | 'onProgress'>} base
+ * @property {import('./types.js').ExportSettings} encodeSettings
+ * @property {AbortSignal} signal
+ * @property {(indices: number[]) => Promise<import('../../shared/masks/final-masks.js').MaskSource | null>} masksFor
+ *   Final masks for these frames (null without the AI cutout)
+ * @property {import('../../workers/worker-manager.js').GifEncoderManager} encoder
+ *   One encoder for every sample encode
+ * @property {Map<string, { maskSource: unknown, frames: Array<import('./api.js').RGBAFrame | undefined> }>} samples
+ *   Composed sample frames per frame skip and scale: rungs that only
+ *   lower the colors re-quantize the same pixels
+ */
+
+/**
  * Estimated bytes of one ladder rung: encode an evenly spaced sample of the
  * frames it would export (one per run when identical frames merge) and
- * extrapolate per-frame bytes to the whole GIF
+ * extrapolate per-frame bytes to the whole GIF. Only the sample needs its
+ * AI masks here; the rung's other frames are prepared if it is encoded.
  * @param {import('./size-planner.js').SizeRung} rung
- * @param {Omit<import('./api.js').EncodeParams, 'settings' | 'onProgress'>} base
- * @param {import('./types.js').ExportSettings} encodeSettings
- * @param {AbortSignal} signal
+ * @param {RungEstimator} estimator
  * @returns {Promise<number>}
  */
-async function estimateRungBytes(rung, base, encodeSettings, signal) {
+async function estimateRungBytes(rung, estimator) {
   const indices = getExportedFrameIndices(frames.length, rung.frameSkip, rangeStart);
   let representatives = indices;
   let gifFrames = indices.length;
@@ -864,20 +899,33 @@ async function estimateRungBytes(rung, base, encodeSettings, signal) {
   const picks = selectPaletteSampleIndices(representatives.length, SIZE_SAMPLE_FRAMES).map(
     (k) => representatives[k],
   );
-  const sample = await encodeGif(
+  const maskSource = await estimator.masksFor(picks);
+  const key = `${rung.frameSkip}:${rung.scale}`;
+  let sample = estimator.samples.get(key);
+  if (!sample || sample.maskSource !== maskSource) {
+    sample = { maskSource, frames: [] };
+    estimator.samples.set(key, sample);
+  }
+  const blob = await encodeGif(
     {
-      ...base,
+      ...estimator.base,
       frames: picks.map((index) => clipFrames[index]),
       frameIndices: picks,
       mergeIdenticalFrames: false,
-      settings: { ...encodeSettings, frameSkip: /** @type {1|2|3|4|5} */ (rung.frameSkip) },
+      maskSource,
+      settings: {
+        ...estimator.encodeSettings,
+        frameSkip: /** @type {1|2|3|4|5} */ (rung.frameSkip),
+      },
       maxColors: rung.maxColors,
       scale: rung.scale,
+      frameCache: sample.frames,
+      encoderManager: estimator.encoder,
       onProgress: () => {},
     },
-    signal,
+    estimator.signal,
   );
-  return extrapolateGifSize(sample.size, picks.length, gifFrames);
+  return extrapolateGifSize(blob.size, picks.length, gifFrames);
 }
 
 /**
@@ -891,12 +939,11 @@ async function handleExport() {
 
   const settings = dialogStore.getState().settings;
   const targetMB = normalizeTargetSizeMB(settings.targetSizeMB);
-  const rungs = getSizeLadder(settings);
-  const encodeSettings = {
-    ...settings,
-    playbackSpeed: clipInfo.speed,
-    encoderId: getEffectiveEncoderId(settings, clipInfo.transparent, rungs !== null),
-  };
+  const rungs = targetMB === null ? null : getSizeLadder(settings);
+  // encodeGif picks the encoder that really runs (gifenc for transparency or
+  // a target size); the job shows the same one
+  const encodeSettings = { ...settings, playbackSpeed: clipInfo.speed };
+  const jobEncoderId = getEffectiveEncoderId(settings, clipInfo.transparent, rungs !== null);
 
   // AI preparation and encoding share the controller, so Cancel stops
   // whichever runs
@@ -906,47 +953,45 @@ async function handleExport() {
   resultInfo = null;
   sizeStep = null;
 
-  // AI cutout: every frame the export may encode needs its final mask
-  /** @type {import('../../shared/masks/final-masks.js').MaskSource | null} */
-  let exportMasks = null;
-  if (isAiCutoutActive(edits?.background)) {
+  const aiCutout = isAiCutoutActive(edits?.background);
+  /**
+   * AI cutout: the final masks of the frames an encode is about to read.
+   * Frames without a mask are analyzed first on the AI preparation view,
+   * which gives way to the encoding view again once they are done. A target
+   * size prepares each rung as it gets to it, so frames only a rung it never
+   * uses would export are not analyzed.
+   * @param {number[]} indices
+   * @returns {Promise<import('../../shared/masks/final-masks.js').MaskSource | null>}
+   */
+  const masksFor = async (indices) => {
+    if (!aiCutout) return null;
+    /** @type {import('../../shared/masks/final-masks.js').MaskSource} */
+    let masks;
     try {
-      exportMasks = await prepareAiMasks(getPlannedFrameSkips(settings), signal);
+      masks = await prepareAiMasks(indices, signal);
     } catch (error) {
-      if (encodingController === controller) encodingController = null;
-      if (!isCurrent()) return;
-      if (isAbortError(error)) {
-        aiPrep = null;
-        emit('export:cancelled', {});
-        announce('Export cancelled');
-      } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
-        aiPrep = {
-          phase: 'needs-wasm',
-          modelFailed:
-            /** @type {any} */ (error).code === SegmentationErrorCode.WEBGPU_MODEL_FAILED,
-          modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
-        };
-      } else {
-        aiPrep = { phase: 'error', message: describeAnalysisError(error).message };
-        emit('export:error', { error: aiPrep.message });
-      }
-      render();
-      return;
+      throw isAbortError(error) ? error : new AiPreparationError(error);
     }
-    if (!isCurrent()) return;
     // A frame the analysis could not cover makes encodeGif refuse with a
     // clear MissingCutoutMasksError, shown on the error view
-    aiPrep = null;
-  }
+    if (aiPrep) {
+      aiPrep = null;
+      if (isCurrent() && dialogStore.getState().job) render();
+    }
+    return masks;
+  };
 
-  const firstSkip = rungs ? rungs[0].frameSkip : settings.frameSkip;
-  const job = createEncodingJob(applyFrameSkip(frames, firstSkip).length, encodeSettings.encoderId);
-  dialogStore.setState((s) => startEncoding(s, job));
-  emit('export:started', { job });
-  if (rungs && targetMB !== null) {
-    sizeStep = { phase: 'estimate', index: 0, total: rungs.length, targetMB };
-  }
-  render();
+  /** Show the encoding view for a new job */
+  const startJob = () => {
+    const firstSkip = rungs ? rungs[0].frameSkip : settings.frameSkip;
+    const job = createEncodingJob(applyFrameSkip(frames, firstSkip).length, jobEncoderId);
+    dialogStore.setState((s) => startEncoding(s, job));
+    emit('export:started', { job });
+    if (rungs && targetMB !== null) {
+      sizeStep = { phase: 'estimate', index: 0, total: rungs.length, targetMB };
+    }
+    render();
+  };
 
   const base = {
     frames,
@@ -956,7 +1001,7 @@ async function handleExport() {
     rangeStart,
     transparent: clipInfo.transparent === true,
     mergeIdenticalFrames,
-    maskSource: exportMasks,
+    maskSource: null,
   };
   /** @param {{ percent: number, current: number, total: number }} progress */
   const onProgress = (progress) => {
@@ -964,6 +1009,8 @@ async function handleExport() {
     dialogStore.setState((s) => updateProgress(s, progress));
     emit('export:progress', { percent: progress.percent, frame: progress.current });
   };
+  // A target size runs every encode of the export on one encoder worker
+  const ladderEncoder = rungs ? createEncoderManager() : null;
 
   try {
     /** @type {Blob} */
@@ -973,18 +1020,36 @@ async function handleExport() {
     let usedScale = settings.scale ?? 1;
     let usedSkip = settings.frameSkip;
 
-    if (!rungs || targetMB === null) {
+    if (!rungs || !ladderEncoder || targetMB === null) {
+      const maskSource = aiCutout
+        ? await masksFor(getExportedFrameIndices(frames.length, settings.frameSkip, rangeStart))
+        : null;
+      if (!isCurrent()) return;
+      startJob();
       blob = await encodeGif(
-        { ...base, settings: encodeSettings, scale: usedScale, onProgress },
+        { ...base, maskSource, settings: encodeSettings, scale: usedScale, onProgress },
         signal,
       );
     } else {
+      startJob();
+      /** @type {RungEstimator} */
+      const estimator = {
+        base,
+        encodeSettings,
+        signal,
+        masksFor,
+        encoder: ladderEncoder,
+        samples: new Map(),
+      };
       const outcome = await exportToTargetSize({
         rungs,
         targetBytes: targetMB * BYTES_PER_MB,
         signal,
-        estimate: (rung) => estimateRungBytes(rung, base, encodeSettings, signal),
-        encode: (rung) => {
+        estimate: (rung) => estimateRungBytes(rung, estimator),
+        encode: async (rung) => {
+          const maskSource = aiCutout
+            ? await masksFor(getExportedFrameIndices(frames.length, rung.frameSkip, rangeStart))
+            : null;
           const totalFrames = applyFrameSkip(frames, rung.frameSkip).length;
           dialogStore.setState((s) =>
             s.job
@@ -1001,13 +1066,15 @@ async function handleExport() {
               : s,
           );
           const current = dialogStore.getState().job;
-          if (session && current) updateProgressUI(session.body, current);
+          if (session && current && isCurrent()) updateProgressUI(session.body, current);
           return encodeGif(
             {
               ...base,
+              maskSource,
               settings: { ...encodeSettings, frameSkip: /** @type {1|2|3|4|5} */ (rung.frameSkip) },
               maxColors: rung.maxColors,
               scale: rung.scale,
+              encoderManager: ladderEncoder,
               onProgress,
             },
             signal,
@@ -1049,11 +1116,27 @@ async function handleExport() {
   } catch (error) {
     if (!isCurrent()) return;
     sizeStep = null;
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       // Cancel returns to the settings
+      aiPrep = null;
       dialogStore.setState(resetExport);
       emit('export:cancelled', {});
       announce('Export cancelled');
+    } else if (error instanceof AiPreparationError) {
+      // The AI preparation's own view: the no-WebGPU choice, or the error
+      // with Retry
+      dialogStore.setState(resetExport);
+      const cause = /** @type {any} */ (error.cause);
+      if (isWasmChoiceError(cause) && !isWasmAllowed()) {
+        aiPrep = {
+          phase: 'needs-wasm',
+          modelFailed: cause.code === SegmentationErrorCode.WEBGPU_MODEL_FAILED,
+          modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
+        };
+      } else {
+        aiPrep = { phase: 'error', message: describeAnalysisError(cause).message };
+        emit('export:error', { error: aiPrep.message });
+      }
     } else {
       const message = error instanceof Error ? error.message : 'Encoding failed';
       dialogStore.setState((s) => failEncoding(s, message));
@@ -1061,6 +1144,7 @@ async function handleExport() {
     }
     render();
   } finally {
+    ladderEncoder?.dispose();
     if (encodingController === controller) encodingController = null;
   }
 }

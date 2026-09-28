@@ -281,6 +281,98 @@ describe('GifEncoderManager', () => {
     });
   });
 
+  describe('init on a live worker', () => {
+    const CONFIG = {
+      width: 10,
+      height: 10,
+      totalFrames: 1,
+      maxColors: 256,
+      frameDelayMs: 100,
+      loopCount: 0,
+    };
+
+    it('re-initializes the same worker after an encode finished, with one set of listeners', async () => {
+      const manager = new workerManagerModule.GifEncoderManager();
+      const first = manager.init(CONFIG);
+      await Promise.resolve();
+      const worker = /** @type {MockWorker} */ (mockWorkerInstance);
+      worker._simulateMessage({ event: Events.READY });
+      await first;
+      const finished = manager.finish();
+      worker._simulateMessage({ event: Events.COMPLETE, gifData: new ArrayBuffer(3), duration: 1 });
+      await finished;
+      const messageListeners = worker.listeners.get('message')?.length;
+      const errorListeners = worker.listeners.get('error')?.length;
+
+      const second = manager.init({ ...CONFIG, maxColors: 32 });
+      await Promise.resolve();
+      // No new worker: the INIT goes to the one already running
+      expect(mockWorkerInstance).toBe(worker);
+      expect(worker._lastMessage).toMatchObject({ command: 'init', maxColors: 32 });
+      worker._simulateMessage({ event: Events.READY });
+      await second;
+      expect(worker.listeners.get('message')?.length).toBe(messageListeners);
+      expect(worker.listeners.get('error')?.length).toBe(errorListeners);
+
+      // The second session works like the first
+      const onProgress = vi.fn();
+      manager.onProgress = onProgress;
+      worker._simulateMessage({
+        event: Events.PROGRESS,
+        frameIndex: 0,
+        totalFrames: 1,
+        percent: 100,
+      });
+      expect(onProgress).toHaveBeenCalledTimes(1);
+      const blob = manager.finish();
+      worker._simulateMessage({ event: Events.COMPLETE, gifData: new ArrayBuffer(5), duration: 1 });
+      expect((await blob).size).toBe(5);
+      expect(worker.terminated).toBe(false);
+      manager.dispose();
+      expect(worker.terminated).toBe(true);
+    });
+
+    it('rejects a re-init at once when the running worker crashes, and replaces it next time', async () => {
+      const manager = new workerManagerModule.GifEncoderManager();
+      const first = manager.init(CONFIG);
+      await Promise.resolve();
+      const worker = /** @type {MockWorker} */ (mockWorkerInstance);
+      worker._simulateMessage({ event: Events.READY });
+      await first;
+
+      const second = manager.init(CONFIG);
+      await Promise.resolve();
+      worker._simulateError('boom');
+      await expect(second).rejects.toThrow('boom');
+
+      // The crashed worker is not reused
+      const third = manager.init(CONFIG);
+      await Promise.resolve();
+      expect(worker.terminated).toBe(true);
+      expect(mockWorkerInstance).not.toBe(worker);
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await third;
+      manager.dispose();
+    });
+
+    it('starts a new worker after dispose', async () => {
+      const manager = new workerManagerModule.GifEncoderManager();
+      const first = manager.init(CONFIG);
+      await Promise.resolve();
+      const worker = /** @type {MockWorker} */ (mockWorkerInstance);
+      worker._simulateMessage({ event: Events.READY });
+      await first;
+      manager.dispose();
+
+      const second = manager.init(CONFIG);
+      await Promise.resolve();
+      expect(mockWorkerInstance).not.toBe(worker);
+      mockWorkerInstance?._simulateMessage({ event: Events.READY });
+      await second;
+      manager.dispose();
+    });
+  });
+
   describe('addFrame', () => {
     it('should throw if not initialized', () => {
       // Arrange
