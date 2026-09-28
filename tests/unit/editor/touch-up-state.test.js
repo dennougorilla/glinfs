@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addTouchUp,
+  addTouchUps,
   canClearTouchUpsOnFrame,
   clearAllTouchUps,
   clearTouchUpsOnFrame,
@@ -141,6 +142,20 @@ describe('strokes', () => {
       },
     };
     expect(addTouchUp(full, stroke('over', 0, 0))).toBe(full);
+
+    // Several strokes at once (one gesture): in order, as many as fit
+    const nearlyFull = {
+      ...full,
+      edits: { ...full.edits, touchUps: full.edits.touchUps.slice(2) },
+    };
+    const added = addTouchUps(nearlyFull, [
+      stroke('x', 0, 0),
+      stroke('y', 0, 0),
+      stroke('z', 0, 0),
+    ]);
+    expect(added.edits.touchUps).toHaveLength(EDIT_LIMITS.touchUps.max);
+    expect(added.edits.touchUps.slice(-2).map((s) => s.id)).toEqual(['x', 'y']);
+    expect(addTouchUps(nearlyFull, [])).toBe(nearlyFull);
   });
 
   it('clear on this frame changes only that frame; clear all removes everything', () => {

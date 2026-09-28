@@ -29,7 +29,11 @@ import {
   normalizeEdits,
   requiresTransparency,
 } from '../../shared/edits/model.js';
-import { touchUpRadiusPx } from '../../shared/edits/touch-ups.js';
+import {
+  extendStrokePath,
+  getStrokePathPoints,
+  startStrokePath,
+} from '../../shared/edits/touch-ups.js';
 import { announce } from '../../shared/live-region.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
@@ -65,7 +69,7 @@ import { TOUCH_UP_NEEDS_REMOVAL } from './panels/touch-up-panel.js';
 import {
   addAiPick,
   addTextLayer,
-  addTouchUp,
+  addTouchUps,
   canClearTouchUpsOnFrame,
   clearAiPicks,
   clearAllTouchUps,
@@ -209,12 +213,26 @@ let exportDialog = null;
  */
 let pendingExportDialog = false;
 
+/** @typedef {import('../../shared/edits/model.js').TouchUp} TouchUp */
+
 /**
- * The mask brush stroke being painted: previewed live (drawPreview adds it
- * to the edits) and added to the edits when the pointer is released
- * @type {{ stroke: import('../../shared/edits/model.js').TouchUp, tail: { x: number, y: number } | null, minDistancePx: number, width: number, height: number } | null}
+ * The mask brush gesture in progress (pointer down until released): its
+ * strokes preview live (drawPreview adds them to the edits) and are added
+ * to the edits together when the pointer is released; Escape drops them.
+ * A stroke is one path, so the pointer leaving the preview ends the current
+ * one (`pieces`) and coming back starts another with the same settings.
+ * `live` is the stroke being painted as the renderer sees it (a new object
+ * whenever its path changes).
+ * @type {{
+ *   settings: Omit<TouchUp, 'id' | 'points'>,
+ *   width: number,
+ *   height: number,
+ *   pieces: TouchUp[],
+ *   path: import('../../shared/edits/touch-ups.js').StrokePath | null,
+ *   live: TouchUp | null,
+ * } | null}
  */
-let brushStroke = null;
+let brushGesture = null;
 
 /** @type {number | null} requestAnimationFrame of the live stroke preview */
 let brushDrawFrameId = null;
@@ -844,6 +862,7 @@ function render(container) {
       onBrushStrokeStart: handleBrushStrokeStart,
       onBrushStrokeMove: handleBrushStrokeMove,
       onBrushStrokeEnd: handleBrushStrokeEnd,
+      onBrushStrokeCancel: handleBrushStrokeCancel,
       onUndoTouchUp: handleUndoTouchUp,
       onClearTouchUpsOnFrame: handleClearTouchUpsOnFrame,
       onClearAllTouchUps: handleClearAllTouchUps,
@@ -873,10 +892,12 @@ function drawPreview(state) {
   if (!baseCanvas || !previewRenderer || !frame) return;
   const ctx = baseCanvas.getContext('2d');
   if (!ctx) return;
-  // A stroke being painted previews live on top of the stored ones
-  const edits = brushStroke
-    ? { ...state.edits, touchUps: [...state.edits.touchUps, brushStroke.stroke] }
-    : state.edits;
+  // The strokes being painted preview live on top of the stored ones
+  const painting = getBrushGestureStrokes();
+  const edits =
+    painting.length > 0
+      ? { ...state.edits, touchUps: [...state.edits.touchUps, ...painting] }
+      : state.edits;
   previewRenderer.render(ctx, frame, state.cropArea, edits, state.currentFrame, {
     skipKey: cropDragging,
     transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
@@ -1589,20 +1610,74 @@ function scheduleBrushDraw() {
 }
 
 /**
- * A brush stroke starts on the preview: playback pauses (a stroke belongs
- * to the frame on screen) and the stroke takes the brush's settings and
+ * Strokes of the brush gesture in progress, as they will be added
+ * @returns {TouchUp[]}
+ */
+function getBrushGestureStrokes() {
+  const gesture = brushGesture;
+  if (!gesture) return [];
+  if (!gesture.path) return gesture.pieces;
+  gesture.live ??= {
+    id: 'live',
+    ...gesture.settings,
+    points: getStrokePathPoints(gesture.path),
+  };
+  return [...gesture.pieces, gesture.live];
+}
+
+/** Strokes the edits can still take, minus the gesture's finished ones */
+function brushStrokeRoom() {
+  const stored = store?.getState().edits.touchUps.length ?? 0;
+  return EDIT_LIMITS.touchUps.max - stored - (brushGesture?.pieces.length ?? 0);
+}
+
+/** Announce that the stroke limit stops the brush */
+function announceStrokeLimit() {
+  announce(
+    `The limit of ${EDIT_LIMITS.touchUps.max} strokes is reached. Undo or clear strokes to paint more.`,
+  );
+}
+
+/**
+ * The gesture's current stroke ends (the pointer left the preview, or was
+ * released): it joins the finished pieces
+ */
+function finishBrushPiece() {
+  const gesture = brushGesture;
+  if (!gesture?.path) return;
+  gesture.pieces.push({
+    id: createLayerId(),
+    ...gesture.settings,
+    points: getStrokePathPoints(gesture.path),
+  });
+  gesture.path = null;
+  gesture.live = null;
+}
+
+/** Stop the scheduled live stroke preview */
+function cancelBrushDraw() {
+  if (brushDrawFrameId !== null) {
+    window.cancelAnimationFrame(brushDrawFrameId);
+    brushDrawFrameId = null;
+  }
+}
+
+/**
+ * A brush gesture starts on the preview: playback pauses (a stroke belongs
+ * to the frame on screen) and its strokes take the brush's settings and
  * the frame range of its scope now
- * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ * @param {{ x: number, y: number } | null} point - Fractions of the SOURCE
+ *   frame; null when the pointer went down off the frame (the stroke starts
+ *   where it enters)
  */
 function handleBrushStrokeStart(point) {
   if (!store) return;
+  brushGesture = null;
   const state = store.getState();
   const frame = state.clip?.frames[state.currentFrame];
   if (!isBrushActive(state) || !frame) return;
   if (state.edits.touchUps.length >= EDIT_LIMITS.touchUps.max) {
-    announce(
-      `The limit of ${EDIT_LIMITS.touchUps.max} strokes is reached. Undo or clear strokes to paint more.`,
-    );
+    announceStrokeLimit();
     return;
   }
   if (state.isPlaying) {
@@ -1611,63 +1686,74 @@ function handleBrushStrokeStart(point) {
   }
   const current = store.getState();
   const { mode, radius } = current.brush;
-  brushStroke = {
-    stroke: { id: createLayerId(), mode, radius, points: [point], ...getBrushStrokeRange(current) },
-    tail: null,
-    // Points closer than a quarter of the radius add nothing a round brush
-    // does not already cover
-    minDistancePx: Math.max(1, touchUpRadiusPx(radius, frame.width, frame.height) / 4),
+  brushGesture = {
+    settings: { mode, radius, ...getBrushStrokeRange(current) },
     width: frame.width,
     height: frame.height,
+    pieces: [],
+    path: point ? startStrokePath(point, radius, frame.width, frame.height) : null,
+    live: null,
   };
-  scheduleBrushDraw();
+  if (point) scheduleBrushDraw();
 }
 
 /**
- * More points of the stroke being painted (coalesced pointer events),
- * thinned out as they arrive
- * @param {{ x: number, y: number }[]} points - Fractions of the SOURCE frame
+ * More of the gesture (coalesced pointer events, already limited to the
+ * frame by clipStrokeMove): points extend the current stroke, thinned out
+ * as they arrive; null ends it (the pointer left the preview) and the next
+ * point starts a new one
+ * @param {({ x: number, y: number } | null)[]} points - Fractions of the SOURCE frame
  */
 function handleBrushStrokeMove(points) {
-  if (!brushStroke) return;
-  const { stroke, minDistancePx, width, height } = brushStroke;
-  const minSq = minDistancePx * minDistancePx;
-  let added = false;
+  const gesture = brushGesture;
+  if (!gesture) return;
+  let changed = false;
   for (const point of points) {
-    const last = stroke.points[stroke.points.length - 1];
-    const dx = (point.x - last.x) * width;
-    const dy = (point.y - last.y) * height;
-    if (dx * dx + dy * dy >= minSq) {
-      stroke.points.push(point);
-      brushStroke.tail = null;
-      added = true;
-    } else {
-      brushStroke.tail = point;
+    if (point === null) {
+      finishBrushPiece();
+    } else if (gesture.path) {
+      if (extendStrokePath(gesture.path, point)) {
+        gesture.live = null;
+        changed = true;
+      }
+    } else if (brushStrokeRoom() > 0) {
+      gesture.path = startStrokePath(point, gesture.settings.radius, gesture.width, gesture.height);
+      gesture.live = null;
+      changed = true;
     }
   }
-  if (added) scheduleBrushDraw();
+  if (changed) scheduleBrushDraw();
 }
 
-/** The stroke being painted ends: add it to the edits */
+/** The gesture ends (pointer released): add its strokes to the edits */
 function handleBrushStrokeEnd() {
-  const pending = brushStroke;
-  brushStroke = null;
-  if (brushDrawFrameId !== null) {
-    window.cancelAnimationFrame(brushDrawFrameId);
-    brushDrawFrameId = null;
-  }
-  if (!store || !pending) return;
-  const { stroke, tail } = pending;
-  const last = stroke.points[stroke.points.length - 1];
-  // The pointer's final position, unless the path already ends there
-  const moved = tail !== null && (tail.x !== last.x || tail.y !== last.y);
-  const points = moved ? [...stroke.points, tail] : [...stroke.points];
+  finishBrushPiece();
+  const gesture = brushGesture;
+  brushGesture = null;
+  cancelBrushDraw();
+  if (!store || !gesture || gesture.pieces.length === 0) return;
   const before = store.getState();
-  store.setState((state) => addTouchUp(state, { ...stroke, points }));
-  if (store.getState() === before) {
-    // Not added (limit reached meanwhile): drop the live preview
-    drawPreview(before);
+  store.setState((state) => addTouchUps(state, gesture.pieces));
+  const after = store.getState();
+  if (after.edits.touchUps.length - before.edits.touchUps.length < gesture.pieces.length) {
+    // Not all added (the limit was reached meanwhile): drop the live preview
+    if (after === before) drawPreview(before);
+    announceStrokeLimit();
   }
+}
+
+/**
+ * Escape during a gesture: its strokes are dropped, nothing is added (the
+ * pointer stays down but paints nothing more until it is released)
+ * @returns {boolean} Whether a gesture was cancelled
+ */
+function handleBrushStrokeCancel() {
+  if (!brushGesture) return false;
+  brushGesture = null;
+  cancelBrushDraw();
+  if (store) drawPreview(store.getState());
+  announce('Stroke cancelled');
+  return true;
 }
 
 /** Remove the most recent stroke */
@@ -2183,11 +2269,8 @@ function cleanup() {
   }
   stopPlayback();
   deletedClipOnScreen = null;
-  brushStroke = null;
-  if (brushDrawFrameId !== null) {
-    window.cancelAnimationFrame(brushDrawFrameId);
-    brushDrawFrameId = null;
-  }
+  brushGesture = null;
+  cancelBrushDraw();
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();

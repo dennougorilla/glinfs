@@ -201,6 +201,84 @@ describe('Mask brush in the mounted editor', () => {
     expect(getEditorState()?.edits.touchUps).toHaveLength(1);
   });
 
+  it('a pointer that leaves the preview breaks the stroke instead of painting along the edge', async () => {
+    check('background-enabled');
+    check('touchup-brush');
+    await settle();
+    // Inside, out past the right edge (the preview is 200x100), down, and back in
+    pointer('pointerdown', 100, 50);
+    for (const [x, y] of [
+      [150, 50],
+      [250, 50],
+      [260, 60],
+      [250, 80],
+      [150, 80],
+    ]) {
+      pointer('pointermove', x, y);
+    }
+    pointer('pointerup', 150, 80);
+    await settle();
+    const strokes = getEditorState()?.edits.touchUps ?? [];
+    expect(strokes).toHaveLength(2);
+    const [out, back] = strokes;
+    // The first stroke stops where the pointer crossed the edge, the second
+    // starts where it came back: nothing is painted between them
+    expect(out.points[0]).toEqual({ x: 0.5, y: 0.5 });
+    expect(out.points.at(-1)).toEqual({ x: 1, y: 0.5 });
+    expect(back.points[0]).toEqual({ x: 1, y: 0.8 });
+    expect(back.points.at(-1)).toEqual({ x: 0.75, y: 0.8 });
+    const onEdge = strokes.flatMap((s) => s.points).filter((p) => p.x === 1);
+    expect(onEdge).toEqual([
+      { x: 1, y: 0.5 },
+      { x: 1, y: 0.8 },
+    ]);
+    // Both belong to the same gesture: same settings, same frame
+    expect(back).toMatchObject({ mode: out.mode, radius: out.radius, start: 0, end: 0 });
+
+    // A gesture that never crosses the frame paints nothing
+    pointer('pointerdown', 100, 50);
+    pointer('pointermove', 250, 50);
+    pointer('pointermove', 250, 120);
+    pointer('pointerup', 250, 120);
+    await settle();
+    expect(getEditorState()?.edits.touchUps).toHaveLength(3);
+    pointer('pointerdown', 250, 50);
+    pointer('pointermove', 260, 50);
+    pointer('pointerup', 260, 50);
+    await settle();
+    expect(getEditorState()?.edits.touchUps).toHaveLength(3);
+  });
+
+  it('Escape during a stroke cancels that stroke; the next Escape leaves the brush', async () => {
+    check('background-enabled');
+    check('touchup-brush');
+    await settle();
+    pointer('pointerdown', 20, 50);
+    pointer('pointermove', 60, 50);
+    pointer('pointermove', 100, 50);
+    press('Escape');
+    // Still pressed: moving on paints nothing, and the release adds nothing
+    pointer('pointermove', 140, 50);
+    pointer('pointerup', 140, 50);
+    await settle();
+    expect(getEditorState()?.edits.touchUps).toEqual([]);
+    expect(getEditorState()?.brush.on).toBe(true);
+    press('Escape');
+    expect(getEditorState()?.brush.on).toBe(false);
+
+    // The same from a focused panel control
+    check('touchup-brush');
+    await settle();
+    pointer('pointerdown', 20, 50);
+    pointer('pointermove', 60, 50);
+    $('#touchup-size').focus();
+    press('Escape');
+    pointer('pointerup', 60, 50);
+    await settle();
+    expect(getEditorState()?.edits.touchUps).toEqual([]);
+    expect(getEditorState()?.brush.on).toBe(true);
+  });
+
   it('Escape leaves the brush first, then the crop; removal off switches the brush off', async () => {
     check('background-enabled');
     window.__TEST_HOOKS__.setEditorState({

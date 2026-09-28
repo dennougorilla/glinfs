@@ -13,9 +13,11 @@ import {
 import { EDIT_LIMITS, normalizeEdits } from '../../../../src/shared/edits/model.js';
 import {
   applyTouchUpsToDecision,
+  clipStrokeMove,
   extendStrokePath,
   getStrokePathPoints,
   getTouchUpsSignature,
+  isPointInFrame,
   startStrokePath,
   touchUpRadiusPx,
 } from '../../../../src/shared/edits/touch-ups.js';
@@ -321,6 +323,42 @@ describe('stroke paths (painting)', () => {
       1,
     ).touchUps[0];
     expect(saved.points).toEqual(painted);
+  });
+});
+
+describe('clipStrokeMove', () => {
+  it('keeps a move inside the frame as is', () => {
+    expect(clipStrokeMove({ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.6 })).toEqual([{ x: 0.4, y: 0.6 }]);
+    expect(isPointInFrame({ x: 0, y: 1 })).toBe(true);
+    expect(isPointInFrame({ x: -0.01, y: 0.5 })).toBe(false);
+  });
+
+  it('ends the stroke at the exit point, and starts the next at the entry point', () => {
+    expect(clipStrokeMove({ x: 0.5, y: 0.5 }, { x: 1.5, y: 0.5 })).toEqual([
+      { x: 1, y: 0.5 },
+      null,
+    ]);
+    expect(clipStrokeMove({ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 })).toEqual([
+      { x: 0.5, y: 0 },
+      { x: 0.5, y: 0.5 },
+    ]);
+    // Across a corner from outside to outside: in and out again
+    expect(clipStrokeMove({ x: -0.5, y: 0.5 }, { x: 0.5, y: -0.5 })).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      null,
+    ]);
+    expect(clipStrokeMove({ x: -1, y: 0.5 }, { x: 2, y: 0.5 })).toEqual([
+      { x: 0, y: 0.5 },
+      { x: 1, y: 0.5 },
+      null,
+    ]);
+  });
+
+  it('paints nothing for a move that misses the frame (never along its edge)', () => {
+    expect(clipStrokeMove({ x: 1.2, y: 0.2 }, { x: 1.2, y: 0.8 })).toEqual([]);
+    expect(clipStrokeMove({ x: 1.2, y: 0.2 }, { x: 1.2, y: 0.2 })).toEqual([]);
+    expect(clipStrokeMove({ x: -0.5, y: 0.2 }, { x: 0.2, y: -0.5 })).toEqual([]);
   });
 });
 

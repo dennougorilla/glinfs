@@ -616,15 +616,27 @@ export function getBrushStrokeRange(state) {
 }
 
 /**
+ * Add touch-up strokes in order, as many as fit in EDIT_LIMITS.touchUps.max
+ * (unchanged when none fits)
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').TouchUp[]} strokes
+ * @returns {import('./types.js').EditorState}
+ */
+export function addTouchUps(state, strokes) {
+  const touchUps = state.edits.touchUps ?? [];
+  const room = EDIT_LIMITS.touchUps.max - touchUps.length;
+  if (room <= 0 || strokes.length === 0) return state;
+  return setEdits(state, { ...state.edits, touchUps: [...touchUps, ...strokes.slice(0, room)] });
+}
+
+/**
  * Add a touch-up stroke (ignored once EDIT_LIMITS.touchUps.max exist)
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').TouchUp} stroke
  * @returns {import('./types.js').EditorState}
  */
 export function addTouchUp(state, stroke) {
-  const touchUps = state.edits.touchUps ?? [];
-  if (touchUps.length >= EDIT_LIMITS.touchUps.max) return state;
-  return setEdits(state, { ...state.edits, touchUps: [...touchUps, stroke] });
+  return addTouchUps(state, [stroke]);
 }
 
 /**

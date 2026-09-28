@@ -10,10 +10,14 @@
  * The brush uses pointer events (captured, with coalesced events for a
  * smooth path) and a circular cursor element sized to the brush; the other
  * tools use mouse events, which the brush's handled pointerdown suppresses
- * (and which also return early while the brush is on).
+ * (and which also return early while the brush is on). A captured pointer
+ * that leaves the frame paints nothing out there: the stroke stops where
+ * the pointer crossed the edge and a new one starts where it comes back
+ * (clipStrokeMove), never a band clamped along the edge.
  * @module features/editor/panels/preview
  */
 
+import { clipStrokeMove, isPointInFrame } from '../../../shared/edits/touch-ups.js';
 import { isComposingEvent, isEditableTarget } from '../../../shared/hotkeys.js';
 import { createElement } from '../../../shared/utils/dom.js';
 import { getCursorForHandle, hitTestCropHandle, renderFrameOnly, renderOverlay } from '../api.js';
@@ -210,6 +214,11 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
   const pickMarker = { x: 0.5, y: 0.5 };
   /** Pointer painting the brush stroke in progress (null: none) */
   let brushPointer = null;
+  /**
+   * Its last position, fractions of the source frame (may lie off the frame)
+   * @type {{ x: number, y: number }}
+   */
+  let brushLast = { x: 0, y: 0 };
 
   // Get current state and frame via handlers (avoids stale closure)
   const getCurrentState = () => handlers.getState?.();
@@ -232,18 +241,34 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
   }
 
   /**
-   * Pointer position as fractions of the SOURCE frame (unrounded, clamped
-   * to the frame: a captured stroke may leave the preview)
+   * Pointer position as fractions of the SOURCE frame, unrounded and not
+   * clamped (a captured stroke may leave the preview: see clipStrokeMove)
    * @param {{ clientX: number, clientY: number }} e
    * @returns {{ x: number, y: number }}
    */
   function getSourceFraction(e) {
     const rect = baseCanvas.getBoundingClientRect();
-    const clamp01 = (/** @type {number} */ v) => Math.min(1, Math.max(0, v));
     return {
-      x: rect.width > 0 ? clamp01((e.clientX - rect.left) / rect.width) : 0.5,
-      y: rect.height > 0 ? clamp01((e.clientY - rect.top) / rect.height) : 0.5,
+      x: rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5,
+      y: rect.height > 0 ? (e.clientY - rect.top) / rect.height : 0.5,
     };
+  }
+
+  /**
+   * Stroke points for the pointer moving through these positions: only
+   * what lies over the frame, with null where the stroke breaks
+   * @param {{ clientX: number, clientY: number }[]} events
+   * @returns {({ x: number, y: number } | null)[]}
+   */
+  function takeStrokePoints(events) {
+    /** @type {({ x: number, y: number } | null)[]} */
+    const points = [];
+    for (const event of events) {
+      const next = getSourceFraction(event);
+      points.push(...clipStrokeMove(brushLast, next));
+      brushLast = next;
+    }
+    return points;
   }
 
   /**
@@ -291,7 +316,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     }
     overlayCanvas.style.cursor = 'none';
     updateBrushCursor(e);
-    handlers.onBrushStrokeStart?.(getSourceFraction(e));
+    brushLast = getSourceFraction(e);
+    handlers.onBrushStrokeStart?.(isPointInFrame(brushLast) ? brushLast : null);
   }
 
   /** @param {PointerEvent} e */
@@ -308,8 +334,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     if (e.pointerId !== brushPointer) return;
     updateBrushCursor(e);
     const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
-    const events = coalesced.length > 0 ? coalesced : [e];
-    handlers.onBrushStrokeMove?.(events.map(getSourceFraction));
+    const points = takeStrokePoints(coalesced.length > 0 ? coalesced : [e]);
+    if (points.length > 0) handlers.onBrushStrokeMove?.(points);
   }
 
   /**
@@ -320,7 +346,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     if (brushPointer === null || e.pointerId !== brushPointer) return;
     brushPointer = null;
     if (e.type === 'pointerup') {
-      handlers.onBrushStrokeMove?.([getSourceFraction(e)]);
+      const points = takeStrokePoints([e]);
+      if (points.length > 0) handlers.onBrushStrokeMove?.(points);
     }
     try {
       if (overlayCanvas.hasPointerCapture?.(e.pointerId)) {

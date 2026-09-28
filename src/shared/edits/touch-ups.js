@@ -292,6 +292,63 @@ export function getStrokePathPoints(path) {
     : [...path.points];
 }
 
+/**
+ * Whether a point (fractions of the source frame) lies on the frame
+ * @param {{ x: number, y: number }} p
+ * @returns {boolean}
+ */
+export function isPointInFrame(p) {
+  return p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+}
+
+/**
+ * The stroke points for a pointer move from `from` to `to` (fractions of the
+ * source frame, either may lie outside it): only the part of the move over
+ * the frame paints. Where the move enters the frame its entry point starts
+ * a new stroke; where it leaves, its exit point ends the stroke and a null
+ * marks the break. Positions outside the frame are never clamped onto its
+ * edge (that would paint a band along the edge).
+ * @param {{ x: number, y: number }} from
+ * @param {{ x: number, y: number }} to
+ * @returns {({ x: number, y: number } | null)[]} Empty when the move misses the frame
+ */
+export function clipStrokeMove(from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  // Liang-Barsky: the part t0..t1 of the move inside 0..1 x 0..1
+  let t0 = 0;
+  let t1 = 1;
+  const edges = [
+    [-dx, from.x],
+    [dx, 1 - from.x],
+    [-dy, from.y],
+    [dy, 1 - from.y],
+  ];
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return [];
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return [];
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return [];
+      if (r < t1) t1 = r;
+    }
+  }
+  /** @type {({ x: number, y: number } | null)[]} */
+  const out = [];
+  if (t0 > 0) out.push({ x: from.x + t0 * dx, y: from.y + t0 * dy });
+  if (t1 < 1) {
+    out.push({ x: from.x + t1 * dx, y: from.y + t1 * dy }, null);
+  } else {
+    out.push(to);
+  }
+  return out;
+}
+
 /** Signatures per strokes array (arrays are replaced, never mutated) */
 const signatures = new WeakMap();
 
