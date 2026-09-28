@@ -220,10 +220,36 @@ describe('touch-ups over the AI mask', () => {
     expect(pixel(result.data, W, 0, 5)).toEqual(GREEN);
   });
 
-  it('a frame without a mask draws unkeyed, touch-ups included', async () => {
+  it('a frame without a mask keeps everything, and its touch-ups still apply', async () => {
     const none = { version: 2, getFinalMask: vi.fn(() => null) };
-    const edits = editsOf({ method: 'ai', touchUps: [dot('erase', 3, 0)] });
+    const edits = editsOf({
+      method: 'ai',
+      touchUps: [dot('erase', 3, 0), dot('erase', 5, 2), dot('restore', 5, 2)],
+    });
     const result = await composeOutputFrameRGBA(patternFrame(), null, edits, 0, none);
-    expect(result.data).toEqual(pattern());
+    // No mask = keep everything: erase removes its pixel, restore keeps its own
+    expect(alphaRows(result.data, W)).toEqual([
+      '###.####',
+      '########',
+      '########',
+      '########',
+      '########',
+      '########',
+    ]);
+    expect(pixel(result.data, W, 5, 2)).toEqual(pixel(pattern(), W, 5, 2));
+
+    // No mask source at all (the analysis never started): the same
+    const noSource = await composeOutputFrameRGBA(patternFrame(), null, edits, 0, null);
+    expect(noSource.data).toEqual(result.data);
+
+    // Without touch-ups such a frame is drawn untouched
+    const plain = await composeOutputFrameRGBA(
+      patternFrame(),
+      null,
+      editsOf({ method: 'ai' }),
+      0,
+      none,
+    );
+    expect(plain.data).toEqual(pattern());
   });
 });

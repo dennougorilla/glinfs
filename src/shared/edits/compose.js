@@ -22,9 +22,11 @@
  *
  * Background removal is the color key, or — with the 'ai' method — the
  * frame's final AI cutout mask from an optional `maskSource` (same place in
- * the pipeline). A frame the mask source has no mask for is drawn without
- * removal (it has not been analyzed yet); the export refuses such frames
- * before it starts (see encodeGif).
+ * the pipeline). A frame the mask source has no mask for (not analyzed yet)
+ * keeps every pixel: it is drawn without removal, except for its touch-ups,
+ * which apply on top of that keep-everything decision (erase removes,
+ * restore keeps). The export analyzes such frames before it starts (see
+ * encodeGif).
  *
  * @module shared/edits/compose
  */
@@ -194,7 +196,8 @@ function getAiDecisionScratch(size) {
 
 /**
  * The background removal a frame needs, or null when it needs none (removal
- * off, or the AI method without a final mask for this frame).
+ * off, or the AI method without a final mask and without touch-ups for this
+ * frame: no mask means "keep everything", and the strokes still apply).
  *
  * The color key receives the region size exactly as callers always passed
  * it; the AI mask is applied to the pixel grid the readback really returned
@@ -229,27 +232,30 @@ export function getRemovalStep(frame, sourceRegion, edits, frameIndex, maskSourc
   }
   if (!isAiCutoutActive(background)) return null;
   const mask = maskSource?.getFinalMask(frameIndex) ?? null;
-  if (!mask) return null;
   if (touchUps.length > 0) {
     return (data, width, height) => {
       const w = Math.floor(width);
       const h = Math.floor(height);
       if (w <= 0 || h <= 0) return;
-      const decision = decideMaskRemoval(
-        w,
-        h,
-        mask.bits,
-        mask.width,
-        mask.height,
-        sourceRegion,
-        frame.width,
-        frame.height,
-        getAiDecisionScratch(w * h),
-      );
+      const scratch = getAiDecisionScratch(w * h);
+      const decision = mask
+        ? decideMaskRemoval(
+            w,
+            h,
+            mask.bits,
+            mask.width,
+            mask.height,
+            sourceRegion,
+            frame.width,
+            frame.height,
+            scratch,
+          )
+        : scratch.fill(0, 0, w * h);
       applyTouchUpsToDecision(decision, w, h, touchUps, sourceRegion, frame.width, frame.height);
       clearDecidedPixels(data, decision, w * h);
     };
   }
+  if (!mask) return null;
   return (data, width, height) => {
     applyMaskToRegion(
       data,
