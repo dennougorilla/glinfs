@@ -349,24 +349,30 @@ export function clipStrokeMove(from, to) {
   return out;
 }
 
-/** Signatures per strokes array (arrays are replaced, never mutated) */
-const signatures = new WeakMap();
+/** Serial number per stroke object, for signatures */
+const strokeSerials = new WeakMap();
+let nextStrokeSerial = 0;
 
 /**
- * Cache identity of a set of strokes: equal signatures mean equal strokes.
- * Strokes are immutable once added (a new stroke gets a new id), so ids,
- * point counts and ranges identify them; memoized per array.
+ * Cache identity of a list of strokes: equal signatures mean the same
+ * stroke objects in the same order. Strokes are immutable once normalized
+ * (normalizeEdits keeps unchanged ones by reference; any change makes a new
+ * object, and the stroke being painted is a new object whenever its path
+ * changes), so object identity identifies their content.
  * @param {readonly TouchUp[] | null | undefined} strokes
- * @returns {string}
+ * @returns {string} '' for none
  */
 export function getTouchUpsSignature(strokes) {
   if (!strokes || strokes.length === 0) return '';
-  const cached = signatures.get(strokes);
-  if (cached !== undefined) return cached;
-  const signature = strokes
-    .map((s) => `${s.id}:${s.mode}:${s.radius}:${s.points.length}:${s.start}-${s.end}`)
-    .join(',');
-  signatures.set(strokes, signature);
+  let signature = '';
+  for (const stroke of strokes) {
+    let serial = strokeSerials.get(stroke);
+    if (serial === undefined) {
+      serial = ++nextStrokeSerial;
+      strokeSerials.set(stroke, serial);
+    }
+    signature += signature ? `,${serial}` : `${serial}`;
+  }
   return signature;
 }
 

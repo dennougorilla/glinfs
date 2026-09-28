@@ -109,6 +109,23 @@ describe('createKeyedRegionCache', () => {
     expect(cache.stats().bytes).toBe(70);
   });
 
+  it('keeps one variant per key: a new variant replaces the old one', () => {
+    const cache = createKeyedRegionCache(100);
+    cache.sync('p');
+    cache.set('a', image(40), 'v1');
+    cache.set('b', image(40));
+    expect(cache.get('a', 'v1')).not.toBeNull();
+    expect(cache.get('a')).toBeNull();
+    expect(cache.get('a', 'v2')).toBeNull();
+    cache.set('a', image(40), 'v2');
+    expect(cache.get('a', 'v1')).toBeNull();
+    expect(cache.get('a', 'v2')).not.toBeNull();
+    expect(cache.stats()).toEqual({ entries: 2, bytes: 80 });
+    cache.set('c', image(40)); // over budget: only the latest
+    expect(cache.get('a', 'v2')).not.toBeNull();
+    expect(cache.stats()).toEqual({ entries: 2, bytes: 80 });
+  });
+
   it('drops everything when the parameters change', () => {
     const cache = createKeyedRegionCache();
     cache.sync('p1');
@@ -275,11 +292,48 @@ describe('createEditorFrameRenderer', () => {
     renderer.render(ctx, frame('c2', GREEN, 'shared'), null, { ...e, touchUps: [stroke] }, 2);
     expect(renderer.stats().readbacks).toBe(2);
 
-    // Another stroke: every frame is keyed again
+    // Another stroke on frame 1: only frame 1 is keyed again (now per index),
+    // frame 2 stays cached
     const more = { ...e, touchUps: [stroke, { ...stroke, id: 's2', start: 1, end: 1 }] };
     renderer.render(ctx, frame('c1', GREEN, 'shared'), null, more, 1);
     expect(ctx.pixelAt(10, 5)).toEqual(GREEN);
-    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+    expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 3 });
+    renderer.render(ctx, frame('c2', GREEN, 'shared'), null, more, 2);
+    expect(ctx.pixelAt(10, 5)).toEqual(GREEN);
+    expect(renderer.stats().readbacks).toBe(3);
+  });
+
+  it('touch-ups: frames without strokes keep sharing keyed pixels; a painted stroke re-keys its frame only', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    /** @param {number} x */
+    const strokeAt = (x) => ({
+      id: 'live',
+      mode: /** @type {const} */ ('restore'),
+      radius: 0.2,
+      points: [{ x, y: 0.5 }],
+      start: 2,
+      end: 2,
+    });
+    let e = { ...edits(), touchUps: [strokeAt(0.3)] };
+    // Frames 0 and 1 are holds of one decoded frame without strokes: one readback
+    renderer.render(ctx, frame('h0', GREEN, 'shared'), null, e, 0);
+    renderer.render(ctx, frame('h1', GREEN, 'shared'), null, e, 1);
+    expect(renderer.stats()).toMatchObject({ readbacks: 1, cachedFrames: 1 });
+    renderer.render(ctx, frame('h2', GREEN, 'shared'), null, e, 2);
+    expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+    // Painting on frame 2 (a new stroke object per move): frame 2 is keyed
+    // again each time, its old result is replaced, the others stay cached
+    for (const x of [0.4, 0.5, 0.6]) {
+      e = { ...e, touchUps: [strokeAt(x)] };
+      renderer.render(ctx, frame('h2', GREEN, 'shared'), null, e, 2);
+      expect(ctx.pixelAt(Math.floor(x * 20), 5)).toEqual(GREEN);
+    }
+    expect(renderer.stats()).toMatchObject({ readbacks: 5, cachedFrames: 2 });
+    renderer.render(ctx, frame('h0', GREEN, 'shared'), null, e, 0);
+    renderer.render(ctx, frame('h1', GREEN, 'shared'), null, e, 1);
+    expect(renderer.stats().readbacks).toBe(5);
   });
 
   it('frees the cache when removal is off and draws through composeEditorFrame', () => {

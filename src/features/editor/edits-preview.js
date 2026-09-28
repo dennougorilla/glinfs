@@ -11,13 +11,17 @@
  * the keyed output region (ImageData) is stored under the frame's pixel
  * identity and simply written back on later draws. The cache holds one
  * parameter set at a time (key color, tolerance, mode — or, for the AI
- * cutout, the mask source's version — the touch-up strokes and the region)
- * and is dropped whenever those change. Touch-ups apply per frame range, so
- * with any stroke the cache is keyed per frame index.
+ * cutout, the mask source's version — and the region) and is dropped
+ * whenever those change. Touch-ups apply per frame range, so they are part
+ * of each frame's entry instead: a frame with strokes on it is cached per
+ * frame index together with the signature of those strokes, and painting or
+ * undoing a stroke re-keys only the frames it covers (a frame without
+ * strokes keeps sharing its keyed pixels with its holds).
  *
  * AI cutout masks come from the optional `maskSource` render option (see
  * shared/masks/final-masks.js). A frame it has no mask for previews without
- * removal; its version changes whenever its masks do, which drops the cache.
+ * removal (its touch-ups still apply); its version changes whenever its
+ * masks do, which drops the cache.
  * Text is drawn on top of the (cached) keyed region on every draw, so
  * text-only edits never read pixels back.
  *
@@ -44,6 +48,7 @@ import {
 } from '../../shared/edits/compose.js';
 import {
   getActiveTextLayers,
+  getActiveTouchUps,
   hasVisibleText,
   isAiCutoutActive,
   isEditsEmpty,
@@ -115,17 +120,16 @@ function getFramePixelKey(frame, frameIndex, perIndex) {
  * @param {Rect} region
  * @param {boolean} snap - Alpha snapped to 1 bit
  * @param {MaskSource | null} maskSource - AI cutout masks
- * @param {string} touchUps - Signature of the touch-up strokes ('' for none)
  * @returns {string}
  */
-function getKeyParamsKey(background, region, snap, maskSource, touchUps) {
+function getKeyParamsKey(background, region, snap, maskSource) {
   let key = 'no-key';
   if (isAiCutoutActive(background)) {
     key = `ai|${maskSource ? maskSource.version : 'no-masks'}`;
   } else if (background) {
     key = `${background.color}|${background.tolerance}|${background.mode}`;
   }
-  return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}|${touchUps}`;
+  return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}`;
 }
 
 /**
@@ -138,15 +142,19 @@ function getKeyParamsKey(background, region, snap, maskSource, touchUps) {
  * The most recent result is always kept on top of the budget, so redrawing
  * the current frame (text edits while paused) never reads pixels back.
  *
+ * Each key holds one variant (the touch-up strokes on that frame): a new
+ * variant replaces the key's entry, so painting on a frame never piles up
+ * stale results of that frame.
+ *
  * @param {number} [budgetBytes]
  */
 export function createKeyedRegionCache(budgetBytes = KEYED_CACHE_BUDGET_BYTES) {
   /** @type {string | null} */
   let paramsKey = null;
-  /** @type {Map<unknown, ImageData>} */
+  /** @type {Map<unknown, { variant: string, image: ImageData }>} */
   const entries = new Map();
   let bytes = 0;
-  /** @type {{ key: unknown, image: ImageData } | null} */
+  /** @type {{ key: unknown, variant: string, image: ImageData } | null} */
   let latest = null;
 
   function clear() {
@@ -169,22 +177,30 @@ export function createKeyedRegionCache(budgetBytes = KEYED_CACHE_BUDGET_BYTES) {
     },
     /**
      * @param {unknown} key
+     * @param {string} [variant]
      * @returns {ImageData | null}
      */
-    get(key) {
-      if (latest && latest.key === key) return latest.image;
-      return entries.get(key) ?? null;
+    get(key, variant = '') {
+      if (latest && latest.key === key && latest.variant === variant) return latest.image;
+      const entry = entries.get(key);
+      return entry && entry.variant === variant ? entry.image : null;
     },
     /**
      * @param {unknown} key
      * @param {ImageData} image
+     * @param {string} [variant]
      */
-    set(key, image) {
-      latest = { key, image };
-      if (entries.has(key)) return;
+    set(key, image, variant = '') {
+      latest = { key, variant, image };
+      const existing = entries.get(key);
+      if (existing) {
+        if (existing.variant === variant) return;
+        entries.delete(key);
+        bytes -= existing.image.data.byteLength;
+      }
       const size = image.data.byteLength;
       if (bytes + size > budgetBytes) return;
-      entries.set(key, image);
+      entries.set(key, { variant, image });
       bytes += size;
     },
     clear,
@@ -260,19 +276,12 @@ export function createEditorFrameRenderer(options = {}) {
       const region = getOutputRegion(frame, crop);
       if (region.width > 0 && region.height > 0) {
         const ai = keyOn && isAiCutoutActive(background);
-        // Touch-ups apply only while removal is on (see getActiveTouchUps)
-        const touchUps = keyOn ? (edits?.touchUps ?? []) : [];
-        cache.sync(
-          getKeyParamsKey(
-            keyOn ? background : null,
-            region,
-            snap,
-            maskSource,
-            getTouchUpsSignature(touchUps),
-          ),
-        );
+        cache.sync(getKeyParamsKey(keyOn ? background : null, region, snap, maskSource));
+        // Only the strokes on this frame (none while removal is off)
+        const touchUps = getActiveTouchUps(edits, frameIndex);
+        const variant = getTouchUpsSignature(touchUps);
         const key = getFramePixelKey(frame, frameIndex, ai || touchUps.length > 0);
-        let keyed = cache.get(key);
+        let keyed = cache.get(key, variant);
         if (!keyed) {
           keyed = ctx.getImageData(region.x, region.y, region.width, region.height);
           readbacks++;
@@ -285,7 +294,7 @@ export function createEditorFrameRenderer(options = {}) {
           if (snap) {
             snapAlphaToBinary(keyed.data);
           }
-          cache.set(key, keyed);
+          cache.set(key, keyed, variant);
         }
         ctx.putImageData(keyed, region.x, region.y);
       }

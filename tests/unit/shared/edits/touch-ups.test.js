@@ -363,16 +363,20 @@ describe('clipStrokeMove', () => {
 });
 
 describe('getTouchUpsSignature', () => {
-  it('is empty without strokes and memoized per array', () => {
+  it('is empty without strokes and the same for the same stroke objects in order', () => {
     expect(getTouchUpsSignature([])).toBe('');
     expect(getTouchUpsSignature(null)).toBe('');
-    const strokes = [stroke({ id: 'a', points: [{ x: 0, y: 0 }] })];
-    const first = getTouchUpsSignature(strokes);
-    expect(getTouchUpsSignature(strokes)).toBe(first);
-    expect(first).toContain('a:erase');
+    const a = stroke({ id: 'a', points: [{ x: 0, y: 0 }] });
+    const b = stroke({ id: 'b', points: [{ x: 0, y: 0 }] });
+    const first = getTouchUpsSignature([a, b]);
+    expect(first).not.toBe('');
+    // A new array of the same strokes (an unrelated edit)
+    expect(getTouchUpsSignature([a, b])).toBe(first);
+    expect(getTouchUpsSignature([b, a])).not.toBe(first);
+    expect(getTouchUpsSignature([a])).not.toBe(first);
   });
 
-  it('differs when a stroke, its range or its point count differs', () => {
+  it('differs for any other stroke object (strokes are never mutated)', () => {
     const base = stroke({ id: 'a', points: [{ x: 0, y: 0 }] });
     const sig = getTouchUpsSignature([base]);
     expect(getTouchUpsSignature([{ ...base, end: 3 }])).not.toBe(sig);
