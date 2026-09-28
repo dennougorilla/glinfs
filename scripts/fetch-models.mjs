@@ -5,6 +5,8 @@
  *   npm run models:fetch            download (skipped when a verified copy exists)
  *   npm run models:fetch -- --check verify the existing files only, never download
  *
+ * Both remove files in the output directory that are not registry models.
+ *
  * The models (src/features/ai-cutout/model-registry.js: fp16 conversions
  * of the anime and the general IS-Net, Apache-2.0, about 88 and 90 MB) are
  * too large for the repository, so each one is fetched from its asset in
@@ -13,6 +15,11 @@
  * can never ship a different model. (scripts/convert-models-fp16.py
  * rebuilds the same bytes from the upstream Hugging Face files.)
  *
+ * Every file in the output directory that is not a registry model (the
+ * fp32 isnetis.onnx of the first AI cutout release, an interrupted
+ * download) is removed first, and the output says so: Vite copies the whole
+ * directory into the build, so a leftover would ship with the app.
+ *
  * The pins come straight from the registry (plain data without Vite
  * imports); tests/unit/ai-cutout/model-config.test.js checks that the Pages
  * deploy workflow uses the same hashes and file names.
@@ -20,7 +27,7 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -159,6 +166,37 @@ export async function ensureModel(pin, { outDir = DEFAULT_OUT_DIR, checkOnly = f
 }
 
 /**
+ * Remove every file in `outDir` that is not one of `pins` (directories are
+ * left alone), saying so for each one.
+ * @param {ModelPin[]} pins
+ * @param {{ outDir?: string, log?: (msg: string) => void }} [options]
+ * @returns {Promise<string[]>} Names of the removed files, sorted
+ */
+export async function removeUnlistedFiles(pins, { outDir = DEFAULT_OUT_DIR, log } = {}) {
+  const say = log ?? ((msg) => console.log(msg));
+  const keep = new Set(pins.map((pin) => pin.fileName));
+  let entries;
+  try {
+    entries = await readdir(outDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const removed = [];
+  const names = entries
+    .filter((entry) => entry.isFile() && !keep.has(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  for (const name of names) {
+    const path = resolve(outDir, name);
+    const { size } = await stat(path);
+    await rm(path, { force: true });
+    say(`${name}: not a model of this version, removed (${size} bytes)`);
+    removed.push(name);
+  }
+  return removed;
+}
+
+/**
  * CLI entry point.
  * @param {string[]} argv
  * @param {{ outDir?: string }} [options]
@@ -167,6 +205,7 @@ export async function ensureModel(pin, { outDir = DEFAULT_OUT_DIR, checkOnly = f
 export async function main(argv, { outDir = DEFAULT_OUT_DIR } = {}) {
   const checkOnly = argv.includes('--check');
   try {
+    await removeUnlistedFiles(MODELS, { outDir });
     for (const pin of MODELS) {
       await ensureModel(pin, { outDir, checkOnly });
     }

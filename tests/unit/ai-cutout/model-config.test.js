@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import {
   hashFile,
   MODELS,
   main,
+  removeUnlistedFiles,
 } from '../../../scripts/fetch-models.mjs';
 import {
   buildGeneralStubModel,
@@ -372,6 +373,43 @@ describe('scripts/fetch-models.mjs', () => {
       /deleted/,
     );
     await expect(hashFile(join(out, pin.fileName))).resolves.toBeNull();
+  });
+
+  it('removes files that are not in the registry (the old fp32 models) and says so', async () => {
+    const out = tempDir();
+    writeFileSync(join(out, pin.fileName), content);
+    writeFileSync(join(out, 'isnetis.onnx'), 'fp32 model of the first release');
+    writeFileSync(join(out, 'isnet-general-use.onnx'), 'upstream fp32 general model');
+    writeFileSync(join(out, `${pin.fileName}.download`), 'an interrupted download');
+    mkdirSync(join(out, 'keep-me'));
+    const log = vi.fn();
+    await expect(removeUnlistedFiles([pin], { outDir: out, log })).resolves.toEqual([
+      'isnet-general-use.onnx',
+      'isnetis.onnx',
+      `${pin.fileName}.download`,
+    ]);
+    expect(readdirSync(out).sort()).toEqual(['keep-me', pin.fileName]);
+    const lines = log.mock.calls.map(([line]) => line);
+    expect(lines).toContain('isnetis.onnx: not a model of this version, removed (31 bytes)');
+    expect(lines).toHaveLength(3);
+    // Nothing to do in a missing directory
+    await expect(
+      removeUnlistedFiles([pin], { outDir: join(out, 'missing'), log }),
+    ).resolves.toEqual([]);
+  });
+
+  it('main() removes unlisted files before checking the models', async () => {
+    const out = tempDir();
+    writeFileSync(join(out, 'isnetis.onnx'), 'old');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(main(['--check'], { outDir: out })).resolves.toBe(1);
+    expect(readdirSync(out)).toEqual([]);
+    expect(logSpy.mock.calls.map(([line]) => line)).toContain(
+      'isnetis.onnx: not a model of this version, removed (3 bytes)',
+    );
+    logSpy.mockRestore();
+    error.mockRestore();
   });
 
   it('main() returns a non-zero exit code and says why', async () => {

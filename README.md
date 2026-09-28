@@ -111,6 +111,10 @@ npm run models:fetch            # into public/models/ (git-ignored), verified by
 npm run models:fetch -- --check # verify an existing copy without downloading
 ```
 
+Both remove every other file in `public/models/` (such as the fp32
+`isnetis.onnx` of the first AI cutout release) and list what they removed,
+since Vite copies that whole directory into the build.
+
 #### Converting the models to fp16
 
 `scripts/convert-models-fp16.py` makes the release assets from the upstream
