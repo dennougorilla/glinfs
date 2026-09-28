@@ -5,7 +5,7 @@ import {
 } from '../../../src/features/settings/downloaded-models.js';
 
 /** @returns {import('../../../src/features/ai-cutout/model-cache.js').DownloadedModelInfo[]} */
-function models({ anime = true, general = false } = {}) {
+function modelInfos({ anime = true, general = false } = {}) {
   return [
     {
       id: 'anime',
@@ -26,6 +26,17 @@ function models({ anime = true, general = false } = {}) {
       cached: general,
     },
   ];
+}
+
+const FP32_URL = 'https://example.test/models/isnetis.onnx?sha256=f156';
+const STALE_URL = 'https://example.test/models/isnetis-fp16.onnx?sha256=old';
+
+/**
+ * A listing as listDownloadedModels returns it
+ * @param {{ anime?: boolean, general?: boolean, oldFiles?: import('../../../src/features/ai-cutout/model-cache.js').OldModelFile[] }} [options]
+ */
+function models({ oldFiles = [], ...cached } = {}) {
+  return { models: modelInfos(cached), oldFiles };
 }
 
 function fakeManager() {
@@ -131,7 +142,8 @@ describe('Settings → Downloaded models', () => {
     );
     expect(row(section, 'anime').textContent).toContain('Not downloaded');
     // Focus stays on the row (its button is disabled now)
-    expect(document.activeElement?.id).toBe('settings-model-anime-name');
+    expect(document.activeElement?.textContent).toBe('Anime');
+    expect(document.activeElement?.tagName).toBe('H3');
   });
 
   it('refuses to delete a model a running analysis uses, and updates when it ends', async () => {
@@ -188,6 +200,83 @@ describe('Settings → Downloaded models', () => {
     );
   });
 
+  it('lists every other cached file as an old model file, and deletes it on its own', async () => {
+    const manager = fakeManager();
+    let oldFiles = [
+      { url: FP32_URL, fileName: 'isnetis.onnx', bytes: 176_069_933 },
+      { url: STALE_URL, fileName: 'isnetis-fp16.onnx', bytes: null },
+    ];
+    const removeFile = vi.fn(async (/** @type {string} */ url) => {
+      oldFiles = oldFiles.filter((file) => file.url !== url);
+      return true;
+    });
+    const remove = vi.fn();
+    const section = renderDownloadedModelsSection(cleanups, {
+      list: async () => models({ anime: false, oldFiles }),
+      remove,
+      removeFile,
+      manager,
+    });
+    document.body.append(section);
+    await flush();
+
+    const rows = [...section.querySelectorAll('[data-old-file]')];
+    expect(rows.map((r) => r.querySelector('h3')?.textContent)).toEqual([
+      'Old model file',
+      'Old model file',
+    ]);
+    expect(rows[0].textContent).toContain('isnetis.onnx · 176 MB');
+    expect(rows[0].textContent).toContain('No longer used');
+    // Unknown size: just the name
+    expect(rows[1].querySelector('.settings-item-note')?.textContent).toBe('isnetis-fp16.onnx');
+    const button = /** @type {HTMLButtonElement} */ (rows[0].querySelector('button'));
+    expect(button.getAttribute('aria-label')).toBe('Delete the old model file isnetis.onnx');
+    expect(button.disabled).toBe(false);
+    // Old files are never "in use"
+    manager.setBusy('anime', true);
+    expect(
+      /** @type {HTMLButtonElement} */ (section.querySelector('[data-old-file] button')).disabled,
+    ).toBe(false);
+
+    const fp32Button = /** @type {HTMLButtonElement} */ (
+      section.querySelector('[data-old-file="isnetis.onnx"] button')
+    );
+    fp32Button.focus();
+    fp32Button.click();
+    await flush();
+    await flush();
+    expect(removeFile).toHaveBeenCalledWith(FP32_URL);
+    expect(remove).not.toHaveBeenCalled();
+    expect(manager.unloadModel).not.toHaveBeenCalled();
+    expect(section.querySelector('[role="status"]')?.textContent).toBe(
+      'The old model file isnetis.onnx was deleted.',
+    );
+    expect(section.querySelectorAll('[data-old-file]')).toHaveLength(1);
+    // Focus moves to the row now in its place
+    expect(document.activeElement?.getAttribute('aria-label')).toBe(
+      'Delete the old model file isnetis-fp16.onnx',
+    );
+  });
+
+  it('reports an old file that could not be deleted', async () => {
+    const manager = fakeManager();
+    const section = renderDownloadedModelsSection(cleanups, {
+      list: async () =>
+        models({ oldFiles: [{ url: FP32_URL, fileName: 'isnetis.onnx', bytes: 1 }] }),
+      removeFile: async () => {
+        throw new Error('nope');
+      },
+      manager,
+    });
+    await flush();
+    /** @type {HTMLButtonElement} */ (section.querySelector('[data-old-file] button')).click();
+    await flush();
+    await flush();
+    expect(section.querySelector('[role="status"]')?.textContent).toBe(
+      'The old model file isnetis.onnx could not be deleted.',
+    );
+  });
+
   it('writes nothing after its cleanup ran', async () => {
     const manager = fakeManager();
     /** @type {(value: any) => void} */
@@ -208,7 +297,7 @@ describe('Settings → Downloaded models', () => {
   });
 
   it('describes each state', () => {
-    const [anime] = models();
+    const [anime] = modelInfos();
     expect(describeModelStatus(anime, true)).toContain('In use');
     expect(describeModelStatus({ ...anime, cached: null }, false)).toContain('does not allow');
     expect(describeModelStatus({ ...anime, cached: false }, false)).toBe('Not downloaded');

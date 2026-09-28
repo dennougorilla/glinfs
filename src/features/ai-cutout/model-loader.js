@@ -6,7 +6,8 @@
  * SHA-256 are checked against the pinned values, and the verified bytes are
  * kept in Cache Storage so later visits skip the download. A cached copy is
  * re-verified on every load and evicted when it no longer matches, so a
- * corrupt entry can never wedge the feature.
+ * corrupt entry can never wedge the feature. Storing a verified download
+ * removes the same model's copies under earlier pins.
  *
  * Every browser API is injectable so the logic is unit-tested without a
  * browser.
@@ -144,6 +145,29 @@ async function openCache(cacheStorage, cacheName) {
 }
 
 /**
+ * Delete every entry of the same model URL whose key is not `key` (the
+ * same file under an earlier SHA-256 pin). Failures are ignored: a stale
+ * entry is only wasted space, and Settings can still delete it.
+ * @param {Cache} cache
+ * @param {string} key - The current key (URL with its `sha256` parameter)
+ * @returns {Promise<void>}
+ */
+async function removeOlderPins(cache, key) {
+  try {
+    const url = new URL(key);
+    url.search = '';
+    const requests = await cache.keys(url.href, { ignoreSearch: true });
+    await Promise.all(
+      requests
+        .filter((request) => request.url !== key)
+        .map((request) => cache.delete(request).catch(() => false)),
+    );
+  } catch {
+    // Listing is not essential
+  }
+}
+
+/**
  * Load the model: from Cache Storage when a verified copy is there,
  * otherwise from the network (then cached).
  * @param {ModelSpec} spec
@@ -250,6 +274,9 @@ export async function loadModelBytes(spec, deps = {}) {
 
   let cached = false;
   if (cache) {
+    // Copies of this model under earlier pins can never load again: drop
+    // them before storing the new one (it also frees the quota for it)
+    await removeOlderPins(cache, key);
     try {
       await cache.put(
         key,

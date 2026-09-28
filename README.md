@@ -30,7 +30,7 @@ The analysis needs WebGPU to be fast (under a second per frame on a recent GPU).
 
 Once frames are analyzed, adjust **Threshold** (higher keeps less), **Smooth between frames** and **Edge** (grow or shrink the cutout by up to 8 pixels). **Keep** and **Remove** pick tools: click a character in the preview to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it. Picks are listed with their time and can be removed one by one or with **Clear picks**. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
 
-**Settings → Downloaded models** lists each model with its size and license and whether this browser keeps it; **Delete** removes a downloaded model from the browser's cache (not while an analysis uses it). The next analysis with it downloads it again.
+**Settings → Downloaded models** lists each model with its size and license and whether this browser keeps it; **Delete** removes a downloaded model from the browser's cache (not while an analysis uses it). The next analysis with it downloads it again. Files left in that cache by earlier versions (a model under an earlier pin, or the fp32 anime model of the first AI cutout release) are listed as **Old model file** and can be deleted the same way; downloading a new version of a model removes its earlier copies by itself.
 
 Press Escape to leave a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, export, or switch clips in the queue.
 

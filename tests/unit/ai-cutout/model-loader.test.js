@@ -50,7 +50,19 @@ function createFakeCaches() {
     put: vi.fn(async (key, response) => {
       entries.set(key, new Uint8Array(await response.arrayBuffer()));
     }),
-    delete: vi.fn(async (key) => entries.delete(key)),
+    delete: vi.fn(async (key) => entries.delete(typeof key === 'string' ? key : key.url)),
+    keys: vi.fn(async (request, options) => {
+      const strip = (/** @type {string} */ url) => url.split('?')[0];
+      return [...entries.keys()]
+        .filter((key) =>
+          request === undefined
+            ? true
+            : options?.ignoreSearch
+              ? strip(key) === strip(request)
+              : key === request,
+        )
+        .map((url) => ({ url }));
+    }),
   };
   return {
     entries,
@@ -131,6 +143,37 @@ describe('loadModelBytes', () => {
       'verifying:1000',
     ]);
     expect(entries.has(modelCacheKey(spec, BASE))).toBe(true);
+  });
+
+  it('removes older pins of the same model after a verified download, and nothing else', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const stale = `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${'0'.repeat(64)}`;
+    const other = 'https://example.test/glinfs/models/isnet-general-fp16.onnx?sha256=abc';
+    entries.set(stale, new Uint8Array(3));
+    entries.set(other, new Uint8Array(3));
+    await loadModelBytes(spec, {
+      fetchImpl: vi.fn(async () => chunkedResponse(MODEL)),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    });
+    expect([...entries.keys()].sort()).toEqual([modelCacheKey(spec, BASE), other].sort());
+  });
+
+  it('keeps older pins when the download fails verification', async () => {
+    const spec = specFor(MODEL, { sha256: 'ab'.repeat(32) });
+    const { storage, entries } = createFakeCaches();
+    const stale = `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${'0'.repeat(64)}`;
+    entries.set(stale, new Uint8Array(3));
+    const error = await loadModelBytes(spec, {
+      fetchImpl: vi.fn(async () => chunkedResponse(MODEL)),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    }).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.HASH_MISMATCH);
+    expect([...entries.keys()]).toEqual([stale]);
   });
 
   it('serves a verified cached copy without fetching', async () => {

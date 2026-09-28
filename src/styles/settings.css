@@ -221,6 +221,11 @@
   flex-shrink: 0;
 }
 
+/* Old model files show their file name, which has no spaces to wrap at */
+.settings-screen .settings-models-file {
+  overflow-wrap: anywhere;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .settings-header {

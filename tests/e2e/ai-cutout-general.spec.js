@@ -89,7 +89,7 @@ async function openDiscClip(page, { count, allowWasm }) {
 
 test.describe('General AI model (stub models, WASM fallback)', () => {
   // Every test compiles ONNX Runtime's WASM binary in a fresh context, and
-  // switching models starts another worker
+  // a WASM session is unloaded before the other model loads
   test.describe.configure({ mode: 'default', timeout: 240_000 });
 
   test('the general model analyzes through its own file; each model keeps its own masks; the export uses the chosen one', async ({
@@ -221,6 +221,19 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     page,
   }) => {
     const requests = await openDiscClip(page, { count: 2, allowWasm: true });
+    // Left over from earlier versions: the fp32 anime model of the first AI
+    // cutout release, and the general file under an earlier pin
+    const leftovers = await page.evaluate(async (generalFile) => {
+      const cache = await caches.open('glinfs-models-v1');
+      const models = new URL('models/', document.baseURI).href;
+      const fp32 = `${models}isnetis.onnx?sha256=${'f'.repeat(64)}`;
+      const stale = `${models}${generalFile}?sha256=${'0'.repeat(64)}`;
+      const body = new Uint8Array(2_000_000);
+      const headers = { 'Content-Length': String(body.byteLength) };
+      await cache.put(fp32, new Response(body, { headers }));
+      await cache.put(stale, new Response(body, { headers }));
+      return { fp32, stale };
+    }, MODEL_FILES.general);
     await chooseAiModel(page, 'general');
     await page.locator('#ai-analyze').click();
     await expect(page.locator('#ai-coverage')).toHaveText('2 of 2 frames analyzed', {
@@ -240,6 +253,23 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await expect(general).toContainText('Downloaded, kept in this browser’s cache');
     await expect(anime).toContainText('Not downloaded');
     await expect(anime.getByRole('button', { name: 'Delete the Anime model' })).toBeDisabled();
+
+    // The verified download of the general model removed its earlier pin;
+    // the fp32 file of another name is listed as an old file
+    const oldFiles = section.locator('[data-old-file]');
+    await expect(oldFiles).toHaveCount(1);
+    await expect(oldFiles).toContainText('Old model file');
+    await expect(oldFiles).toContainText('isnetis.onnx · 2 MB');
+    await oldFiles.getByRole('button', { name: 'Delete the old model file isnetis.onnx' }).click();
+    await expect(section.getByRole('status')).toHaveText(
+      'The old model file isnetis.onnx was deleted.',
+    );
+    await expect(oldFiles).toHaveCount(0);
+    const keys = await page.evaluate(async () =>
+      (await (await caches.open('glinfs-models-v1')).keys()).map((r) => r.url),
+    );
+    expect(keys).not.toContain(leftovers.fp32);
+    expect(keys).not.toContain(leftovers.stale);
 
     const deleteGeneral = general.getByRole('button', { name: 'Delete the General model' });
     await deleteGeneral.focus();

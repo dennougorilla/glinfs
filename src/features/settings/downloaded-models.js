@@ -7,21 +7,36 @@
  * model that an analysis is using (queued or running) cannot be deleted;
  * the row says why and updates when the analysis ends. Deleting also stops
  * an idle worker that still holds the model, so its memory is freed too.
+ *
+ * Every other file in the model cache (a copy under an earlier pin, or a
+ * model this version no longer ships, like the fp32 isnetis.onnx of the
+ * first AI cutout release) is listed below as an "Old model file" with its
+ * own Delete button: nothing the app stored stays out of reach.
  */
 
 import { createElement } from '../../shared/utils/dom.js';
-import { deleteDownloadedModel, listDownloadedModels } from '../ai-cutout/model-cache.js';
+import {
+  deleteCachedFile,
+  deleteDownloadedModel,
+  listDownloadedModels,
+} from '../ai-cutout/model-cache.js';
 import { formatModelSize } from '../ai-cutout/model-registry.js';
-import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { getSegmentationManager, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
 
 /** @typedef {import('../ai-cutout/model-cache.js').DownloadedModelInfo} DownloadedModelInfo */
+/** @typedef {import('../ai-cutout/model-cache.js').OldModelFile} OldModelFile */
+/** @typedef {import('../ai-cutout/model-cache.js').DownloadedModelsListing} DownloadedModelsListing */
 
 /**
  * @typedef {Object} DownloadedModelsDeps
- * @property {() => Promise<DownloadedModelInfo[]>} [list]
+ * @property {() => Promise<DownloadedModelsListing>} [list]
  * @property {(modelId: string) => Promise<boolean>} [remove]
+ * @property {(url: string) => Promise<boolean>} [removeFile] - Deletes an old file
  * @property {{ isModelBusy: (id: string) => boolean, onBusyChange: (listener: () => void) => () => void, unloadModel: (id: string) => boolean }} [manager]
  */
+
+/** Row label of a file no registered model loads */
+export const OLD_FILE_LABEL = 'Old model file';
 
 /**
  * Status line of a model row
@@ -42,14 +57,18 @@ export function describeModelStatus(model, busy) {
  * @returns {HTMLElement}
  */
 export function renderDownloadedModelsSection(cleanups, deps = {}) {
-  const list = deps.list ?? (() => listDownloadedModels());
-  const remove = deps.remove ?? ((id) => deleteDownloadedModel(id));
+  // The key a model is cached under carries the hash its load verifies
+  // (the DEV/E2E stub override included)
+  const cacheDeps = { getSha256: (/** @type {string} */ id) => resolveModelSpec(id).sha256 };
+  const list = deps.list ?? (() => listDownloadedModels(cacheDeps));
+  const remove = deps.remove ?? ((id) => deleteDownloadedModel(id, cacheDeps));
+  const removeFile = deps.removeFile ?? ((url) => deleteCachedFile(url));
   const manager = deps.manager ?? getSegmentationManager();
 
   let disposed = false;
-  /** @type {DownloadedModelInfo[] | null} */
-  let models = null;
-  /** Rows being deleted @type {Set<string>} */
+  /** @type {DownloadedModelsListing | null} */
+  let listing = null;
+  /** Rows being deleted, by row key @type {Set<string>} */
   const deleting = new Set();
 
   const titleId = 'settings-models-title';
@@ -63,7 +82,7 @@ export function renderDownloadedModelsSection(cleanups, deps = {}) {
     ]),
   ]);
   const intro = createElement('p', { className: 'settings-models-intro' }, [
-    'AI cutout models download the first time you analyze with them and stay in this browser’s cache. Deleting one frees the space; it downloads again the next time you use it.',
+    'AI cutout models download the first time you analyze with them and stay in this browser’s cache. Deleting one frees the space; it downloads again the next time you use it. Old model files are left over from earlier versions of glinfs and are no longer used.',
   ]);
   const listEl = createElement('ul', {
     className: 'settings-list settings-models-list',
@@ -76,13 +95,66 @@ export function renderDownloadedModelsSection(cleanups, deps = {}) {
   section.append(header, intro, listEl, status);
 
   /**
-   * @param {DownloadedModelInfo} model
+   * One row: name, notes, status line and a Delete button
+   * @param {{ key: string, index: number, label: string, notes: (string | Node)[], status: string, deleteLabel: string, canDelete: boolean, onDelete: () => void, attrs: Record<string, string>, buttonAttrs: Record<string, string> }} row
    * @returns {HTMLElement}
    */
-  const renderRow = (model) => {
+  const renderRow = ({
+    key,
+    index,
+    label,
+    notes,
+    status: rowStatus,
+    deleteLabel,
+    canDelete,
+    onDelete,
+    attrs,
+    buttonAttrs,
+  }) => {
+    const nameId = `settings-model-row-${index}-name`;
+    const statusId = `settings-model-row-${index}-status`;
+    const deleteBtn = /** @type {HTMLButtonElement} */ (
+      createElement(
+        'button',
+        {
+          type: 'button',
+          className: 'btn btn-secondary btn-sm settings-models-delete',
+          'aria-label': deleteLabel,
+          'aria-describedby': statusId,
+          ...buttonAttrs,
+        },
+        [deleting.has(key) ? 'Deleting…' : 'Delete'],
+      )
+    );
+    deleteBtn.disabled = !canDelete || deleting.has(key);
+    deleteBtn.addEventListener('click', onDelete);
+    const item = createElement(
+      'li',
+      { className: 'settings-item settings-models-item', ...attrs },
+      [
+        createElement('div', { className: 'settings-item-text' }, [
+          createElement('h3', { className: 'settings-item-label', id: nameId }, [label]),
+          createElement('p', { className: 'settings-item-note' }, notes),
+          createElement(
+            'p',
+            { className: 'settings-item-note settings-models-state', id: statusId },
+            [rowStatus],
+          ),
+        ]),
+        deleteBtn,
+      ],
+    );
+    item.dataset.rowKey = key;
+    return item;
+  };
+
+  /**
+   * @param {DownloadedModelInfo} model
+   * @param {number} index
+   * @returns {HTMLElement}
+   */
+  const renderModelRow = (model, index) => {
     const busy = manager.isModelBusy(model.id);
-    const nameId = `settings-model-${model.id}-name`;
-    const statusId = `settings-model-${model.id}-status`;
     const licenseLink = createElement(
       'a',
       {
@@ -93,64 +165,73 @@ export function renderDownloadedModelsSection(cleanups, deps = {}) {
       },
       [model.license.name],
     );
-    const deleteBtn = /** @type {HTMLButtonElement} */ (
-      createElement(
-        'button',
-        {
-          type: 'button',
-          className: 'btn btn-secondary btn-sm settings-models-delete',
-          'aria-label': `Delete the ${model.label} model`,
-          'aria-describedby': statusId,
-          'data-model-delete': model.id,
-        },
-        [deleting.has(model.id) ? 'Deleting…' : 'Delete'],
-      )
-    );
-    deleteBtn.disabled = busy || model.cached !== true || deleting.has(model.id);
-    deleteBtn.addEventListener('click', () => void handleDelete(model));
-    return createElement(
-      'li',
-      { className: 'settings-item settings-models-item', 'data-model-id': model.id },
-      [
-        createElement('div', { className: 'settings-item-text' }, [
-          createElement('h3', { className: 'settings-item-label', id: nameId }, [model.label]),
-          createElement('p', { className: 'settings-item-note' }, [
-            `${model.description} · ${formatModelSize(model.bytes)} · License: `,
-            licenseLink,
-          ]),
-          createElement(
-            'p',
-            { className: 'settings-item-note settings-models-state', id: statusId },
-            [describeModelStatus(model, busy)],
-          ),
-        ]),
-        deleteBtn,
-      ],
-    );
+    return renderRow({
+      key: `model:${model.id}`,
+      index,
+      label: model.label,
+      notes: [`${model.description} · ${formatModelSize(model.bytes)} · License: `, licenseLink],
+      status: describeModelStatus(model, busy),
+      deleteLabel: `Delete the ${model.label} model`,
+      canDelete: !busy && model.cached === true,
+      onDelete: () => void handleDelete(model),
+      attrs: { 'data-model-id': model.id },
+      buttonAttrs: { 'data-model-delete': model.id },
+    });
   };
 
+  /**
+   * @param {OldModelFile} file
+   * @param {number} index
+   * @returns {HTMLElement}
+   */
+  const renderOldFileRow = (file, index) =>
+    renderRow({
+      key: `file:${file.url}`,
+      index,
+      label: OLD_FILE_LABEL,
+      notes: [
+        createElement('span', { className: 'settings-models-file' }, [file.fileName]),
+        file.bytes === null ? '' : ` · ${formatModelSize(file.bytes)}`,
+      ],
+      status: 'No longer used by this version. Deleting it frees the space.',
+      deleteLabel: `Delete the old model file ${file.fileName}`,
+      canDelete: true,
+      onDelete: () => void handleDeleteFile(file),
+      attrs: { 'data-old-file': file.fileName },
+      buttonAttrs: {},
+    });
+
   const render = () => {
-    if (disposed || !models) return;
-    // The row that holds focus (its button, or its heading once the button
-    // got disabled) keeps it across the rebuild
+    if (disposed || !listing) return;
+    // The row that holds focus keeps it across the rebuild (its button, or
+    // its heading once the button got disabled); a row that is gone hands
+    // it to the row now in its place
     const focused = document.activeElement;
-    const focusedId =
+    const focusedRow =
       focused instanceof HTMLElement && listEl.contains(focused)
-        ? /** @type {HTMLElement | null} */ (focused.closest('[data-model-id]'))?.dataset.modelId
-        : undefined;
-    listEl.replaceChildren(...models.map(renderRow));
+        ? /** @type {HTMLElement | null} */ (focused.closest('[data-row-key]'))
+        : null;
+    const focusedKey = focusedRow?.dataset.rowKey;
+    const focusedIndex = focusedRow ? [...listEl.children].indexOf(focusedRow) : -1;
+    const rows = [
+      ...listing.models.map(renderModelRow),
+      ...listing.oldFiles.map((file, i) => renderOldFileRow(file, listing.models.length + i)),
+    ];
+    listEl.replaceChildren(...rows);
     listEl.removeAttribute('aria-busy');
-    if (focusedId) {
-      // Keep keyboard focus on the row (its button may be disabled now)
-      const button = listEl.querySelector(`[data-model-delete="${focusedId}"]`);
-      if (button instanceof HTMLButtonElement && !button.disabled) {
-        button.focus();
-      } else {
-        const heading = listEl.querySelector(`#settings-model-${focusedId}-name`);
-        if (heading instanceof HTMLElement) {
-          heading.tabIndex = -1;
-          heading.focus();
-        }
+    if (focusedKey === undefined) return;
+    const target =
+      rows.find((row) => row.dataset.rowKey === focusedKey) ??
+      rows[Math.min(focusedIndex, rows.length - 1)];
+    if (!target) return;
+    const button = target.querySelector('button');
+    if (button instanceof HTMLButtonElement && !button.disabled) {
+      button.focus();
+    } else {
+      const heading = target.querySelector('h3');
+      if (heading instanceof HTMLElement) {
+        heading.tabIndex = -1;
+        heading.focus();
       }
     }
   };
@@ -159,38 +240,69 @@ export function renderDownloadedModelsSection(cleanups, deps = {}) {
     try {
       const next = await list();
       if (disposed) return;
-      models = next;
+      listing = next;
     } catch {
       if (disposed) return;
-      models = [];
+      listing = { models: [], oldFiles: [] };
       status.textContent = 'The downloaded models could not be listed.';
     }
     render();
   };
 
-  /** @param {DownloadedModelInfo} model */
-  const handleDelete = async (model) => {
-    // Re-checked at click time: an analysis may have started meanwhile
-    if (manager.isModelBusy(model.id) || deleting.has(model.id)) {
-      render();
-      return;
-    }
-    deleting.add(model.id);
+  /**
+   * Run a delete for one row, then say how it went and list again
+   * @param {string} key
+   * @param {() => Promise<string>} run - Resolves with the status message
+   * @param {string} failure - Message when `run` throws
+   */
+  const deleteRow = async (key, run, failure) => {
+    deleting.add(key);
     render();
     let message;
     try {
-      const deleted = await remove(model.id);
-      manager.unloadModel(model.id);
-      message = deleted
-        ? `The ${model.label} model was deleted.`
-        : `The ${model.label} model was not in this browser’s cache.`;
+      message = await run();
     } catch {
-      message = `The ${model.label} model could not be deleted.`;
+      message = failure;
     }
-    deleting.delete(model.id);
+    deleting.delete(key);
     if (disposed) return;
     status.textContent = message;
     await refresh();
+  };
+
+  /** @param {DownloadedModelInfo} model */
+  const handleDelete = async (model) => {
+    const key = `model:${model.id}`;
+    // Re-checked at click time: an analysis may have started meanwhile
+    if (manager.isModelBusy(model.id) || deleting.has(key)) {
+      render();
+      return;
+    }
+    await deleteRow(
+      key,
+      async () => {
+        const deleted = await remove(model.id);
+        manager.unloadModel(model.id);
+        return deleted
+          ? `The ${model.label} model was deleted.`
+          : `The ${model.label} model was not in this browser’s cache.`;
+      },
+      `The ${model.label} model could not be deleted.`,
+    );
+  };
+
+  /** @param {OldModelFile} file */
+  const handleDeleteFile = async (file) => {
+    const key = `file:${file.url}`;
+    if (deleting.has(key)) return;
+    await deleteRow(
+      key,
+      async () =>
+        (await removeFile(file.url))
+          ? `The old model file ${file.fileName} was deleted.`
+          : `The old model file ${file.fileName} was already gone.`,
+      `The old model file ${file.fileName} could not be deleted.`,
+    );
   };
 
   const unsubscribe = manager.onBusyChange(() => render());
