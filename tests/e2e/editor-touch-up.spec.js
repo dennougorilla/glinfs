@@ -7,8 +7,9 @@
  * on the (removed) green brings the original green back. "This frame"
  * strokes change one frame, "Selection" strokes every frame in IN..OUT;
  * Undo, Clear on this frame and Clear all take strokes away again. The
- * brush only works while background removal is on and Escape leaves it
- * before anything else. Over the AI cutout (stub model on the WASM
+ * brush only works while background removal is on; Escape cancels a stroke
+ * in progress, then leaves the brush before anything else, and a stroke
+ * that leaves the preview stops at its edge. Over the AI cutout (stub model on the WASM
  * fallback, two-disc clip) the same strokes erase a kept character and
  * restore removed background.
  * @module tests/e2e/editor-touch-up.spec
@@ -287,6 +288,55 @@ test.describe('Mask brush (touch up)', () => {
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect.poll(async () => (await readEditorState(page))?.edits.touchUps.length).toBe(1);
     await expect.poll(() => editorPreviewAlpha(page, 25, 20)).toBe(255);
+  });
+
+  test('Escape cancels a stroke in progress; a stroke leaving the preview stops at its edge', async ({
+    page,
+  }) => {
+    await enableColorKey(page);
+    await useBrush(page, { mode: 'restore', scope: 'frame' });
+    const touchUps = async () => (await readEditorState(page))?.edits.touchUps ?? [];
+
+    // Escape while the pointer is down: the live stroke goes, nothing is added
+    const a = await editorFramePointToViewport(page, 20, 20);
+    const b = await editorFramePointToViewport(page, 40, 20);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps: 4 });
+    await expect.poll(() => editorPreviewAlpha(page, 30, 20)).toBe(255);
+    await page.keyboard.press('Escape');
+    await expect.poll(() => editorPreviewAlpha(page, 30, 20)).toBe(0);
+    await page.mouse.move(a.x, a.y, { steps: 4 });
+    await page.mouse.up();
+    expect(await touchUps()).toEqual([]);
+    expect((await readEditorState(page))?.brush.on).toBe(true);
+
+    // Out past the right edge, down, and back in: two strokes, nothing
+    // painted along the edge between them
+    const path = [
+      [140, 30],
+      [200, 30],
+      [200, 90],
+      [140, 90],
+    ];
+    const start = await editorFramePointToViewport(page, path[0][0], path[0][1]);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    for (const [x, y] of path.slice(1)) {
+      const to = await editorFramePointToViewport(page, x, y);
+      await page.mouse.move(to.x, to.y, { steps: 6 });
+    }
+    await page.mouse.up();
+    await expect.poll(async () => (await touchUps()).length).toBe(2);
+    for (const stroke of await touchUps()) {
+      for (const point of stroke.points) {
+        expect(point.x).toBeGreaterThanOrEqual(0);
+        expect(point.x).toBeLessThanOrEqual(1);
+      }
+    }
+    await expect.poll(() => editorPreviewAlpha(page, 150, 30)).toBe(255);
+    await expect.poll(() => editorPreviewAlpha(page, 150, 90)).toBe(255);
+    expect(await editorPreviewAlpha(page, 157, 60)).toBe(0);
   });
 
   test('the brush outranks the crop, and Escape leaves the brush before clearing the crop', async ({
