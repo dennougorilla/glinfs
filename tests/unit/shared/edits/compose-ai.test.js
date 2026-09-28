@@ -260,6 +260,37 @@ describe('AI cutout masks', () => {
     expect(result.data[3]).toBe(0);
   });
 
+  it('are applied at full resolution before an output scale, so no removed color bleeds in', async () => {
+    // 4x2 source of alternating green and white columns; the full-resolution
+    // mask keeps the white ones
+    const rgba = new Uint8ClampedArray(4 * 2 * 4);
+    for (let p = 0; p < 8; p++) rgba.set(p % 2 === 0 ? GREEN : [255, 255, 255, 255], p * 4);
+    const frame = /** @type {any} */ ({
+      id: 's',
+      frame: { closed: false, rgba, width: 4, height: 2 },
+      timestamp: 0,
+      width: 4,
+      height: 2,
+    });
+    const mask = packMask(Uint8Array.from([0, 1, 0, 1, 0, 1, 0, 1]), 4, 2);
+    const maskSource = { version: 1, getFinalMask: vi.fn(() => mask) };
+    const result = await composeOutputFrameRGBA(
+      frame,
+      null,
+      editsOf({ method: 'ai' }),
+      0,
+      maskSource,
+      0.5,
+    );
+    expect([result.width, result.height]).toEqual([2, 1]);
+    for (let p = 0; p < 2; p++) {
+      const [r, g, b, a] = result.data.subarray(p * 4, p * 4 + 4);
+      expect([r, g, b]).toEqual([255, 255, 255]);
+      expect(a).toBeGreaterThan(100);
+      expect(a).toBeLessThan(160);
+    }
+  });
+
   it('draw the frame unkeyed, without a readback, when the frame has no mask', async () => {
     const none = { version: 3, getFinalMask: vi.fn(() => null) };
     const result = await composeOutputFrameRGBA(

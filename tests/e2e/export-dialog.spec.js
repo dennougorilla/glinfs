@@ -233,10 +233,11 @@ test.describe('Export dialog: exporting', () => {
     // The default output first, to aim well below it
     await exportGifAndWait(page);
     const defaultBytes = await exportedGifBytes(page);
-    expect(defaultBytes).toBeGreaterThan(100 * 1024);
+    expect(defaultBytes).toBeGreaterThan(100_000);
     await dialog.locator('#export-again').click();
 
-    const targetMB = Math.floor((defaultBytes * 0.35 * 100) / (1024 * 1024)) / 100;
+    // Decimal megabytes, as the dialog counts them (1 MB = 1,000,000 bytes)
+    const targetMB = Math.floor((defaultBytes * 0.35 * 100) / 1_000_000) / 100;
     await dialog.getByLabel('Target size', { exact: true }).check();
     const amount = dialog.getByLabel('Target size in MB');
     await amount.fill(String(targetMB));
@@ -247,7 +248,7 @@ test.describe('Export dialog: exporting', () => {
 
     await exportGifAndWait(page);
     const bytes = await exportedGifBytes(page);
-    expect(bytes).toBeLessThanOrEqual(targetMB * 1024 * 1024);
+    expect(bytes).toBeLessThanOrEqual(targetMB * 1_000_000);
     await expect(dialog.locator('#export-result-target')).toContainText('Fits the');
 
     // The result view reports the real GIF

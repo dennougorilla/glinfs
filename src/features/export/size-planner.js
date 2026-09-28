@@ -14,8 +14,25 @@
  * @module features/export/size-planner
  */
 
-/** Bytes per MB as the dialog shows sizes (formatBytes uses 1024) */
-export const BYTES_PER_MB = 1024 * 1024;
+/**
+ * Bytes per MB: decimal, as upload limits count ("10 MB" = 10,000,000
+ * bytes). The export dialog shows and checks every size in these units
+ * (formatFileSize), so a GIF that fits a 10 MB target fits a 10 MB limit.
+ */
+export const BYTES_PER_MB = 1_000_000;
+
+/**
+ * A file size in decimal units (1 KB = 1,000 bytes), e.g. "10.2 MB"
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatFileSize(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (i < units.length - 1 && bytes >= 1000 ** (i + 1)) i++;
+  const value = bytes / 1000 ** i;
+  return `${value.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
 
 /** A rung fits when its estimate is at most this share of the target */
 export const SAFETY_MARGIN = 0.9;
@@ -76,16 +93,6 @@ export function buildSizeLadder(base, ladder = SIZE_LADDER) {
     rungs.push(capped);
   }
   return rungs;
-}
-
-/**
- * Every frame skip the ladder can use (for preparing AI masks up front:
- * skip 3 exports frames that skip 2 never touches)
- * @param {SizeRung[]} rungs
- * @returns {number[]} Distinct, ascending
- */
-export function getLadderFrameSkips(rungs) {
-  return [...new Set(rungs.map((rung) => rung.frameSkip))].sort((a, b) => a - b);
 }
 
 /**

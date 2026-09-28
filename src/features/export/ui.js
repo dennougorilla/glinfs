@@ -11,7 +11,6 @@
 
 import { createElement, on } from '../../shared/utils/dom.js';
 import {
-  formatBytes,
   formatDurationPrecise,
   formatPercent,
   formatRemaining,
@@ -23,6 +22,7 @@ import {
   getScaledDimensions,
   OUTPUT_SCALES,
 } from './core.js';
+import { BYTES_PER_MB, formatFileSize } from './size-planner.js';
 
 /**
  * Static encoder definitions for UI display
@@ -405,10 +405,10 @@ function renderSettings(params, cleanups) {
     createElement('footer', { className: 'export-footer' }, [
       createElement('p', { className: 'export-estimate', id: 'export-estimate' }, [
         facts.sizeLimited && settings.targetSizeMB
-          ? `Target ≤ ${formatBytes(settings.targetSizeMB * 1024 * 1024)} (estimated ${formatBytes(
-              state.estimatedSizeMB * 1024 * 1024,
+          ? `Target ≤ ${formatFileSize(settings.targetSizeMB * BYTES_PER_MB)} (estimated ${formatFileSize(
+              state.estimatedSizeMB * BYTES_PER_MB,
             )} with these settings)`
-          : `Estimated size ≈ ${formatBytes(state.estimatedSizeMB * 1024 * 1024)}`,
+          : `Estimated size ≈ ${formatFileSize(state.estimatedSizeMB * BYTES_PER_MB)}`,
       ]),
       exportButton,
     ]),
@@ -959,12 +959,12 @@ export function updateAiPreparationUI(container, aiPrep) {
  */
 export function describeSizeStep(step) {
   if (!step) return '';
-  const target = formatBytes(step.targetMB * 1024 * 1024);
+  const target = formatFileSize(step.targetMB * BYTES_PER_MB);
   if (step.phase === 'estimate') {
     return `Finding settings for ${target}: checking option ${step.index + 1} of ${step.total}`;
   }
   if ((step.attempt ?? 1) > 1 && step.previousBytes !== undefined) {
-    return `${formatBytes(step.previousBytes)} is still over ${target}. Trying smaller settings (attempt ${step.attempt})`;
+    return `${formatFileSize(step.previousBytes)} is still over ${target}. Trying smaller settings (attempt ${step.attempt})`;
   }
   return `Encoding to fit ${target}`;
 }
@@ -1125,7 +1125,7 @@ function renderResult(params, cleanups) {
         'Your GIF is ready',
       ]),
       createElement('dl', { className: 'export-facts' }, [
-        fact('Size', formatBytes(info.size), 'export-result-size'),
+        fact('Size', formatFileSize(info.size), 'export-result-size'),
         fact('Dimensions', info.width > 0 ? formatDims(info) : '—', 'export-result-dimensions'),
         fact(
           'Frames',
@@ -1144,8 +1144,8 @@ function renderResult(params, cleanups) {
               },
               [
                 target.fits
-                  ? `Fits the ${formatBytes(target.targetMB * 1024 * 1024)} target with ${target.settingsText}.`
-                  : `Could not get under ${formatBytes(target.targetMB * 1024 * 1024)}, even with ${target.settingsText}. This is the smallest version.`,
+                  ? `Fits the ${formatFileSize(target.targetMB * BYTES_PER_MB)} target with ${target.settingsText}.`
+                  : `Could not get under ${formatFileSize(target.targetMB * BYTES_PER_MB)}, even with ${target.settingsText}. This is the smallest version.`,
               ],
             ),
           ]

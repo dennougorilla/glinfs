@@ -212,7 +212,7 @@ describe('composeOutputFrameRGBA', () => {
     expect(ctx.names().filter((n) => n === 'clearRect')).toHaveLength(1);
   });
 
-  it('draws a scaled output at the smaller size, then keys and draws text at that size', async () => {
+  it('keys a scaled output at full size, scales the result down, then draws text', async () => {
     const crop = { x: 4, y: 2, width: 12, height: 8, aspectRatio: 'free' };
     const result = await composeOutputFrameRGBA(
       solidFrame(20, 20),
@@ -224,24 +224,80 @@ describe('composeOutputFrameRGBA', () => {
     );
     expect([result.width, result.height]).toEqual([6, 4]);
     expect(result.data).toHaveLength(6 * 4 * 4);
-    const { ctx } = contexts[0];
-    // The crop rectangle drawn into the 6x4 output with high-quality smoothing
-    expect(ctx.calls.find((c) => c.name === 'drawImage')?.args.slice(1)).toEqual([
-      4, 2, 12, 8, 0, 0, 6, 4,
+    // The removal canvas: the crop drawn 1:1 and keyed at full size
+    const removal = contexts.find(({ ctx }) => ctx.canvas.width === 12)?.ctx;
+    expect(removal.calls.find((c) => c.name === 'drawImage')?.args.slice(1)).toEqual([
+      4, 2, 12, 8, 0, 0, 12, 8,
     ]);
-    expect(ctx.imageSmoothingQuality).toBe('high');
-    // Keyed at the output size; the text lands in the middle of the 6x4 output
-    expect(ctx.calls.find((c) => c.name === 'getImageData')?.args).toEqual([0, 0, 6, 4]);
+    expect(removal.calls.find((c) => c.name === 'getImageData')?.args).toEqual([0, 0, 12, 8]);
+    // The output canvas: the keyed canvas scaled into 6x4 with high-quality
+    // smoothing, then the text at that size
+    const output = contexts.find(({ ctx }) => ctx.canvas.width === 6)?.ctx;
+    const draw = output.calls.find((c) => c.name === 'drawImage');
+    expect(draw?.args[0]).toBe(removal.canvas);
+    expect(draw?.args.slice(1)).toEqual([0, 0, 12, 8, 0, 0, 6, 4]);
+    expect(output.imageSmoothingQuality).toBe('high');
+    expect(output.names().filter((n) => n === 'fillText')).toHaveLength(1);
     expect(Array.from(result.data.subarray(0, 4))).toEqual([0, 0, 0, 0]);
     expect(Array.from(result.data.subarray((2 * 6 + 3) * 4, (2 * 6 + 3) * 4 + 4))).toEqual([
       255, 0, 0, 255,
     ]);
   });
 
+  it('draws the source scaled right away when nothing is removed', async () => {
+    const crop = { x: 4, y: 2, width: 12, height: 8, aspectRatio: 'free' };
+    const result = await composeOutputFrameRGBA(solidFrame(20, 20), crop, null, 0, null, 0.5);
+    expect([result.width, result.height]).toEqual([6, 4]);
+    expect(contexts).toHaveLength(1);
+    const { ctx } = contexts[0];
+    expect(ctx.calls.find((c) => c.name === 'drawImage')?.args.slice(1)).toEqual([
+      4, 2, 12, 8, 0, 0, 6, 4,
+    ]);
+    expect(ctx.names().filter((n) => n === 'getImageData')).toHaveLength(1);
+    expect(Array.from(result.data.subarray(0, 4))).toEqual(GREEN);
+  });
+
+  it('keys at full resolution before scaling, so no key color bleeds into kept edges', async () => {
+    // 4x2 source of alternating green (keyed) and white (kept) columns
+    const rgba = new Uint8ClampedArray(4 * 2 * 4);
+    for (let p = 0; p < 8; p++) rgba.set(p % 2 === 0 ? GREEN : [255, 255, 255, 255], p * 4);
+    const frame = /** @type {any} */ ({
+      id: 's',
+      frame: { closed: false, rgba, width: 4, height: 2 },
+      timestamp: 0,
+      width: 4,
+      height: 2,
+    });
+    const result = await composeOutputFrameRGBA(
+      frame,
+      null,
+      makeEdits({ key: true }),
+      0,
+      null,
+      0.5,
+    );
+    expect([result.width, result.height]).toEqual([2, 1]);
+    for (let p = 0; p < 2; p++) {
+      const [r, g, b, a] = result.data.subarray(p * 4, p * 4 + 4);
+      // Half of each output pixel is the kept white column: white at about
+      // half alpha, never the green-white blend a key after scaling leaves
+      expect([r, g, b]).toEqual([255, 255, 255]);
+      expect(a).toBeGreaterThan(100);
+      expect(a).toBeLessThan(160);
+    }
+  });
+
   it('draws the full-size source unscaled with default smoothing at scale 1', async () => {
     await composeOutputFrameRGBA(solidFrame(8, 8), null, makeEdits({ key: true }), 0, null, 0.5);
     await composeOutputFrameRGBA(solidFrame(8, 8), null, makeEdits({ key: true }), 0, null, 1);
-    const { ctx } = contexts[0];
+    // The output context: the one the scaled frame was drawn into
+    const { ctx } = /** @type {any} */ (
+      contexts.find(({ ctx: c }) =>
+        c.calls.some(
+          (/** @type {any} */ call) => call.name === 'drawImage' && call.args.length === 9,
+        ),
+      )
+    );
     const draws = ctx.calls.filter((c) => c.name === 'drawImage');
     expect(draws.at(-1)?.args.slice(1)).toEqual([0, 0]);
     // The cached context is reset from the previous scaled frame

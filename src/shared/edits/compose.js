@@ -129,30 +129,30 @@ export function scaleOutputSize(width, height, scale) {
 }
 
 /**
- * Draw the source frame's output region scaled into an already-sized,
- * cleared canvas of width x height. At scale 1 this is exactly
- * drawSourceRegion (no resampling, default smoothing), so unscaled exports
- * stay byte-identical; smaller outputs are resampled with high-quality
- * smoothing. The smoothing quality is set on every call because the cached
- * composition context keeps its state from one frame to the next.
+ * Whether an output scale shrinks the output (anything outside (0, 1) is
+ * full size, as in scaleOutputSize)
+ * @param {number} scale
+ * @returns {boolean}
+ */
+function isDownscale(scale) {
+  return scale > 0 && scale < 1;
+}
+
+/**
+ * Draw a rectangle of an image into the whole of an already-sized, cleared
+ * canvas of width x height, resampled with high-quality smoothing. The
+ * smoothing is set on every call because the cached composition contexts
+ * keep their state from one frame to the next.
  * @param {Context2D} ctx
- * @param {CanvasImageSource} source
- * @param {Frame} frame
- * @param {CropArea | null | undefined} crop
+ * @param {CanvasImageSource} image
+ * @param {Rect} rect - Rectangle of `image` to draw
  * @param {number} width - Output width (scaled)
  * @param {number} height - Output height (scaled)
- * @param {number} scale
  */
-function drawScaledSourceRegion(ctx, source, frame, crop, width, height, scale) {
-  if (!(scale > 0) || scale >= 1) {
-    ctx.imageSmoothingQuality = 'low';
-    drawSourceRegion(ctx, source, crop);
-    return;
-  }
-  const region = getSourceRegion(frame, crop);
+function drawDownscaled(ctx, image, rect, width, height) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, region.x, region.y, region.width, region.height, 0, 0, width, height);
+  ctx.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, width, height);
 }
 
 /**
@@ -367,22 +367,36 @@ export function snapCanvasAlphaToBinary(ctx) {
 let rgbaCanvasCache = null;
 
 /**
- * Get the cached RGBA composition canvas, sized and cleared
+ * Cached full-resolution canvas where a scaled export removes the
+ * background before the result is scaled down (see composeOutputFrameRGBA).
+ * Same sequential-use contract as rgbaCanvasCache.
+ * @type {{ canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D } | null}
+ */
+let removalCanvasCache = null;
+
+/**
+ * Get a cached composition canvas, sized and cleared
+ * @param {'rgba' | 'removal'} which
  * @param {number} width
  * @param {number} height
  * @returns {OffscreenCanvasRenderingContext2D}
  */
-function getRgbaContext(width, height) {
-  if (!rgbaCanvasCache) {
+function getCachedContext(which, width, height) {
+  const cache = which === 'rgba' ? rgbaCanvasCache : removalCanvasCache;
+  if (!cache) {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) {
       throw new Error('Failed to get OffscreenCanvas 2d context');
     }
-    rgbaCanvasCache = { canvas, ctx };
+    if (which === 'rgba') {
+      rgbaCanvasCache = { canvas, ctx };
+    } else {
+      removalCanvasCache = { canvas, ctx };
+    }
     return ctx;
   }
-  const { canvas, ctx } = rgbaCanvasCache;
+  const { canvas, ctx } = cache;
   if (!syncCanvasSize(canvas, width, height)) {
     // Same-size reuse keeps the previous frame; a resize already cleared it
     ctx.clearRect(0, 0, width, height);
@@ -391,11 +405,12 @@ function getRgbaContext(width, height) {
 }
 
 /**
- * Reset the cached composition canvas. Test-only, like
+ * Reset the cached composition canvases. Test-only, like
  * __resetFrameExtractionCacheForTests in features/export/api.js.
  */
 export function __resetComposeCacheForTests() {
   rgbaCanvasCache = null;
+  removalCanvasCache = null;
 }
 
 /**
@@ -406,12 +421,14 @@ export function __resetComposeCacheForTests() {
  * text are drawn and read back once. Only text over a keyed frame needs
  * the removal written back before drawing the text.
  *
- * An output scale below 1 draws the (cropped) source already scaled down,
- * then removes the background and draws the text at that size: the color
- * key runs on the output pixels, AI masks are sampled through the region
- * mapping (applyMaskToRegion handles an output smaller than its source
- * rectangle) and text sizes are fractions of the output, so every edit
- * renders at the smaller size as it would at full size.
+ * An output scale below 1 decides the background removal at full source
+ * resolution, exactly as a 100 % export would, and only then scales the
+ * result (with its alpha) down: the canvas resamples premultiplied pixels,
+ * so a removed pixel adds no color to a kept edge (removing after scaling
+ * would key blends of background and subject, and leave a background-
+ * colored halo). Without removal the source is drawn scaled right away.
+ * Text is drawn at the output size (its sizes are fractions of the output).
+ * At scale 1 nothing is resampled, so full-size output is unchanged.
  *
  * The returned buffer is fresh on every call (ImageData.data), so callers
  * may transfer it.
@@ -439,12 +456,36 @@ export async function composeOutputFrameRGBA(
   }
 
   const full = getOutputSize(frame, crop, { width: 0, height: 0 });
-  const { width, height } = scaleOutputSize(full.width, full.height, scale);
-  const ctx = getRgbaContext(width, height);
-  drawScaledSourceRegion(ctx, source, frame, crop, width, height, scale);
-
-  const remove = getRemovalStep(frame, getSourceRegion(frame, crop), edits, frameIndex, maskSource);
+  const region = getSourceRegion(frame, crop);
+  const remove = getRemovalStep(frame, region, edits, frameIndex, maskSource);
   const layers = getActiveTextLayers(edits, frameIndex);
+
+  if (isDownscale(scale)) {
+    const { width, height } = scaleOutputSize(full.width, full.height, scale);
+    /** @type {CanvasImageSource} */
+    let image = source;
+    /** @type {Rect} */
+    let rect = region;
+    if (remove) {
+      // Remove at full resolution first (the 100 % pixels), then scale
+      const removal = getCachedContext('removal', full.width, full.height);
+      removal.imageSmoothingQuality = 'low';
+      drawSourceRegion(removal, source, crop);
+      removeInCanvasRegion(removal, 0, 0, full.width, full.height, remove);
+      image = removal.canvas;
+      rect = { x: 0, y: 0, width: removal.canvas.width, height: removal.canvas.height };
+    }
+    const ctx = getCachedContext('rgba', width, height);
+    drawDownscaled(ctx, image, rect, width, height);
+    drawTextLayers(ctx, layers, width, height);
+    const output = ctx.getImageData(0, 0, width, height);
+    return { data: output.data, width, height };
+  }
+
+  const { width, height } = full;
+  const ctx = getCachedContext('rgba', width, height);
+  ctx.imageSmoothingQuality = 'low';
+  drawSourceRegion(ctx, source, crop);
 
   if (layers.length === 0) {
     const image = ctx.getImageData(0, 0, width, height);

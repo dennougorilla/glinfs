@@ -10,6 +10,7 @@ import {
   getCroppedDimensions,
   getScaledDimensions,
 } from './core.js';
+import { BYTES_PER_MB } from './size-planner.js';
 
 /**
  * Initialize export state
@@ -50,7 +51,7 @@ export function openDialog(state, clip, crop) {
   return {
     ...state,
     isDialogOpen: true,
-    estimatedSizeMB: estimatedBytes / (1024 * 1024),
+    estimatedSizeMB: estimatedBytes / BYTES_PER_MB,
   };
 }
 
@@ -95,7 +96,7 @@ export function updateSettings(state, settings, dimensions) {
   return {
     ...state,
     settings: newSettings,
-    estimatedSizeMB: estimatedBytes / (1024 * 1024),
+    estimatedSizeMB: estimatedBytes / BYTES_PER_MB,
   };
 }
 

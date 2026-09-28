@@ -109,6 +109,26 @@ describe('getSpeedLimitInfo', () => {
     expect(getSpeedLimitInfo(30, 4, 1).limited).toBe(true);
     expect(getSpeedLimitInfo(30, 4, 3).limited).toBe(false);
   });
+
+  it('judges merged runs by their whole delay (imported holds)', () => {
+    // 50 fps at 2x: 1 cs per slot, but each GIF frame covers a run of 5
+    // slots (5 cs), which GIF delays express exactly
+    expect(getSpeedLimitInfo(50, 2, 1, [5, 5, 5])).toEqual({
+      limited: false,
+      effectiveSpeed: 2,
+      minDelayCs: 2,
+    });
+    // Runs of one are the plain case
+    expect(getSpeedLimitInfo(60, 2, 1, [1, 1, 1])).toEqual(getSpeedLimitInfo(60, 2, 1));
+  });
+
+  it('reports the real speed when only some runs hit the floor', () => {
+    // Runs of 1 slot (1 cs ideal, played as 2 cs) and of 4 (4 cs, exact):
+    // 5 cs of ideal time play as 6 cs
+    const info = getSpeedLimitInfo(50, 2, 1, [1, 4]);
+    expect(info.limited).toBe(true);
+    expect(info.effectiveSpeed).toBeCloseTo((2 * 5) / 6, 5);
+  });
 });
 
 describe('readGifInfo', () => {
