@@ -1,0 +1,10 @@
+# scripts/convert-models-fp16.py (Python 3.11). Every package is pinned,
+# dependencies included, so the converted files are byte-for-byte
+# reproducible and match the SHA-256 pins in model-registry.js.
+onnx==1.23.0
+onnxconverter-common==1.16.0
+ml_dtypes==0.6.0
+numpy==2.4.6
+packaging==26.3
+protobuf==7.36.2
+typing_extensions==4.16.0
