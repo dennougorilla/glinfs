@@ -592,6 +592,40 @@ describe('output scale, color cap and explicit frame indices', () => {
     expect(manager.initConfig.maxColors).toBe(179);
   });
 
+  it('uses gifenc for a color cap or a target size, whatever encoder the settings name', async () => {
+    const wasm = { ...SETTINGS, encoderId: 'gifsicle-wasm' };
+    // The WASM encoder has no color count to lower: a cap must not be lost
+    await encodeGif({
+      frames: framesOf([1]),
+      crop: null,
+      settings: wasm,
+      fps: 30,
+      onProgress: vi.fn(),
+      maxColors: 32,
+    });
+    expect(manager.initConfig).toMatchObject({ encoderId: 'gifenc-js', maxColors: 32 });
+
+    installManager();
+    await encodeGif({
+      frames: framesOf([1]),
+      crop: null,
+      settings: { ...wasm, targetSizeMB: 5 },
+      fps: 30,
+      onProgress: vi.fn(),
+    });
+    expect(manager.initConfig.encoderId).toBe('gifenc-js');
+
+    installManager();
+    await encodeGif({
+      frames: framesOf([1]),
+      crop: null,
+      settings: wasm,
+      fps: 30,
+      onProgress: vi.fn(),
+    });
+    expect(manager.initConfig.encoderId).toBe('gifsicle-wasm');
+  });
+
   it('encodes explicit frames with their own absolute indices, without frame skip', async () => {
     const frames = framesOf([1, 2, 3]);
     await encodeGif({

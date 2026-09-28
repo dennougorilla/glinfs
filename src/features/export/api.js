@@ -17,6 +17,7 @@ import {
   getEncoderPreset,
   getExportedFrameIndices,
   getScaledDimensions,
+  normalizeTargetSizeMB,
   sampledPixelCount,
   sampleFramePixels,
   selectPaletteSampleIndices,
@@ -266,7 +267,8 @@ export async function checkEncoderStatus() {
  *   frame goes through the compositor at the smaller size (the copyTo fast
  *   path only applies at full size)
  * @property {number} [maxColors] - Palette size cap overriding the one
- *   derived from quality and preset (the target-size ladder lowers it)
+ *   derived from quality and preset (the target-size ladder lowers it).
+ *   Like a target size in the settings, it makes the export use gifenc
  * @property {number[]} [frameIndices] - Absolute clip index of each entry
  *   of `frames`. When given, `frames` are encoded as they are (no frame skip
  *   is applied) and text ranges and masks are looked up by these indices —
@@ -374,13 +376,16 @@ export async function encodeGif(params, signal) {
   const preset = getEncoderPreset(settings.encoderPreset);
 
   // Calculate max colors based on quality and preset (or the caller's cap)
-  const maxColors =
-    typeof maxColorsOverride === 'number' && maxColorsOverride > 0
-      ? Math.min(256, Math.max(2, Math.round(maxColorsOverride)))
-      : calculateMaxColors(settings.quality, settings.encoderPreset);
+  const colorCapped = typeof maxColorsOverride === 'number' && maxColorsOverride > 0;
+  const maxColors = colorCapped
+    ? Math.min(256, Math.max(2, Math.round(maxColorsOverride)))
+    : calculateMaxColors(settings.quality, settings.encoderPreset);
 
-  // Transparent exports always use gifenc (see getEffectiveEncoderId)
-  const encoderId = getEffectiveEncoderId(settings, transparent);
+  // Transparent and size-limited exports (a target size, or a color cap the
+  // size ladder set) always use gifenc, whatever encoder the settings name
+  // (see getEffectiveEncoderId)
+  const sizeLimited = colorCapped || normalizeTargetSizeMB(settings.targetSizeMB) !== null;
+  const encoderId = getEffectiveEncoderId(settings, transparent, sizeLimited);
 
   // Unedited full-size clips keep the VideoFrame.copyTo fast path; edits
   // and scaled output render through the compositor so text, keying and AI

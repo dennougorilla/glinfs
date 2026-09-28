@@ -415,7 +415,9 @@ describe('export dialog: target size', () => {
     expect(samples[0].mergeIdenticalFrames).toBe(false);
     expect(full).toHaveLength(1);
     expect(full[0]).toMatchObject({ maxColors: 32, scale: 1 });
-    expect(full[0].settings.encoderId).toBe('gifenc-js');
+    // encodeGif derives the JavaScript encoder from the target in the settings
+    expect(full[0].settings.targetSizeMB).toBe(1);
+    expect(getExportState()?.job?.encoder).toBe('gifenc-js');
     expect($('#export-result-target')?.textContent).toBe(
       'Fits the 1.0 MB target with 32 colors · every frame · 100 %.',
     );

@@ -904,11 +904,10 @@ async function handleExport() {
   const settings = dialogStore.getState().settings;
   const targetMB = normalizeTargetSizeMB(settings.targetSizeMB);
   const rungs = getSizeLadder(settings);
-  const encodeSettings = {
-    ...settings,
-    playbackSpeed: clipInfo.speed,
-    encoderId: getEffectiveEncoderId(settings, clipInfo.transparent, rungs !== null),
-  };
+  // encodeGif picks the encoder that really runs (gifenc for transparency or
+  // a target size); the job shows the same one
+  const encodeSettings = { ...settings, playbackSpeed: clipInfo.speed };
+  const jobEncoderId = getEffectiveEncoderId(settings, clipInfo.transparent, rungs !== null);
 
   // AI preparation and encoding share the controller, so Cancel stops
   // whichever runs
@@ -950,7 +949,7 @@ async function handleExport() {
   }
 
   const firstSkip = rungs ? rungs[0].frameSkip : settings.frameSkip;
-  const job = createEncodingJob(applyFrameSkip(frames, firstSkip).length, encodeSettings.encoderId);
+  const job = createEncodingJob(applyFrameSkip(frames, firstSkip).length, jobEncoderId);
   dialogStore.setState((s) => startEncoding(s, job));
   emit('export:started', { job });
   if (rungs && targetMB !== null) {
