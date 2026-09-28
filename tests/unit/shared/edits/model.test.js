@@ -5,13 +5,13 @@ import {
   createDefaultEdits,
   createTextLayer,
   DEFAULT_TOUCH_UP_RADIUS,
-  decimatePoints,
   EDIT_LIMITS,
   getActiveTextLayers,
   getActiveTouchUps,
   isAiCutoutActive,
   isColorKeyActive,
   isEditsEmpty,
+  limitStrokePoints,
   normalizeEdits,
   requiresTransparency,
 } from '../../../../src/shared/edits/model.js';
@@ -457,7 +457,7 @@ describe('touch-ups (mask brush strokes)', () => {
     );
   });
 
-  it('keeps at most the stroke limit and decimates long paths to the point limit', () => {
+  it('keeps at most the stroke limit and limits long paths with limitStrokePoints', () => {
     const many = Array.from({ length: EDIT_LIMITS.touchUps.max + 5 }, (_, i) => ({
       ...valid,
       id: `s${i}`,
@@ -468,15 +468,43 @@ describe('touch-ups (mask brush strokes)', () => {
 
     const points = Array.from({ length: 1234 }, (_, i) => ({ x: i / 1233, y: 0.5 }));
     const [long] = normalizeEdits({ touchUps: [{ ...valid, points }] }, 5).touchUps;
-    expect(long.points).toHaveLength(EDIT_LIMITS.touchUpPoints.max);
+    expect(long.points).toEqual(limitStrokePoints(points, EDIT_LIMITS.touchUpPoints.max));
+    expect(long.points.length).toBeLessThanOrEqual(EDIT_LIMITS.touchUpPoints.max);
     expect(long.points[0]).toEqual(points[0]);
     expect(long.points.at(-1)).toEqual(points.at(-1));
+
+    // A path within the limit is saved exactly as painted
+    const atLimit = points.slice(0, EDIT_LIMITS.touchUpPoints.max);
+    const [same] = normalizeEdits({ touchUps: [{ ...valid, points: atLimit }] }, 5).touchUps;
+    expect(same.points).toEqual(atLimit);
   });
 
-  it('decimatePoints leaves short paths alone', () => {
+  it('limitStrokePoints drops every other point until the path fits, keeping both ends', () => {
     const points = [1, 2, 3];
-    expect(decimatePoints(points, 5)).toBe(points);
-    expect(decimatePoints([1, 2, 3, 4, 5], 3)).toEqual([1, 3, 5]);
+    expect(limitStrokePoints(points, 5)).toBe(points);
+    expect(limitStrokePoints([1, 2, 3, 4, 5], 4)).toEqual([1, 3, 5]);
+    expect(limitStrokePoints([1, 2, 3, 4, 5, 6], 5)).toEqual([1, 3, 5, 6]);
+    // Halved again while still too long
+    expect(limitStrokePoints([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).toEqual([1, 5, 9]);
+    expect(limitStrokePoints([1, 2, 3, 4], 2)).toEqual([1, 4]);
+  });
+
+  it('keeps already-normalized strokes, and an unchanged array, by reference', () => {
+    const first = normalizeEdits({ touchUps: [valid, { ...valid, id: 's2' }] }, 5);
+    const again = normalizeEdits({ ...first, textLayers: [] }, 5);
+    expect(again.touchUps).toBe(first.touchUps);
+    expect(again.touchUps[0]).toBe(first.touchUps[0]);
+
+    // A new stroke: the old ones stay the same objects
+    const added = normalizeEdits({ ...first, touchUps: [...first.touchUps, valid] }, 5);
+    expect(added.touchUps[0]).toBe(first.touchUps[0]);
+    expect(added.touchUps[1]).toBe(first.touchUps[1]);
+    expect(added.touchUps[2]).not.toBe(valid);
+
+    // A shorter clip clamps the ranges again
+    const shorter = normalizeEdits(first, 2);
+    expect(shorter.touchUps[0]).not.toBe(first.touchUps[0]);
+    expect(shorter.touchUps[0]).toMatchObject({ start: 1, end: 1 });
   });
 
   it('getActiveTouchUps: strokes covering the frame, only while removal is on', () => {

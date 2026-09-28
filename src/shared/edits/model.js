@@ -393,35 +393,54 @@ function normalizeBackground(background, frameCount) {
 }
 
 /**
- * Keep at most `max` points of a path, evenly spaced along the array, always
- * including the first and the last
+ * The one point-limit rule of a stroke path, used both while painting (see
+ * extendStrokePath in ./touch-ups.js) and when edits are normalized, so a
+ * stroke never changes between its live preview and its saved form: while
+ * the path has more than `max` points, every other point is dropped
+ * (indices 0, 2, 4, ...), always keeping the last. A path within the limit
+ * is returned as is.
  * @template T
  * @param {T[]} points
  * @param {number} max - At least 2
  * @returns {T[]}
  */
-export function decimatePoints(points, max) {
-  if (points.length <= max) return points;
-  const last = points.length - 1;
-  /** @type {T[]} */
-  const kept = [];
-  for (let i = 0; i < max; i++) {
-    kept.push(points[Math.round((i * last) / (max - 1))]);
+export function limitStrokePoints(points, max) {
+  let kept = points;
+  while (kept.length > max) {
+    const last = kept.length - 1;
+    /** @type {T[]} */
+    const halved = [];
+    for (let i = 0; i < last; i += 2) halved.push(kept[i]);
+    halved.push(kept[last]);
+    kept = halved;
   }
   return kept;
 }
 
 /**
+ * Strokes normalizeTouchUp produced, with the frame count they were
+ * normalized for: such a stroke is valid as is and is kept by reference
+ * (every edit normalizes the whole ClipEdits, and rebuilding every stroke's
+ * points on each text drag or slider step would be wasted work and would
+ * defeat identity-based caches). Strokes are never mutated once normalized.
+ * @type {WeakMap<object, number>}
+ */
+const normalizedTouchUps = new WeakMap();
+
+/**
  * Normalize one touch-up stroke; null when it has no usable point. Points
- * without finite x/y are dropped, the rest clamped into 0..1 and decimated
- * to EDIT_LIMITS.touchUpPoints.max; the radius is clamped; the frame range
- * is clamped into the clip like a text layer's.
+ * without finite x/y are dropped, the rest clamped into 0..1 and limited
+ * to EDIT_LIMITS.touchUpPoints.max (limitStrokePoints); the radius is
+ * clamped; the frame range is clamped into the clip like a text layer's.
+ * A stroke this function already returned for the same frame count comes
+ * back as is.
  * @param {unknown} stroke
  * @param {number} frameCount
  * @returns {TouchUp | null}
  */
 function normalizeTouchUp(stroke, frameCount) {
   if (!stroke || typeof stroke !== 'object' || Array.isArray(stroke)) return null;
+  if (normalizedTouchUps.get(stroke) === frameCount) return /** @type {TouchUp} */ (stroke);
   const t = /** @type {Record<string, unknown>} */ (stroke);
   const { position, touchUpRadius, touchUpPoints } = EDIT_LIMITS;
   const raw = Array.isArray(t.points) ? t.points : [];
@@ -441,30 +460,38 @@ function normalizeTouchUp(stroke, frameCount) {
   const last = lastFrameIndex(frameCount);
   const start = Math.round(clampNumber(t.start, 0, last, 0));
   const end = Math.max(start, Math.round(clampNumber(t.end, 0, last, start)));
-  return {
+  /** @type {TouchUp} */
+  const normalized = {
     id: typeof t.id === 'string' && t.id ? t.id : createLayerId(),
     mode: normalizeEnum(t.mode, TOUCH_UP_MODES, 'erase'),
     radius: clampNumber(t.radius, touchUpRadius.min, touchUpRadius.max, DEFAULT_TOUCH_UP_RADIUS),
-    points: decimatePoints(points, touchUpPoints.max),
+    points: limitStrokePoints(points, touchUpPoints.max),
     start,
     end,
   };
+  normalizedTouchUps.set(normalized, frameCount);
+  return normalized;
 }
 
 /**
  * Normalize the touch-up strokes: unusable ones are dropped and only the
  * first EDIT_LIMITS.touchUps.max are kept. Input without the field (edits
- * saved before touch-ups existed) has none.
+ * saved before touch-ups existed) has none. Already-normalized strokes, and
+ * an array of nothing else, are returned by reference.
  * @param {unknown} touchUps
  * @param {number} frameCount
  * @returns {TouchUp[]}
  */
 function normalizeTouchUps(touchUps, frameCount) {
   if (!Array.isArray(touchUps)) return [];
-  return touchUps
+  const normalized = touchUps
     .map((stroke) => normalizeTouchUp(stroke, frameCount))
     .filter((stroke) => stroke !== null)
     .slice(0, EDIT_LIMITS.touchUps.max);
+  // Nothing changed (every stroke kept by reference): keep the array too
+  const unchanged =
+    normalized.length === touchUps.length && normalized.every((s, i) => s === touchUps[i]);
+  return unchanged ? /** @type {TouchUp[]} */ (touchUps) : normalized;
 }
 
 /**

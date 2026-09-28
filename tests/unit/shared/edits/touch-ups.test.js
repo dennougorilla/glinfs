@@ -1,6 +1,6 @@
 /**
  * Touch-ups (mask brush): stroke rasterization onto a removal decision,
- * path simplification, cache signatures, and the decide/clear split of the
+ * stroke paths while painting, cache signatures, and the decide/clear split of the
  * color key and the AI mask that touch-ups rely on.
  */
 
@@ -10,10 +10,13 @@ import {
   clearDecidedPixels,
   decideColorKey,
 } from '../../../../src/shared/edits/color-key.js';
+import { EDIT_LIMITS, normalizeEdits } from '../../../../src/shared/edits/model.js';
 import {
   applyTouchUpsToDecision,
+  extendStrokePath,
+  getStrokePathPoints,
   getTouchUpsSignature,
-  simplifyStrokePoints,
+  startStrokePath,
   touchUpRadiusPx,
 } from '../../../../src/shared/edits/touch-ups.js';
 import {
@@ -206,9 +209,7 @@ describe('applyTouchUpsToDecision', () => {
             const dy = b.y - a.y;
             const lenSq = dx * dx + dy * dy;
             const t =
-              lenSq > 0
-                ? Math.min(1, Math.max(0, ((cx - a.x) * dx + (cy - a.y) * dy) / lenSq))
-                : 0;
+              lenSq > 0 ? Math.min(1, Math.max(0, ((cx - a.x) * dx + (cy - a.y) * dy) / lenSq)) : 0;
             return (cx - a.x - t * dx) ** 2 + (cy - a.y - t * dy) ** 2 <= r * r;
           });
           if (inside) decision[y * rw + x] = s.mode === 'restore' ? 0 : 1;
@@ -256,39 +257,70 @@ describe('applyTouchUpsToDecision', () => {
   });
 });
 
-describe('simplifyStrokePoints', () => {
-  it('drops points closer than the distance to the last kept one, keeping both ends', () => {
-    const points = [
+describe('stroke paths (painting)', () => {
+  it('thins points closer than a quarter radius to the last kept one; the tail is kept too', () => {
+    // 100x100 source, radius 0.2 = 20 px: 5 px spacing
+    const path = startStrokePath({ x: 0, y: 0 }, 0.2, 100, 100);
+    expect(path.minDistancePx).toBe(5);
+    expect(extendStrokePath(path, { x: 0.01, y: 0 })).toBe(true);
+    expect(extendStrokePath(path, { x: 0.01, y: 0 })).toBe(false);
+    expect(extendStrokePath(path, { x: 0.02, y: 0 })).toBe(true);
+    expect(path.points).toEqual([{ x: 0, y: 0 }]);
+    expect(getStrokePathPoints(path)).toEqual([
       { x: 0, y: 0 },
-      { x: 0.01, y: 0 },
       { x: 0.02, y: 0 },
-      { x: 0.1, y: 0 },
-      { x: 0.11, y: 0 },
-      { x: 0.12, y: 0 },
-    ];
-    // 100 px wide source: 5 px minimum distance
-    expect(simplifyStrokePoints(points, 5, 100, 100)).toEqual([
+    ]);
+    extendStrokePath(path, { x: 0.1, y: 0 });
+    extendStrokePath(path, { x: 0.12, y: 0 });
+    expect(getStrokePathPoints(path)).toEqual([
       { x: 0, y: 0 },
       { x: 0.1, y: 0 },
       { x: 0.12, y: 0 },
     ]);
+    // Back on the last kept point: no tail
+    extendStrokePath(path, { x: 0.1, y: 0 });
+    expect(getStrokePathPoints(path)).toEqual([
+      { x: 0, y: 0 },
+      { x: 0.1, y: 0 },
+    ]);
   });
 
-  it('measures in source pixels (aspect ratio matters)', () => {
-    const points = [
+  it('measures in source pixels (aspect ratio matters), at least 1 px apart', () => {
+    // 1000x10: radius 0.1 = 1 px, so the spacing is 1 px; 0.1 of 10 px tall = 1 px
+    const path = startStrokePath({ x: 0, y: 0 }, 0.1, 1000, 10);
+    expect(path.minDistancePx).toBe(1);
+    extendStrokePath(path, { x: 0, y: 0.05 });
+    extendStrokePath(path, { x: 0, y: 0.1 });
+    expect(path.points).toEqual([
       { x: 0, y: 0 },
       { x: 0, y: 0.1 },
-      { x: 0, y: 0.2 },
-    ];
-    // 10 px tall: 1 px per step, below 2 px
-    expect(simplifyStrokePoints(points, 2, 1000, 10)).toEqual([points[0], points[2]]);
+    ]);
   });
 
-  it('returns short paths as a copy', () => {
-    const points = [{ x: 0.5, y: 0.5 }];
-    const out = simplifyStrokePoints(points, 5, 10, 10);
-    expect(out).toEqual(points);
-    expect(out).not.toBe(points);
+  it('keeps a long stroke within the point limit with the save rule, so saving changes nothing', () => {
+    const max = EDIT_LIMITS.touchUpPoints.max;
+    const path = startStrokePath({ x: 0, y: 0.5 }, 0.01, 1000, 1000);
+    /** @type {{ x: number, y: number }[]} */
+    const all = [path.points[0]];
+    for (let i = 1; i <= 3 * max; i++) {
+      const p = { x: i / (3 * max), y: 0.5 + 0.1 * Math.sin(i / 7) };
+      all.push(p);
+      extendStrokePath(path, p);
+      const points = getStrokePathPoints(path);
+      expect(points.length).toBeLessThanOrEqual(max);
+    }
+    expect(path.minDistancePx).toBeGreaterThan(2.5);
+    const painted = getStrokePathPoints(path);
+    expect(painted[0]).toEqual(all[0]);
+    expect(painted.at(-1)).toEqual(all.at(-1));
+    // What normalizeEdits keeps is exactly the painted stroke
+    const saved = normalizeEdits(
+      {
+        touchUps: [{ id: 'a', mode: 'erase', radius: 0.01, points: painted, start: 0, end: 0 }],
+      },
+      1,
+    ).touchUps[0];
+    expect(saved.points).toEqual(painted);
   });
 });
 

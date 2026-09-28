@@ -17,7 +17,7 @@
  * @module shared/edits/touch-ups
  */
 
-import { createLayerId } from './model.js';
+import { createLayerId, EDIT_LIMITS, limitStrokePoints } from './model.js';
 
 /** @typedef {import('./model.js').TouchUp} TouchUp */
 /** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
@@ -212,31 +212,84 @@ export function applyTouchUpsToDecision(
 }
 
 /**
- * Thin out a freshly painted path: a point closer than `minDistancePx`
- * (source pixels) to the last kept point adds nothing a round brush does
- * not already cover. The first and the last point are always kept.
- * @param {readonly { x: number, y: number }[]} points - Fractions of the source frame
- * @param {number} minDistancePx
+ * A stroke path being painted (see startStrokePath)
+ * @typedef {Object} StrokePath
+ * @property {{ x: number, y: number }[]} points - Kept points, fractions of
+ *   the source frame; never more than EDIT_LIMITS.touchUpPoints.max - 1,
+ *   so the tail always fits
+ * @property {{ x: number, y: number } | null} tail - The latest position
+ *   when it was too close to the last kept point to be kept (null: it was
+ *   kept); part of the stroke, previewed and saved
+ * @property {number} minDistancePx - Spacing of kept points, source pixels
+ * @property {number} sourceW
+ * @property {number} sourceH
+ */
+
+/**
+ * Start a stroke path at its first point. Points closer than a quarter of
+ * the brush radius to the last kept point add nothing a round brush does
+ * not already cover, so they are thinned out as they arrive.
+ * @param {{ x: number, y: number }} point - Fractions of the source frame
+ * @param {number} radius - Fraction of the source frame's shorter side
  * @param {number} sourceW
  * @param {number} sourceH
- * @returns {{ x: number, y: number }[]}
+ * @returns {StrokePath}
  */
-export function simplifyStrokePoints(points, minDistancePx, sourceW, sourceH) {
-  if (points.length <= 2) return points.slice();
-  const minSq = minDistancePx * minDistancePx;
-  const kept = [points[0]];
-  let last = points[0];
-  for (let i = 1; i < points.length - 1; i++) {
-    const p = points[i];
-    const dx = (p.x - last.x) * sourceW;
-    const dy = (p.y - last.y) * sourceH;
-    if (dx * dx + dy * dy >= minSq) {
-      kept.push(p);
-      last = p;
-    }
+export function startStrokePath(point, radius, sourceW, sourceH) {
+  return {
+    points: [point],
+    tail: null,
+    minDistancePx: Math.max(1, touchUpRadiusPx(radius, sourceW, sourceH) / 4),
+    sourceW,
+    sourceH,
+  };
+}
+
+/**
+ * Add the next pointer position to a stroke path (in place). When the kept
+ * points would pass the point limit they go through limitStrokePoints, the
+ * rule normalizeEdits applies on save, and the spacing doubles so the path
+ * keeps its new density; the live preview shows exactly that path, so what
+ * is saved is what was painted.
+ * @param {StrokePath} path
+ * @param {{ x: number, y: number }} point - Fractions of the source frame
+ * @returns {boolean} Whether the stroke changed (a new point, or a new tail)
+ */
+export function extendStrokePath(path, point) {
+  const last = path.points[path.points.length - 1];
+  const dx = (point.x - last.x) * path.sourceW;
+  const dy = (point.y - last.y) * path.sourceH;
+  if (dx * dx + dy * dy < path.minDistancePx * path.minDistancePx) {
+    const changed =
+      path.tail === null
+        ? point.x !== last.x || point.y !== last.y
+        : point.x !== path.tail.x || point.y !== path.tail.y;
+    path.tail = point;
+    return changed;
   }
-  kept.push(points[points.length - 1]);
-  return kept;
+  path.points.push(point);
+  path.tail = null;
+  const max = EDIT_LIMITS.touchUpPoints.max - 1;
+  if (path.points.length > max) {
+    path.points = limitStrokePoints(path.points, max);
+    path.minDistancePx *= 2;
+  }
+  return true;
+}
+
+/**
+ * The points of a stroke path as a stroke stores them: the kept points and
+ * the tail, within EDIT_LIMITS.touchUpPoints.max (so normalizeEdits keeps
+ * them as they are)
+ * @param {StrokePath} path
+ * @returns {{ x: number, y: number }[]} A new array
+ */
+export function getStrokePathPoints(path) {
+  const last = path.points[path.points.length - 1];
+  const { tail } = path;
+  return tail && (tail.x !== last.x || tail.y !== last.y)
+    ? [...path.points, tail]
+    : [...path.points];
 }
 
 /** Signatures per strokes array (arrays are replaced, never mutated) */
