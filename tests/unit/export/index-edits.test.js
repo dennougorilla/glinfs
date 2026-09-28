@@ -298,6 +298,34 @@ describe('export dialog: the editor speed is the GIF speed', () => {
     expect(/** @type {HTMLElement} */ ($('#export-speed-note')).hidden).toBe(true);
   });
 
+  it('judges an imported clip by its merged holds, not by its frame slots', () => {
+    // 50 fps slots in holds of 5 (one decoded frame each): at 2x a slot
+    // would want 1 cs, but each merged GIF frame lasts 5 cs
+    const holdFrames = Array.from({ length: 20 }, (_, index) => ({
+      id: String(index),
+      sharedKey: `k${Math.floor(index / 5)}`,
+      timestamp: index,
+      width: 16,
+      height: 12,
+    }));
+    setClipPayload(
+      /** @type {any} */ ({ frames: holdFrames, fps: 50, capturedAt: 0, sourceName: 'a.gif' }),
+    );
+    setEditorPayload(
+      /** @type {any} */ ({
+        selectedRange: { start: 0, end: 19 },
+        cropArea: null,
+        clip: { frames: holdFrames, fps: 50 },
+        fps: 50,
+        playbackSpeed: 2,
+      }),
+    );
+    dialog = openExportDialog();
+    expect(/** @type {HTMLElement} */ ($('#export-speed-note')).hidden).toBe(true);
+    // 20 slots at 50 fps = 0.4 s, at 2x
+    expect($('#export-summary')?.textContent).toBe('16×12 · 4 frames · 0.20s at 2×');
+  });
+
   it('does not show the note at speeds GIF can play', () => {
     inject({ editorExtras: { playbackSpeed: 1.5 } });
     dialog = openExportDialog();

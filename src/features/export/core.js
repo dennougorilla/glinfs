@@ -597,20 +597,34 @@ export function normalizeTargetSizeMB(value) {
  * Whether GIF delays can express a playback speed. A GIF frame lasts a whole
  * number of centiseconds and at least MIN_DELAY_CS, so above some speed the
  * frames cannot get shorter and the GIF plays slower than asked.
+ *
+ * With identical-frame merging a GIF frame covers a run of source frames
+ * and its delay is the run's whole duration (calculateFrameDelay with the
+ * run length), so pass the runs: only runs too short for MIN_DELAY_CS slow
+ * the GIF down. Without runs every GIF frame is one source frame.
  * @param {number} fps - Source FPS
  * @param {number} speed - Playback speed multiplier
  * @param {number} frameSkip - Frame skip factor
+ * @param {number[]} [runLengths] - Source frames (after frame skip) of each
+ *   GIF frame, when identical frames merge
  * @returns {{ limited: boolean, effectiveSpeed: number, minDelayCs: number }}
  *   effectiveSpeed: the speed the GIF actually plays at
  */
-export function getSpeedLimitInfo(fps, speed, frameSkip) {
+export function getSpeedLimitInfo(fps, speed, frameSkip, runLengths) {
   const skip = Math.max(1, frameSkip);
-  const idealCs = (100 * skip) / (fps * speed);
-  const delayCs = calculateFrameDelay(fps, speed, skip);
-  const limited = idealCs < MIN_DELAY_CS;
+  const runs = runLengths?.length ? runLengths : [1];
+  let idealTotalCs = 0;
+  let delayTotalCs = 0;
+  let limited = false;
+  for (const run of runs) {
+    const idealCs = (100 * skip * run) / (fps * speed);
+    idealTotalCs += idealCs;
+    delayTotalCs += calculateFrameDelay(fps, speed, skip, run);
+    if (idealCs < MIN_DELAY_CS) limited = true;
+  }
   return {
     limited,
-    effectiveSpeed: limited ? (speed * idealCs) / delayCs : speed,
+    effectiveSpeed: limited ? (speed * idealTotalCs) / delayTotalCs : speed,
     minDelayCs: MIN_DELAY_CS,
   };
 }

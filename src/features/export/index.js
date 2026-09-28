@@ -194,8 +194,11 @@ let resultInfo = null;
  */
 let mergeIdenticalFrames = false;
 
-/** @type {Map<number, number>} GIF frame count per frame skip (merge estimate) */
-const gifFrameCounts = new Map();
+/**
+ * Estimated merged runs per frame skip (identical-frame merging only)
+ * @type {Map<number, { count: number, runLengths: number[] }>}
+ */
+const mergedRunsBySkip = new Map();
 
 /** @type {AbortController | null} */
 let encodingController = null;
@@ -262,7 +265,7 @@ export function openExportDialog(options = {}) {
   aiPrep = null;
   sizeStep = null;
   resultInfo = null;
-  gifFrameCounts.clear();
+  mergedRunsBySkip.clear();
 
   // Edits and alpha travel on the editor payload (or its clip). Both are
   // optional: clips edited before these existed carry neither.
@@ -490,7 +493,12 @@ function render(options = {}) {
  */
 function computeFacts(state) {
   const settings = state.settings;
-  const speedLimit = getSpeedLimitInfo(clipInfo.fps, clipInfo.speed, settings.frameSkip);
+  const speedLimit = getSpeedLimitInfo(
+    clipInfo.fps,
+    clipInfo.speed,
+    settings.frameSkip,
+    mergeIdenticalFrames ? getMergedRuns(settings.frameSkip).runLengths : undefined,
+  );
   return {
     output: getScaledDimensions(clipInfo.width, clipInfo.height, settings.scale ?? 1),
     gifFrames: countGifFrames(settings.frameSkip),
@@ -509,12 +517,25 @@ function computeFacts(state) {
 function countGifFrames(frameSkip) {
   const skip = Math.max(1, frameSkip);
   if (!mergeIdenticalFrames) return Math.ceil(frames.length / skip);
-  const cached = gifFrameCounts.get(skip);
-  if (cached !== undefined) return cached;
-  const indices = getExportedFrameIndices(frames.length, skip, rangeStart);
-  const count = estimateMergedRuns(indices, clipFrames, edits).count;
-  gifFrameCounts.set(skip, count);
-  return count;
+  return getMergedRuns(skip).count;
+}
+
+/**
+ * Estimated runs identical-frame merging leaves at this frame skip (cached
+ * for the dialog: the frames and edits do not change while it is open)
+ * @param {number} frameSkip
+ * @returns {{ count: number, runLengths: number[] }}
+ */
+function getMergedRuns(frameSkip) {
+  const skip = Math.max(1, frameSkip);
+  let runs = mergedRunsBySkip.get(skip);
+  if (!runs) {
+    const indices = getExportedFrameIndices(frames.length, skip, rangeStart);
+    const { count, runLengths } = estimateMergedRuns(indices, clipFrames, edits);
+    runs = { count, runLengths };
+    mergedRunsBySkip.set(skip, runs);
+  }
+  return runs;
 }
 
 /**
@@ -584,7 +605,7 @@ function closeDialog({ restoreFocus }) {
   resultInfo = null;
   rangeStart = 0;
   mergeIdenticalFrames = false;
-  gifFrameCounts.clear();
+  mergedRunsBySkip.clear();
 
   if (restoreFocus) restoreOpenerFocus(closing.opener);
   emit('export:closed', {});
