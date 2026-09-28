@@ -640,6 +640,30 @@ describe('SegmentationManager with more than one model', () => {
     expect(manager.loadedModelId).toBe('general');
   });
 
+  it('sends a stretch model a bitmap resized from the source to its input, not the mask size', async () => {
+    const { manager, workers, createBitmap } = createHarness();
+    const source = { codedWidth: 1280 };
+    const frame = { ...makeFrame('a', { width: 1280, height: 720 }), frame: source };
+    await manager.analyzeFrames([frame], { clipId: 'c', modelId: 'general' });
+
+    // Straight from the source frame to 1024×1024, as upstream resizes it
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    expect(createBitmap.mock.calls[0]).toEqual([source, 1024, 1024]);
+    const [segment] = workers[0].segments;
+    expect(segment.bitmap).toMatchObject({ width: 1024, height: 1024 });
+    // The mask is still stored at the mask resolution
+    expect(segment).toMatchObject({
+      sourceWidth: 1280,
+      sourceHeight: 720,
+      maskWidth: 1024,
+      maskHeight: 576,
+    });
+
+    // A letterbox model keeps the mask-resolution bitmap
+    await manager.analyzeFrames([frame], { clipId: 'c', modelId: 'anime' });
+    expect(createBitmap.mock.calls[1]).toEqual([source, 1024, 576]);
+  });
+
   it('tells which model is busy while an analysis is queued or running', async () => {
     const { manager, workers } = createHarness({ autoMask: false });
     const listener = vi.fn();

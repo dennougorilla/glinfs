@@ -18,7 +18,8 @@
  *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
- * resolution) and transfers that bitmap to the worker, which closes it. A
+ * resolution for a letterbox model, to the square model input for a stretch
+ * model) and transfers that bitmap to the worker, which closes it. A
  * bitmap that cannot be sent (cancelled job, dead worker) is closed here.
  * At most MAX_FRAMES_IN_FLIGHT bitmaps exist at a time.
  */
@@ -86,6 +87,8 @@ import {
  * @property {{ vendor: string, architecture: string, description: string } | null} adapter
  * @property {boolean} fromCache
  * @property {number} modelBytes - Size of the loaded model
+ * @property {'letterbox' | 'stretch'} resize - How frames become the model input
+ * @property {number} inputSize - Side of the square model input
  * @property {{ loadMs: number, createMs: number, warmupMs?: number | null }} timings
  */
 
@@ -444,7 +447,7 @@ export class SegmentationManager {
     try {
       while (framesDone < pending.length) {
         while (inflight.length < MAX_FRAMES_IN_FLIGHT && next < pending.length) {
-          const request = this.#submitFrame(jobId, pending[next++], clipId);
+          const request = this.#submitFrame(jobId, pending[next++], clipId, ready);
           request.catch(() => undefined); // awaited below, in order
           inflight.push(request);
         }
@@ -563,6 +566,8 @@ export class SegmentationManager {
               adapter: data.adapter ?? null,
               fromCache: Boolean(data.fromCache),
               modelBytes: spec.bytes,
+              resize: spec.preprocess.resize,
+              inputSize: spec.inputSize,
               timings: data.timings,
             };
             this.#rejectInit = null;
@@ -649,9 +654,10 @@ export class SegmentationManager {
    * @param {number} jobId
    * @param {{ key: string, frame: Frame }} item
    * @param {string | undefined} clipId
+   * @param {ReadyInfo} ready - The session the frame is for
    * @returns {Promise<{ totalMs: number, inferenceMs: number }>}
    */
-  async #submitFrame(jobId, { key, frame }, clipId) {
+  async #submitFrame(jobId, { key, frame }, clipId, ready) {
     const source = getDrawableSource(frame);
     // A closed VideoFrame has no `closed` flag in browsers; close() zeroes its
     // coded size (format can be null for open GPU-backed frames, so not that)
@@ -662,9 +668,15 @@ export class SegmentationManager {
       );
     }
     const { width, height } = computeMaskSize(frame.width, frame.height);
+    // A letterbox model sees the frame at the mask resolution (its long side
+    // is the input side). A stretch model resizes the frame straight to its
+    // square input, like upstream: going through the mask resolution first
+    // would throw away rows (1024×576 stretched to 1024×1024).
+    const [bitmapWidth, bitmapHeight] =
+      ready.resize === 'stretch' ? [ready.inputSize, ready.inputSize] : [width, height];
     let bitmap;
     try {
-      bitmap = await this.#createBitmap(source, width, height);
+      bitmap = await this.#createBitmap(source, bitmapWidth, bitmapHeight);
     } catch (error) {
       // e.g. InvalidStateError: the VideoFrame was closed while waiting
       throw new SegmentationError(

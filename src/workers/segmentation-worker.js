@@ -20,8 +20,10 @@
  * `env.wasm.wasmPaths`; the JS glue is inlined in the ORT bundle, so no
  * extra module is fetched. `numThreads = 1` and no proxy worker.
  *
- * Frames arrive as transferred ImageBitmaps already scaled to the mask
- * resolution; this worker owns them and closes each exactly once. It never
+ * Frames arrive as transferred ImageBitmaps already scaled (to the mask
+ * resolution for a letterbox model, to the square input for a stretch
+ * model: drawing either into the input rectangle needs no further loss of
+ * detail); this worker owns them and closes each exactly once. It never
  * sees a VideoFrame. Protocol: see features/ai-cutout/protocol.js.
  */
 
