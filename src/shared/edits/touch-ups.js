@@ -34,8 +34,77 @@ export function touchUpRadiusPx(radius, sourceW, sourceH) {
 }
 
 /**
+ * Source x interval, relative to `ax`, where the horizontal line at vertical
+ * offset `v` (from `ay`) meets the capsule of radius r around the segment
+ * a→a+(dx, dy): the union of the discs around both ends and the band along
+ * the segment. The capsule is convex, so that union is a single interval.
+ * Writes it to `out` ([lo, hi]); returns false when the line misses it.
+ * @param {number} v - Row center y minus ay
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} lenSq - dx² + dy²
+ * @param {number} r
+ * @param {number} rSq
+ * @param {number[]} out
+ * @returns {boolean}
+ */
+function capsuleRowSpan(v, dx, dy, lenSq, r, rSq, out) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  // Disc around a
+  if (v >= -r && v <= r) {
+    const h = Math.sqrt(rSq - v * v);
+    lo = -h;
+    hi = h;
+  }
+  if (lenSq > 0) {
+    // Disc around b
+    const w = v - dy;
+    if (w >= -r && w <= r) {
+      const h = Math.sqrt(rSq - w * w);
+      if (dx - h < lo) lo = dx - h;
+      if (dx + h > hi) hi = dx + h;
+    }
+    // Band: the projection t = (dx*u + dy*v) / lenSq in 0..1, and the
+    // distance |dx*v - dy*u| / len at most r (u = x - ax)
+    const rLen = r * Math.sqrt(lenSq);
+    let bandLo = -Infinity;
+    let bandHi = Infinity;
+    if (dx !== 0) {
+      const t0 = (-dy * v) / dx;
+      const t1 = (lenSq - dy * v) / dx;
+      bandLo = Math.min(t0, t1);
+      bandHi = Math.max(t0, t1);
+    } else if (dy * v < 0 || dy * v > lenSq) {
+      bandHi = -Infinity;
+    }
+    if (dy !== 0) {
+      const c0 = (dx * v - rLen) / dy;
+      const c1 = (dx * v + rLen) / dy;
+      bandLo = Math.max(bandLo, Math.min(c0, c1));
+      bandHi = Math.min(bandHi, Math.max(c0, c1));
+    } else if (Math.abs(dx * v) > rLen) {
+      bandHi = -Infinity;
+    }
+    if (bandLo <= bandHi) {
+      if (bandLo < lo) lo = bandLo;
+      if (bandHi > hi) hi = bandHi;
+    }
+  }
+  if (lo > hi) return false;
+  out[0] = lo;
+  out[1] = hi;
+  return true;
+}
+
+/**
  * Paint one stroke onto a decision buffer: every region pixel whose center
  * lies within the brush radius of the stroke's path gets `value`.
+ *
+ * Rasterized by row spans: for each segment and each region row it
+ * crosses, the pixels whose centers fall inside the segment's capsule form
+ * one run, found analytically and filled at once, so no pixel is
+ * distance-tested (overlapping segments only rewrite runs).
  * @param {Uint8Array} decision
  * @param {number} regionW
  * @param {number} regionH
@@ -68,36 +137,29 @@ function paintStroke(
   const rSq = r * r;
   const pts = stroke.points;
   const segments = Math.max(1, pts.length - 1);
+  const span = [0, 0];
   for (let s = 0; s < segments; s++) {
     const a = pts[s];
     const b = pts[Math.min(s + 1, pts.length - 1)];
     const ax = a.x * sourceW;
     const ay = a.y * sourceH;
-    const bx = b.x * sourceW;
-    const by = b.y * sourceH;
-    const dx = bx - ax;
-    const dy = by - ay;
+    const dx = b.x * sourceW - ax;
+    const dy = b.y * sourceH - ay;
     const lenSq = dx * dx + dy * dy;
 
-    // Region pixels whose centers can be within r of the segment
-    const x0 = Math.max(0, Math.ceil((Math.min(ax, bx) - r - region.x) / scaleX - 0.5));
-    const x1 = Math.min(regionW - 1, Math.floor((Math.max(ax, bx) + r - region.x) / scaleX - 0.5));
-    const y0 = Math.max(0, Math.ceil((Math.min(ay, by) - r - region.y) / scaleY - 0.5));
-    const y1 = Math.min(regionH - 1, Math.floor((Math.max(ay, by) + r - region.y) / scaleY - 0.5));
-
+    // Region rows whose centers can be within r of the segment
+    const y0 = Math.max(0, Math.ceil((Math.min(ay, ay + dy) - r - region.y) / scaleY - 0.5));
+    const y1 = Math.min(
+      regionH - 1,
+      Math.floor((Math.max(ay, ay + dy) + r - region.y) / scaleY - 0.5),
+    );
     for (let y = y0; y <= y1; y++) {
-      const sy = region.y + (y + 0.5) * scaleY;
-      const row = y * regionW;
-      for (let x = x0; x <= x1; x++) {
-        const sx = region.x + (x + 0.5) * scaleX;
-        // Distance to the segment: project onto it, clamped to its ends
-        let t = lenSq > 0 ? ((sx - ax) * dx + (sy - ay) * dy) / lenSq : 0;
-        if (t < 0) t = 0;
-        else if (t > 1) t = 1;
-        const ex = sx - (ax + t * dx);
-        const ey = sy - (ay + t * dy);
-        if (ex * ex + ey * ey <= rSq) decision[row + x] = value;
-      }
+      const v = region.y + (y + 0.5) * scaleY - ay;
+      if (!capsuleRowSpan(v, dx, dy, lenSq, r, rSq, span)) continue;
+      // Region pixels whose centers lie in ax + [lo, hi]
+      const x0 = Math.max(0, Math.ceil((ax + span[0] - region.x) / scaleX - 0.5));
+      const x1 = Math.min(regionW - 1, Math.floor((ax + span[1] - region.x) / scaleX - 0.5));
+      if (x0 <= x1) decision.fill(value, y * regionW + x0, y * regionW + x1 + 1);
     }
   }
 }

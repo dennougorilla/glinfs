@@ -180,6 +180,76 @@ describe('applyTouchUpsToDecision', () => {
     expect(Array.from(decision)).toEqual([0, 0, 0, 0]);
   });
 
+  it('paints exactly the pixels whose centers lie within the radius of the path', () => {
+    // Reference: test every pixel center against every segment
+    /**
+     * @param {Uint8Array} decision
+     * @param {number} rw
+     * @param {number} rh
+     * @param {import('../../../../src/shared/edits/model.js').TouchUp} s
+     * @param {{ x: number, y: number, width: number, height: number }} region
+     * @param {number} sw
+     * @param {number} sh
+     */
+    const reference = (decision, rw, rh, s, region, sw, sh) => {
+      const scaleX = region.width / rw;
+      const scaleY = region.height / rh;
+      const r = Math.max(touchUpRadiusPx(s.radius, sw, sh), 0.5 * Math.max(scaleX, scaleY));
+      const pts = s.points.map((p) => ({ x: p.x * sw, y: p.y * sh }));
+      for (let y = 0; y < rh; y++) {
+        const cy = region.y + (y + 0.5) * scaleY;
+        for (let x = 0; x < rw; x++) {
+          const cx = region.x + (x + 0.5) * scaleX;
+          const inside = pts.some((a, i) => {
+            const b = pts[Math.min(i + 1, pts.length - 1)];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const lenSq = dx * dx + dy * dy;
+            const t =
+              lenSq > 0
+                ? Math.min(1, Math.max(0, ((cx - a.x) * dx + (cy - a.y) * dy) / lenSq))
+                : 0;
+            return (cx - a.x - t * dx) ** 2 + (cy - a.y - t * dy) ** 2 <= r * r;
+          });
+          if (inside) decision[y * rw + x] = s.mode === 'restore' ? 0 : 1;
+        }
+      }
+    };
+    const rand = randomBytes(4000, 7);
+    let k = 0;
+    const next = () => rand[k++] / 255;
+    for (let trial = 0; trial < 60; trial++) {
+      const sw = 20 + Math.floor(next() * 40);
+      const sh = 20 + Math.floor(next() * 40);
+      const region = {
+        x: Math.floor(next() * 6),
+        y: Math.floor(next() * 6),
+        width: sw - 8,
+        height: sh - 8,
+      };
+      // Same size, scaled down, or a fractional crop
+      const scale = [1, 0.5, 0.37][trial % 3];
+      const rw = Math.max(1, Math.floor(region.width * scale));
+      const rh = Math.max(1, Math.floor(region.height * scale));
+      const count = 1 + Math.floor(next() * 6);
+      const s = stroke({
+        mode: trial % 2 ? 'restore' : 'erase',
+        radius: 0.01 + next() * 0.15,
+        // Some points on one axis, some repeated, some past the edges
+        points: Array.from({ length: count }, (_, i) => ({
+          x: i % 3 === 1 ? 0.5 : next() * 1.2 - 0.1,
+          y: i % 4 === 2 ? 0.5 : next() * 1.2 - 0.1,
+        })),
+      });
+      const fill = trial % 2 ? 1 : 0;
+      const expected = new Uint8Array(rw * rh).fill(fill);
+      reference(expected, rw, rh, s, region, sw, sh);
+      const actual = new Uint8Array(rw * rh).fill(fill);
+      applyTouchUpsToDecision(actual, rw, rh, [s], region, sw, sh);
+      expect(rows(actual, rw, rh)).toEqual(rows(expected, rw, rh));
+    }
+  });
+
   it('touchUpRadiusPx scales by the shorter side', () => {
     expect(touchUpRadiusPx(0.1, 200, 100)).toBe(10);
     expect(touchUpRadiusPx(0.1, 100, 300)).toBe(10);
