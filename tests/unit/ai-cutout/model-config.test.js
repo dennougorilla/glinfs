@@ -117,6 +117,9 @@ describe('model registry', () => {
     expect(formatModelSize(178_648_008)).toBe('179 MB');
     expect(formatModelSize(getModelEntry('anime').bytes)).toBe('88 MB');
     expect(formatModelSize(getModelEntry('general').bytes)).toBe('90 MB');
+    // One helper for every size: download progress asks for a decimal
+    expect(formatModelSize(getModelEntry('anime').bytes, 1)).toBe('88.1 MB');
+    expect(formatModelSize(0, 1)).toBe('0.0 MB');
   });
 
   it('matches the model ids and the default model the edits accept', () => {

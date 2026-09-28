@@ -330,16 +330,6 @@ export function describeAnalysisError(error) {
 }
 
 /**
- * Decimal megabytes (10^6 bytes) with one decimal, the unit of the "88 MB"
- * model sizes in the README and credits
- * @param {number} bytes
- * @returns {string}
- */
-function mb(bytes) {
-  return `${(bytes / 1_000_000).toFixed(1)} MB`;
-}
-
-/**
  * Time left as a short phrase
  * @param {number | null} ms
  * @returns {string}
@@ -364,7 +354,7 @@ export function describeAnalysisProgress(progress) {
       if (progress.fromCache) return 'Loading the model from this browser’s cache…';
       const total = progress.totalBytes;
       const pct = total > 0 ? Math.floor((progress.loadedBytes / total) * 100) : 0;
-      return `Downloading the model: ${mb(progress.loadedBytes)} of ${mb(total)} (${pct}%)`;
+      return `Downloading the model: ${formatModelSize(progress.loadedBytes, 1)} of ${formatModelSize(total, 1)} (${pct}%)`;
     }
     case 'verifying':
       return 'Checking the downloaded model…';

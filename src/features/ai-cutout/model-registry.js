@@ -245,10 +245,13 @@ export function getUpstreamModelUrl(entry) {
 }
 
 /**
- * Decimal megabytes, rounded (the unit of "88 MB" in the README)
+ * Decimal megabytes (10^6 bytes), the unit of "88 MB" in the README, the
+ * credits, the editor and Settings: whole megabytes, or `decimals` places
+ * where an amount must visibly move (download progress: "12.3 MB of 88.1 MB")
  * @param {number} bytes
+ * @param {number} [decimals]
  * @returns {string}
  */
-export function formatModelSize(bytes) {
-  return `${Math.round(bytes / 1_000_000)} MB`;
+export function formatModelSize(bytes, decimals = 0) {
+  return `${(bytes / 1_000_000).toFixed(decimals)} MB`;
 }
