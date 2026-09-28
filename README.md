@@ -22,7 +22,7 @@ Add captions in the editor's **Text** panel: type the text, pick the font, size,
 The **Background** panel removes a solid background: turn on **Remove background** (it picks the most common edge color) or use **Pick from preview** and click the background, then adjust the **Tolerance**. **Edges only** removes the matching color connected to the frame border; **All matching** removes it everywhere. Removed pixels become transparent in the GIF. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
 
 ### AI cutout
-In the **Background** panel, set **Method** to **AI cutout** to cut the subject out of every frame with a segmentation model that runs in your browser. Choose the **Model**: **Anime** for anime and illustrated characters, or **General** for people, pets and objects in live-action video. **Analyze selection** analyzes the frames between IN and OUT with the chosen model; the first analysis with a model downloads it once (176 MB for Anime, 179 MB for General, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
+In the **Background** panel, set **Method** to **AI cutout** to cut the subject out of every frame with a segmentation model that runs in your browser. Choose the **Model**: **Anime** for anime and illustrated characters, or **General** for people, pets and objects in live-action video. **Analyze selection** analyzes the frames between IN and OUT with the chosen model; the first analysis with a model downloads it once (88 MB for Anime, 90 MB for General, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
 
 Each model keeps its own analysis: switching the model shows that model's progress, and switching back reuses the frames it already analyzed. Threshold, smoothing, edge and picks stay as they are across a switch (a pick selects whatever the other model finds at that spot). The model cannot be changed while an analysis runs.
 
@@ -91,19 +91,60 @@ The AI cutout runs one of two IS-Net segmentation models in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
 - **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
-  model (`isnetis.onnx`, Apache-2.0, 176 MB)
+  model (`isnetis-fp16.onnx`, Apache-2.0, 88 MB)
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
-  (`isnet-general-use.onnx`, Apache-2.0, 179 MB)
+  (`isnet-general-fp16.onnx`, Apache-2.0, 90 MB)
 
-Both are described once in `src/features/ai-cutout/model-registry.js`
-(pinned source, size, SHA-256, license and preprocessing); the worker, the
-fetch script, Settings and the deploy workflow read it.
-The models are not in the repository. Download them once for local development:
+Both are fp16 conversions of the upstream fp32 files (176 and 179 MB): half
+the download, and faster on WebGPU, with the same masks for practical
+purposes (see below). Both are described once in
+`src/features/ai-cutout/model-registry.js` (the shipped file's size and
+SHA-256, the upstream file it was converted from, license and
+preprocessing); the worker, the fetch script, Settings and the deploy
+workflow read it.
+The models are not in the repository; they are assets of the
+[`models-v1` release](https://github.com/dennougorilla/glinfs/releases/tag/models-v1).
+Download them once for local development:
 
 ```bash
 npm run models:fetch            # into public/models/ (git-ignored), verified by SHA-256
 npm run models:fetch -- --check # verify an existing copy without downloading
 ```
+
+#### Converting the models to fp16
+
+`scripts/convert-models-fp16.py` makes the release assets from the upstream
+files (pinned Hugging Face commits, checked by SHA-256). It keeps only the
+output the worker reads (the general model's 11 side outputs go) and converts
+the rest to float16 with `onnxconverter-common`, keeping the input and the
+output float32, so the worker code is the same for fp32 and fp16. With the
+versions pinned in `scripts/requirements-models.txt` (Python 3.11) the output
+is byte-for-byte identical to the release assets:
+
+```bash
+python3.11 -m venv .venv-models
+.venv-models/bin/pip install -r scripts/requirements-models.txt
+.venv-models/bin/python scripts/convert-models-fp16.py --src /path/to/fp32 --out /path/to/fp16
+```
+
+`--src` holds `isnetis.onnx` and `isnet-general-use.onnx` (downloaded there
+when missing). The script prints each file's size and SHA-256, which must
+equal the registry's pins. To publish new conversions, upload them to a new
+release, then update the release URL, sizes and SHA-256s in the registry, the
+deploy workflow's cache key and checks, and `THIRD_PARTY_NOTICES.md` (the
+unit tests check that these agree).
+
+Measured through the app's own worker on WebGPU (headless Chromium, Apple
+Metal 3 adapter), fp16 against fp32, masks thresholded at 0.5:
+
+| Model | Test images | Mean abs. difference | Max abs. difference | Pixels that agree | Median per frame (fp32 → fp16) |
+| --- | --- | --- | --- | --- | --- |
+| Anime | 6 CC0 anime-style illustrations | 0.00005–0.00016 | 0.051 | ≥ 99.99% | 469 → 356 ms |
+| General | 4 CC0 photos | 0.00001–0.00117 | 0.075 | ≥ 99.55% | 705 → 515 ms |
+
+(Mask values are the app's 8-bit masks, 0–1; 12 frames per image, 3 of them
+compared. fp16 was faster on every image in two runs; absolute times vary with
+the machine's load.)
 
 The Pages deploy workflow runs the same script before `vite build`, so the
 site serves the models from its own origin. The browser downloads a model only
