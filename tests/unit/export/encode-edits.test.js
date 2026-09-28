@@ -643,6 +643,67 @@ describe('output scale, color cap and explicit frame indices', () => {
     expect(manager.frames).toHaveLength(3);
   });
 
+  it('composes each frame once across encodes that share a frame cache', async () => {
+    const frames = framesOf([1, 2, 3]);
+    // 'fast' builds a global palette first: without the cache every frame
+    // would be composed for the palette sample and again for the encode
+    const settings = { ...SETTINGS, encoderPreset: 'fast' };
+    /** @type {any[]} */
+    const frameCache = [];
+    const params = {
+      frames,
+      frameIndices: [0, 5, 9],
+      crop: null,
+      settings,
+      fps: 30,
+      onProgress: vi.fn(),
+      edits: textEdits(0, 99),
+      scale: 0.5,
+      frameCache,
+    };
+    await encodeGif({ ...params, maxColors: 128 });
+    expect(manager.initConfig.paletteSample).toBeDefined();
+    installManager();
+    await encodeGif({ ...params, maxColors: 32 });
+
+    const calls = vi.mocked(composeOutputFrameRGBA).mock.calls;
+    expect(calls.map((c) => c[3])).toEqual([0, 5, 9]);
+    expect(frameCache).toHaveLength(3);
+    // The second encode got every frame, from the cache, as copies (the
+    // worker takes the buffers it is sent)
+    expect(manager.initConfig).toMatchObject({ maxColors: 32 });
+    expect(manager.frames).toHaveLength(3);
+    for (const cached of frameCache) expect(cached.data.byteLength).toBe(2 * 2 * 4);
+  });
+
+  it("runs on the caller's encoder and leaves it up after a successful encode", async () => {
+    const own = new RecordingManager();
+    managerFactory.create = () => {
+      throw new Error('encodeGif must not create an encoder');
+    };
+    const params = {
+      frames: framesOf([1, 2]),
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+      encoderManager: /** @type {any} */ (own),
+    };
+    await encodeGif(params);
+    expect(own.frames).toHaveLength(2);
+    expect(own.disposed).toBe(false);
+    // This encode's callbacks do not outlive it
+    expect(own.onProgress).toBeNull();
+    expect(own.onError).toBeNull();
+
+    // A failed encode disposes it: a broken worker is never reused
+    own.finish = async () => {
+      throw new Error('worker failed');
+    };
+    await expect(encodeGif(params)).rejects.toThrow('worker failed');
+    expect(own.disposed).toBe(true);
+  });
+
   it('refuses frame indices that do not match the frames', async () => {
     await expect(
       encodeGif({

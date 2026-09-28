@@ -273,6 +273,21 @@ export async function checkEncoderStatus() {
  *   of `frames`. When given, `frames` are encoded as they are (no frame skip
  *   is applied) and text ranges and masks are looked up by these indices —
  *   the size estimator encodes a sparse sample of the export this way.
+ * @property {Array<RGBAFrame | undefined>} [frameCache] - Keeps each frame
+ *   extracted for this encode (by its position in the encode), and reads it
+ *   from there when it is already in: pass the same array to encodes of the
+ *   same frames, crop, edits, masks and scale (the size estimator encodes
+ *   one sample at several color caps) and every frame is composed once.
+ *   Frames are copied out, as the worker takes the buffers; keep it to
+ *   small samples.
+ * @property {import('../../workers/worker-manager.js').GifEncoderManager} [encoderManager]
+ *   Encoder to run on instead of a new one. It is left running after a
+ *   successful encode, so the next encode starts on the same worker; the
+ *   caller disposes it. A failed or cancelled encode disposes it.
+ */
+
+/**
+ * @typedef {{ data: Uint8ClampedArray, width: number, height: number }} RGBAFrame
  */
 
 /**
@@ -329,6 +344,8 @@ export async function encodeGif(params, signal) {
     scale = 1,
     maxColors: maxColorsOverride,
     frameIndices = null,
+    frameCache = null,
+    encoderManager = null,
   } = params;
 
   // Apply frame skip (an explicit index list is already the frames to encode)
@@ -391,7 +408,7 @@ export async function encodeGif(params, signal) {
   // and scaled output render through the compositor so text, keying and AI
   // masks match the editor preview at any size.
   /** @type {FrameExtractor} */
-  const extractFrame =
+  const extractNew =
     isEditsEmpty(edits) && !scaled
       ? (k) => getFrameRGBA(skippedFrames[k], crop)
       : (k) =>
@@ -403,9 +420,27 @@ export async function encodeGif(params, signal) {
             maskSource,
             scale,
           );
+  /** @type {FrameExtractor} Frame k, from the cache when it is in */
+  const readFrame = frameCache
+    ? async (k) => {
+        const cached = frameCache[k];
+        if (cached) return cached;
+        const frame = await extractNew(k);
+        frameCache[k] = frame;
+        return frame;
+      }
+    : extractNew;
+  /** @type {FrameExtractor} Frame k to hand to the worker (a cached frame is copied) */
+  const extractFrame = frameCache
+    ? async (k) => {
+        const frame = await readFrame(k);
+        return { data: frame.data.slice(), width: frame.width, height: frame.height };
+      }
+    : extractNew;
 
-  // Create worker manager
-  const manager = createEncoderManager();
+  // The caller's encoder, or a new one for this encode
+  const manager = encoderManager ?? createEncoderManager();
+  let encoded = false;
 
   // Backpressure bookkeeping: frame submission waits whenever
   // (submitted - processed) reaches MAX_IN_FLIGHT_FRAMES and is woken by
@@ -494,7 +529,8 @@ export async function encodeGif(params, signal) {
     const paletteSample =
       preset.paletteInterval === 0 && (encoderId ?? 'gifenc-js') === 'gifenc-js'
         ? await buildPaletteSample(skippedFrames, crop, signal, {
-            extract: extractFrame,
+            // Only read: a cached frame needs no copy
+            extract: readFrame,
             opaqueOnly: transparent,
           })
         : undefined;
@@ -596,10 +632,19 @@ export async function encodeGif(params, signal) {
     }
 
     // Finish and return result
-    return await manager.finish();
+    const blob = await manager.finish();
+    encoded = true;
+    return blob;
   } finally {
     signal?.removeEventListener('abort', abortHandler);
-    manager.dispose();
+    if (encoderManager && encoded) {
+      // The caller's encoder stays up for its next encode, without this
+      // encode's callbacks
+      encoderManager.onProgress = null;
+      encoderManager.onError = null;
+    } else {
+      manager.dispose();
+    }
   }
 }
 
