@@ -65,7 +65,7 @@ import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { isBrushActive, setOverlayPickMode } from './panels/preview.js';
 import { updateDeleteHint } from './panels/status-bar.js';
-import { TOUCH_UP_NEEDS_REMOVAL } from './panels/touch-up-panel.js';
+import { TOUCH_UP_NEEDS_REMOVAL, updateTouchUpSection } from './panels/touch-up-panel.js';
 import {
   addAiPick,
   addTextLayer,
@@ -589,14 +589,17 @@ export function initEditor() {
     const pickToolChanged = state.aiPickTool !== lastRendered.aiPickTool;
     const aiChanged = state.aiCutout !== lastRendered.aiCutout;
     const brushChanged = state.brush !== lastRendered.brush;
-    // The Touch up section counts the strokes on the current frame
-    const touchUpFrameChanged = frameChanged && state.edits.touchUps.length > 0;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
     // The analysis coverage shown in the panel depends on the selection
     const selectionChanged =
       state.selectedRange.start !== lastRendered.selectedRange.start ||
       state.selectedRange.end !== lastRendered.selectedRange.end;
+    // The Touch up section counts the strokes on the current frame and says
+    // when the frame lies outside the selection: only that section follows
+    // the playhead (not the whole panel on every played frame)
+    const touchUpSectionStale =
+      (frameChanged || selectionChanged) && (state.edits.touchUps.length > 0 || state.brush.on);
 
     // Update base canvas ONLY when the composed frame changes
     if (frameChanged || editsChanged || masksChanged || (cropChanged && editsUseCrop)) {
@@ -630,7 +633,6 @@ export function initEditor() {
       pickToolChanged ||
       aiChanged ||
       brushChanged ||
-      touchUpFrameChanged ||
       (selectionChanged && state.edits.background.method === 'ai')
     ) {
       updateEditsPanel(container, state, fps);
@@ -659,6 +661,8 @@ export function initEditor() {
       lastRendered.aiPickTool = state.aiPickTool;
       lastRendered.aiCutout = state.aiCutout;
       lastRendered.brush = state.brush;
+    } else if (touchUpSectionStale) {
+      updateTouchUpSection(container, state);
     }
 
     // Update crop info panel when crop changes

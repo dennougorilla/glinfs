@@ -15,6 +15,7 @@
 
 import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
+import { isCurrentFrameOutsideSelection } from '../state.js';
 
 /** Brush size slider steps per unit of radius (value 1 = the minimum radius) */
 export const BRUSH_SIZE_STEPS = 400;
@@ -75,6 +76,26 @@ export function describeTouchUps(onFrame, total) {
   if (total === 0) return 'No touch-ups yet.';
   const plural = (/** @type {number} */ n) => `${n} stroke${n === 1 ? '' : 's'}`;
   return `${plural(onFrame)} on this frame, ${plural(total)} in total.`;
+}
+
+/** Status line: a frame outside IN..OUT under the Selection scope */
+export const TOUCH_UP_OUTSIDE_SELECTION =
+  'This frame is outside the selection (IN to OUT), so strokes apply to this frame only.';
+
+/**
+ * Status line of the brush while it is on: what a stroke does and where
+ * @param {import('../types.js').EditorState} state
+ * @returns {string}
+ */
+export function describeBrushStatus(state) {
+  const { brush } = state;
+  const verb = brush.mode === 'erase' ? 'erase' : 'restore';
+  const tail = 'Escape cancels a stroke in progress, then stops the brush.';
+  if (brush.scope === 'selection' && isCurrentFrameOutsideSelection(state)) {
+    return `${TOUCH_UP_OUTSIDE_SELECTION} Paint on the preview to ${verb} on this frame. ${tail}`;
+  }
+  const where = brush.scope === 'frame' ? 'on this frame' : 'across the selection';
+  return `Paint on the preview to ${verb} ${where}. ${tail}`;
 }
 
 /**
@@ -307,14 +328,7 @@ export function updateTouchUpSection(root, state) {
   if (size.value !== sizeValue) size.value = sizeValue;
   setText(q(section, '#touchup-size-value'), formatBrushSize(brush.radius, state.clip?.frames[0]));
 
-  setText(
-    q(section, '#touchup-status'),
-    brush.on
-      ? `Paint on the preview to ${brush.mode === 'erase' ? 'erase' : 'restore'} ${
-          brush.scope === 'frame' ? 'on this frame' : 'across the selection'
-        }. Press Escape to stop.`
-      : '',
-  );
+  setText(q(section, '#touchup-status'), brush.on ? describeBrushStatus(state) : '');
 
   // Strokes covering the current frame (they show while removal is on)
   const frame = state.currentFrame;

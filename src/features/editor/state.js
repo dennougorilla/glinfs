@@ -603,13 +603,26 @@ export function setBrush(state, patch) {
 }
 
 /**
+ * Whether the frame on screen lies outside the IN..OUT selection
+ * @param {import('./types.js').EditorState} state
+ * @returns {boolean}
+ */
+export function isCurrentFrameOutsideSelection(state) {
+  const { start, end } = state.selectedRange;
+  return state.currentFrame < start || state.currentFrame > end;
+}
+
+/**
  * Frame range a new stroke applies to under the brush's scope: the current
- * frame, or the IN..OUT selection
+ * frame, or the IN..OUT selection. A stroke always covers the frame it is
+ * painted on, so with the Selection scope on a frame outside IN..OUT it
+ * applies to that frame only (the Touch up section says so) instead of to
+ * frames the user cannot see.
  * @param {import('./types.js').EditorState} state
  * @returns {{ start: number, end: number }}
  */
 export function getBrushStrokeRange(state) {
-  if ((state.brush?.scope ?? 'frame') === 'selection') {
+  if ((state.brush?.scope ?? 'frame') === 'selection' && !isCurrentFrameOutsideSelection(state)) {
     return { start: state.selectedRange.start, end: state.selectedRange.end };
   }
   return { start: state.currentFrame, end: state.currentFrame };

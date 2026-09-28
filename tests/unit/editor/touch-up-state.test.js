@@ -14,6 +14,7 @@ import {
   createBrushState,
   createEditorStore,
   getBrushStrokeRange,
+  isCurrentFrameOutsideSelection,
   setAiPickTool,
   setBackground,
   setBrush,
@@ -116,6 +117,16 @@ describe('brush tool', () => {
     expect(getBrushStrokeRange(state)).toEqual({ start: 3, end: 3 });
     state = setBrush(state, { scope: 'selection' });
     expect(getBrushStrokeRange(state)).toEqual({ start: 1, end: 4 });
+    expect(isCurrentFrameOutsideSelection(state)).toBe(false);
+  });
+
+  it('with the Selection scope, a frame outside IN..OUT gets the stroke on itself only', () => {
+    let state = setBrush(updateRange(makeState(), { start: 1, end: 3 }), { scope: 'selection' });
+    for (const frame of [0, 5]) {
+      state = { ...state, currentFrame: frame };
+      expect(isCurrentFrameOutsideSelection(state)).toBe(true);
+      expect(getBrushStrokeRange(state)).toEqual({ start: frame, end: frame });
+    }
   });
 });
 

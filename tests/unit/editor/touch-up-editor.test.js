@@ -8,7 +8,17 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEditorState, initEditor } from '../../../src/features/editor/index.js';
+import { updateEditsPanel } from '../../../src/features/editor/panels/edits-panel.js';
 import { resetAppStore, setClipPayload } from '../../../src/shared/app-store.js';
+
+// Count full edits-panel updates (the Touch up section alone follows the playhead)
+vi.mock('../../../src/features/editor/panels/edits-panel.js', async (importOriginal) => {
+  const actual =
+    /** @type {typeof import('../../../src/features/editor/panels/edits-panel.js')} */ (
+      await importOriginal()
+    );
+  return { ...actual, updateEditsPanel: vi.fn(actual.updateEditsPanel) };
+});
 
 /**
  * @param {number} count
@@ -277,6 +287,51 @@ describe('Mask brush in the mounted editor', () => {
     await settle();
     expect(getEditorState()?.edits.touchUps).toEqual([]);
     expect(getEditorState()?.brush.on).toBe(true);
+  });
+
+  it('a played frame updates the Touch up section only, not the whole edits panel', async () => {
+    check('background-enabled');
+    check('touchup-brush');
+    await settle();
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    paint(20, 60, 50);
+    await settle();
+    vi.mocked(updateEditsPanel).mockClear();
+    for (const frame of [3, 2, 4]) {
+      window.__TEST_HOOKS__.setEditorState({ currentFrame: frame });
+      await settle();
+      expect($('#touchup-summary').textContent).toBe(
+        `${frame === 2 ? 1 : 0} stroke${frame === 2 ? '' : 's'} on this frame, 1 stroke in total.`,
+      );
+    }
+    expect(updateEditsPanel).not.toHaveBeenCalled();
+  });
+
+  it('Selection scope on a frame outside IN..OUT paints that frame only and says so', async () => {
+    check('background-enabled');
+    check('touchup-brush');
+    check('touchup-scope-selection');
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 1, end: 3 }, currentFrame: 2 });
+    await settle();
+    expect($('#touchup-status').textContent).toContain('across the selection');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 5 });
+    await settle();
+    expect($('#touchup-status').textContent).toContain(
+      'This frame is outside the selection (IN to OUT), so strokes apply to this frame only.',
+    );
+    paint(20, 60, 50);
+    await settle();
+    expect(getEditorState()?.edits.touchUps[0]).toMatchObject({ start: 5, end: 5 });
+    expect($('#touchup-summary').textContent).toBe('1 stroke on this frame, 1 stroke in total.');
+
+    // Back inside the selection: the whole selection again
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    await settle();
+    expect($('#touchup-status').textContent).toContain('across the selection');
+    expect($('#touchup-summary').textContent).toBe('0 strokes on this frame, 1 stroke in total.');
+    paint(20, 60, 50);
+    await settle();
+    expect(getEditorState()?.edits.touchUps[1]).toMatchObject({ start: 1, end: 3 });
   });
 
   it('Escape leaves the brush first, then the crop; removal off switches the brush off', async () => {
