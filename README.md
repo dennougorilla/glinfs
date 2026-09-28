@@ -21,12 +21,16 @@ Add captions in the editor's **Text** panel: type the text, pick the font, size,
 
 The **Background** panel removes a solid background: turn on **Remove background** (it picks the most common edge color) or use **Pick from preview** and click the background, then adjust the **Tolerance**. **Edges only** removes the matching color connected to the frame border; **All matching** removes it everywhere. Removed pixels become transparent in the GIF. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
 
-### AI cutout (anime)
-In the **Background** panel, set **Method** to **AI cutout (anime)** to cut the characters out of every frame with an anime segmentation model that runs in your browser. **Analyze selection** analyzes the frames between IN and OUT; the first analysis downloads about 200 MB once (the model and its runtime, kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
+### AI cutout
+In the **Background** panel, set **Method** to **AI cutout** to cut the subject out of every frame with a segmentation model that runs in your browser. Choose the **Model**: **Anime** for anime and illustrated characters, or **General** for people, pets and objects in live-action video. **Analyze selection** analyzes the frames between IN and OUT with the chosen model; the first analysis with a model downloads it once (176 MB for Anime, 179 MB for General, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
+
+Each model keeps its own analysis: switching the model shows that model's progress, and switching back reuses the frames it already analyzed. Threshold, smoothing, edge and picks stay as they are across a switch (a pick selects whatever the other model finds at that spot). The model cannot be changed while an analysis runs.
 
 The analysis needs WebGPU to be fast (under a second per frame on a recent GPU). Without WebGPU it can still run on the CPU after you choose **Run without WebGPU (very slow)**, at about 14 seconds per frame.
 
 Once frames are analyzed, adjust **Threshold** (higher keeps less), **Smooth between frames** and **Edge** (grow or shrink the cutout by up to 8 pixels). **Keep** and **Remove** pick tools: click a character in the preview to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it. Picks are listed with their time and can be removed one by one or with **Clear picks**. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
+
+**Settings → Downloaded models** lists each model with its size and license and whether this browser keeps it; **Delete** removes a downloaded model from the browser's cache (not while an analysis uses it). The next analysis with it downloads it again.
 
 Press Escape to leave a pick tool or the eyedropper, then to deselect a caption, then to clear the crop. With a caption selected, Delete removes the caption, not the clip. Your edits stay with the clip when you go back to Capture, export, or switch clips in the queue.
 
@@ -38,7 +42,7 @@ Press **Export** in the editor (or Ctrl/Cmd+E) to open the Export GIF dialog ove
 
 ## Privacy
 
-All processing happens entirely in your browser. Your screen recordings never leave your device - no uploads, no servers, no tracking. The AI cutout's model is downloaded once from this site and runs locally; frames are never sent anywhere.
+All processing happens entirely in your browser. Your screen recordings never leave your device - no uploads, no servers, no tracking. The AI cutout's models are downloaded once from this site and runs locally; frames are never sent anywhere.
 
 ## Getting Started
 
@@ -83,11 +87,18 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs skytnt's
-[anime-segmentation](https://github.com/SkyTNT/anime-segmentation) model
-(`isnetis.onnx`, Apache-2.0, 176 MB) in the browser with
-[ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker.
-The model is not in the repository. Download it once for local development:
+The AI cutout runs one of two IS-Net segmentation models in the browser with
+[ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
+
+- **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
+  model (`isnetis.onnx`, Apache-2.0, 176 MB)
+- **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
+  (`isnet-general-use.onnx`, Apache-2.0, 179 MB)
+
+Both are described once in `src/features/ai-cutout/model-registry.js`
+(pinned source, size, SHA-256, license and preprocessing); the worker, the
+fetch script, Settings and the deploy workflow read it.
+The models are not in the repository. Download them once for local development:
 
 ```bash
 npm run models:fetch            # into public/models/ (git-ignored), verified by SHA-256
@@ -95,13 +106,15 @@ npm run models:fetch -- --check # verify an existing copy without downloading
 ```
 
 The Pages deploy workflow runs the same script before `vite build`, so the
-site serves the model from its own origin. The browser downloads it only when
-someone starts an analysis, checks its SHA-256 and keeps it in Cache Storage.
+site serves the models from its own origin. The browser downloads a model only
+when someone starts an analysis with it, checks its SHA-256 and keeps it in Cache Storage.
 `npm run build` and the E2E suite do not need it: E2E serves the tiny stub
-model in `tests/fixtures/models/` (regenerate it with
-`node scripts/generate-stub-seg-model.mjs`). To check the real model on this
+models in `tests/fixtures/models/` (regenerate them with
+`node scripts/generate-stub-seg-model.mjs`). To check a real model on this
 machine's GPU, run
-`E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`.
+`E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`
+(add `E2E_REAL_MODEL_ID=general` with a live-action photo for the general
+model; `E2E_REAL_IMAGE` takes several comma-separated paths).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
 
 ### Architecture

@@ -18,6 +18,23 @@ components only.
   in this repository. The preprocessing in
   `src/features/ai-cutout/preprocess.js` follows the project's `inference.py`.
 
+## DIS IS-Net general-use model (`isnet-general-use.onnx`)
+
+- Source: https://github.com/xuebinqin/DIS (code and weights; the model
+  card on Hugging Face also says apache-2.0) and the published ONNX export
+  https://huggingface.co/BritishWerewolf/IS-Net, file `onnx/model.onnx` at
+  commit `9783722d9f964c0286a411e7e8e6fede947d5a53`
+  (SHA-256 `60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a`,
+  byte-identical to rembg's `isnet-general-use.onnx`)
+- Copyright: Xuebin Qin and the DIS authors
+- License: Apache License 2.0
+- Use in Glinfs: the unmodified model file is downloaded by
+  `npm run models:fetch` / the Pages deploy workflow and served next to the
+  app as `models/isnet-general-use.onnx`; the browser runs it locally. It is
+  not stored in this repository. The preprocessing in
+  `src/features/ai-cutout/preprocess.js` follows DIS `IS-Net/Inference.py`
+  (without its per-image min-max normalization).
+
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 
 - Source: https://github.com/microsoft/onnxruntime (npm package `onnxruntime-web`)
@@ -51,7 +68,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Apache License 2.0 (full text, applies to the anime-segmentation model)
+## Apache License 2.0 (full text, applies to the anime-segmentation and DIS IS-Net models)
 
 ```
 Apache License
