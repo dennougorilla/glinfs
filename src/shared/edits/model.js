@@ -145,6 +145,18 @@ const AI_DEFAULTS = /** @type {const} */ ({
   edge: 0,
 });
 
+/**
+ * The model an AiCutout's masks come from: its `model` when it names one,
+ * else the default (edits saved before the general model have none). The
+ * AI cutout code (getAiModelId) and the final-mask cache key both use this.
+ * @param {{ model?: unknown } | null | undefined} ai
+ * @returns {AiModel}
+ */
+export function getAiModel(ai) {
+  const model = /** @type {AiModel} */ (ai?.model);
+  return AI_MODELS.includes(model) ? model : AI_DEFAULTS.model;
+}
+
 /** Defaults for background removal (the `ai` object is added per call) */
 const BACKGROUND_DEFAULTS = /** @type {const} */ ({
   enabled: false,

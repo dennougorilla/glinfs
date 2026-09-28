@@ -42,7 +42,7 @@ import {
   SegmentationErrorCode,
   toErrorPayload,
 } from '../../../src/features/ai-cutout/protocol.js';
-import { AI_MODELS } from '../../../src/shared/edits/model.js';
+import { AI_MODELS, getAiModel } from '../../../src/shared/edits/model.js';
 
 const ANIME_SHA256 = 'f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0';
 const GENERAL_SHA256 = '437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b';
@@ -119,8 +119,11 @@ describe('model registry', () => {
     expect(formatModelSize(getModelEntry('general').bytes)).toBe('90 MB');
   });
 
-  it('matches the model ids the edits accept', () => {
+  it('matches the model ids and the default model the edits accept', () => {
     expect([...AI_MODELS]).toEqual(getModelIds());
+    expect(getAiModel(undefined)).toBe(DEFAULT_MODEL_ID);
+    expect(getAiModel({ model: 'bogus' })).toBe(DEFAULT_MODEL_ID);
+    expect(getAiModel({ model: 'general' })).toBe('general');
   });
 
   it('documents each upstream preprocessing contract', () => {

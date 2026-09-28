@@ -13,18 +13,14 @@
  * (asked once, valid for the editor and the export).
  */
 
+import { getAiModel } from '../../shared/edits/model.js';
 import {
   createFinalMaskCache,
   getFinalMaskParamsKey,
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import {
-  DEFAULT_MODEL_ID,
-  formatModelSize,
-  getModelEntry,
-  isModelId,
-} from '../ai-cutout/model-registry.js';
+import { DEFAULT_MODEL_ID, formatModelSize, getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, maskKey } from '../ai-cutout/segmentation-manager.js';
 
@@ -39,12 +35,13 @@ import { collectPendingFrames, maskKey } from '../ai-cutout/segmentation-manager
 export const RUNTIME_SIZE_LABEL = 'about 27 MB';
 
 /**
- * The model an AiCutout uses (edits from before the general model have none)
+ * The model an AiCutout uses (edits from before the general model have none;
+ * the registry's ids are the edits' AI_MODELS, a unit test keeps them equal)
  * @param {{ model?: string } | null | undefined} ai
  * @returns {string}
  */
 export function getAiModelId(ai) {
-  return isModelId(ai?.model) ? /** @type {string} */ (ai?.model) : DEFAULT_MODEL_ID;
+  return getAiModel(ai);
 }
 
 /**

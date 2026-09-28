@@ -76,6 +76,14 @@ describe('getAiParamsKey', () => {
     expect(keys.size).toBe(6);
     expect(getAiParamsKey(aiOf())).toBe(getAiParamsKey(base));
   });
+
+  it('keys by the model the masks are read with: a missing or unknown model means anime', () => {
+    const base = aiOf();
+    const anime = getAiParamsKey({ ...base, model: 'anime' });
+    expect(getAiParamsKey({ ...base, model: undefined })).toBe(anime);
+    expect(getAiParamsKey({ ...base, model: /** @type {any} */ ('bogus') })).toBe(anime);
+    expect(getAiParamsKey({ ...base, model: 'general' })).not.toBe(anime);
+  });
 });
 
 describe('getFinalMaskParamsKey', () => {

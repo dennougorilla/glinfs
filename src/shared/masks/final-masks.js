@@ -19,6 +19,7 @@
  * @module shared/masks/final-masks
  */
 
+import { getAiModel } from '../edits/model.js';
 import {
   createPickTracker,
   findPickedComponent,
@@ -117,8 +118,8 @@ export function edgeRadiusInMaskPixels(edge, maskWidth, sourceWidth) {
 export function getAiParamsKey(ai) {
   const picks = (ai.picks ?? []).map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`).join(',');
   // The model is part of the key: the shared cache must never hand one
-  // model's cutout to the other (edits without a model mean 'anime')
-  return `${ai.model ?? 'anime'}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}`;
+  // model's cutout to the other (the same model the masks are read with)
+  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}`;
 }
 
 /**
