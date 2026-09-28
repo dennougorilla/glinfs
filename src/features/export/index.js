@@ -42,6 +42,7 @@ import { updateSetting } from '../../shared/user-settings.js';
 import { on } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
@@ -51,6 +52,7 @@ import {
   getAiModelId,
   isAbortError,
   isWasmAllowed,
+  isWasmChoiceError,
   peekClipMaskSource,
   setWasmAllowed,
 } from '../editor/ai-cutout.js';
@@ -917,11 +919,13 @@ async function handleExport() {
         aiPrep = null;
         emit('export:cancelled', {});
         announce('Export cancelled');
-      } else if (
-        /** @type {any} */ (error)?.code === SegmentationErrorCode.WEBGPU_UNAVAILABLE &&
-        !isWasmAllowed()
-      ) {
-        aiPrep = { phase: 'needs-wasm' };
+      } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
+        aiPrep = {
+          phase: 'needs-wasm',
+          modelFailed:
+            /** @type {any} */ (error).code === SegmentationErrorCode.WEBGPU_MODEL_FAILED,
+          modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
+        };
       } else {
         aiPrep = { phase: 'error', message: describeAnalysisError(error).message };
         emit('export:error', { error: aiPrep.message });

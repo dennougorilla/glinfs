@@ -52,6 +52,7 @@ export function createAiCutoutStatus() {
     webgpu: null,
     wasmAllowed: false,
     needsWasmChoice: false,
+    webgpuModelFailed: false,
     backend: null,
     loadedBytes: 0,
     totalBytes: 0,

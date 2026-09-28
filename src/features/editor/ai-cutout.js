@@ -285,10 +285,27 @@ export function isAbortError(error) {
   return /** @type {any} */ (error)?.name === 'AbortError';
 }
 
+/**
+ * Whether an analysis stopped only because it may not run without WebGPU:
+ * the browser has no WebGPU (WEBGPU_UNAVAILABLE), or this model could not
+ * run on it (WEBGPU_MODEL_FAILED). Both offer the explicit slow choice.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isWasmChoiceError(error) {
+  const code = /** @type {any} */ (error)?.code;
+  return (
+    code === SegmentationErrorCode.WEBGPU_UNAVAILABLE ||
+    code === SegmentationErrorCode.WEBGPU_MODEL_FAILED
+  );
+}
+
 /** User-facing copy per SegmentationErrorCode */
 const ERROR_COPY = {
   [SegmentationErrorCode.WEBGPU_UNAVAILABLE]:
     'This browser has no WebGPU, which the fast analysis needs. You can run it without WebGPU instead (very slow).',
+  [SegmentationErrorCode.WEBGPU_MODEL_FAILED]:
+    'This model could not run on WebGPU in this browser. You can run it without WebGPU instead (very slow).',
   [SegmentationErrorCode.DOWNLOAD_FAILED]:
     'The model could not be downloaded. Check your connection and try again.',
   [SegmentationErrorCode.HASH_MISMATCH]:

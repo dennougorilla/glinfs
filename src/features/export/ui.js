@@ -84,6 +84,9 @@ const LOOP_OPTIONS = [0, 1, 2, 3, 5, 10];
  * @property {number} [buildDone] - Final-mask build steps done
  * @property {number} [buildTotal]
  * @property {string} [message] - Error copy (phase 'error')
+ * @property {boolean} [modelFailed] - Phase 'needs-wasm': WebGPU exists but
+ *   the model could not run on it (else the browser has no WebGPU)
+ * @property {string} [modelLabel] - Phase 'needs-wasm': the model's name
  */
 
 /**
@@ -863,10 +866,17 @@ function renderAiPreparation(aiPrep, params, cleanups) {
     button('export-ai-back', 'Back to settings', 'btn btn-ghost', handlers.onAiBack);
 
   if (aiPrep.phase === 'needs-wasm') {
+    const slow =
+      'It can run on the CPU instead, but that is very slow (about 14 seconds per frame).';
+    const model = aiPrep.modelLabel ? `The ${aiPrep.modelLabel} model` : 'This model';
     root.append(
-      createElement('h3', { className: 'export-view-title' }, ['WebGPU is not available']),
+      createElement('h3', { className: 'export-view-title' }, [
+        aiPrep.modelFailed ? `${model} could not run on WebGPU` : 'WebGPU is not available',
+      ]),
       createElement('p', { className: 'export-text', role: 'alert' }, [
-        'Some frames still need the AI analysis, which needs WebGPU in this browser. It can run on the CPU instead, but that is very slow (about 14 seconds per frame).',
+        aiPrep.modelFailed
+          ? `Some frames still need the AI analysis. ${model} could not run on WebGPU in this browser. ${slow}`
+          : `Some frames still need the AI analysis, which needs WebGPU in this browser. ${slow}`,
       ]),
       createElement('div', { className: 'export-actions' }, [
         button(

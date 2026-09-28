@@ -30,8 +30,14 @@
  * @enum {string}
  */
 export const SegmentationErrorCode = Object.freeze({
-  /** No usable WebGPU adapter/session and the WASM fallback was not allowed */
+  /** No WebGPU adapter in this browser and the WASM fallback was not allowed */
   WEBGPU_UNAVAILABLE: 'webgpu-unavailable',
+  /**
+   * A WebGPU adapter exists but this model could not run on it (session
+   * creation or the warm-up run failed) and the WASM fallback was not
+   * allowed. It concerns this model only: another model may run on WebGPU.
+   */
+  WEBGPU_MODEL_FAILED: 'webgpu-model-failed',
   /** The model could not be downloaded (network error, HTTP error) */
   DOWNLOAD_FAILED: 'download-failed',
   /** The downloaded model's size or SHA-256 is not the pinned one */

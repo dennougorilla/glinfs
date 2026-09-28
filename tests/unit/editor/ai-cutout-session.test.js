@@ -208,6 +208,28 @@ describe('AI cutout session', () => {
     expect(maskStore.size).toBe(4);
   });
 
+  it('a model that failed on WebGPU asks for the slow choice without marking WebGPU missing', async () => {
+    manager.fail = new SegmentationError(
+      SegmentationErrorCode.WEBGPU_MODEL_FAILED,
+      'The model could not run on WebGPU: shader limits',
+    );
+    await session.checkCapabilities();
+    await session.analyze(state.clip.frames);
+    expect(status).toMatchObject({
+      phase: 'idle',
+      needsWasmChoice: true,
+      webgpuModelFailed: true,
+      webgpu: true,
+      error: null,
+    });
+
+    // A retry that runs on WebGPU after all (the fake reports webgpu)
+    // clears the model's failure
+    manager.fail = null;
+    await session.analyze(state.clip.frames);
+    expect(status).toMatchObject({ needsWasmChoice: false, webgpuModelFailed: false });
+  });
+
   it('shows other failures as errors (retry clears them)', async () => {
     manager.fail = new SegmentationError(SegmentationErrorCode.DOWNLOAD_FAILED, 'HTTP 404');
     await session.analyze(state.clip.frames);

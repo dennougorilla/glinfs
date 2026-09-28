@@ -242,6 +242,22 @@ describe('Export with the AI cutout', () => {
     expect(encodeGif).toHaveBeenCalledTimes(1);
   });
 
+  it('names the model when it could not run on WebGPU (the browser has WebGPU)', async () => {
+    inject();
+    dialog = openExportDialog();
+    await flush();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      new SegmentationError(SegmentationErrorCode.WEBGPU_MODEL_FAILED, 'shader limits'),
+    );
+    $('#export-start')?.click();
+    await flush();
+    const text = $('#export-ai-prep')?.textContent ?? '';
+    expect(text).toContain('The Anime model could not run on WebGPU');
+    expect(text).not.toContain('WebGPU is not available');
+    expect($('#export-ai-run-wasm')).not.toBeNull();
+    expect(encodeGif).not.toHaveBeenCalled();
+  });
+
   it('shows other failures with Retry', async () => {
     inject();
     dialog = openExportDialog();

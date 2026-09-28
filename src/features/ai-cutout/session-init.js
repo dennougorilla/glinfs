@@ -8,9 +8,10 @@
  * allocation failure). So the WebGPU session runs one warm-up inference on
  * a blank input before the worker reports ready; a warm-up failure is
  * handled exactly like a failed WebGPU create — the WASM fallback when the
- * caller allowed it, otherwise WEBGPU_UNAVAILABLE (the UI then offers the
- * explicit slow choice). The warm-up also moves WebGPU's one-time shader
- * compilation out of the first frame.
+ * caller allowed it, otherwise WEBGPU_MODEL_FAILED (the UI then offers the
+ * explicit slow choice for this model; without any adapter the error is
+ * WEBGPU_UNAVAILABLE instead). The warm-up also moves WebGPU's one-time
+ * shader compilation out of the first frame.
  *
  * The WASM session gets no warm-up: a 1024×1024 run takes about 14 s on
  * the CPU, which would double the wait for the first frame, and the WASM
@@ -106,8 +107,9 @@ function messageOf(error) {
  * @param {Float32Array} [options.warmupInput] - Reused buffer for the blank input (zeroed here)
  * @param {() => number} [options.now]
  * @returns {Promise<CreatedSession>}
- * @throws {SegmentationError} WEBGPU_UNAVAILABLE (WebGPU failed, WASM not
- *   allowed) or MODEL_INIT_FAILED (the WASM session could not be created)
+ * @throws {SegmentationError} WEBGPU_UNAVAILABLE (no adapter, WASM not
+ *   allowed), WEBGPU_MODEL_FAILED (this model failed on the adapter, WASM
+ *   not allowed) or MODEL_INIT_FAILED (the WASM session could not be created)
  */
 export async function createModelSession({
   ort,
@@ -146,10 +148,12 @@ export async function createModelSession({
   }
 
   if (!allowWasm) {
-    throw new SegmentationError(
-      SegmentationErrorCode.WEBGPU_UNAVAILABLE,
-      webgpuError ?? 'WebGPU is not available in this browser',
-    );
+    throw webgpuError
+      ? new SegmentationError(SegmentationErrorCode.WEBGPU_MODEL_FAILED, webgpuError)
+      : new SegmentationError(
+          SegmentationErrorCode.WEBGPU_UNAVAILABLE,
+          'WebGPU is not available in this browser',
+        );
   }
   try {
     const session = await ort.InferenceSession.create(bytes, {

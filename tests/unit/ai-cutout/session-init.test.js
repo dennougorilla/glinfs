@@ -144,7 +144,7 @@ describe('createModelSession', () => {
     expect(warmupInput.every((v) => v === 0)).toBe(true);
   });
 
-  it('treats a warm-up failure like a failed WebGPU session: WEBGPU_UNAVAILABLE without WASM', async () => {
+  it('treats a warm-up failure like a failed WebGPU session: WEBGPU_MODEL_FAILED without WASM', async () => {
     const { ort, sessions } = fakeOrt({ webgpu: 'run-fails' });
     const error = await createModelSession({
       ort: /** @type {any} */ (ort),
@@ -153,7 +153,8 @@ describe('createModelSession', () => {
       adapter: {},
       allowWasm: false,
     }).catch((e) => e);
-    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_UNAVAILABLE);
+    // This model failed on an adapter that exists: not "no WebGPU"
+    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_MODEL_FAILED);
     expect(error.message).toContain('could not run on WebGPU');
     expect(error.message).toContain('Too many storage buffers');
     // The broken session was released, and nothing fell back silently
@@ -186,7 +187,7 @@ describe('createModelSession', () => {
       adapter: {},
       allowWasm: false,
     }).catch((e) => e);
-    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_UNAVAILABLE);
+    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_MODEL_FAILED);
     expect(error.message).toBe('The model could not start on WebGPU: webgpu create failed');
   });
 

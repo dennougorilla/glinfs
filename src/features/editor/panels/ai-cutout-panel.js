@@ -74,6 +74,25 @@ export function getAiIntro(modelId) {
 }
 
 /**
+ * The no-WebGPU warning: the chosen model failed on this browser's WebGPU,
+ * an analysis stopped because the browser has none, or it has none
+ * @param {{ needsWasmChoice: boolean, webgpuModelFailed: boolean }} status
+ * @param {string} modelLabel
+ * @returns {string}
+ */
+export function getWebgpuWarning(status, modelLabel) {
+  const slow =
+    'You can run it on the CPU instead, but it is very slow (about 14 seconds per frame).';
+  if (status.webgpuModelFailed) {
+    return `The ${modelLabel} model could not run on WebGPU in this browser. ${slow}`;
+  }
+  if (status.needsWasmChoice) {
+    return `The analysis needs WebGPU, which this browser does not provide. ${slow}`;
+  }
+  return 'WebGPU is not available in this browser. Without it the model runs on the CPU, which is very slow (about 14 seconds per frame).';
+}
+
+/**
  * Label of a pick in the list
  * @param {CutoutPick} pick
  * @param {number} fps
@@ -539,15 +558,11 @@ export function updateAiCutoutSection(root, state, fps) {
   );
   setText(q(section, '#ai-intro'), getAiIntro(modelId));
 
-  // WebGPU warning: known missing adapter, or an analysis stopped on it
-  const noWebgpu = status.webgpu === false || status.needsWasmChoice;
+  // WebGPU warning: known missing adapter, an analysis stopped on it, or
+  // the chosen model could not run on the adapter
+  const noWebgpu = status.webgpu === false || status.needsWasmChoice || status.webgpuModelFailed;
   q(section, '#ai-webgpu-warning').toggleAttribute('hidden', !noWebgpu || status.wasmAllowed);
-  setText(
-    q(section, '#ai-webgpu-warning-text'),
-    status.needsWasmChoice
-      ? 'The analysis needs WebGPU, which this browser does not provide. You can run it on the CPU instead, but it is very slow (about 14 seconds per frame).'
-      : 'WebGPU is not available in this browser. Without it the model runs on the CPU, which is very slow (about 14 seconds per frame).',
-  );
+  setText(q(section, '#ai-webgpu-warning-text'), getWebgpuWarning(status, model.label));
   /** @type {HTMLButtonElement} */ (q(section, '#ai-run-wasm')).disabled = running;
   q(section, '#ai-wasm-note').toggleAttribute('hidden', !(noWebgpu && status.wasmAllowed));
 

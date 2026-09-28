@@ -1399,10 +1399,13 @@ function handleSetAiModel(modelId) {
   if (getAiModelId(state.edits.background.ai) === modelId || aiSession?.analyzing) return;
   store.setState((s) => {
     const next = setAiParams(s, { model: modelId });
-    // The last analysis' outcome belonged to the other model
+    // The last analysis' outcome (and a model's failure on WebGPU)
+    // belonged to the other model
     return updateAiCutoutStatus(next, {
       notice: '',
       error: null,
+      needsWasmChoice: false,
+      webgpuModelFailed: false,
       phase: s.aiCutout.phase === 'error' ? 'idle' : s.aiCutout.phase,
     });
   });

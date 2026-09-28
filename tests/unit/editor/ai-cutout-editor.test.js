@@ -311,6 +311,72 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-wasm-note').hidden).toBe(false);
   });
 
+  it('a model that fails on WebGPU asks for the slow choice for that model only', async () => {
+    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
+    mount(2);
+    await chooseAi();
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    check('ai-model-general');
+    await settle();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      Object.assign(new Error('The model could not run on WebGPU: shader limits'), {
+        code: 'webgpu-model-failed',
+      }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    // The browser has WebGPU: the copy names the model, not a missing WebGPU
+    expect(getEditorState()?.aiCutout).toMatchObject({
+      webgpu: true,
+      needsWasmChoice: true,
+      webgpuModelFailed: true,
+    });
+    expect($('#ai-error').hidden).toBe(true);
+    expect($('#ai-webgpu-warning').hidden).toBe(false);
+    const text = $('#ai-webgpu-warning-text').textContent ?? '';
+    expect(text).toContain('The General model could not run on WebGPU in this browser');
+    expect(text).not.toContain('does not provide');
+
+    // The anime model is not affected: switching clears the choice
+    check('ai-model-anime');
+    await settle();
+    expect(getEditorState()?.aiCutout).toMatchObject({
+      needsWasmChoice: false,
+      webgpuModelFailed: false,
+    });
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({
+      modelId: 'anime',
+      allowWasm: false,
+    });
+    expect($('#ai-coverage').textContent).toBe('2 of 2 frames analyzed');
+  });
+
+  it('the slow choice after a model failed on WebGPU keeps the WASM note for that model', async () => {
+    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
+    mount(2);
+    await chooseAi();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'webgpu-model-failed' }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect($('#ai-webgpu-warning-text').textContent).toContain(
+      'The Anime model could not run on WebGPU',
+    );
+    $('#ai-run-wasm').click();
+    await settle();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1].allowWasm).toBe(true);
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    expect($('#ai-wasm-note').hidden).toBe(false);
+  });
+
   it('shows errors with Retry', async () => {
     mount(2);
     await chooseAi();
