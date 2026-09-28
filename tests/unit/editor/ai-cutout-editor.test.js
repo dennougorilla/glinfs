@@ -166,7 +166,7 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-section').hidden).toBe(false);
     expect($('#ai-color-fields').hidden).toBe(true);
     expect(/** @type {HTMLInputElement} */ ($('#background-enabled')).checked).toBe(true);
-    expect($('#ai-intro').textContent).toContain('176 MB');
+    expect($('#ai-intro').textContent).toContain('88 MB');
 
     // No adapter: the warning with the explicit slow option
     expect(fake.getCapabilities).toHaveBeenCalled();
@@ -231,8 +231,8 @@ describe('AI cutout in the mounted editor', () => {
     const anime = /** @type {HTMLInputElement} */ ($('#ai-model-anime'));
     const general = /** @type {HTMLInputElement} */ ($('#ai-model-general'));
     expect(anime.checked).toBe(true);
-    expect(anime.labels?.[0]?.textContent).toBe('Anime (176 MB)');
-    expect(general.labels?.[0]?.textContent).toBe('General (179 MB)');
+    expect(anime.labels?.[0]?.textContent).toBe('Anime (88 MB)');
+    expect(general.labels?.[0]?.textContent).toBe('General (90 MB)');
     expect($('#ai-model').tagName).toBe('FIELDSET');
 
     // Anime analyzes the clip
@@ -264,7 +264,7 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-analyze').textContent).toBe('Analyze selection (4 frames)');
     expect($('#ai-notice').textContent).toBe('');
     expect($('#ai-intro').textContent).toContain('General model');
-    expect($('#ai-intro').textContent).toContain('179 MB');
+    expect($('#ai-intro').textContent).toContain('90 MB');
     expect($('#ai-model-note').textContent).toContain('People, pets and objects');
     expect($('#ai-preview-note').textContent).toBe('Not analyzed yet');
 

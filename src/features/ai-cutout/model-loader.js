@@ -184,7 +184,7 @@ export async function loadModelBytes(spec, deps = {}) {
   let response;
   try {
     // no-store: the verified copy lives in Cache Storage; keeping a second
-    // 176 MB copy in the HTTP cache would only waste disk
+    // copy of the model (about 90 MB) in the HTTP cache would only waste disk
     response = await fetchImpl(spec.url, { cache: 'no-store' });
   } catch (error) {
     throw new SegmentationError(

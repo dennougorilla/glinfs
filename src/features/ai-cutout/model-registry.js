@@ -11,14 +11,21 @@
  *
  * The `id` is what edits store (`edits.background.ai.model`) and what masks
  * are keyed by; it never changes. The file behind an id can: replacing an
- * entry's source, bytes and SHA-256 (e.g. with a smaller fp16 conversion of
- * the same network) needs no code change elsewhere — the Cache Storage key
- * includes the SHA-256, so browsers download the new file on next use.
+ * entry's file name, bytes and SHA-256 needs no code change elsewhere — the
+ * Cache Storage key includes the SHA-256, so browsers download the new file
+ * on next use.
+ *
+ * The app ships fp16 conversions of the upstream fp32 weights, half their
+ * size (scripts/convert-models-fp16.py; the input and the output stay
+ * float32, so the worker feeds and reads the same tensors). Each entry pins
+ * the converted file (`fileName`, `bytes`, `sha256`) and the upstream file
+ * it was converted from (`convertedFrom`: a Hugging Face commit, size and
+ * SHA-256). The conversion is reproducible byte for byte.
  *
  * None of the models is committed: `npm run models:fetch` downloads each
- * one from its pinned Hugging Face commit into public/models/<fileName>,
- * and the browser fetches it same-origin only when the user analyzes with
- * that model.
+ * converted file from the `models-v1` GitHub Release of this repository
+ * (asset name = `fileName`) into public/models/<fileName>, and the browser
+ * fetches it same-origin only when the user analyzes with that model.
  */
 
 /**
@@ -33,10 +40,13 @@
  */
 
 /**
- * @typedef {Object} ModelSource
+ * The upstream fp32 file a shipped model was converted from.
+ * @typedef {Object} ModelUpstreamFile
  * @property {string} repo - Hugging Face repository
  * @property {string} revision - Pinned commit (never a branch)
  * @property {string} path - File path inside the repository
+ * @property {number} bytes - Exact byte size
+ * @property {string} sha256 - Lowercase hex SHA-256
  */
 
 /**
@@ -44,10 +54,11 @@
  * @property {string} id - Stable id (edits, mask keys, messages)
  * @property {string} label - Short UI name
  * @property {string} description - What it is good at (UI copy)
- * @property {string} fileName - File name under public/models/ (and the served URL)
- * @property {ModelSource} source
- * @property {number} bytes - Exact byte size
- * @property {string} sha256 - Lowercase hex SHA-256
+ * @property {string} fileName - File name under public/models/, in the served
+ *   URL and of the `models-v1` release asset
+ * @property {number} bytes - Exact byte size of the shipped file
+ * @property {string} sha256 - Lowercase hex SHA-256 of the shipped file
+ * @property {ModelUpstreamFile} convertedFrom
  * @property {{ name: string, url: string }} license
  * @property {string} upstream - Project page of the network
  * @property {string} inputName - Image input: float32 [1, 3, inputSize, inputSize]
@@ -56,16 +67,25 @@
  * @property {ModelPreprocess} preprocess
  */
 
+/**
+ * GitHub Release that hosts the converted models; `npm run models:fetch`
+ * downloads `<this>/<fileName>` (the browser never contacts GitHub).
+ */
+export const MODEL_RELEASE_URL =
+  'https://github.com/dennougorilla/glinfs/releases/download/models-v1';
+
 const APACHE_2 = Object.freeze({
   name: 'Apache-2.0',
   url: 'https://www.apache.org/licenses/LICENSE-2.0',
 });
 
 /**
- * skytnt's anime-segmentation IS-Net (`isnetis.onnx`, byte-identical to
- * rembg's `isnet-anime.onnx`). isnetis.onnx was last changed in a0a563c4
- * (2022-09-14); the pinned 493cb608 (2026-08-17) only adds the Apache-2.0
- * license metadata to the model card, so the bytes are the same.
+ * skytnt's anime-segmentation IS-Net, converted to fp16 from `isnetis.onnx`
+ * (byte-identical to rembg's `isnet-anime.onnx`). isnetis.onnx was last
+ * changed in a0a563c4 (2022-09-14); the pinned 493cb608 (2026-08-17) only
+ * adds the Apache-2.0 license metadata to the model card, so the bytes are
+ * the same. fp16 vs fp32 through the app's worker on WebGPU: masks agree on
+ * more than 99.99% of pixels after thresholding at 0.5.
  *
  * Preprocessing, verified against skytnt's own inference code:
  * - https://github.com/SkyTNT/anime-segmentation/blob/55d874013a2811cdf59c365059174c7823acf5b4/inference.py
@@ -82,14 +102,16 @@ const ANIME = {
   id: 'anime',
   label: 'Anime',
   description: 'Anime and illustrated characters',
-  fileName: 'isnetis.onnx',
-  source: {
+  fileName: 'isnetis-fp16.onnx',
+  bytes: 88_070_957,
+  sha256: 'f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0',
+  convertedFrom: {
     repo: 'skytnt/anime-seg',
     revision: '493cb60893f47441b26ec4fb9a306bce9e342982',
     path: 'isnetis.onnx',
+    bytes: 176_069_933,
+    sha256: 'f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99',
   },
-  bytes: 176_069_933,
-  sha256: 'f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99',
   license: APACHE_2,
   upstream: 'https://github.com/SkyTNT/anime-segmentation',
   inputName: 'img',
@@ -107,10 +129,12 @@ const ANIME = {
 /**
  * DIS IS-Net general-use (`isnet-general-use`, Apache-2.0: upstream
  * github.com/xuebinqin/DIS LICENSE.md; the Hugging Face card says
- * apache-2.0). The published ONNX export on Hugging Face is byte-identical
- * to rembg's isnet-general-use.onnx release asset. It is the fp32 file
- * with the network's 12 outputs (main + side outputs); the worker fetches
- * only `output_image`.
+ * apache-2.0), converted to fp16 from the published ONNX export on Hugging
+ * Face (byte-identical to rembg's isnet-general-use.onnx release asset).
+ * That fp32 file has the network's 12 outputs (main + side outputs); the
+ * conversion keeps only `output_image`, the one the worker reads. fp16 vs
+ * fp32 through the app's worker on WebGPU: masks agree on more than 99.5%
+ * of pixels after thresholding at 0.5 (the rest are soft edge pixels).
  *
  * Preprocessing, verified against the upstream inference script
  * https://github.com/xuebinqin/DIS/blob/b6764e20381f6f42a70f83fa3324181529ed1403/IS-Net/Inference.py
@@ -128,14 +152,16 @@ const GENERAL = {
   id: 'general',
   label: 'General',
   description: 'People, pets and objects in live-action video',
-  fileName: 'isnet-general-use.onnx',
-  source: {
+  fileName: 'isnet-general-fp16.onnx',
+  bytes: 90_448_072,
+  sha256: '437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b',
+  convertedFrom: {
     repo: 'BritishWerewolf/IS-Net',
     revision: '9783722d9f964c0286a411e7e8e6fede947d5a53',
     path: 'onnx/model.onnx',
+    bytes: 178_648_008,
+    sha256: '60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a',
   },
-  bytes: 178_648_008,
-  sha256: '60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a',
   license: APACHE_2,
   upstream: 'https://github.com/xuebinqin/DIS',
   inputName: 'input_image',
@@ -156,7 +182,7 @@ const GENERAL = {
  * @returns {Readonly<ModelEntry>}
  */
 function freezeEntry(entry) {
-  Object.freeze(entry.source);
+  Object.freeze(entry.convertedFrom);
   Object.freeze(entry.preprocess.mean);
   Object.freeze(entry.preprocess.std);
   Object.freeze(entry.preprocess);
@@ -198,18 +224,28 @@ export function getModelEntry(id) {
 }
 
 /**
- * Pinned download URL of a model on Hugging Face (used by the fetch
- * script; the browser never contacts Hugging Face).
- * @param {{ source: ModelSource }} entry
+ * Download URL of a shipped model: its asset in the `models-v1` GitHub
+ * Release (used by the fetch script; the browser loads it same-origin).
+ * @param {{ fileName: string }} entry
  * @returns {string}
  */
-export function getModelSourceUrl(entry) {
-  const { repo, revision, path } = entry.source;
+export function getModelDownloadUrl(entry) {
+  return `${MODEL_RELEASE_URL}/${entry.fileName}`;
+}
+
+/**
+ * Pinned Hugging Face URL of the upstream fp32 file a model was converted
+ * from (scripts/convert-models-fp16.py downloads it).
+ * @param {{ convertedFrom: ModelUpstreamFile }} entry
+ * @returns {string}
+ */
+export function getUpstreamModelUrl(entry) {
+  const { repo, revision, path } = entry.convertedFrom;
   return `https://huggingface.co/${repo}/resolve/${revision}/${path}`;
 }
 
 /**
- * Decimal megabytes, rounded (the unit of "176 MB" in the README)
+ * Decimal megabytes, rounded (the unit of "88 MB" in the README)
  * @param {number} bytes
  * @returns {string}
  */

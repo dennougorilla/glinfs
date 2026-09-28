@@ -6,15 +6,16 @@
  *   node scripts/generate-stub-seg-model.mjs
  *
  * tests/fixtures/models/stub-seg.onnx — same interface as the anime model
- * isnetis.onnx (opset 11): input `img` float32 [1, 3, 1024, 1024], output
+ * isnetis-fp16.onnx (opset 11): input `img` float32 [1, 3, 1024, 1024], output
  * `mask` float32 [1, 1, 1024, 1024]. The graph is a single node,
  * `mask = ReduceMean(img, axes=[1], keepdims=1)`: the mean of R, G and B in
  * [0, 1], so bright pixels read as foreground. It has no weights, so the
  * file is under 200 bytes.
  *
  * tests/fixtures/models/stub-seg-general.onnx — same interface as the
- * general model (isnet-general-use.onnx): input `input_image`, outputs
- * `output_image` and one side output `side_1` (the real graph has 11). Its
+ * general model (isnet-general-fp16.onnx): input `input_image`, outputs
+ * `output_image` and one side output `side_1` (the upstream fp32 graph has
+ * 11; the shipped fp16 conversion keeps only `output_image`). Its
  * input is normalized with mean 0.5, so the graph adds the 0.5 back:
  * `side_1 = ReduceMean(input_image)`, `output_image = side_1 + 0.5` — the
  * same [0, 1] mean brightness as the anime stub gives.

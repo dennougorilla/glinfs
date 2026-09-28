@@ -125,7 +125,7 @@ function describeAdapter(adapter) {
 async function initialize(spec, allowWasm) {
   const adapter = await requestAdapter();
   if (!adapter && !allowWasm) {
-    // Fail before downloading 176 MB the user cannot run
+    // Fail before downloading a model (about 90 MB) the user cannot run
     throw new SegmentationError(
       SegmentationErrorCode.WEBGPU_UNAVAILABLE,
       'WebGPU is not available in this browser',

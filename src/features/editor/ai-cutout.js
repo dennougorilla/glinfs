@@ -48,7 +48,7 @@ export function getAiModelId(ai) {
 }
 
 /**
- * Download size of a model as shown next to its name ("176 MB")
+ * Download size of a model as shown next to its name ("88 MB")
  * @param {string} modelId
  * @returns {string}
  */
@@ -316,7 +316,7 @@ export function describeAnalysisError(error) {
 }
 
 /**
- * Decimal megabytes (10^6 bytes) with one decimal, the unit of the "176 MB"
+ * Decimal megabytes (10^6 bytes) with one decimal, the unit of the "88 MB"
  * model sizes in the README and credits
  * @param {number} bytes
  * @returns {string}

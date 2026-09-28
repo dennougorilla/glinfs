@@ -25,18 +25,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # AI cutout models (about 176 + 179 MB, too large for the repository):
-      # restored from the cache or downloaded from their pinned Hugging Face
-      # commits. The cache key holds every pinned SHA-256
+      # AI cutout models (fp16, about 88 + 90 MB, too large for the
+      # repository): restored from the cache or downloaded from the
+      # models-v1 GitHub Release. The cache key holds every pinned SHA-256
       # (src/features/ai-cutout/model-registry.js, which the fetch script
       # reads; a unit test keeps this file in sync with it).
       - name: Restore AI cutout models
         uses: actions/cache@v4
         with:
           path: |
-            public/models/isnetis.onnx
-            public/models/isnet-general-use.onnx
-          key: ai-models-sha256-f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99-60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+            public/models/isnetis-fp16.onnx
+            public/models/isnet-general-fp16.onnx
+          key: ai-models-sha256-f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0-437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b
       # Verifies size and SHA-256 of restored copies too; any mismatch
       # re-downloads, and a mismatching download fails the job
       - name: Fetch AI cutout models
@@ -51,8 +51,8 @@ jobs:
               exit 1
             fi
           }
-          check isnetis.onnx f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99
-          check isnet-general-use.onnx 60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a
+          check isnetis-fp16.onnx f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0
+          check isnet-general-fp16.onnx 437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b
       # GitHub Pages rejects artifacts of 1 GB or more
       - name: Check the Pages artifact size
         run: |

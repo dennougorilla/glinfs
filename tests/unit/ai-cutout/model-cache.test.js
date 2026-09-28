@@ -51,7 +51,7 @@ describe('listDownloadedModels', () => {
   it('lists every model with size and license, and which ones are cached', async () => {
     const { storage } = fakeCaches([
       // a copy under an older pin (or a test override) still counts
-      'https://example.test/glinfs/models/isnet-general-use.onnx?sha256=old',
+      'https://example.test/glinfs/models/isnet-general-fp16.onnx?sha256=old',
     ]);
     const models = await listDownloadedModels({
       cacheStorage: storage,
@@ -64,7 +64,7 @@ describe('listDownloadedModels', () => {
     ]);
     expect(models[1]).toMatchObject({
       label: 'General',
-      bytes: 178_648_008,
+      bytes: 90_448_072,
       license: { name: 'Apache-2.0' },
     });
   });
@@ -99,14 +99,14 @@ describe('listDownloadedModels', () => {
 describe('deleteDownloadedModel', () => {
   it('deletes every copy of that model and nothing else', async () => {
     const { storage, buckets } = fakeCaches([
-      'https://example.test/models/isnet-general-use.onnx?sha256=a',
-      'https://example.test/models/isnetis.onnx?sha256=b',
+      'https://example.test/models/isnet-general-fp16.onnx?sha256=a',
+      'https://example.test/models/isnetis-fp16.onnx?sha256=b',
     ]);
     await expect(
       deleteDownloadedModel('general', { cacheStorage: storage, baseHref: BASE, baseUrl: '/' }),
     ).resolves.toBe(true);
     expect([...(buckets.get(MODEL_CACHE_NAME) ?? [])]).toEqual([
-      'https://example.test/models/isnetis.onnx?sha256=b',
+      'https://example.test/models/isnetis-fp16.onnx?sha256=b',
     ]);
     await expect(
       deleteDownloadedModel('general', { cacheStorage: storage, baseHref: BASE, baseUrl: '/' }),

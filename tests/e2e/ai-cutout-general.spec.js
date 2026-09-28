@@ -99,11 +99,11 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
 
     // The choice, with each model's download size
-    await expect(page.getByRole('radio', { name: 'Anime (176 MB)' })).toBeChecked();
-    await expect(page.getByRole('radio', { name: 'General (179 MB)' })).not.toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Anime (88 MB)' })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'General (90 MB)' })).not.toBeChecked();
     await chooseAiModel(page, 'general');
     await expect(page.locator('#ai-intro')).toContainText('General model');
-    await expect(page.locator('#ai-intro')).toContainText('downloads 179 MB once');
+    await expect(page.locator('#ai-intro')).toContainText('downloads 90 MB once');
     await expect(page.locator('#ai-coverage')).toHaveText(`0 of ${N} frames analyzed`);
 
     await page.locator('#ai-analyze').click();
@@ -235,7 +235,7 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const general = section.locator('[data-model-id="general"]');
     const anime = section.locator('[data-model-id="anime"]');
     await expect(general).toContainText('General');
-    await expect(general).toContainText('179 MB');
+    await expect(general).toContainText('90 MB');
     await expect(general.getByRole('link', { name: 'Apache-2.0' })).toBeVisible();
     await expect(general).toContainText('Downloaded, kept in this browser’s cache');
     await expect(anime).toContainText('Not downloaded');

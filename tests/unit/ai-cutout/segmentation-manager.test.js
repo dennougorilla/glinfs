@@ -13,8 +13,8 @@ import {
 
 const SPEC = {
   id: 'anime',
-  url: '/glinfs/models/isnetis.onnx',
-  bytes: 176_069_933,
+  url: '/glinfs/models/isnetis-fp16.onnx',
+  bytes: 88_070_957,
   sha256: 'f'.repeat(64),
   inputName: 'img',
   outputName: 'mask',
@@ -24,7 +24,7 @@ const SPEC = {
 
 const GENERAL_SPEC = {
   id: 'general',
-  url: '/glinfs/models/isnet-general-use.onnx',
+  url: '/glinfs/models/isnet-general-fp16.onnx',
   bytes: 178_648_008,
   sha256: 'e'.repeat(64),
   inputName: 'input_image',

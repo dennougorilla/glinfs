@@ -11,7 +11,7 @@ function models({ anime = true, general = false } = {}) {
       id: 'anime',
       label: 'Anime',
       description: 'Anime and illustrated characters',
-      bytes: 176_069_933,
+      bytes: 88_070_957,
       license: { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' },
       upstream: 'https://github.com/SkyTNT/anime-segmentation',
       cached: anime,
@@ -20,7 +20,7 @@ function models({ anime = true, general = false } = {}) {
       id: 'general',
       label: 'General',
       description: 'People, pets and objects in live-action video',
-      bytes: 178_648_008,
+      bytes: 90_448_072,
       license: { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' },
       upstream: 'https://github.com/xuebinqin/DIS',
       cached: general,
@@ -89,7 +89,7 @@ describe('Settings → Downloaded models', () => {
 
     const anime = row(section, 'anime');
     expect(anime.querySelector('h3')?.textContent).toBe('Anime');
-    expect(anime.textContent).toContain('176 MB');
+    expect(anime.textContent).toContain('88 MB');
     expect(anime.querySelector('a')?.textContent).toBe('Apache-2.0');
     expect(anime.textContent).toContain('Downloaded, kept in this browser’s cache');
     expect(deleteButton(section, 'anime').disabled).toBe(false);
@@ -98,7 +98,7 @@ describe('Settings → Downloaded models', () => {
     );
 
     expect(row(section, 'general').textContent).toContain('Not downloaded');
-    expect(row(section, 'general').textContent).toContain('179 MB');
+    expect(row(section, 'general').textContent).toContain('90 MB');
     expect(deleteButton(section, 'general').disabled).toBe(true);
     expect(section.querySelector('ul')?.hasAttribute('aria-busy')).toBe(false);
   });

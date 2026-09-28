@@ -14,7 +14,7 @@ const BASE = 'https://example.test/glinfs/';
 /** @param {Uint8Array} bytes */
 function specFor(bytes, overrides = {}) {
   return {
-    url: '/glinfs/models/isnetis.onnx',
+    url: '/glinfs/models/isnetis-fp16.onnx',
     bytes: bytes.byteLength,
     sha256: createHash('sha256').update(bytes).digest('hex'),
     inputName: 'img',
@@ -71,7 +71,7 @@ describe('toHex / modelCacheKey', () => {
   it('keys the cache by absolute URL plus the expected hash', () => {
     const spec = specFor(MODEL);
     expect(modelCacheKey(spec, BASE)).toBe(
-      `https://example.test/glinfs/models/isnetis.onnx?sha256=${spec.sha256}`,
+      `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${spec.sha256}`,
     );
   });
 });

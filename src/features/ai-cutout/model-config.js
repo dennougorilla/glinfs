@@ -12,12 +12,14 @@ import { getModelEntry } from './model-registry.js';
 
 export {
   DEFAULT_MODEL_ID,
+  getModelDownloadUrl,
   getModelEntry,
   getModelIds,
-  getModelSourceUrl,
+  getUpstreamModelUrl,
   isModelId,
   MODEL_CACHE_NAME,
   MODEL_REGISTRY,
+  MODEL_RELEASE_URL,
 } from './model-registry.js';
 
 /** Default model input side (both models take 1024×1024) */
@@ -30,7 +32,7 @@ export const MASK_MAX_SIDE = 1024;
 
 /**
  * Same-origin URL of a model, under the app's base path
- * (`/glinfs/models/isnetis.onnx` on GitHub Pages).
+ * (`/glinfs/models/isnetis-fp16.onnx` on GitHub Pages).
  * @param {string} modelId
  * @param {string} [baseUrl] - Defaults to Vite's BASE_URL
  * @returns {string}

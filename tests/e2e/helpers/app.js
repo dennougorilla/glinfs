@@ -234,8 +234,8 @@ export function countGifPixelsNear(frame, rect, rgb, maxDistance = 60) {
 
 /** Served file name of each model (see src/features/ai-cutout/model-registry.js) */
 export const MODEL_FILES = /** @type {const} */ ({
-  anime: 'isnetis.onnx',
-  general: 'isnet-general-use.onnx',
+  anime: 'isnetis-fp16.onnx',
+  general: 'isnet-general-fp16.onnx',
 });
 
 /**

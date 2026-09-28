@@ -53,7 +53,7 @@ async function analyzeDiscClip(page) {
   // Nothing analyzed yet: the preview is unkeyed and says so
   await expect(page.locator('#ai-preview-note')).toHaveText('Not analyzed yet');
   await expect(page.locator('#ai-analyze')).toHaveText(`Analyze selection (${FRAME_COUNT} frames)`);
-  await expect(page.locator('#ai-intro')).toContainText('downloads 176 MB once');
+  await expect(page.locator('#ai-intro')).toContainText('downloads 88 MB once');
   await expect(page.locator('#ai-intro')).toContainText('never leave this device');
 
   await page.locator('#ai-analyze').click();

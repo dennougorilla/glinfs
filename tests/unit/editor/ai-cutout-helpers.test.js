@@ -58,8 +58,8 @@ describe('AI cutout helpers', () => {
   afterEach(() => setWasmAllowed(false));
 
   it('labels each model’s download size and the shared runtime', () => {
-    expect(getModelSizeLabel('anime')).toBe('176 MB');
-    expect(getModelSizeLabel('general')).toBe('179 MB');
+    expect(getModelSizeLabel('anime')).toBe('88 MB');
+    expect(getModelSizeLabel('general')).toBe('90 MB');
     expect(RUNTIME_SIZE_LABEL).toBe('about 27 MB');
   });
 
@@ -284,15 +284,15 @@ describe('AI cutout helpers', () => {
     expect(describeAnalysisProgress({ ...base, phase: 'downloading' })).toBe(
       'Downloading the model: 50.0 MB of 200.0 MB (25%)',
     );
-    // Decimal megabytes, like the "176 MB" of the README and credits
+    // Decimal megabytes, like the "88 MB" of the README and credits
     expect(
       describeAnalysisProgress({
         ...base,
         phase: 'downloading',
         loadedBytes: 12_000_000,
-        totalBytes: 176_069_933,
+        totalBytes: 88_070_957,
       }),
-    ).toBe('Downloading the model: 12.0 MB of 176.1 MB (6%)');
+    ).toBe('Downloading the model: 12.0 MB of 88.1 MB (13%)');
     expect(describeAnalysisProgress({ ...base, phase: 'downloading', fromCache: true })).toContain(
       'cache',
     );
