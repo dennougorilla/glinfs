@@ -34,7 +34,7 @@ Press Escape to leave a pick tool or the eyedropper, then to deselect a caption,
 Use **Open GIF or image** on the Capture screen, or drop a file on the preview, to edit an existing GIF, APNG, animated WebP, PNG, JPEG or WebP file with the same trim, crop, text and transparency tools. Frame timing and transparent pixels are kept when you export it again.
 
 ### Export
-Press **Export** in the editor (or Ctrl/Cmd+E) to open the Export GIF dialog over it. Choose the encoder, quality, frame rate, loop count and output scale; the GIF plays at the editor's playback speed (0.25x to 4x). Set a **Target size** in MB to fit an upload limit: the export lowers the colors, then the frame rate, then the scale until the GIF fits. The finished GIF is shown with its size, dimensions and frame count, ready to download or open in a new tab.
+Press **Export** in the editor (or Ctrl/Cmd+E) to open the Export GIF dialog over it. Choose the encoder, quality, frame rate, loop count and output scale; the GIF plays at the editor's playback speed (0.25x to 4x). Set a **Target size** in MB (1 MB = 1,000,000 bytes, as upload limits count) to fit an upload limit: the export lowers the colors, then the frame rate, then the scale until the GIF fits. The finished GIF is shown with its size, dimensions and frame count, ready to download or open in a new tab.
 
 ## Privacy
 

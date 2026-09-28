@@ -24,7 +24,7 @@
  * @property {import('./encoders/types.js').EncoderId} encoderId - Selected encoder
  * @property {number} [scale=1] - Output scale (1, 0.75, 0.5, 1/3 or 0.25)
  * @property {number | null} [targetSizeMB=null] - Aim for a GIF at or under
- *   this size (MB = 1024 * 1024 bytes); null for no target
+ *   this size (decimal: 1 MB = 1,000,000 bytes); null for no target
  */
 
 /**
@@ -64,7 +64,7 @@
  * @property {boolean} isDialogOpen - Export dialog visible
  * @property {ExportSettings} settings - Current export settings
  * @property {EncodingJob|null} job - Active encoding job
- * @property {number} estimatedSizeMB - Estimated output size
+ * @property {number} estimatedSizeMB - Estimated output size (decimal MB)
  * @property {import('./encoders/types.js').EncoderId|'unavailable'} encoderStatus - Active encoder ID or unavailable
  */
 

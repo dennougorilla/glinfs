@@ -415,6 +415,24 @@ describe('export dialog: target size', () => {
     expect($('#export-result-target')?.textContent).toMatch(/^Could not get under 1\.0 MB/);
   });
 
+  it('checks and shows the target in decimal megabytes (1 MB = 1,000,000 bytes)', async () => {
+    inject({ count: 30 });
+    updateSetting('export', 'targetSizeMB', 10);
+    // Estimates fit; every real GIF is 10.2 million bytes: over a 10 MB
+    // upload limit, though under 10 MiB
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      params.frameIndices
+        ? new Blob([new Uint8Array(100)])
+        : new Blob([new Uint8Array(10_200_000)], { type: 'image/gif' }),
+    );
+    dialog = openExportDialog();
+    clickExport();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+
+    expect($('#export-result-target')?.textContent).toMatch(/^Could not get under 10\.0 MB/);
+    expect($('#export-result-size')?.textContent).toContain('10.2 MB');
+  });
+
   it('shows the estimating step while it plans', async () => {
     inject({ count: 30 });
     updateSetting('export', 'targetSizeMB', 2);
