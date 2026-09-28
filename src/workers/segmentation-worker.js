@@ -1,6 +1,6 @@
 /**
  * Segmentation Worker
- * Runs the AI cutout model (ONNX Runtime Web) off the main thread.
+ * Runs the AI cutout models (ONNX Runtime Web) off the main thread.
  * @module workers/segmentation-worker
  *
  * ORT loads only here, so the main bundle never carries it. The WebGPU
@@ -10,9 +10,15 @@
  *   survives a warm-up run (see features/ai-cutout/session-init.js);
  * - WASM only when the caller allowed it (GitHub Pages cannot send
  *   COOP/COEP, so it is single-threaded and very slow).
- * One worker runs one model (the spec in its 'init' message: file, input
- * and output names, preprocessing); the manager starts a new worker to
- * switch models.
+ *
+ * One session per model: each 'init' message loads one model (the spec:
+ * file, input and output names, preprocessing) next to the ones already
+ * loaded, and 'unload' releases one. Switching between models therefore
+ * never reloads ORT, re-verifies the file or re-runs the warm-up. Every ORT
+ * call (session creation with its warm-up, a frame's run, a release) goes
+ * through one queue: the sessions share the input buffer, and a WebGPU
+ * device runs one graph at a time anyway.
+ *
  * The document CSP does not apply here (a worker takes its policy from its
  * own response), which matters because ORT's WebGPU glue uses `new Function`.
  *
@@ -36,6 +42,7 @@ import {
   rgbaToChw,
 } from '../features/ai-cutout/preprocess.js';
 import {
+  createAbortError,
   SegmentationError,
   SegmentationErrorCode,
   toErrorPayload,
@@ -48,11 +55,22 @@ import { createModelSession, runModel } from '../features/ai-cutout/session-init
  * @typedef {Object} SegmentRequest
  * @property {number} requestId
  * @property {number} jobId
+ * @property {string} modelId
  * @property {ImageBitmap | null} bitmap - Owned by this worker; null once closed
  * @property {number} sourceWidth
  * @property {number} sourceHeight
  * @property {number} maskWidth
  * @property {number} maskHeight
+ */
+
+/**
+ * A model loading or loaded in this worker.
+ * @typedef {Object} LoadedModel
+ * @property {ModelSpec} spec
+ * @property {AbortController} controller - Aborted by 'unload'
+ * @property {Promise<void>} ready - Settles once the session exists (or failed)
+ * @property {import('onnxruntime-web').InferenceSession | null} session
+ * @property {Object | null} readyMessage - The 'ready' message, sent again to a repeated 'init'
  */
 
 ort.env.wasm.wasmPaths = { wasm: ortWasmUrl };
@@ -63,14 +81,14 @@ ort.env.logLevel = 'error';
 /** Minimum interval between download progress messages */
 const PROGRESS_INTERVAL_MS = 100;
 
-/** @type {import('onnxruntime-web').InferenceSession | null} */
-let session = null;
-/** @type {ModelSpec | null} */
-let model = null;
-/** @type {'webgpu' | 'wasm' | null} */
-let backend = null;
-/** @type {Promise<void> | null} */
-let initPromise = null;
+/** Models by id @type {Map<string, LoadedModel>} */
+const models = new Map();
+
+/** @type {Promise<GPUAdapter | null> | null} */
+let adapterPromise = null;
+
+/** Tail of the ORT call queue @type {Promise<unknown>} */
+let ortTail = Promise.resolve();
 
 /** @type {SegmentRequest[]} */
 const queue = [];
@@ -92,17 +110,32 @@ function post(message, transfer = []) {
 }
 
 /**
- * The WebGPU adapter ORT would use, or null.
+ * Run `task` after every ORT call queued before it.
+ * @template T
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ */
+function withOrt(task) {
+  const run = ortTail.then(task);
+  ortTail = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * The WebGPU adapter ORT would use, or null (asked once).
  * @returns {Promise<GPUAdapter | null>}
  */
-async function requestAdapter() {
-  const gpu = /** @type {any} */ (self.navigator).gpu;
-  if (!gpu) return null;
-  try {
-    return (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? null;
-  } catch {
-    return null;
-  }
+function getAdapter() {
+  adapterPromise ??= (async () => {
+    const gpu = /** @type {any} */ (self.navigator).gpu;
+    if (!gpu) return null;
+    try {
+      return (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  return adapterPromise;
 }
 
 /**
@@ -120,12 +153,16 @@ function describeAdapter(adapter) {
 }
 
 /**
- * Load the model and create the session.
- * @param {ModelSpec} spec
+ * Load a model and create its session.
+ * @param {LoadedModel} entry
  * @param {boolean} allowWasm
+ * @returns {Promise<Object>} The 'ready' message
  */
-async function initialize(spec, allowWasm) {
-  const adapter = await requestAdapter();
+async function initialize(entry, allowWasm) {
+  const { spec } = entry;
+  const { signal } = entry.controller;
+  const modelId = spec.id;
+  const adapter = await getAdapter();
   if (!adapter && !allowWasm) {
     // Fail before downloading a model (about 90 MB) the user cannot run
     throw new SegmentationError(
@@ -137,6 +174,7 @@ async function initialize(spec, allowWasm) {
   const loadStart = performance.now();
   let lastProgressAt = 0;
   const loaded = await loadModelBytes(spec, {
+    signal,
     onProgress(progress) {
       const now = performance.now();
       const final = progress.loadedBytes === progress.totalBytes;
@@ -148,13 +186,14 @@ async function initialize(spec, allowWasm) {
         return;
       }
       lastProgressAt = now;
-      post({ type: 'status', ...progress });
+      post({ type: 'status', modelId, ...progress });
     },
   });
   const loadMs = performance.now() - loadStart;
 
   post({
     type: 'status',
+    modelId,
     phase: 'initializing',
     loadedBytes: loaded.bytes.byteLength,
     totalBytes: spec.bytes,
@@ -162,27 +201,34 @@ async function initialize(spec, allowWasm) {
   });
 
   const createStart = performance.now();
-  // Allocated here so the warm-up reuses the buffer every frame fills later
-  getInputContext(spec.inputSize);
-  const created = await createModelSession({
-    ort: /** @type {any} */ (ort),
-    bytes: loaded.bytes,
-    spec,
-    adapter,
-    allowWasm,
-    warmupInput: /** @type {Float32Array} */ (inputTensorData),
+  const created = await withOrt(async () => {
+    if (signal.aborted) throw createAbortError('Model unloaded');
+    // Allocated here so the warm-up reuses the buffer every frame fills later
+    getInputContext(spec.inputSize);
+    return createModelSession({
+      ort: /** @type {any} */ (ort),
+      bytes: loaded.bytes,
+      spec,
+      adapter,
+      allowWasm,
+      warmupInput: /** @type {Float32Array} */ (inputTensorData),
+    });
   });
-  session = /** @type {any} */ (created.session);
-  backend = created.backend;
+  if (signal.aborted) {
+    // Unloaded while the session was being created
+    await withOrt(() => created.session.release?.() ?? Promise.resolve()).catch(() => undefined);
+    throw createAbortError('Model unloaded');
+  }
+  entry.session = /** @type {any} */ (created.session);
   if (created.webgpuError) {
     console.warn(`[segmentation] ${created.webgpuError}; running on WASM`);
   }
 
-  model = spec;
-  post({
+  return {
     type: 'ready',
-    backend,
-    adapter: backend === 'webgpu' ? describeAdapter(adapter) : null,
+    modelId,
+    backend: created.backend,
+    adapter: created.backend === 'webgpu' ? describeAdapter(adapter) : null,
     fromCache: loaded.fromCache,
     cached: loaded.cached,
     timings: {
@@ -190,7 +236,64 @@ async function initialize(spec, allowWasm) {
       createMs: performance.now() - createStart,
       warmupMs: created.warmupMs,
     },
-  });
+  };
+}
+
+/**
+ * Handle 'init': load a model unless it is loading or loaded already (a
+ * loaded one answers with its 'ready' again).
+ * @param {ModelSpec} spec
+ * @param {boolean} allowWasm
+ */
+function loadModel(spec, allowWasm) {
+  const existing = models.get(spec.id);
+  if (existing) {
+    if (existing.readyMessage) post(existing.readyMessage);
+    return;
+  }
+  /** @type {LoadedModel} */
+  const entry = {
+    spec,
+    controller: new AbortController(),
+    ready: Promise.resolve(),
+    session: null,
+    readyMessage: null,
+  };
+  models.set(spec.id, entry);
+  entry.ready = initialize(entry, allowWasm).then(
+    (message) => {
+      entry.readyMessage = message;
+      post(message);
+    },
+    (error) => {
+      if (models.get(spec.id) === entry) models.delete(spec.id);
+      // An unloaded model's failure concerns nobody
+      if (!entry.controller.signal.aborted) {
+        post({
+          type: 'init-error',
+          modelId: spec.id,
+          error: toErrorPayload(error, SegmentationErrorCode.MODEL_INIT_FAILED),
+        });
+      }
+      throw error;
+    },
+  );
+  entry.ready.catch(() => undefined);
+}
+
+/**
+ * Handle 'unload': stop loading a model, or release its session.
+ * @param {string} modelId
+ */
+function unloadModel(modelId) {
+  const entry = models.get(modelId);
+  if (!entry) return;
+  models.delete(modelId);
+  entry.controller.abort();
+  const session = entry.session;
+  entry.session = null;
+  // A session still being created is released by initialize()
+  if (session) void withOrt(() => session.release?.() ?? Promise.resolve()).catch(() => undefined);
 }
 
 /**
@@ -209,11 +312,14 @@ function getInputContext(size) {
 }
 
 /**
- * Run the model on one frame and post its mask.
+ * Run a model on one frame and post its mask.
  * @param {SegmentRequest} request
  */
 async function segment(request) {
-  if (!session || !model) throw new Error('Model not initialized');
+  const entry = models.get(request.modelId);
+  if (!entry) throw new Error(`The model "${request.modelId}" is not loaded`);
+  await entry.ready;
+  const { spec: model } = entry;
   const start = performance.now();
   const size = model.inputSize;
   const { preprocess } = model;
@@ -224,30 +330,33 @@ async function segment(request) {
     size,
   );
 
-  // Black (zero) canvas, frame scaled into the input rectangle: the centred
-  // letterbox rectangle, or the whole square for a stretch
-  const ctx = getInputContext(size);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, size, size);
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  if (!request.bitmap) throw new Error('Frame bitmap missing');
-  ctx.drawImage(request.bitmap, geometry.padX, geometry.padY, geometry.width, geometry.height);
-  request.bitmap.close();
-  request.bitmap = null;
-  const rgba = ctx.getImageData(0, 0, size, size).data;
-  const inputData = rgbaToChw(
-    rgba,
-    size,
-    size,
-    /** @type {Float32Array} */ (inputTensorData),
-    preprocess,
-  );
-
-  const inferenceStart = performance.now();
-  const probability = await runModel(/** @type {any} */ (ort), session, model, inputData);
-  const inferenceMs = performance.now() - inferenceStart;
+  const { probability, inferenceMs } = await withOrt(async () => {
+    const session = entry.session;
+    if (!session) throw new Error(`The model "${request.modelId}" was unloaded`);
+    // Black (zero) canvas, frame scaled into the input rectangle: the centred
+    // letterbox rectangle, or the whole square for a stretch
+    const ctx = getInputContext(size);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    if (!request.bitmap) throw new Error('Frame bitmap missing');
+    ctx.drawImage(request.bitmap, geometry.padX, geometry.padY, geometry.width, geometry.height);
+    request.bitmap.close();
+    request.bitmap = null;
+    const rgba = ctx.getImageData(0, 0, size, size).data;
+    const inputData = rgbaToChw(
+      rgba,
+      size,
+      size,
+      /** @type {Float32Array} */ (inputTensorData),
+      preprocess,
+    );
+    const inferenceStart = performance.now();
+    const output = await runModel(/** @type {any} */ (ort), session, model, inputData);
+    return { probability: output, inferenceMs: performance.now() - inferenceStart };
+  });
 
   const mask = probabilityToMask(probability, geometry, request.maskWidth, request.maskHeight);
   post(
@@ -272,7 +381,6 @@ async function drainQueue() {
     while (queue.length > 0) {
       const request = /** @type {SegmentRequest} */ (queue.shift());
       try {
-        await initPromise;
         await segment(request);
       } catch (error) {
         post({
@@ -311,20 +419,16 @@ self.onmessage = (event) => {
   const message = event.data;
   switch (message?.type) {
     case 'init':
-      if (!initPromise) {
-        initPromise = initialize(message.model, Boolean(message.allowWasm));
-        initPromise.catch((error) => {
-          post({
-            type: 'init-error',
-            error: toErrorPayload(error, SegmentationErrorCode.MODEL_INIT_FAILED),
-          });
-        });
-      }
+      loadModel(message.model, Boolean(message.allowWasm));
+      break;
+    case 'unload':
+      unloadModel(message.modelId);
       break;
     case 'segment':
       queue.push({
         requestId: message.requestId,
         jobId: message.jobId,
+        modelId: message.modelId,
         bitmap: message.bitmap,
         sourceWidth: message.sourceWidth,
         sourceHeight: message.sourceHeight,

@@ -64,8 +64,10 @@ class FakeWorker {
 
   postMessage(msg, transfer) {
     this.posted.push({ msg, transfer });
+    if (msg.type === 'init') this.initModelId = msg.model.id;
     if (msg.type === 'init' && this.autoReady) {
-      queueMicrotask(() => this.ready());
+      const modelId = msg.model.id;
+      queueMicrotask(() => this.ready({ modelId }));
     }
     if (msg.type === 'segment' && this.autoMask) {
       queueMicrotask(() => this.mask(msg));
@@ -76,7 +78,11 @@ class FakeWorker {
     this.terminated = true;
   }
 
+  /** Model messages name the model of the last 'init' unless they say otherwise */
   emit(data) {
+    if (['status', 'ready', 'init-error'].includes(data.type) && !('modelId' in data)) {
+      data = { modelId: this.initModelId, ...data };
+    }
     for (const handler of this.listeners.get('message') ?? []) handler({ data });
   }
 
@@ -107,6 +113,14 @@ class FakeWorker {
   crash(message = 'boom') {
     const event = new ErrorEvent('error', { message });
     for (const handler of this.listeners.get('error') ?? []) handler(event);
+  }
+
+  get inits() {
+    return this.posted.filter((p) => p.msg.type === 'init').map((p) => p.msg);
+  }
+
+  get unloads() {
+    return this.posted.filter((p) => p.msg.type === 'unload').map((p) => p.msg.modelId);
   }
 
   get segments() {
@@ -319,7 +333,7 @@ describe('SegmentationManager.analyzeFrames', () => {
       fetchAllOutputs: true,
     });
     await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
-    expect(workers[1].posted[0].msg.model).toMatchObject({ id: 'anime', sha256: 'all' });
+    expect(workers[0].inits[1].model).toMatchObject({ id: 'anime', sha256: 'all' });
   });
 
   it('rejects with the init error code, terminates the worker and retries fresh', async () => {
@@ -612,20 +626,28 @@ describe('SegmentationManager.analyzeFrames', () => {
 });
 
 describe('SegmentationManager with more than one model', () => {
-  it('keeps each model’s masks apart and reuses them when switching back', async () => {
+  it('keeps each model’s masks apart and one session per model in the same worker', async () => {
     const { manager, maskStore, workers, createWorker } = createHarness();
     const frames = [makeFrame('a'), makeFrame('b')];
 
     await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
-    expect(manager.loadedModelId).toBe('anime');
-    expect(workers[0].posted[0].msg.model).toEqual(SPEC);
+    expect(manager.loadedModelIds).toEqual(['anime']);
+    expect(workers[0].inits[0].model).toEqual(SPEC);
 
-    // The general model analyzes the same frames: a new worker for its spec
+    // The general model loads next to the anime one: same worker, no teardown
     const general = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'general' });
     expect(general).toMatchObject({ analyzed: 2, skipped: 0 });
-    expect(workers[0].terminated).toBe(true);
-    expect(workers[1].posted[0].msg.model).toEqual(GENERAL_SPEC);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(workers[0].terminated).toBe(false);
+    expect(workers[0].inits.map((m) => m.model)).toEqual([SPEC, GENERAL_SPEC]);
+    expect(workers[0].segments.map((m) => m.modelId)).toEqual([
+      'anime',
+      'anime',
+      'general',
+      'general',
+    ]);
     expect(manager.readyInfo).toMatchObject({ modelId: 'general', modelBytes: GENERAL_SPEC.bytes });
+    expect(manager.loadedModelIds).toEqual(['anime', 'general']);
     expect(maskStore.keysForClip('c').sort()).toEqual([
       'anime:a',
       'anime:b',
@@ -635,9 +657,120 @@ describe('SegmentationManager with more than one model', () => {
 
     // Back to the anime model: its masks are still there, nothing to do
     const back = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
-    expect(back).toEqual({ analyzed: 0, skipped: 2, backend: null });
+    expect(back).toEqual({ analyzed: 0, skipped: 2, backend: 'webgpu' });
+
+    // New anime frames run on the loaded anime session: no second init
+    await manager.analyzeFrames([makeFrame('c')], { clipId: 'c', modelId: 'anime' });
+    expect(workers[0].inits).toHaveLength(2);
+    expect(workers[0].segments.at(-1).modelId).toBe('anime');
+    expect(manager.getReadyInfo('anime')).toMatchObject({ modelId: 'anime' });
+    expect(manager.readyInfo).toMatchObject({ modelId: 'anime' });
+  });
+
+  it('keeps the masks a cancelled job still has in the worker when another model starts', async () => {
+    const { manager, maskStore, workers } = createHarness({ autoMask: false });
+    const controller = new AbortController();
+    const frames = [makeFrame('a'), makeFrame('b'), makeFrame('c')];
+    const run = manager.analyzeFrames(frames, {
+      clipId: 'c',
+      modelId: 'anime',
+      signal: controller.signal,
+    });
+    await flush();
+    const [first, second] = workers[0].segments;
+    controller.abort();
+    expect((await run.catch((e) => e)).name).toBe('AbortError');
+
+    // The general model starts while both anime frames are in the worker
+    const general = manager.analyzeFrames([makeFrame('a')], { clipId: 'c', modelId: 'general' });
+    await flush();
+    expect(workers[0].terminated).toBe(false);
+    workers[0].mask(first);
+    workers[0].mask(second);
+    workers[0].mask(workers[0].segments.at(-1));
+    await general;
+    expect(maskStore.has('anime:a')).toBe(true);
+    expect(maskStore.has('anime:b')).toBe(true);
+    expect(maskStore.has('general:a')).toBe(true);
+    expect(manager.cancelledJobCount).toBe(0);
+  });
+
+  it('unloads a WASM session once its frames settled before another model loads', async () => {
+    const { manager, maskStore, workers, createWorker } = createHarness({
+      autoMask: false,
+      backend: 'wasm',
+    });
+    const controller = new AbortController();
+    const run = manager.analyzeFrames([makeFrame('a'), makeFrame('b')], {
+      clipId: 'c',
+      modelId: 'anime',
+      allowWasm: true,
+      signal: controller.signal,
+    });
+    await flush();
+    const [first] = workers[0].segments;
+    controller.abort();
+    await run.catch(() => undefined);
+
+    const general = manager.analyzeFrames([makeFrame('a')], {
+      clipId: 'c',
+      modelId: 'general',
+      allowWasm: true,
+    });
+    await flush();
+    // Waits for the anime frame still running: nothing loads, nothing stops
+    expect(workers[0].terminated).toBe(false);
+    expect(workers[0].inits).toHaveLength(1);
+    workers[0].mask(first);
+    await flush();
+    // The dropped second frame settled too (it was queued): the worker only
+    // held the anime session, so it stops and a fresh one loads general
+    workers[0].emit({ type: 'dropped', requestIds: [workers[0].segments[1].requestId] });
+    await flush();
+    expect(maskStore.has('anime:a')).toBe(true);
+    expect(workers[0].terminated).toBe(true);
     expect(createWorker).toHaveBeenCalledTimes(2);
-    expect(manager.loadedModelId).toBe('general');
+    expect(workers[1].inits[0].model).toEqual(GENERAL_SPEC);
+    workers[1].mask(workers[1].segments[0]);
+    await expect(general).resolves.toMatchObject({ analyzed: 1, backend: 'wasm' });
+  });
+
+  it('a failed load of one model leaves the other model’s session alone', async () => {
+    const { manager, workers } = createHarness();
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
+    workers[0].autoReady = false;
+    const run = manager.analyzeFrames([makeFrame('a')], { modelId: 'general' });
+    await flush();
+    workers[0].emit({
+      type: 'init-error',
+      modelId: 'general',
+      error: { code: SegmentationErrorCode.MODEL_INIT_FAILED, message: 'bad graph' },
+    });
+    expect((await run.catch((e) => e)).code).toBe(SegmentationErrorCode.MODEL_INIT_FAILED);
+    expect(workers[0].terminated).toBe(false);
+    expect(workers[0].unloads).toEqual(['general']);
+    expect(manager.loadedModelIds).toEqual(['anime']);
+    // Messages for a model nobody waits for are ignored
+    workers[0].emit({ type: 'ready', modelId: 'general', backend: 'webgpu' });
+    workers[0].emit({ type: 'status', modelId: 'general', phase: 'verifying' });
+    expect(manager.getReadyInfo('general')).toBeNull();
+  });
+
+  it('cancelling one model’s download stops only that load', async () => {
+    const { manager, workers } = createHarness();
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
+    workers[0].autoReady = false;
+    const controller = new AbortController();
+    const run = manager.analyzeFrames([makeFrame('a')], {
+      modelId: 'general',
+      signal: controller.signal,
+    });
+    await flush();
+    controller.abort();
+    expect((await run.catch((e) => e)).name).toBe('AbortError');
+    expect(workers[0].unloads).toEqual(['general']);
+    expect(workers[0].terminated).toBe(false);
+    expect(manager.getReadyInfo('anime')).not.toBeNull();
   });
 
   it('sends a stretch model a bitmap resized from the source to its input, not the mask size', async () => {
@@ -684,14 +817,74 @@ describe('SegmentationManager with more than one model', () => {
     expect(manager.isModelBusy('general')).toBe(false);
     expect(listener).toHaveBeenCalledTimes(2);
 
-    // Idle: unloading stops the worker; another model is left alone
+    // Idle: unloading the only model stops the worker; one never loaded is not unloaded
     expect(manager.unloadModel('anime')).toBe(false);
     expect(manager.unloadModel('general')).toBe(true);
     expect(workers[0].terminated).toBe(true);
-    expect(manager.loadedModelId).toBeNull();
+    expect(manager.loadedModelIds).toEqual([]);
     unsubscribe();
     await manager.analyzeFrames([], { modelId: 'anime' });
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('unloading one of two models releases only its session, after its frames settled', async () => {
+    const { manager, maskStore, workers } = createHarness({ autoMask: false });
+    const both = async (modelId) => {
+      const run = manager.analyzeFrames([makeFrame(`${modelId}-0`)], { modelId, clipId: 'c' });
+      await flush();
+      workers[0].mask(workers[0].segments.at(-1));
+      await run;
+    };
+    await both('anime');
+    await both('general');
+
+    // A cancelled general job still has a frame in the worker
+    const controller = new AbortController();
+    const run = manager.analyzeFrames([makeFrame('x')], {
+      modelId: 'general',
+      clipId: 'c',
+      signal: controller.signal,
+    });
+    await flush();
+    const inflight = workers[0].segments.at(-1);
+    controller.abort();
+    await run.catch(() => undefined);
+    await flush();
+
+    expect(manager.unloadModel('general')).toBe(true);
+    expect(manager.loadedModelIds).toEqual(['anime']);
+    expect(workers[0].unloads).toEqual([]);
+    workers[0].mask(inflight);
+    await flush();
+    expect(maskStore.has('general:x')).toBe(true);
+    expect(workers[0].unloads).toEqual(['general']);
+    expect(workers[0].terminated).toBe(false);
+  });
+
+  it('a model loaded again before its deferred unload keeps its session', async () => {
+    const { manager, workers } = createHarness({ autoMask: false });
+    const first = manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
+    await flush();
+    workers[0].mask(workers[0].segments[0]);
+    await first;
+    const controller = new AbortController();
+    const cancelled = manager.analyzeFrames([makeFrame('b')], { signal: controller.signal });
+    await flush();
+    const inflight = workers[0].segments.at(-1);
+    controller.abort();
+    await cancelled.catch(() => undefined);
+    expect(manager.unloadModel('anime')).toBe(true);
+
+    // Loaded again while the frame still runs: a new init, no unload later
+    const again = manager.analyzeFrames([makeFrame('c')], { modelId: 'anime' });
+    await flush();
+    workers[0].mask(inflight);
+    await flush();
+    workers[0].mask(workers[0].segments.at(-1));
+    await again;
+    expect(workers[0].unloads).toEqual([]);
+    expect(workers[0].terminated).toBe(false);
+    expect(workers[0].inits).toHaveLength(2);
   });
 
   it('counts a failed analysis as done', async () => {

@@ -6,16 +6,18 @@
  * ORT and DOM code so both sides can import it).
  *
  * Manager -> worker:
- *   { type: 'init', model: ModelSpec, allowWasm: boolean }
- *   { type: 'segment', requestId, jobId, bitmap (transferred), sourceWidth,
- *     sourceHeight, maskWidth, maskHeight }
+ *   { type: 'init', model: ModelSpec, allowWasm: boolean }  - load a model
+ *     next to the loaded ones (a loaded one answers with 'ready' again)
+ *   { type: 'unload', modelId }  - stop loading a model / release its session
+ *   { type: 'segment', requestId, jobId, modelId, bitmap (transferred),
+ *     sourceWidth, sourceHeight, maskWidth, maskHeight }
  *   { type: 'cancel', jobId }  - drop that job's queued frames
  *
  * Worker -> manager:
- *   { type: 'status', phase: 'downloading' | 'verifying' | 'initializing',
- *     loadedBytes, totalBytes, fromCache }
- *   { type: 'ready', backend: 'webgpu' | 'wasm', adapter, fromCache, timings }
- *   { type: 'init-error', error: ErrorPayload }
+ *   { type: 'status', modelId, phase: 'downloading' | 'verifying' |
+ *     'initializing', loadedBytes, totalBytes, fromCache }
+ *   { type: 'ready', modelId, backend: 'webgpu' | 'wasm', adapter, fromCache, timings }
+ *   { type: 'init-error', modelId, error: ErrorPayload }  - never for an unloaded model
  *   { type: 'mask', requestId, width, height, data (ArrayBuffer, transferred),
  *     inferenceMs, totalMs }
  *   { type: 'segment-error', requestId, error: ErrorPayload }

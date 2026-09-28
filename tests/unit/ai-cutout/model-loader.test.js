@@ -120,7 +120,7 @@ describe('loadModelBytes', () => {
     expect(Array.from(result.bytes)).toEqual(Array.from(MODEL));
     expect(result.fromCache).toBe(false);
     expect(result.cached).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledWith(spec.url, { cache: 'no-store' });
+    expect(fetchImpl).toHaveBeenCalledWith(spec.url, { cache: 'no-store', signal: undefined });
     const phases = onProgress.mock.calls.map(([p]) => `${p.phase}:${p.loadedBytes}`);
     expect(phases).toEqual([
       'downloading:0',
@@ -324,6 +324,69 @@ describe('loadModelBytes', () => {
       baseHref: BASE,
     });
     expect(result.bytes.byteLength).toBe(1000);
+  });
+
+  it('stops a download when its signal aborts: AbortError, nothing cached', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => chunkedResponse(MODEL, 4));
+    const error = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.loadedBytes >= 250) controller.abort();
+      },
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(fetchImpl.mock.calls[0][1].signal).toBe(controller.signal);
+    expect(entries.size).toBe(0);
+  });
+
+  it('reports a fetch aborted by its signal as an AbortError, not a download failure', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => {
+      controller.abort();
+      throw new DOMException('The operation was aborted', 'AbortError');
+    });
+    const error = await loadModelBytes(specFor(MODEL), {
+      fetchImpl,
+      cacheStorage: undefined,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(typeof error.code).not.toBe('string'); // not a SegmentationError code
+  });
+
+  it('does nothing for an already-aborted signal, and drops a cached copy read after an abort', async () => {
+    const spec = specFor(MODEL);
+    const fetchImpl = vi.fn();
+    const aborted = AbortSignal.abort();
+    await expect(
+      loadModelBytes(spec, { fetchImpl, cacheStorage: undefined, subtle, signal: aborted }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const { storage, entries } = createFakeCaches();
+    entries.set(modelCacheKey(spec, BASE), MODEL.slice());
+    const controller = new AbortController();
+    const error = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+      onProgress: () => controller.abort(),
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // A cancelled load is not a corrupt entry: the cached copy stays
+    expect(entries.has(modelCacheKey(spec, BASE))).toBe(true);
   });
 
   it('refuses to run without crypto.subtle', async () => {

@@ -181,11 +181,11 @@ export function installAiCutoutTestHooks(hooks) {
       return { size: store.size, byteLength: store.byteLength, version: store.version, byModel };
     },
 
-    /** @returns {{ loadedModelId: string | null, busy: string[] }} */
+    /** @returns {{ loadedModelIds: string[], busy: string[] }} */
     getManagerState() {
       const manager = getSegmentationManager();
       return {
-        loadedModelId: manager.loadedModelId,
+        loadedModelIds: manager.loadedModelIds,
         busy: getModelIds().filter((id) => manager.isModelBusy(id)),
       };
     },

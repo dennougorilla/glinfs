@@ -11,10 +11,13 @@
  * `frame.sharedKey ?? frame.id` (imported holds share pixels, so they share
  * one mask).
  *
- * One worker runs one model at a time. An analysis with another model than
- * the loaded one terminates the worker and starts a fresh one for that
- * model (analyses run one after another, so nothing is in flight then);
- * the model then comes from Cache Storage when it was downloaded before.
+ * One worker keeps one session per model it has loaded, so switching
+ * between models never reloads ORT, re-verifies the file or re-runs the
+ * warm-up. Two exceptions free memory instead: a WASM session (it shares
+ * the worker's heap with any other session) is unloaded before another
+ * model loads, and the worker stops once no model is loaded any more.
+ * Unloading a model waits for its frames still in the worker — a cancelled
+ * job's finished frames are valid masks that the manager keeps.
  *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
@@ -126,7 +129,7 @@ let devModelOverride = null;
 
 /**
  * DEV/E2E only: override the expected model sizes/hashes and allow WASM.
- * Takes effect for workers created afterwards (call dispose() first to
+ * Takes effect for models loaded afterwards (call dispose() first to
  * re-init).
  * @param {DevModelOverride | null} override
  */
@@ -135,6 +138,37 @@ export function setDevModelOverride(override) {
     throw new Error('setDevModelOverride is only available in development builds');
   }
   devModelOverride = override;
+}
+
+/**
+ * The spec a model loads with: `spec` itself, or in DEV the E2E override
+ * applied to it (the stubs' size and hash).
+ * @param {ModelSpec} spec
+ * @param {boolean} [allowWasm]
+ * @returns {{ spec: ModelSpec, allowWasm: boolean }}
+ */
+function applyDevOverride(spec, allowWasm = false) {
+  if (!import.meta.env.DEV || !devModelOverride) return { spec, allowWasm };
+  const own = devModelOverride.models?.[spec.id];
+  return {
+    spec: {
+      ...spec,
+      sha256: own?.sha256 ?? devModelOverride.sha256 ?? spec.sha256,
+      bytes: own?.bytes ?? devModelOverride.bytes ?? spec.bytes,
+      fetchAllOutputs: Boolean(devModelOverride.fetchAllOutputs),
+    },
+    allowWasm: allowWasm || Boolean(devModelOverride.allowWasm),
+  };
+}
+
+/**
+ * The spec a registered model loads with (the DEV override applied): its
+ * SHA-256 is the one its Cache Storage key holds.
+ * @param {string} modelId
+ * @returns {ModelSpec}
+ */
+export function resolveModelSpec(modelId) {
+  return applyDevOverride(getModelSpec(modelId)).spec;
 }
 
 /**
@@ -231,6 +265,19 @@ function createScaledBitmap(source, width, height) {
  * @property {(error: unknown) => void} reject
  * @property {string} key
  * @property {string | undefined} clipId
+ * @property {string} modelId
+ * @property {Promise<unknown>} [done] - Settles with the request
+ */
+
+/**
+ * A model loading or loaded in the worker.
+ * @typedef {Object} ModelSlot
+ * @property {ModelSpec} spec
+ * @property {Promise<ReadyInfo>} ready
+ * @property {ReadyInfo | null} info - Set once the session is ready
+ * @property {(info: ReadyInfo) => void} resolve
+ * @property {(error: unknown) => void} reject
+ * @property {((progress: AnalysisProgress) => void) | null} onProgress - Load progress of the analysis waiting for it
  */
 
 /** Main-thread front of the segmentation worker. */
@@ -257,20 +304,14 @@ export class SegmentationManager {
 
   /** @type {Worker | null} */
   #worker = null;
-  /** Model of the current worker (loading or ready) @type {string | null} */
-  #workerModelId = null;
+  /** Models loading or loaded in the worker @type {Map<string, ModelSlot>} */
+  #slots = new Map();
   /** Analyses queued or running, per model @type {Map<string, number>} */
   #busy = new Map();
   /** @type {Set<() => void>} */
   #busyListeners = new Set();
-  /** @type {Promise<ReadyInfo> | null} */
-  #ready = null;
-  /** @type {ReadyInfo | null} */
-  #readyInfo = null;
-  /** @type {((error: unknown) => void) | null} */
-  #rejectInit = null;
-  /** @type {((progress: AnalysisProgress) => void) | null} */
-  #initProgress = null;
+  /** Session of the last analysis @type {ReadyInfo | null} */
+  #lastReady = null;
   /** @type {Map<number, PendingRequest>} */
   #requests = new Map();
   /**
@@ -293,14 +334,23 @@ export class SegmentationManager {
    */
   #releasedClips = new Set();
 
-  /** The backend the loaded model runs on, or null before the first analysis. */
+  /** The backend the last analysis ran on, or null before the first one. */
   get backend() {
-    return this.#readyInfo?.backend ?? null;
+    return this.#lastReady?.backend ?? null;
   }
 
-  /** Details of the loaded model session, or null. */
+  /** Details of the model session the last analysis ran with, or null. */
   get readyInfo() {
-    return this.#readyInfo;
+    return this.#lastReady;
+  }
+
+  /**
+   * Details of a model's session once it is ready, or null.
+   * @param {string} modelId
+   * @returns {ReadyInfo | null}
+   */
+  getReadyInfo(modelId) {
+    return this.#slots.get(modelId)?.info ?? null;
   }
 
   /** The mask store results are written to. */
@@ -313,9 +363,9 @@ export class SegmentationManager {
     return this.#cancelledJobs.size;
   }
 
-  /** Model of the current worker (loading or loaded), or null. */
-  get loadedModelId() {
-    return this.#workerModelId;
+  /** Models loading or loaded in the worker. */
+  get loadedModelIds() {
+    return [...this.#slots.keys()];
   }
 
   /**
@@ -341,14 +391,15 @@ export class SegmentationManager {
   }
 
   /**
-   * Stop the worker when it holds this model and no analysis uses it (its
-   * file was deleted: free the session's memory too).
+   * Release a model's session when no analysis uses it (its file was
+   * deleted: free the session's memory too). Its frames still in the
+   * worker finish first; the worker stops when no other model is loaded.
    * @param {string} modelId
-   * @returns {boolean} The worker was stopped
+   * @returns {boolean} The model was loaded and is being released
    */
   unloadModel(modelId) {
-    if (this.#workerModelId !== modelId || this.isModelBusy(modelId)) return false;
-    this.#teardown(createAbortError('Model unloaded'));
+    if (!this.#slots.has(modelId) || this.isModelBusy(modelId)) return false;
+    void this.#releaseSlot(modelId, createAbortError('Model unloaded'));
     return true;
   }
 
@@ -420,11 +471,12 @@ export class SegmentationManager {
       return {
         analyzed: 0,
         skipped,
-        backend: this.#readyInfo?.modelId === modelId ? this.backend : null,
+        backend: this.#slots.get(modelId)?.info?.backend ?? null,
       };
     }
 
     const ready = await this.#ensureReady(modelId, allowWasm, onProgress, signal, pending.length);
+    this.#lastReady = ready;
     const jobId = ++this.#jobSeq;
     let framesDone = 0;
     /** @param {number | null} frameMs */
@@ -464,8 +516,9 @@ export class SegmentationManager {
         error.code === SegmentationErrorCode.INFERENCE_FAILED
       ) {
         // The session may be unusable (e.g. a lost WebGPU device, which ORT
-        // never re-creates): start a fresh worker on the next call. The
-        // model then loads from Cache Storage, so a retry stays cheap.
+        // never re-creates, and which every session shares): start a fresh
+        // worker on the next call. The model then loads from Cache Storage,
+        // so a retry stays cheap.
         this.#teardown(error);
       }
       throw error;
@@ -474,8 +527,8 @@ export class SegmentationManager {
   }
 
   /**
-   * Start the worker for `modelId` and load the model once (a worker that
-   * holds another model is stopped first).
+   * The ready session of `modelId`: loaded once in the worker (started on
+   * first use) and kept for later analyses.
    * @param {string} modelId
    * @param {boolean} allowWasm
    * @param {((progress: AnalysisProgress) => void) | undefined} onProgress
@@ -484,129 +537,186 @@ export class SegmentationManager {
    * @returns {Promise<ReadyInfo>}
    */
   async #ensureReady(modelId, allowWasm, onProgress, signal, framesTotal) {
-    if (this.#readyInfo?.modelId === modelId) return this.#readyInfo;
-    if (this.#workerModelId !== null && this.#workerModelId !== modelId) {
-      // Analyses are serialized: nothing of the other model is in flight
-      this.#teardown(createAbortError('Switching models'));
+    let slot = this.#slots.get(modelId);
+    if (slot?.info) return slot.info;
+    if (!slot) {
+      // A WASM session shares the worker's memory with any other session:
+      // unload it (once its frames settled) before loading another model
+      const wasm = [...this.#slots]
+        .filter(([id, other]) => id !== modelId && other.info?.backend === 'wasm')
+        .map(([id]) => this.#releaseSlot(id, createAbortError('Switching models')));
+      if (wasm.length > 0) await raceAbort(Promise.all(wasm), signal);
+      slot = this.#slots.get(modelId) ?? this.#loadModel(modelId, allowWasm);
     }
-    this.#initProgress = (progress) => onProgress?.({ ...progress, framesTotal });
-    if (!this.#ready) {
-      let wasmAllowed = allowWasm;
-      /** @type {ModelSpec} */
-      let spec = this.#getModelSpec(modelId);
-      if (import.meta.env.DEV && devModelOverride) {
-        const own = devModelOverride.models?.[modelId];
-        spec = {
-          ...spec,
-          sha256: own?.sha256 ?? devModelOverride.sha256 ?? spec.sha256,
-          bytes: own?.bytes ?? devModelOverride.bytes ?? spec.bytes,
-          fetchAllOutputs: Boolean(devModelOverride.fetchAllOutputs),
-        };
-        wasmAllowed ||= Boolean(devModelOverride.allowWasm);
-      }
-      this.#workerModelId = modelId;
-      this.#ready = this.#startWorker(spec, wasmAllowed);
-    }
+    /** @param {AnalysisProgress} progress */
+    const progress = (progress) => onProgress?.({ ...progress, framesTotal });
+    slot.onProgress = progress;
     try {
-      return await raceAbort(this.#ready, signal);
+      return await raceAbort(slot.ready, signal);
     } catch (error) {
-      if (!this.#readyInfo) {
-        // Cancelled download or failed init: start over on the next call
-        this.#teardown(error);
+      if (this.#slots.get(modelId) === slot && !slot.info) {
+        // Cancelled download or failed init: the worker stops loading it,
+        // and the next call starts over
+        void this.#releaseSlot(modelId, error);
       }
       throw error;
     } finally {
-      this.#initProgress = null;
+      if (slot.onProgress === progress) slot.onProgress = null;
     }
   }
 
   /**
-   * @param {ModelSpec} spec
+   * Ask the worker (started if needed) to load a model.
+   * @param {string} modelId
    * @param {boolean} allowWasm
-   * @returns {Promise<ReadyInfo>}
+   * @returns {ModelSlot}
    */
-  #startWorker(spec, allowWasm) {
-    const modelId = this.#workerModelId ?? spec.id;
-    return new Promise((resolve, reject) => {
-      this.#rejectInit = reject;
-      let worker;
-      try {
-        worker = this.#createWorker();
-      } catch (error) {
-        reject(
-          new SegmentationError(
-            SegmentationErrorCode.WORKER_CRASHED,
-            `The segmentation worker could not start: ${error instanceof Error ? error.message : error}`,
-          ),
-        );
-        return;
-      }
-      this.#worker = worker;
-
-      worker.addEventListener('message', (event) => {
-        if (this.#worker !== worker) return;
-        const data = event.data;
-        switch (data?.type) {
-          case 'status':
-            this.#initProgress?.({
-              phase: data.phase,
-              loadedBytes: data.loadedBytes,
-              totalBytes: data.totalBytes,
-              fromCache: data.fromCache,
-              framesDone: 0,
-              framesTotal: 0,
-              backend: null,
-              frameMs: null,
-            });
-            break;
-          case 'ready':
-            this.#readyInfo = {
-              modelId,
-              backend: data.backend,
-              adapter: data.adapter ?? null,
-              fromCache: Boolean(data.fromCache),
-              modelBytes: spec.bytes,
-              resize: spec.preprocess.resize,
-              inputSize: spec.inputSize,
-              timings: data.timings,
-            };
-            this.#rejectInit = null;
-            resolve(this.#readyInfo);
-            break;
-          case 'init-error':
-            this.#rejectInit = null;
-            reject(fromErrorPayload(data.error, SegmentationErrorCode.MODEL_INIT_FAILED));
-            break;
-          case 'mask':
-            this.#onMask(data);
-            break;
-          case 'segment-error':
-            this.#settleRequest(data.requestId, (request) =>
-              request.reject(fromErrorPayload(data.error, SegmentationErrorCode.INFERENCE_FAILED)),
-            );
-            break;
-          case 'dropped':
-            for (const requestId of data.requestIds ?? []) {
-              this.#settleRequest(requestId, (request) => request.reject(createAbortError()));
-            }
-            break;
-        }
-      });
-
-      worker.addEventListener('error', (event) => {
-        if (this.#worker !== worker) return;
-        event.preventDefault?.();
-        const message = (event instanceof ErrorEvent && event.message) || 'unknown error';
-        this.#teardown(
-          new SegmentationError(
-            SegmentationErrorCode.WORKER_CRASHED,
-            `The segmentation worker crashed: ${message}`,
-          ),
-        );
-      });
-
-      worker.postMessage({ type: 'init', model: spec, allowWasm });
+  #loadModel(modelId, allowWasm) {
+    const resolved = applyDevOverride(this.#getModelSpec(modelId), allowWasm);
+    /** @type {(info: ReadyInfo) => void} */
+    let resolve = () => undefined;
+    /** @type {(error: unknown) => void} */
+    let reject = () => undefined;
+    /** @type {Promise<ReadyInfo>} */
+    const ready = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
     });
+    ready.catch(() => undefined);
+    /** @type {ModelSlot} */
+    const slot = { spec: resolved.spec, ready, info: null, resolve, reject, onProgress: null };
+    this.#slots.set(modelId, slot);
+    try {
+      this.#ensureWorker().postMessage({
+        type: 'init',
+        model: resolved.spec,
+        allowWasm: resolved.allowWasm,
+      });
+    } catch (error) {
+      slot.reject(error);
+    }
+    return slot;
+  }
+
+  /**
+   * The worker, started on first use.
+   * @returns {Worker}
+   * @throws {SegmentationError} WORKER_CRASHED when it cannot start
+   */
+  #ensureWorker() {
+    if (this.#worker) return this.#worker;
+    let worker;
+    try {
+      worker = this.#createWorker();
+    } catch (error) {
+      throw new SegmentationError(
+        SegmentationErrorCode.WORKER_CRASHED,
+        `The segmentation worker could not start: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    this.#worker = worker;
+
+    worker.addEventListener('message', (event) => {
+      if (this.#worker !== worker) return;
+      const data = event.data;
+      switch (data?.type) {
+        case 'status':
+          this.#slots.get(data.modelId)?.onProgress?.({
+            phase: data.phase,
+            loadedBytes: data.loadedBytes,
+            totalBytes: data.totalBytes,
+            fromCache: data.fromCache,
+            framesDone: 0,
+            framesTotal: 0,
+            backend: null,
+            frameMs: null,
+          });
+          break;
+        case 'ready': {
+          const slot = this.#slots.get(data.modelId);
+          if (!slot || slot.info) break;
+          slot.info = {
+            modelId: data.modelId,
+            backend: data.backend,
+            adapter: data.adapter ?? null,
+            fromCache: Boolean(data.fromCache),
+            modelBytes: slot.spec.bytes,
+            resize: slot.spec.preprocess.resize,
+            inputSize: slot.spec.inputSize,
+            timings: data.timings,
+          };
+          slot.resolve(slot.info);
+          break;
+        }
+        case 'init-error': {
+          const slot = this.#slots.get(data.modelId);
+          if (!slot || slot.info) break;
+          slot.reject(fromErrorPayload(data.error, SegmentationErrorCode.MODEL_INIT_FAILED));
+          break;
+        }
+        case 'mask':
+          this.#onMask(data);
+          break;
+        case 'segment-error':
+          this.#settleRequest(data.requestId, (request) =>
+            request.reject(fromErrorPayload(data.error, SegmentationErrorCode.INFERENCE_FAILED)),
+          );
+          break;
+        case 'dropped':
+          for (const requestId of data.requestIds ?? []) {
+            this.#settleRequest(requestId, (request) => request.reject(createAbortError()));
+          }
+          break;
+      }
+    });
+
+    worker.addEventListener('error', (event) => {
+      if (this.#worker !== worker) return;
+      event.preventDefault?.();
+      const message = (event instanceof ErrorEvent && event.message) || 'unknown error';
+      this.#teardown(
+        new SegmentationError(
+          SegmentationErrorCode.WORKER_CRASHED,
+          `The segmentation worker crashed: ${message}`,
+        ),
+      );
+    });
+    return worker;
+  }
+
+  /**
+   * Forget a model now (a pending load rejects with `error`) and release it
+   * in the worker once its frames still there have settled: unload it, or
+   * stop the worker when nothing else is loaded or in flight. A model
+   * loaded again meanwhile keeps its session (the worker answers the new
+   * 'init' with 'ready').
+   * @param {string} modelId
+   * @param {unknown} error
+   * @returns {Promise<void>} Resolves once the worker was told
+   */
+  #releaseSlot(modelId, error) {
+    const slot = this.#slots.get(modelId);
+    if (!slot) return Promise.resolve();
+    this.#slots.delete(modelId);
+    if (this.#lastReady?.modelId === modelId) this.#lastReady = null;
+    slot.reject(error);
+    const worker = this.#worker;
+    const release = () => {
+      if (!worker || this.#worker !== worker || this.#slots.has(modelId)) return;
+      if (this.#slots.size === 0 && this.#requests.size === 0) {
+        this.#teardown(error);
+      } else {
+        worker.postMessage({ type: 'unload', modelId });
+      }
+    };
+    const inflight = [...this.#requests.values()]
+      .filter((request) => request.modelId === modelId)
+      .map((request) => request.done);
+    if (inflight.length === 0) {
+      release();
+      return Promise.resolve();
+    }
+    return Promise.allSettled(inflight).then(release);
   }
 
   /**
@@ -690,14 +800,20 @@ export class SegmentationManager {
       throw createAbortError();
     }
     const requestId = ++this.#requestSeq;
-    return new Promise((resolve, reject) => {
-      this.#requests.set(requestId, { resolve, reject, key, clipId });
+    const { modelId } = ready;
+    /** @type {PendingRequest | undefined} */
+    let request;
+    /** @type {Promise<{ totalMs: number, inferenceMs: number }>} */
+    const done = new Promise((resolve, reject) => {
+      request = { resolve, reject, key, clipId, modelId };
+      this.#requests.set(requestId, request);
       try {
         worker.postMessage(
           {
             type: 'segment',
             requestId,
             jobId,
+            modelId,
             bitmap,
             sourceWidth: frame.width,
             sourceHeight: frame.height,
@@ -712,6 +828,8 @@ export class SegmentationManager {
         reject(error);
       }
     });
+    if (request) request.done = done.catch(() => undefined);
+    return done;
   }
 
   /**
@@ -734,11 +852,10 @@ export class SegmentationManager {
   #teardown(error) {
     this.#worker?.terminate();
     this.#worker = null;
-    this.#workerModelId = null;
-    this.#ready = null;
-    this.#readyInfo = null;
-    this.#rejectInit?.(error);
-    this.#rejectInit = null;
+    this.#lastReady = null;
+    const slots = [...this.#slots.values()];
+    this.#slots.clear();
+    for (const slot of slots) slot.reject(error);
     const requests = [...this.#requests.values()];
     this.#requests.clear();
     for (const request of requests) {

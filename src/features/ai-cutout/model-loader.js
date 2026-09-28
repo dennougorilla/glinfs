@@ -13,7 +13,7 @@
  */
 
 import { MODEL_CACHE_NAME } from './model-config.js';
-import { SegmentationError, SegmentationErrorCode } from './protocol.js';
+import { createAbortError, SegmentationError, SegmentationErrorCode } from './protocol.js';
 
 /** @typedef {import('./model-config.js').ModelSpec} ModelSpec */
 
@@ -33,6 +33,8 @@ import { SegmentationError, SegmentationErrorCode } from './protocol.js';
  * @property {string} [baseHref] - Resolves a relative model URL (worker location)
  * @property {string} [cacheName]
  * @property {(progress: LoadProgress) => void} [onProgress]
+ * @property {AbortSignal} [signal] - Aborting stops the download and rejects
+ *   with an AbortError (the model was unloaded while it loaded)
  */
 
 /**
@@ -92,9 +94,11 @@ export async function verifyModelBytes(bytes, spec, subtle) {
  * @param {Response} response
  * @param {number} expectedBytes
  * @param {(loaded: number) => void} onChunk
+ * @param {AbortSignal} [signal] - Stops reading (a fetch abort already
+ *   fails the read; this also covers bodies that ignore it)
  * @returns {Promise<Uint8Array>}
  */
-async function readBody(response, expectedBytes, onChunk) {
+async function readBody(response, expectedBytes, onChunk, signal) {
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     onChunk(bytes.byteLength);
@@ -106,6 +110,10 @@ async function readBody(response, expectedBytes, onChunk) {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (signal?.aborted) {
+      await reader.cancel().catch(() => undefined);
+      throw createAbortError('Model load cancelled');
+    }
     if (loaded + value.byteLength > expectedBytes) {
       await reader.cancel();
       throw new SegmentationError(
@@ -150,7 +158,12 @@ export async function loadModelBytes(spec, deps = {}) {
     baseHref = globalThis.location?.href ?? 'http://localhost/',
     cacheName = MODEL_CACHE_NAME,
     onProgress,
+    signal,
   } = deps;
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw createAbortError('Model load cancelled');
+  };
+  throwIfAborted();
   if (!subtle) {
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
@@ -173,8 +186,10 @@ export async function loadModelBytes(spec, deps = {}) {
           fromCache: true,
         });
         await verifyModelBytes(bytes, spec, subtle);
+        throwIfAborted();
         return { bytes, fromCache: true, cached: true };
       } catch {
+        throwIfAborted();
         // Unreadable, corrupt or stale entry: drop it and download a fresh copy
         await cache.delete(key).catch(() => false);
       }
@@ -185,8 +200,9 @@ export async function loadModelBytes(spec, deps = {}) {
   try {
     // no-store: the verified copy lives in Cache Storage; keeping a second
     // copy of the model (about 90 MB) in the HTTP cache would only waste disk
-    response = await fetchImpl(spec.url, { cache: 'no-store' });
+    response = await fetchImpl(spec.url, { cache: 'no-store', signal });
   } catch (error) {
+    throwIfAborted();
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
       `The model download failed: ${error instanceof Error ? error.message : error}`,
@@ -202,15 +218,20 @@ export async function loadModelBytes(spec, deps = {}) {
   onProgress?.({ phase: 'downloading', loadedBytes: 0, totalBytes: spec.bytes, fromCache: false });
   let bytes;
   try {
-    bytes = await readBody(response, spec.bytes, (loaded) =>
-      onProgress?.({
-        phase: 'downloading',
-        loadedBytes: loaded,
-        totalBytes: spec.bytes,
-        fromCache: false,
-      }),
+    bytes = await readBody(
+      response,
+      spec.bytes,
+      (loaded) =>
+        onProgress?.({
+          phase: 'downloading',
+          loadedBytes: loaded,
+          totalBytes: spec.bytes,
+          fromCache: false,
+        }),
+      signal,
     );
   } catch (error) {
+    throwIfAborted();
     if (error instanceof SegmentationError) throw error;
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
@@ -225,6 +246,7 @@ export async function loadModelBytes(spec, deps = {}) {
     fromCache: false,
   });
   await verifyModelBytes(bytes, spec, subtle);
+  throwIfAborted();
 
   let cached = false;
   if (cache) {
