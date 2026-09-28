@@ -1,3 +1,4 @@
+import { ALPHA_THRESHOLD } from '../../../../src/shared/edits/color-key.js';
 /**
  * Frame composition with touch-ups (mask brush): strokes change the color
  * key's or the AI mask's keep/remove decision before any pixel is cleared,
@@ -176,7 +177,10 @@ describe('touch-ups over the color key', () => {
     const edits = editsOf({ touchUps: [dot('restore', 1, 1, { radius: 0.2 })] });
     const result = await composeOutputFrameRGBA(patternFrame(), null, edits, 0, null, 0.5);
     expect(result.width).toBe(4);
-    expect(result.data[3]).toBe(255);
+    // Removal and touch-ups are decided at full resolution and the RGBA is
+    // then downscaled with its alpha (no halo), so the restored output pixel
+    // averages to partial alpha — opaque once the GIF snaps alpha to 1 bit
+    expect(result.data[3]).toBeGreaterThanOrEqual(ALPHA_THRESHOLD);
     // A removed neighbour stays removed
     expect(result.data[(2 * 4 + 0) * 4 + 3]).toBe(0);
   });
