@@ -195,7 +195,8 @@ let exportDialog = null;
 
 /**
  * `#/export` asked for the editor with the Export dialog open: the next
- * editor mount that shows a clip opens it (see initExportRoute)
+ * editor mount takes the request (see initExportRoute) and opens the dialog
+ * once it shows the clip
  */
 let pendingExportDialog = false;
 
@@ -260,6 +261,12 @@ function getActiveClipId() {
  * Initialize editor feature
  */
 export function initEditor() {
+  // A `#/export` request is for this mount only: taken first, so a mount
+  // that fails, shows an error or is left while a clip opens can't leave it
+  // armed for a later, unrelated mount
+  const openExportDialogOnMount = pendingExportDialog;
+  pendingExportDialog = false;
+
   const container = qsRequired('#main-content');
 
   // Register test hooks
@@ -285,7 +292,7 @@ export function initEditor() {
     } else if (queue.length >= 1) {
       // Newest entry needs the codec (compressed / still compressing):
       // show a lightweight opening state while it decodes, then re-init
-      return renderClipOpeningScreen(container, queue[0].id);
+      return renderClipOpeningScreen(container, queue[0].id, openExportDialogOnMount);
     }
     // 0 queued: fall through to the existing invalid-payload screen
   }
@@ -295,8 +302,6 @@ export function initEditor() {
   if (!hasValidEditorPayload) {
     const validation = validateClipPayload(clipPayload);
     if (!validation.valid) {
-      // Nothing to export either: drop a pending `#/export` request
-      pendingExportDialog = false;
       /** @type {(() => void)[]} */
       const cleanups = [];
 
@@ -348,7 +353,6 @@ export function initEditor() {
   const fps = hasValidEditorPayload ? editorPayload.clip.fps : clipPayload?.fps || DEFAULT_FPS;
 
   if (frames.length === 0) {
-    pendingExportDialog = false;
     /** @type {(() => void)[]} */
     const cleanups = [];
 
@@ -725,8 +729,7 @@ export function initEditor() {
   }
 
   // `#/export` deep link: the editor with the Export dialog open
-  if (pendingExportDialog) {
-    pendingExportDialog = false;
+  if (openExportDialogOnMount) {
     handleExport();
   }
 
@@ -1155,6 +1158,9 @@ function handleExport() {
   exportDialog = openExportDialog({
     opener,
     onClose: () => {
+      // The editor's teardown drops the handle before closing the dialog:
+      // playback must not restart on the editor going away
+      if (!exportDialog) return;
       exportDialog = null;
       if (wasPlaying && store === sessionStore && !sessionStore.getState().isPlaying) {
         sessionStore.setState((s) => setPlaying(s, true));
@@ -1828,9 +1834,12 @@ export async function promoteClipFromQueue(id) {
  *
  * @param {HTMLElement} container
  * @param {string} entryId - Queue entry being opened
+ * @param {boolean} [openExportDialogOnMount=false] - A `#/export` request
+ *   taken by this mount: handed on to the editor that replaces this screen,
+ *   and dropped when the clip cannot be opened or the screen is left
  * @returns {() => void} Route cleanup
  */
-function renderClipOpeningScreen(container, entryId) {
+function renderClipOpeningScreen(container, entryId, openExportDialogOnMount = false) {
   updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
   let disposed = false;
 
@@ -1856,6 +1865,7 @@ function renderClipOpeningScreen(container, entryId) {
     if (getClipPayload()) {
       disposed = true;
       unsubscribe();
+      pendingExportDialog = openExportDialogOnMount;
       initEditor();
     }
   });
