@@ -96,16 +96,6 @@ export function buildSizeLadder(base, ladder = SIZE_LADDER) {
 }
 
 /**
- * Every frame skip the ladder can use (for preparing AI masks up front:
- * skip 3 exports frames that skip 2 never touches)
- * @param {SizeRung[]} rungs
- * @returns {number[]} Distinct, ascending
- */
-export function getLadderFrameSkips(rungs) {
-  return [...new Set(rungs.map((rung) => rung.frameSkip))].sort((a, b) => a - b);
-}
-
-/**
  * @param {AbortSignal | undefined} signal
  */
 function throwIfAborted(signal) {

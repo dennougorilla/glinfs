@@ -13,6 +13,7 @@ import {
 } from '../../../src/shared/app-store.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
 import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
+import { GifEncoderManager } from '../../../src/workers/worker-manager.js';
 
 /**
  * Export dialog wiring for edits, transparency, imported clips, the editor
@@ -421,6 +422,40 @@ describe('export dialog: target size', () => {
     expect($('#export-result-target')?.textContent).toBe(
       'Fits the 1.0 MB target with 32 colors · every frame · 100 %.',
     );
+  });
+
+  it('composes each sample once per frame rate and scale, and runs every encode on one encoder', async () => {
+    inject({ count: 30 });
+    updateSetting('export', 'targetSizeMB', 1);
+    const dispose = vi.spyOn(GifEncoderManager.prototype, 'dispose');
+    // Only the 50 % sample fits
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      params.frameIndices
+        ? /** @type {any} */ ({ size: params.scale === 0.5 ? 100 : 50_000_000 })
+        : new Blob([new Uint8Array(900_000)], { type: 'image/gif' }),
+    );
+    dialog = openExportDialog();
+    clickExport();
+    await vi.waitFor(() => expect($('#export-result')).not.toBeNull());
+
+    const calls = vi.mocked(encodeGif).mock.calls.map(([params]) => params);
+    const samples = calls.filter((params) => params.frameIndices);
+    const full = calls.filter((params) => !params.frameIndices);
+    const key = (/** @type {any} */ p) => `${p.settings.frameSkip}:${p.scale}`;
+    // 103 (the quality's cap), 64 and 32 colors at every frame, then fewer
+    // frames, then smaller
+    expect(samples.map(key)).toEqual(['1:1', '1:1', '1:1', '2:1', '3:1', '3:0.75', '3:0.5']);
+    // The rungs that only lower the colors re-quantize the same composed
+    // frames; every other frame rate or scale composes its own
+    const caches = samples.map((params) => params.frameCache);
+    expect(caches.slice(1, 3).every((cache) => cache === caches[0])).toBe(true);
+    expect(new Set(caches).size).toBe(5);
+    // One encoder worker for the whole export, released at the end
+    const encoder = samples[0].encoderManager;
+    expect(encoder).toBeInstanceOf(GifEncoderManager);
+    expect([...samples, ...full].every((params) => params.encoderManager === encoder)).toBe(true);
+    expect(dispose.mock.contexts).toContain(encoder);
+    dispose.mockRestore();
   });
 
   it('steps down a rung when the real GIF is still too big, and says so when nothing fits', async () => {

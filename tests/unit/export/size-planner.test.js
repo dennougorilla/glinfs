@@ -7,7 +7,6 @@ import {
   extrapolateGifSize,
   formatFileSize,
   GIF_FILE_OVERHEAD,
-  getLadderFrameSkips,
   planTargetSize,
   SIZE_LADDER,
 } from '../../../src/features/export/size-planner.js';
@@ -65,11 +64,6 @@ describe('buildSizeLadder', () => {
   it('keeps a user frame skip above the ladder', () => {
     const rungs = buildSizeLadder({ maxColors: 32, frameSkip: 5, scale: 0.25 });
     expect(rungs).toEqual([{ maxColors: 32, frameSkip: 5, scale: 0.25 }]);
-  });
-
-  it('lists the frame skips the ladder uses', () => {
-    expect(getLadderFrameSkips(buildSizeLadder(FULL))).toEqual([1, 2, 3]);
-    expect(getLadderFrameSkips(buildSizeLadder({ ...FULL, frameSkip: 4 }))).toEqual([4]);
   });
 });
 
