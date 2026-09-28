@@ -54,6 +54,8 @@
  * @property {string} id - Stable id (edits, mask keys, messages)
  * @property {string} label - Short UI name
  * @property {string} description - What it is good at (UI copy)
+ * @property {string} finds - What it cuts out, as the object of "Finds …
+ *   in every frame" (UI copy)
  * @property {string} fileName - File name under public/models/, in the served
  *   URL and of the `models-v1` release asset
  * @property {number} bytes - Exact byte size of the shipped file
@@ -102,6 +104,7 @@ const ANIME = {
   id: 'anime',
   label: 'Anime',
   description: 'Anime and illustrated characters',
+  finds: 'the characters',
   fileName: 'isnetis-fp16.onnx',
   bytes: 88_070_957,
   sha256: 'f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0',
@@ -152,6 +155,7 @@ const GENERAL = {
   id: 'general',
   label: 'General',
   description: 'People, pets and objects in live-action video',
+  finds: 'the people, pets and objects',
   fileName: 'isnet-general-fp16.onnx',
   bytes: 90_448_072,
   sha256: '437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b',

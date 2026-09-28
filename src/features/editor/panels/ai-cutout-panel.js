@@ -68,9 +68,8 @@ export function formatEdge(edge) {
  * @returns {string}
  */
 export function getAiIntro(modelId) {
-  const { label } = getModelEntry(modelId);
-  const subject = modelId === 'general' ? 'the people, pets and objects' : 'the characters';
-  return `Finds ${subject} in every frame with the ${label} model, which runs in this browser. The first analysis with it downloads ${getModelSizeLabel(modelId)} once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time); your frames never leave this device.`;
+  const { label, finds } = getModelEntry(modelId);
+  return `Finds ${finds} in every frame with the ${label} model, which runs in this browser. The first analysis with it downloads ${getModelSizeLabel(modelId)} once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time); your frames never leave this device.`;
 }
 
 /**
