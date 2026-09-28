@@ -701,7 +701,7 @@ async function prepareAiMasks(frameSkips, signal) {
   const pending = collectPendingFrames(exported, maskStore, modelId);
   if (pending.length > 0) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: pending.length });
-    if (clipId !== undefined) maskStore.touchClip(clipId);
+    if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
     await getSegmentationManager().analyzeFrames(exported, {

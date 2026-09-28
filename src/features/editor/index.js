@@ -1525,7 +1525,10 @@ function startAiCutoutSession() {
   aiSession = session;
 
   const clipId = getActiveClipId();
-  if (clipId !== undefined) maskStore.touchClip(clipId);
+  // Only the masks of the clip's model: the other model's set may be evicted first
+  if (clipId !== undefined) {
+    maskStore.touchClip(clipId, getAiModelId(sessionStore.getState().edits.background.ai));
+  }
 
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight

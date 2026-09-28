@@ -118,6 +118,52 @@ describe('createMaskStore', () => {
     expect(store.byteLength).toBe(8);
   });
 
+  it('groups masks by clip and model: the unused model’s set of the active clip can be evicted', () => {
+    const store = createMaskStore({ capBytes: 10 });
+    store.set('anime:a', mask(4), 'A', 'anime');
+    store.set('anime:b', mask(4), 'A', 'anime');
+    // Same clip, the other model: writing it evicts the anime set, which
+    // nothing reads any more, instead of growing past the cap
+    store.set('general:a', mask(4), 'A', 'general');
+    expect(store.has('anime:a')).toBe(false);
+    expect(store.has('anime:b')).toBe(false);
+    expect(store.keysForClip('A')).toEqual(['general:a']);
+    expect(store.byteLength).toBe(4);
+  });
+
+  it('reading or touching one model’s masks keeps that set, not the clip’s other one', () => {
+    const store = createMaskStore({ capBytes: 12 });
+    store.set('anime:a', mask(4), 'A', 'anime');
+    store.set('general:a', mask(4), 'A', 'general');
+    store.set('b', mask(4), 'B');
+    store.get('anime:a');
+    store.touchClip('B');
+    store.set('c', mask(4), 'C'); // 16 > 12: the least recently used set goes
+    expect(store.has('general:a')).toBe(false);
+    expect(store.has('anime:a')).toBe(true);
+    expect(store.has('b')).toBe(true);
+
+    // touchClip with a model touches only that set; without one, every set
+    store.set('general:a', mask(4), 'A', 'general'); // evicts anime:a (oldest)
+    expect(store.has('anime:a')).toBe(false);
+    store.set('anime:a', mask(4), 'A', 'anime'); // evicts b
+    store.touchClip('A', 'general');
+    store.set('d', mask(8), 'D'); // evicts c, then anime:a (older than general:a)
+    expect(store.keysForClip('A')).toEqual(['general:a']);
+  });
+
+  it('deleteClip drops every model’s masks of the clip', () => {
+    const store = createMaskStore();
+    store.set('anime:a', mask(2), 'A', 'anime');
+    store.set('general:a', mask(2), 'A', 'general');
+    store.set('anime:b', mask(2), 'B', 'anime');
+    expect(store.keysForClip('A').sort()).toEqual(['anime:a', 'general:a']);
+    expect(store.deleteClip('A')).toBe(2);
+    expect(store.keysForClip('A')).toEqual([]);
+    expect(store.keysForClip('B')).toEqual(['anime:b']);
+    expect(store.byteLength).toBe(2);
+  });
+
   it('notifies subscribers with the change and new version', () => {
     const store = createMaskStore({ capBytes: 4 });
     const listener = vi.fn();
@@ -126,7 +172,7 @@ describe('createMaskStore', () => {
     store.set('b', mask(4), 'B'); // evicts A
     expect(listener).toHaveBeenCalledWith({ type: 'set', key: 'a', clipId: 'A', version: 1 });
     expect(listener).toHaveBeenCalledWith({ type: 'set', key: 'b', clipId: 'B', version: 2 });
-    expect(listener).toHaveBeenCalledWith({ type: 'evict', clipId: 'A', version: 3 });
+    expect(listener).toHaveBeenCalledWith({ type: 'evict', clipId: 'A', model: '', version: 3 });
     store.delete('b');
     expect(listener).toHaveBeenLastCalledWith({
       type: 'delete',

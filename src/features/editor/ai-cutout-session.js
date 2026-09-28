@@ -245,7 +245,7 @@ export function createAiCutoutSession(options) {
     analysisController = controller;
     const clipId = getClipId();
     const modelId = getAiModelId(getState()?.edits.background.ai);
-    if (clipId !== undefined) maskStore.touchClip(clipId);
+    if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
     report({

@@ -231,6 +231,9 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(bitmaps.every((b) => b.close.mock.calls.length === 0)).toBe(true);
 
     expect(maskStore.keysForClip('clip-1').sort()).toEqual(['anime:f0', 'anime:f1', 'anime:f3']);
+    // Grouped by clip and model, so eviction can drop one model's set
+    maskStore.touchClip('clip-1', 'general'); // no such group: no-op
+    expect(maskStore.keysForClip('clip-1')).toHaveLength(3);
     expect(maskStore.get('anime:f3')).toMatchObject({ width: 480, height: 640 });
     expect(manager.backend).toBe('webgpu');
     expect(manager.readyInfo).toMatchObject({
@@ -693,6 +696,19 @@ describe('SegmentationManager with more than one model', () => {
     expect(maskStore.has('anime:b')).toBe(true);
     expect(maskStore.has('general:a')).toBe(true);
     expect(manager.cancelledJobCount).toBe(0);
+  });
+
+  it('stores each model’s masks in its own group of the clip', async () => {
+    const maskStore = createMaskStore({ capBytes: 1024 * 576 * 3 });
+    const { manager: small } = createHarness({}, { maskStore });
+    await small.analyzeFrames([makeFrame('a'), makeFrame('b')], { clipId: 'c', modelId: 'anime' });
+    // Two general masks of the same clip push it over the cap: the anime
+    // set goes, not the general one being written
+    await small.analyzeFrames([makeFrame('a'), makeFrame('b')], {
+      clipId: 'c',
+      modelId: 'general',
+    });
+    expect(maskStore.keysForClip('c').sort()).toEqual(['general:a', 'general:b']);
   });
 
   it('unloads a WASM session once its frames settled before another model loads', async () => {

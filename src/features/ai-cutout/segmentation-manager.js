@@ -742,6 +742,7 @@ export class SegmentationManager {
           request.key,
           { data: new Uint8Array(data.data), width: data.width, height: data.height },
           request.clipId,
+          request.modelId,
         );
       }
       request.resolve({ totalMs: data.totalMs, inferenceMs: data.inferenceMs });
