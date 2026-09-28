@@ -5,8 +5,11 @@
  * so layouts are deterministic. getImageData/putImageData work on a real
  * RGBA backing buffer, and drawImage fills the drawn region from the
  * source's `fill` color (tests pass `{ fill: [r, g, b, a] }` as the source)
- * or copies a patterned source (`{ rgba, width, height }`) pixel for pixel,
- * so keying and readback order can be asserted on real pixels. fillText
+ * or copies a patterned source (`{ rgba, width, height }`) or another fake
+ * context's canvas pixel for pixel, so keying and readback order can be
+ * asserted on real pixels. A pixel source drawn at a different size is
+ * resampled with a box filter over premultiplied alpha, as a real canvas
+ * does (a transparent pixel adds no color to its neighbours). fillText
  * paints one pixel of the fill color at its anchor (x, y), translated by any
  * translate() calls since the last save().
  */
@@ -108,20 +111,48 @@ export function createFakeContext(width = 0, height = 0, canvas = { width, heigh
       return { width: (text.length * px) / 2 };
     },
     drawImage: record('drawImage', (source, ...rest) => {
-      if (source?.rgba) {
-        // Patterned source ({ rgba, width, height }): copied 1:1, unscaled
-        const [sx, sy, sw, sh, dx, dy] =
+      // Pixel sources: a pattern ({ rgba, width, height }) or the canvas of
+      // another fake context
+      const sourcePixels = source?.rgba ?? source?.__fakeContext?.__pixels();
+      if (sourcePixels) {
+        const [sx, sy, sw, sh, dx, dy, dw = sw, dh = sh] =
           rest.length === 2
             ? [0, 0, source.width, source.height, rest[0], rest[1]]
-            : [rest[0], rest[1], rest[2], rest[3], rest[4], rest[5]];
+            : rest.length === 4
+              ? [0, 0, source.width, source.height, rest[0], rest[1], rest[2], rest[3]]
+              : rest;
         sync();
-        for (let yy = 0; yy < sh; yy++) {
-          for (let xx = 0; xx < sw; xx++) {
+        for (let yy = 0; yy < dh; yy++) {
+          for (let xx = 0; xx < dw; xx++) {
             const x = dx + xx;
             const y = dy + yy;
             if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
-            const from = ((sy + yy) * source.width + sx + xx) * 4;
-            pixels.set(source.rgba.subarray(from, from + 4), (y * canvas.width + x) * 4);
+            // Source pixels covered by this destination pixel (1:1 when unscaled)
+            const x0 = sx + Math.floor((xx * sw) / dw);
+            const x1 = Math.max(x0 + 1, sx + Math.floor(((xx + 1) * sw) / dw));
+            const y0 = sy + Math.floor((yy * sh) / dh);
+            const y1 = Math.max(y0 + 1, sy + Math.floor(((yy + 1) * sh) / dh));
+            let r = 0;
+            let g = 0;
+            let b = 0;
+            let a = 0;
+            let n = 0;
+            for (let py = y0; py < y1; py++) {
+              for (let px = x0; px < x1; px++) {
+                const from = (py * source.width + px) * 4;
+                const alpha = sourcePixels[from + 3];
+                r += sourcePixels[from] * alpha;
+                g += sourcePixels[from + 1] * alpha;
+                b += sourcePixels[from + 2] * alpha;
+                a += alpha;
+                n++;
+              }
+            }
+            const to = (y * canvas.width + x) * 4;
+            pixels[to] = a > 0 ? r / a : 0;
+            pixels[to + 1] = a > 0 ? g / a : 0;
+            pixels[to + 2] = a > 0 ? b / a : 0;
+            pixels[to + 3] = a / n;
           }
         }
         return;
@@ -158,7 +189,15 @@ export function createFakeContext(width = 0, height = 0, canvas = { width, heigh
     },
     /** Test helper: names of recorded calls */
     names: () => calls.map((c) => c.name),
+    /** Backing pixels, read without recording a call (drawImage of this canvas) */
+    __pixels: () => {
+      sync();
+      return pixels;
+    },
   };
+
+  /** Lets drawImage(thisCanvas, ...) on another fake context read the pixels */
+  Object.defineProperty(canvas, '__fakeContext', { value: ctx, configurable: true });
 
   return ctx;
 }
