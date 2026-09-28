@@ -232,27 +232,47 @@ export function countGifPixelsNear(frame, rect, rgb, maxDistance = 60) {
 // AI cutout (stub model, WASM fallback)
 // ============================================================
 
+/** Served file name of each model (see src/features/ai-cutout/model-registry.js) */
+export const MODEL_FILES = /** @type {const} */ ({
+  anime: 'isnetis.onnx',
+  general: 'isnet-general-use.onnx',
+});
+
 /**
- * Serve the stub model in place of the real one and count the requests.
+ * Serve stub models in place of the real ones and count the requests.
  * Register it before the page loads the app.
  * @param {import('@playwright/test').Page} page
- * @param {Buffer} model - Stub model bytes (tests/fixtures/models/stub-seg.onnx)
- * @returns {Promise<{ count: number }>}
+ * @param {Buffer} model - Stub served as the anime model (tests/fixtures/models/stub-seg.onnx)
+ * @param {{ general?: Buffer }} [others] - Stub served as the general model
+ *   (tests/fixtures/models/stub-seg-general.onnx)
+ * @returns {Promise<{ count: number, byModel: { anime: number, general: number } }>}
+ *   count: requests for any model
  */
-export async function serveStubModel(page, model) {
-  const requests = { count: 0 };
-  await page.route('**/models/isnetis.onnx', async (route) => {
-    requests.count++;
-    await route.fulfill({ body: model, contentType: 'application/octet-stream' });
-  });
+export async function serveStubModel(page, model, others = {}) {
+  const requests = { count: 0, byModel: { anime: 0, general: 0 } };
+  /** @type {[keyof typeof MODEL_FILES, Buffer | undefined][]} */
+  const stubs = [
+    ['anime', model],
+    ['general', others.general],
+  ];
+  for (const [modelId, body] of stubs) {
+    if (!body) continue;
+    await page.route(`**/models/${MODEL_FILES[modelId]}`, async (route) => {
+      requests.count++;
+      requests.byModel[modelId]++;
+      await route.fulfill({ body, contentType: 'application/octet-stream' });
+    });
+  }
   return requests;
 }
 
 /**
  * Open the app with the DEV-only AI cutout hook set up for the stub model
  * @param {import('@playwright/test').Page} page
- * @param {{ sha256: string, bytes: number, allowWasm: boolean }} override - allowWasm:
- *   run the WASM fallback without the user's explicit choice
+ * @param {{ sha256?: string, bytes?: number, models?: Record<string, { sha256: string, bytes: number }>, allowWasm: boolean }} override
+ *   sha256/bytes: accepted for every model unless `models[id]` gives that
+ *   model's own (one stub per model); allowWasm: run the WASM fallback
+ *   without the user's explicit choice
  */
 export async function gotoCaptureWithStubModel(page, override) {
   await gotoCapture(page);
@@ -332,6 +352,16 @@ export async function chooseAiCutout(page) {
   await page.locator('label[for="ai-method-ai"]').click();
   await expect(page.locator('#ai-method-ai')).toBeChecked();
   await expect(page.locator('#ai-section')).toBeVisible();
+}
+
+/**
+ * Choose the AI model in the editor's AI section
+ * @param {import('@playwright/test').Page} page
+ * @param {'anime' | 'general'} modelId
+ */
+export async function chooseAiModel(page, modelId) {
+  await page.locator(`label[for="ai-model-${modelId}"]`).click();
+  await expect(page.locator(`#ai-model-${modelId}`)).toBeChecked();
 }
 
 /**
