@@ -58,6 +58,7 @@ beforeEach(() => {
     onRemoveText: vi.fn(),
     onSetBackground: vi.fn(),
     onToggleBackground: vi.fn(),
+    onSetBackgroundMethod: vi.fn(),
     onSetPickingKeyColor: vi.fn(),
   };
   document.body.innerHTML = '';
@@ -267,7 +268,9 @@ describe('Background panel', () => {
       }),
       10,
     );
-    expect($('#background-enabled').checked).toBe(true);
+    expect($('#ai-method-color').checked).toBe(true);
+    expect($('#background-method-off').checked).toBe(false);
+    expect($('#background-settings').hidden).toBe(false);
     expect($('#background-color').value).toBe('#abcdef');
     expect($('#background-pick').checked).toBe(true);
     expect($('.editor-bg-pick').classList.contains('editor-bg-pick--active')).toBe(true);
@@ -283,9 +286,12 @@ describe('Background panel', () => {
   });
 
   it('controls call the background handlers', () => {
-    $('#background-enabled').checked = true;
-    fire($('#background-enabled'), 'change');
-    expect(handlers.onToggleBackground).toHaveBeenCalledWith(true);
+    $('#ai-method-color').checked = true;
+    fire($('#ai-method-color'), 'change');
+    expect(handlers.onSetBackgroundMethod).toHaveBeenLastCalledWith('color');
+    $('#background-method-off').checked = true;
+    fire($('#background-method-off'), 'change');
+    expect(handlers.onSetBackgroundMethod).toHaveBeenLastCalledWith('off');
 
     $('#background-color').value = '#ff00ff';
     fire($('#background-color'), 'input');

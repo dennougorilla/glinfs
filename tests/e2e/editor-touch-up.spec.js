@@ -100,7 +100,7 @@ function readEditorState(page) {
  */
 async function enableColorKey(page) {
   await openSidebarTab(page, 'background');
-  await page.locator('#background-enabled').check();
+  await page.locator('label[for="ai-method-color"]').click();
   await expect
     .poll(async () => (await readEditorState(page))?.edits.background)
     .toMatchObject({ enabled: true, color: '#00ff00' });
@@ -201,7 +201,7 @@ test.describe('Mask brush (touch up)', () => {
     await expect(page.locator('#preview-view')).toBeHidden();
     await expect(page.locator('#editor-side-tab-badge')).toBeHidden();
 
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await expect(page.locator('#background-lead')).toBeHidden();
     await expect(page.locator('#ai-color-fields')).toBeVisible();
     await expect(page.locator('#ai-section')).toBeHidden();
@@ -280,7 +280,7 @@ test.describe('Mask brush (touch up)', () => {
 
     // Removal off hides the switch and shows the plain frame
     await openSidebarTab(page, 'background');
-    await page.locator('#background-enabled').uncheck();
+    await page.locator('label[for="background-method-off"]').click();
     await expect(page.locator('#preview-view')).toBeHidden();
     await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
   });

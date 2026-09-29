@@ -59,7 +59,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
  * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
- * @property {(method: import('../../shared/edits/model.js').BackgroundMethod) => void} [onSetBackgroundMethod] - Color key or AI cutout
+ * @property {(method: import('../../shared/edits/model.js').BackgroundMethod | 'off') => void} [onSetBackgroundMethod] - Off | Color | AI switch: off turns removal off, a method turns it on with that method
  * @property {() => void} [onAiAnalyze] - Analyze the selection (also Retry)
  * @property {() => void} [onAiCancel] - Cancel the running analysis
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice

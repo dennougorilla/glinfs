@@ -896,7 +896,7 @@ function render(container) {
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
       onPickTransparentArea: handlePickTransparentArea,
-      onSetBackgroundMethod: handleSetBackgroundMethod,
+      onSetBackgroundMethod: handleSetBackgroundChoice,
       onAiAnalyze: handleAiAnalyze,
       onAiCancel: handleAiCancel,
       onAiAllowWasm: handleAiAllowWasm,
@@ -1436,6 +1436,27 @@ function handleToggleBackground(enabled) {
     }
   }
   store.setState((state) => setBackground(state, patch));
+}
+
+/**
+ * The Background tab's Off | Color | AI switch. Off turns removal off (a
+ * running analysis stops: its controls are hidden then); Color or AI turns
+ * it on with that method. Each method keeps its own settings; the first
+ * switch to Color without a chosen key color detects the edge color.
+ * @param {import('../../shared/edits/model.js').BackgroundMethod | 'off'} choice
+ */
+function handleSetBackgroundChoice(choice) {
+  if (!store) return;
+  if (choice === 'off') {
+    if (aiSession?.analyzing) {
+      aiSession.cancel();
+      announce('Background removal off. The analysis was stopped; finished frames are kept.');
+    }
+    handleToggleBackground(false);
+    return;
+  }
+  handleSetBackgroundMethod(choice);
+  if (!store.getState().edits.background.enabled) handleToggleBackground(true);
 }
 
 /**

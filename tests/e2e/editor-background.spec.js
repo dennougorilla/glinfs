@@ -52,7 +52,7 @@ async function previewAlpha(page, x, y) {
 /** @param {import('@playwright/test').Page} page */
 async function openBackgroundPanel(page) {
   await openSidebarTab(page, 'background');
-  await expect(page.locator('#background-enabled')).toBeVisible();
+  await expect(page.locator('#background-method-off')).toBeVisible();
 }
 
 /**
@@ -62,7 +62,7 @@ async function openBackgroundPanel(page) {
  */
 async function enableWithOtherColor(page) {
   await openBackgroundPanel(page);
-  await page.locator('#background-enabled').check();
+  await page.locator('label[for="ai-method-color"]').click();
   await page.locator('#background-color').fill('#ff00ff');
   await expect
     .poll(async () => (await readEditorState(page))?.edits.background)
@@ -121,7 +121,7 @@ test.describe('Editor background removal', () => {
     expect(state?.pickingKeyColor).toBe(false);
     // The pick selected nothing else: the caption keeps its position, no crop
     expect(state?.cropArea).toBeNull();
-    await expect(page.locator('#background-enabled')).toBeChecked();
+    await expect(page.locator('#ai-method-color')).toBeChecked();
     await expect(page.locator('#background-color')).toHaveValue('#00ff00');
 
     // The preview shows the removal (checkerboard shows through)
@@ -188,7 +188,7 @@ test.describe('Editor background removal', () => {
 
   test('a crop drag does not re-key the frame on every pointer move', async ({ page }) => {
     await openBackgroundPanel(page);
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(0);
     await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats());
@@ -239,7 +239,7 @@ test.describe('Editor background removal', () => {
 
   test('enabling removal without a picked color keys out the edge color', async ({ page }) => {
     await openBackgroundPanel(page);
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
 
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
@@ -256,7 +256,7 @@ test.describe('Editor background removal', () => {
     await expect(page.locator('#background-tolerance-value')).toHaveText('35');
 
     // Turning it off restores the frame
-    await page.locator('#background-enabled').uncheck();
+    await page.locator('label[for="background-method-off"]').click();
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(255);
   });
 });
@@ -307,7 +307,7 @@ test.describe('Background removal on an already transparent clip', () => {
   });
 
   test('enabling removal does not key out black and keeps the dark outline', async ({ page }) => {
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background.enabled)
       .toBe(true);
@@ -323,7 +323,7 @@ test.describe('Background removal on an already transparent clip', () => {
   });
 
   test('the eyedropper on a transparent area picks nothing and stays on', async ({ page }) => {
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background.enabled)
       .toBe(true);

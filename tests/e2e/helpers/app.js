@@ -353,13 +353,13 @@ export async function openSidebarTab(page, tab) {
 }
 
 /**
- * Open the Background tab and turn background removal on (the method and
- * its settings only show while it is on)
+ * Open the Background tab and turn background removal on with the color
+ * key (the settings only show while a method is chosen)
  * @param {import('@playwright/test').Page} page
  */
 export async function enableBackgroundRemoval(page) {
   await openSidebarTab(page, 'background');
-  await page.locator('#background-enabled').check();
+  await page.locator('label[for="ai-method-color"]').click();
   await expect(page.locator('#background-settings')).toBeVisible();
 }
 
@@ -368,7 +368,7 @@ export async function enableBackgroundRemoval(page) {
  * @param {import('@playwright/test').Page} page
  */
 export async function chooseAiCutout(page) {
-  await enableBackgroundRemoval(page);
+  await openSidebarTab(page, 'background');
   await page.locator('label[for="ai-method-ai"]').click();
   await expect(page.locator('#ai-method-ai')).toBeChecked();
   await expect(page.locator('#ai-section')).toBeVisible();

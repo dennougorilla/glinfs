@@ -42,7 +42,7 @@ async function addEdits(page, caption) {
   await page.locator('#text-layer-text').fill(caption);
   await page.locator('#text-layer-color').fill('#ff8800');
   await openSidebarTab(page, 'background');
-  await page.locator('#background-enabled').check();
+  await page.locator('label[for="ai-method-color"]').click();
   await page.locator('#background-tolerance').fill('42');
   await expect.poll(async () => (await readEditorState(page))?.edits.background.tolerance).toBe(42);
 }
@@ -61,7 +61,7 @@ async function expectEdits(page, caption) {
   expect(state?.edits.background).toMatchObject({ enabled: true, tolerance: 42 });
   // The panels reflect the restored edits
   await expect(page.locator('#text-layer-list .editor-text-item-select')).toHaveText(caption);
-  await expect(page.locator('#background-enabled')).toBeChecked();
+  await expect(page.locator('#ai-method-color')).toBeChecked();
   await expect(page.locator('#background-tolerance')).toHaveValue('42');
 }
 
@@ -139,10 +139,10 @@ test.describe('Editor edits persistence', () => {
     // The key color shows once removal is on (which detects the clip's
     // edge, #2050a0); choose the default green on purpose, then turn it off
     await openSidebarTab(page, 'background');
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await page.locator('#background-color').fill('#ff0000');
     await page.locator('#background-color').fill('#00ff00');
-    await page.locator('#background-enabled').uncheck();
+    await page.locator('label[for="background-method-off"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
@@ -154,7 +154,7 @@ test.describe('Editor edits persistence', () => {
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
     await openSidebarTab(page, 'background');
-    await page.locator('#background-enabled').check();
+    await page.locator('label[for="ai-method-color"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: true, color: '#00ff00' });

@@ -212,16 +212,16 @@ describe('sidebar in the mounted editor', () => {
     expect($('#editor-side-panel-background').hidden).toBe(false);
   });
 
-  it('Background: off shows only the switch; on shows one method, a badge and the view switch', async () => {
+  it('Background: Off shows only the switch; Color/AI show one method, a badge and the view switch', async () => {
     tabButton('background').click();
     await settle();
-    expect($('#background-enabled').getAttribute('role')).toBe('switch');
+    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(true);
     expect($('#background-settings').hidden).toBe(true);
     expect($('#background-lead').hidden).toBe(false);
     expect($('#editor-side-tab-badge').hidden).toBe(true);
     expect($('#preview-view').hidden).toBe(true);
 
-    check('background-enabled');
+    check('ai-method-color');
     await settle();
     expect($('#background-settings').hidden).toBe(false);
     expect($('#background-lead').hidden).toBe(true);
@@ -243,7 +243,7 @@ describe('sidebar in the mounted editor', () => {
 
   it('leaving the Background tab ends the eyedropper', async () => {
     tabButton('background').click();
-    check('background-enabled');
+    check('ai-method-color');
     await settle();
     check('background-pick');
     await settle();
@@ -255,7 +255,7 @@ describe('sidebar in the mounted editor', () => {
 
   it('Touch up mode replaces the tabs; Done leaves it and focus returns to its entry', async () => {
     tabButton('background').click();
-    check('background-enabled');
+    check('ai-method-color');
     await settle();
     $('#touchup-brush').focus();
     check('touchup-brush');
@@ -277,13 +277,13 @@ describe('sidebar in the mounted editor', () => {
 
   it('the view switch sets the preview view; removal off shows the result again', async () => {
     tabButton('background').click();
-    check('background-enabled');
+    check('ai-method-color');
     await settle();
     check('preview-view-mask');
     await settle();
     expect(getEditorState()?.previewView).toBe('mask');
     expect($('.editor-canvas-container').dataset.previewView).toBe('mask');
-    check('background-enabled', false);
+    check('background-method-off');
     await settle();
     expect($('.editor-canvas-container').dataset.previewView).toBe('result');
     expect(/** @type {HTMLInputElement} */ ($('#preview-view-result')).checked).toBe(true);

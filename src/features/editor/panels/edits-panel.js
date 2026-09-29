@@ -417,9 +417,9 @@ export function renderTextPanel(handlers) {
 }
 
 /**
- * Render the Background panel (the sidebar's Background tab). Off, it is
- * only the "Remove background" switch and one line; on, the method switch
- * and ONLY the chosen method's settings, then the Touch up entry.
+ * Render the Background panel (the sidebar's Background tab): one
+ * "Remove background" switch Off | Color | AI. Off, it is only that and one
+ * line; with a method, ONLY that method's settings, then the Touch up entry.
  * @param {import('../ui.js').EditorUIHandlers} handlers
  * @returns {{ element: HTMLElement, cleanups: (() => void)[] }}
  */
@@ -427,31 +427,8 @@ export function renderBackgroundPanel(handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
-  // "Remove background" switch: a checkbox with the switch role, styled as
-  // a toggle (see module doc for why a checkbox)
-  const enabledInput = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'checkbox',
-      id: 'background-enabled',
-      role: 'switch',
-      className: 'editor-bg-switch-input',
-      'aria-describedby': 'background-lead',
-    })
-  );
-  cleanups.push(
-    on(enabledInput, 'change', () => handlers.onToggleBackground?.(enabledInput.checked)),
-  );
-  const enabledSwitch = createElement(
-    'label',
-    { className: 'editor-bg-switch', for: 'background-enabled' },
-    [
-      createElement('span', { className: 'editor-bg-switch-label' }, ['Remove background']),
-      enabledInput,
-      createElement('span', { className: 'editor-bg-switch-track', 'aria-hidden': 'true' }),
-    ],
-  );
   const lead = createElement('p', { className: 'editor-bg-lead', id: 'background-lead' }, [
-    'Make the background transparent in the GIF.',
+    'Choose Color or AI to make the background transparent in the GIF.',
   ]);
 
   const colorInput = /** @type {HTMLInputElement} */ (
@@ -566,13 +543,13 @@ export function renderBackgroundPanel(handlers) {
   const settings = createElement(
     'div',
     { className: 'editor-bg-settings', id: 'background-settings', hidden: 'true' },
-    [ai.methodSwitch, colorFields, ai.section, touchUp.element],
+    [colorFields, ai.section, touchUp.element],
   );
 
   const element = createElement(
     'div',
     { className: 'property-group editor-bg-panel', 'data-edits-panel': 'background' },
-    [enabledSwitch, lead, settings, alphaNote],
+    [ai.methodSwitch, lead, settings, alphaNote],
   );
 
   return { element, cleanups };
@@ -734,8 +711,7 @@ function updateBackgroundPanel(container, state, fps) {
   if (!root || !state.edits) return;
   const { background } = state.edits;
 
-  setChecked(/** @type {HTMLInputElement} */ (q(root, '#background-enabled')), background.enabled);
-  // Off: the switch and its line only (the settings are hidden, not greyed)
+  // Off: the method switch and its line only (settings hidden, not greyed)
   /** @type {HTMLElement} */ (q(root, '#background-settings')).hidden = !background.enabled;
   /** @type {HTMLElement} */ (q(root, '#background-lead')).hidden = background.enabled;
   setValue(/** @type {HTMLInputElement} */ (q(root, '#background-color')), background.color);

@@ -141,6 +141,19 @@ function toggleButton(id, label) {
   return { wrapper, input };
 }
 
+/** Order of the model switch's segments (left to right) */
+const MODEL_ORDER = ['general', 'anime'];
+
+/**
+ * Label of the Analyze button
+ * @param {number} pending - Frames of the selection still to analyze
+ * @returns {string}
+ */
+export function getAnalyzeLabel(pending) {
+  if (pending === 0) return 'Selection analyzed';
+  return `Analyze ${pending} frame${pending === 1 ? '' : 's'}`;
+}
+
 /**
  * Collapsed "Advanced" disclosure for settings most clips never need
  * (Background panel: the color key's Remove mode, the AI tuning sliders)
@@ -164,16 +177,17 @@ export function renderAiCutoutSection(handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
-  // --- Method switch ---
+  // --- Method switch: Off (no removal) | Color | AI ---
   const methods = /** @type {const} */ ([
+    { value: 'off', id: 'background-method-off', label: 'Off' },
     { value: 'color', id: 'ai-method-color', label: 'Color' },
     { value: 'ai', id: 'ai-method-ai', label: 'AI' },
   ]);
   const methodSwitch = createElement(
     'fieldset',
-    { className: 'editor-text-fieldset editor-ai-method' },
+    { className: 'editor-text-fieldset editor-ai-method', id: 'background-method' },
     [
-      createElement('legend', { className: 'editor-text-field-label' }, ['Method']),
+      createElement('legend', { className: 'editor-bg-method-legend' }, ['Remove background']),
       createElement(
         'div',
         { className: 'editor-text-segmented' },
@@ -204,27 +218,35 @@ export function renderAiCutoutSection(handlers) {
       createElement(
         'div',
         { className: 'editor-text-segmented' },
-        MODEL_REGISTRY.map((entry) => {
-          const id = `ai-model-${entry.id}`;
-          const input = /** @type {HTMLInputElement} */ (
-            createElement('input', {
-              type: 'radio',
-              name: 'ai-model',
-              id,
-              value: entry.id,
-              'aria-describedby': 'ai-model-note',
-            })
-          );
-          cleanups.push(
-            on(input, 'change', () => {
-              if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
-            }),
-          );
-          return createElement('label', { className: 'editor-text-segment', for: id }, [
-            input,
-            createElement('span', {}, [`${entry.label} (${getModelSizeLabel(entry.id)})`]),
-          ]);
-        }),
+        // General first (left): the order shown, not the default model
+        [...MODEL_REGISTRY]
+          .sort((a, b) => MODEL_ORDER.indexOf(a.id) - MODEL_ORDER.indexOf(b.id))
+          .map((entry) => {
+            const id = `ai-model-${entry.id}`;
+            const input = /** @type {HTMLInputElement} */ (
+              createElement('input', {
+                type: 'radio',
+                name: 'ai-model',
+                id,
+                value: entry.id,
+                'aria-describedby': 'ai-model-note',
+              })
+            );
+            cleanups.push(
+              on(input, 'change', () => {
+                if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
+              }),
+            );
+            return createElement('label', { className: 'editor-text-segment', for: id }, [
+              input,
+              createElement('span', {}, [
+                entry.label,
+                createElement('small', { className: 'editor-ai-model-size' }, [
+                  ` ${getModelSizeLabel(entry.id)}`,
+                ]),
+              ]),
+            ]);
+          }),
       ),
     ],
   );
@@ -558,8 +580,10 @@ export function updateAiCutoutSection(root, state, fps) {
   const status = state.aiCutout;
   const focused = document.activeElement;
 
-  setChecked(q(root, '#ai-method-color'), !isAi);
-  setChecked(q(root, '#ai-method-ai'), isAi);
+  const on = background.enabled === true;
+  setChecked(q(root, '#background-method-off'), !on);
+  setChecked(q(root, '#ai-method-color'), on && !isAi);
+  setChecked(q(root, '#ai-method-ai'), on && isAi);
   /** @type {HTMLElement | null} */ (root.querySelector('#ai-color-fields'))?.toggleAttribute(
     'hidden',
     isAi,
@@ -597,8 +621,9 @@ export function updateAiCutoutSection(root, state, fps) {
 
   const analyzeBtn = /** @type {HTMLButtonElement} */ (q(section, '#ai-analyze'));
   const pending = cover.pendingInSelection;
-  setText(
-    analyzeBtn,
+  setText(analyzeBtn, getAnalyzeLabel(pending));
+  analyzeBtn.setAttribute(
+    'aria-label',
     pending > 0
       ? `Analyze selection (${pending} frame${pending === 1 ? '' : 's'})`
       : 'Selection analyzed',
