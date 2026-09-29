@@ -421,6 +421,36 @@ export function applyFrameSkip(frames, skip) {
 }
 
 /**
+ * Absolute clip frame indices an export encodes: frames[k] after frame skip
+ * is clip frame rangeStart + k * frameSkip (the index text ranges and AI
+ * masks are looked up by)
+ * @param {number} frameCount - Frames handed to the export (before skip)
+ * @param {number} frameSkip - Keep every Nth frame (<= 1 keeps all)
+ * @param {number} [rangeStart=0] - Absolute clip index of the first frame
+ * @returns {number[]}
+ */
+export function getExportedFrameIndices(frameCount, frameSkip, rangeStart = 0) {
+  // Same stepping as applyFrameSkip (any skip <= 1 keeps every frame)
+  const step = frameSkip > 1 ? frameSkip : 1;
+  const indices = [];
+  for (let i = 0; i < frameCount; i += step) {
+    indices.push(rangeStart + i);
+  }
+  return indices;
+}
+
+/**
+ * Exported frames the AI cutout has no final mask for
+ * @param {number[]} frameIndices - Absolute clip frame indices
+ * @param {{ getFinalMask: (frameIndex: number) => unknown } | null | undefined} maskSource
+ * @returns {number[]} The indices without a mask (all of them without a source)
+ */
+export function findFramesMissingMasks(frameIndices, maskSource) {
+  if (!maskSource) return [...frameIndices];
+  return frameIndices.filter((index) => !maskSource.getFinalMask(index));
+}
+
+/**
  * @typedef {Object} ProgressInfo
  * @property {number} percent - Completion percentage (0-100)
  * @property {number} estimatedRemaining - Estimated ms remaining

@@ -12,6 +12,7 @@ import {
   formatRemaining,
 } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
+import { describeAnalysisProgress, getAnalysisFraction } from '../editor/ai-cutout.js';
 import { ENCODER_PRESETS, getEffectiveEncoderId } from './core.js';
 
 /**
@@ -45,6 +46,24 @@ const ENCODER_OPTIONS = [
  * @property {() => void} onTogglePlay - Toggle preview playback
  * @property {() => void} onAdjustSettings - Return to settings after export complete
  * @property {() => void} onCreateNew - Start new capture, releasing current frames
+ * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice, then export
+ * @property {() => void} [onAiBack] - Leave the AI preparation view for the settings
+ */
+
+/**
+ * Preparation of an AI cutout export (analysis of frames that still lack a
+ * mask, then the final masks), shown instead of the preview and settings
+ * @typedef {Object} ExportAiPrep
+ * @property {'starting'|'downloading'|'verifying'|'initializing'|'analyzing'|'building'|'needs-wasm'|'error'} phase
+ * @property {number} [loadedBytes]
+ * @property {number} [totalBytes]
+ * @property {boolean} [fromCache]
+ * @property {number} [framesDone]
+ * @property {number} [framesTotal]
+ * @property {number | null} [remainingMs]
+ * @property {number} [buildDone] - Final-mask build steps done
+ * @property {number} [buildTotal]
+ * @property {string} [message] - Error copy (phase 'error')
  */
 
 /**
@@ -57,6 +76,7 @@ const ENCODER_OPTIONS = [
  * @property {boolean} [transparent] - The GIF will have transparent pixels
  *   (source alpha or background removal); only the JavaScript encoder can
  *   write them
+ * @property {boolean} [aiCutout] - The export uses the AI cutout
  */
 
 /** Note shown on the disabled WASM encoder card for transparent exports */
@@ -74,9 +94,10 @@ const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
  * @param {import('./types.js').ExportState} state
  * @param {ExportUIHandlers} handlers
  * @param {ExportClipInfo} clipInfo
+ * @param {ExportAiPrep | null} [aiPrep] - AI cutout preparation in progress
  * @returns {{ cleanup: () => void, canvas: HTMLCanvasElement | null }} Cleanup function and canvas element
  */
-export function renderExportScreen(container, state, handlers, clipInfo) {
+export function renderExportScreen(container, state, handlers, clipInfo, aiPrep = null) {
   const cleanups = [];
 
   // Update step indicator
@@ -119,7 +140,9 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   let previewCanvas = null;
 
   // Show different content based on state
-  if (state.job?.status === 'encoding') {
+  if (aiPrep) {
+    previewWrapper.appendChild(renderAiPreparation(aiPrep, handlers, cleanups));
+  } else if (state.job?.status === 'encoding') {
     previewWrapper.appendChild(renderEncodingProgress(state.job, handlers, cleanups));
   } else if (state.job?.status === 'complete' && state.job.result) {
     previewWrapper.appendChild(renderComplete(state.job, handlers, cleanups));
@@ -135,8 +158,8 @@ export function renderExportScreen(container, state, handlers, clipInfo) {
   previewPanel.appendChild(previewWrapper);
   content.appendChild(previewPanel);
 
-  // Settings Panel (only show when not encoding/complete/error)
-  if (!state.job || state.job.status === 'idle') {
+  // Settings Panel (only show when not preparing/encoding/complete/error)
+  if (!aiPrep && (!state.job || state.job.status === 'idle')) {
     content.appendChild(renderSettingsPanel(state, handlers, clipInfo, cleanups));
   } else {
     // Encoding/complete/error views replace the settings panel, but the
@@ -612,6 +635,18 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
 
   panel.appendChild(content);
 
+  // AI cutout: frames without a mask are analyzed before encoding
+  if (clipInfo.aiCutout) {
+    panel.appendChild(
+      createElement('p', {
+        className: 'export-ai-note',
+        id: 'export-ai-note',
+        role: 'status',
+        hidden: 'true',
+      }),
+    );
+  }
+
   // Actions
   const actions = createElement('div', { className: 'settings-actions' });
   const exportBtn = createElement('button', { className: 'btn btn-export-main', type: 'button' }, [
@@ -622,6 +657,177 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
   panel.appendChild(actions);
 
   return panel;
+}
+
+/**
+ * Show how many exported frames the AI cutout still has to analyze
+ * @param {ParentNode} container
+ * @param {number} missing - Exported frames without a mask
+ * @param {number} total - Exported frames
+ */
+export function updateExportAiNote(container, missing, total) {
+  const note = container.querySelector('#export-ai-note');
+  if (!(note instanceof HTMLElement)) return;
+  const text =
+    missing > 0
+      ? `${missing} of ${total} frames are not analyzed yet. Export analyzes them first (they preview without the cutout).`
+      : '';
+  if (note.textContent !== text) note.textContent = text;
+  note.hidden = text === '';
+}
+
+/**
+ * One line describing the AI preparation
+ * @param {ExportAiPrep} aiPrep
+ * @returns {string}
+ */
+export function describeAiPreparation(aiPrep) {
+  if (aiPrep.phase === 'building') {
+    const total = aiPrep.buildTotal ?? 0;
+    const pct = total > 0 ? Math.floor(((aiPrep.buildDone ?? 0) / total) * 100) : 0;
+    return `Building the cutout: ${pct}%`;
+  }
+  return describeAnalysisProgress({
+    phase: aiPrep.phase,
+    loadedBytes: aiPrep.loadedBytes ?? 0,
+    totalBytes: aiPrep.totalBytes ?? 0,
+    fromCache: aiPrep.fromCache,
+    framesDone: aiPrep.framesDone ?? 0,
+    framesTotal: aiPrep.framesTotal ?? 0,
+    remainingMs: aiPrep.remainingMs ?? null,
+  });
+}
+
+/**
+ * Progress bar value (0..1) of the AI preparation, or null for indeterminate
+ * @param {ExportAiPrep} aiPrep
+ * @returns {number | null}
+ */
+function getAiPreparationFraction(aiPrep) {
+  if (aiPrep.phase === 'building') {
+    const total = aiPrep.buildTotal ?? 0;
+    return total > 0 ? (aiPrep.buildDone ?? 0) / total : null;
+  }
+  if (aiPrep.phase === 'downloading' || aiPrep.phase === 'analyzing') {
+    return getAnalysisFraction({
+      phase: aiPrep.phase,
+      loadedBytes: aiPrep.loadedBytes ?? 0,
+      totalBytes: aiPrep.totalBytes ?? 0,
+      framesDone: aiPrep.framesDone ?? 0,
+      framesTotal: aiPrep.framesTotal ?? 0,
+    });
+  }
+  return null;
+}
+
+/**
+ * Render the AI cutout preparation (progress, the no-WebGPU choice, or an
+ * error)
+ * @param {ExportAiPrep} aiPrep
+ * @param {ExportUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderAiPreparation(aiPrep, handlers, cleanups) {
+  const root = createElement('div', { className: 'export-ai-prep', id: 'export-ai-prep' });
+
+  /**
+   * @param {string} id
+   * @param {string} label
+   * @param {string} className
+   * @param {(() => void) | undefined} onClick
+   */
+  const button = (id, label, className, onClick) => {
+    const btn = createElement('button', { type: 'button', id, className }, [label]);
+    if (onClick) cleanups.push(on(btn, 'click', onClick));
+    return btn;
+  };
+  const back = () =>
+    button('export-ai-back', 'Back to settings', 'btn btn-ghost', handlers.onAiBack);
+
+  if (aiPrep.phase === 'needs-wasm') {
+    root.append(
+      createElement('h2', { className: 'export-ai-title' }, ['WebGPU is not available']),
+      createElement('p', { className: 'export-ai-text', role: 'alert' }, [
+        'Some frames still need the AI analysis, which needs WebGPU in this browser. It can run on the CPU instead, but that is very slow (about 14 seconds per frame).',
+      ]),
+      createElement('div', { className: 'export-ai-actions' }, [
+        button(
+          'export-ai-run-wasm',
+          'Run without WebGPU (very slow)',
+          'btn btn-primary',
+          handlers.onAiAllowWasm,
+        ),
+        back(),
+      ]),
+    );
+    return root;
+  }
+
+  if (aiPrep.phase === 'error') {
+    root.append(
+      createElement('h2', { className: 'export-ai-title' }, [
+        'The AI cutout could not be prepared',
+      ]),
+      createElement('p', { className: 'export-ai-text', role: 'alert' }, [
+        aiPrep.message ?? 'The analysis failed.',
+      ]),
+      createElement('div', { className: 'export-ai-actions' }, [
+        button('export-ai-retry', 'Retry', 'btn btn-primary', handlers.onExport),
+        back(),
+      ]),
+    );
+    return root;
+  }
+
+  const bar = /** @type {HTMLProgressElement} */ (
+    createElement('progress', {
+      id: 'export-ai-progress-bar',
+      className: 'export-ai-progress-bar',
+      max: '1',
+      'aria-labelledby': 'export-ai-progress-text',
+    })
+  );
+  const fraction = getAiPreparationFraction(aiPrep);
+  if (fraction !== null) bar.value = fraction;
+  root.append(
+    createElement('h2', { className: 'export-ai-title' }, ['Preparing the AI cutout']),
+    createElement('p', { className: 'export-ai-text' }, [
+      'Frames that were not analyzed in the editor are analyzed now, on this device.',
+    ]),
+    createElement(
+      'p',
+      { className: 'export-ai-progress-text', id: 'export-ai-progress-text', role: 'status' },
+      [describeAiPreparation(aiPrep)],
+    ),
+    bar,
+    createElement('div', { className: 'export-ai-actions' }, [
+      button('export-ai-cancel', 'Cancel', 'btn btn-secondary', handlers.onCancel),
+    ]),
+  );
+  return root;
+}
+
+/**
+ * Patch the AI preparation progress in place (same phase group)
+ * @param {ParentNode} container
+ * @param {ExportAiPrep} aiPrep
+ */
+export function updateAiPreparationUI(container, aiPrep) {
+  const text = container.querySelector('#export-ai-progress-text');
+  if (text) {
+    const line = describeAiPreparation(aiPrep);
+    if (text.textContent !== line) text.textContent = line;
+  }
+  const bar = container.querySelector('#export-ai-progress-bar');
+  if (bar instanceof HTMLProgressElement) {
+    const fraction = getAiPreparationFraction(aiPrep);
+    if (fraction === null) {
+      bar.removeAttribute('value');
+    } else {
+      bar.value = fraction;
+    }
+  }
 }
 
 /**

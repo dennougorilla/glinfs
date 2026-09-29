@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "models:fetch": "node scripts/fetch-models.mjs"
   },
   "repository": {
     "type": "git",
@@ -43,6 +44,7 @@
     "vitest": "^4.0.16"
   },
   "dependencies": {
-    "gifenc": "^1.0.3"
+    "gifenc": "^1.0.3",
+    "onnxruntime-web": "1.30.0"
   }
 }

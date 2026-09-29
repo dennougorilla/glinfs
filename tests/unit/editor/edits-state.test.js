@@ -42,10 +42,12 @@ describe('createClip with edits', () => {
       textLayers: [],
       background: {
         enabled: false,
+        method: 'color',
         color: '#00ff00',
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
+        ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
     });
   });
@@ -158,10 +160,12 @@ describe('background reducers', () => {
     let state = setBackground(freshState(), { enabled: true, color: '#ABCDEF', tolerance: 250 });
     expect(state.edits.background).toEqual({
       enabled: true,
+      method: 'color',
       color: '#abcdef',
       tolerance: 100,
       mode: 'connected',
       colorChosen: true,
+      ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
     });
     state = setBackground(state, { mode: 'global', color: 'bad' });
     expect(state.edits.background).toMatchObject({ mode: 'global', color: '#00ff00' });

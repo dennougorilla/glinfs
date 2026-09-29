@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createDefaultAiCutout,
   createDefaultEdits,
   createTextLayer,
+  EDIT_LIMITS,
   getActiveTextLayers,
+  isAiCutoutActive,
+  isColorKeyActive,
   isEditsEmpty,
   normalizeEdits,
   requiresTransparency,
@@ -14,10 +18,12 @@ describe('createDefaultEdits', () => {
       textLayers: [],
       background: {
         enabled: false,
+        method: 'color',
         color: '#00ff00',
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
+        ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
     });
   });
@@ -25,7 +31,10 @@ describe('createDefaultEdits', () => {
   it('returns a fresh object each call', () => {
     const a = createDefaultEdits();
     a.background.enabled = true;
+    a.background.ai.picks.push({ frame: 0, x: 0, y: 0, mode: 'keep' });
     expect(createDefaultEdits().background.enabled).toBe(false);
+    expect(createDefaultEdits().background.ai.picks).toEqual([]);
+    expect(createDefaultAiCutout()).not.toBe(createDefaultAiCutout());
   });
 });
 
@@ -284,5 +293,104 @@ describe('requiresTransparency', () => {
     expect(requiresTransparency({ edits: on, hasAlpha: false })).toBe(true);
     expect(requiresTransparency({ edits: createDefaultEdits(), hasAlpha: false })).toBe(false);
     expect(requiresTransparency({ edits: undefined, hasAlpha: undefined })).toBe(false);
+  });
+});
+
+describe('background method and AI cutout', () => {
+  it('reads v0.7.0 edits (no method, no ai) as the color key with default AI params', () => {
+    const legacy = {
+      textLayers: [],
+      background: {
+        enabled: true,
+        color: '#123456',
+        tolerance: 30,
+        mode: 'global',
+        colorChosen: true,
+      },
+    };
+    const { background } = normalizeEdits(legacy, 10);
+    expect(background).toEqual({
+      ...legacy.background,
+      method: 'color',
+      ai: createDefaultAiCutout(),
+    });
+    expect(isColorKeyActive(background)).toBe(true);
+    expect(isAiCutoutActive(background)).toBe(false);
+  });
+
+  it('keeps a valid method and falls back to color on garbage', () => {
+    expect(normalizeEdits({ background: { method: 'ai' } }, 5).background.method).toBe('ai');
+    expect(normalizeEdits({ background: { method: 'magic' } }, 5).background.method).toBe('color');
+    expect(normalizeEdits({ background: { method: 3 } }, 5).background.method).toBe('color');
+  });
+
+  it('clamps threshold and edge, rounds edge, and validates smoothing', () => {
+    const ai = (/** @type {Record<string, unknown>} */ input) =>
+      normalizeEdits({ background: { ai: input } }, 5).background.ai;
+    expect(ai({ threshold: 0 }).threshold).toBe(EDIT_LIMITS.aiThreshold.min);
+    expect(ai({ threshold: 2 }).threshold).toBe(EDIT_LIMITS.aiThreshold.max);
+    expect(ai({ threshold: 0.3 }).threshold).toBe(0.3);
+    expect(ai({ threshold: Number.NaN }).threshold).toBe(0.5);
+    expect(ai({ edge: -20 }).edge).toBe(-8);
+    expect(ai({ edge: 20 }).edge).toBe(8);
+    expect(ai({ edge: 2.6 }).edge).toBe(3);
+    expect(ai({ edge: '4' }).edge).toBe(0);
+    expect(ai({ smoothing: false }).smoothing).toBe(false);
+    expect(ai({ smoothing: 'no' }).smoothing).toBe(true);
+    expect(normalizeEdits({ background: { ai: 'bad' } }, 5).background.ai).toEqual(
+      createDefaultAiCutout(),
+    );
+  });
+
+  it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {
+    const picks = (/** @type {unknown} */ input, frameCount = 10) =>
+      normalizeEdits({ background: { ai: { picks: input } } }, frameCount).background.ai.picks;
+
+    expect(
+      picks([
+        null,
+        'x',
+        [],
+        { frame: 2, x: 0.5 },
+        { frame: 'a', x: 0.5, y: 0.5 },
+        { frame: 1, x: Number.NaN, y: 0.2 },
+        { frame: 3, x: 0.25, y: 0.75, mode: 'remove' },
+        { frame: 99, x: -1, y: 4, mode: 'other' },
+        { frame: 2.4, x: 1, y: 0 },
+      ]),
+    ).toEqual([
+      { frame: 3, x: 0.25, y: 0.75, mode: 'remove' },
+      { frame: 9, x: 0, y: 1, mode: 'keep' },
+      { frame: 2, x: 1, y: 0, mode: 'keep' },
+    ]);
+    expect(picks('nope')).toEqual([]);
+
+    const many = Array.from({ length: 20 }, (_, i) => ({ frame: i, x: 0.5, y: 0.5 }));
+    const kept = picks(many, 30);
+    expect(kept).toHaveLength(EDIT_LIMITS.aiPicks.max);
+    expect(kept.map((p) => p.frame)).toEqual(many.slice(0, 16).map((p) => p.frame));
+  });
+
+  it('returns new pick objects', () => {
+    const pick = { frame: 0, x: 0.5, y: 0.5, mode: 'keep' };
+    const result = normalizeEdits({ background: { ai: { picks: [pick] } } }, 5).background.ai;
+    expect(result.picks[0]).toEqual(pick);
+    expect(result.picks[0]).not.toBe(pick);
+  });
+
+  it('treats an enabled AI cutout like an enabled color key', () => {
+    const edits = createDefaultEdits();
+    edits.background.method = 'ai';
+    expect(isEditsEmpty(edits)).toBe(true);
+    expect(requiresTransparency({ edits, hasAlpha: false })).toBe(false);
+    expect(isAiCutoutActive(edits.background)).toBe(false);
+
+    edits.background.enabled = true;
+    expect(isEditsEmpty(edits)).toBe(false);
+    expect(requiresTransparency({ edits, hasAlpha: false })).toBe(true);
+    expect(isAiCutoutActive(edits.background)).toBe(true);
+    expect(isColorKeyActive(edits.background)).toBe(false);
+    expect(isAiCutoutActive(null)).toBe(false);
+    expect(isColorKeyActive(undefined)).toBe(false);
   });
 });

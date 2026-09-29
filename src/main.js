@@ -299,6 +299,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // runtime-gated hooks above it is absent from production bundles.
     if (import.meta.env.DEV) {
       window.__TEST_HOOKS__.crashClipCodecOnNextEncode = () => crashNextEncodeForTest(clipCodec);
+      // AI cutout: run the real segmentation worker with the stub model on
+      // the WASM fallback (E2E). Dynamic import inside the DEV branch, so
+      // production bundles contain neither the hooks nor their override.
+      const hooks = window.__TEST_HOOKS__;
+      void import('./features/ai-cutout/test-hooks.js').then(({ installAiCutoutTestHooks }) =>
+        installAiCutoutTestHooks(hooks),
+      );
     }
   }
 

@@ -3,7 +3,12 @@
  * @module features/editor/state
  */
 
-import { createDefaultEdits, createTextLayer, normalizeEdits } from '../../shared/edits/model.js';
+import {
+  createDefaultEdits,
+  createTextLayer,
+  EDIT_LIMITS,
+  normalizeEdits,
+} from '../../shared/edits/model.js';
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
 import { clampCropArea, createClip, setFrameRange } from './core.js';
@@ -31,6 +36,34 @@ export function initEditorState(clip) {
     edits: clip.edits ?? createDefaultEdits(),
     selectedTextId: null,
     pickingKeyColor: false,
+    aiPickTool: null,
+    aiCutout: createAiCutoutStatus(),
+  };
+}
+
+/**
+ * Initial AI cutout runtime status of an editor session (nothing running,
+ * WebGPU not checked yet)
+ * @returns {import('./types.js').AiCutoutStatus}
+ */
+export function createAiCutoutStatus() {
+  return {
+    phase: 'idle',
+    webgpu: null,
+    wasmAllowed: false,
+    needsWasmChoice: false,
+    backend: null,
+    loadedBytes: 0,
+    totalBytes: 0,
+    fromCache: false,
+    framesDone: 0,
+    framesTotal: 0,
+    remainingMs: null,
+    error: null,
+    notice: '',
+    building: false,
+    maskVersion: 0,
+    storeVersion: 0,
   };
 }
 
@@ -345,6 +378,133 @@ export function setBackground(state, patch) {
 }
 
 /**
+ * Patch the AI cutout parameters (threshold, smoothing, edge, picks). The
+ * `ai` object is replaced as a whole by setBackground, so this always
+ * spreads the current one.
+ * @param {import('./types.js').EditorState} state
+ * @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiParams(state, patch) {
+  return setBackground(state, { ai: { ...state.edits.background.ai, ...patch } });
+}
+
+/**
+ * Add a pick (ignored once EDIT_LIMITS.aiPicks.max picks exist)
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').CutoutPick} pick
+ * @returns {import('./types.js').EditorState}
+ */
+export function addAiPick(state, pick) {
+  const { picks } = state.edits.background.ai;
+  if (picks.length >= EDIT_LIMITS.aiPicks.max) return state;
+  return setAiParams(state, { picks: [...picks, pick] });
+}
+
+/**
+ * Remove the pick at `index`
+ * @param {import('./types.js').EditorState} state
+ * @param {number} index
+ * @returns {import('./types.js').EditorState}
+ */
+export function removeAiPick(state, index) {
+  const { picks } = state.edits.background.ai;
+  if (index < 0 || index >= picks.length) return state;
+  return setAiParams(state, { picks: picks.filter((_, i) => i !== index) });
+}
+
+/**
+ * Remove every pick
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function clearAiPicks(state) {
+  if (state.edits.background.ai.picks.length === 0) return state;
+  return setAiParams(state, { picks: [] });
+}
+
+/**
+ * Switch the background removal method. Choosing the AI cutout also turns
+ * removal on (that is what the user asked for) and leaves the eyedropper;
+ * choosing Color keeps the on/off switch as it was.
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').BackgroundMethod} method
+ * @param {string | null} [detectedColor] - Edge color to key when the color
+ *   key becomes active without a chosen color
+ * @returns {import('./types.js').EditorState}
+ */
+export function setBackgroundMethod(state, method, detectedColor = null) {
+  /** @type {Partial<import('../../shared/edits/model.js').BackgroundRemoval>} */
+  const patch = { method };
+  if (method === 'ai') {
+    patch.enabled = true;
+  } else if (detectedColor) {
+    patch.color = detectedColor;
+  }
+  let next = setBackground(state, patch);
+  if (method === 'ai') {
+    next = setPickingKeyColor(next, false);
+  } else {
+    next = setAiPickTool(next, null);
+  }
+  return next;
+}
+
+/**
+ * Enter/leave an AI pick tool ('keep' / 'remove'); null leaves it. A pick
+ * tool and the eyedropper are exclusive.
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').PickMode | null} tool
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiPickTool(state, tool) {
+  if (state.aiPickTool === tool) return state;
+  const next = {
+    ...state,
+    aiPickTool: tool,
+    pickingKeyColor: tool ? false : state.pickingKeyColor,
+  };
+  // Leaving the tool (a pick that worked, Escape, the toggle) ends the
+  // refused pick the notice was about
+  return tool ? next : clearPickNotice(next);
+}
+
+/** Notice shown when a pick lands on a frame without analysis */
+export const PICK_NEEDS_ANALYSIS_NOTICE =
+  'This frame is not analyzed yet. Analyze it, then pick again.';
+
+/** Notice shown when a pick lands on background (no character under or near it) */
+export const PICK_NO_CHARACTER_NOTICE = 'No character here. Click on a character.';
+
+/**
+ * Drop a refused-pick notice (other notices, e.g. an analysis outcome, stay)
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+function clearPickNotice(state) {
+  const notice = state.aiCutout?.notice;
+  if (notice !== PICK_NEEDS_ANALYSIS_NOTICE && notice !== PICK_NO_CHARACTER_NOTICE) return state;
+  return { ...state, aiCutout: { ...state.aiCutout, notice: '' } };
+}
+
+/**
+ * Patch the AI cutout runtime status (analysis progress, errors, masks)
+ * @param {import('./types.js').EditorState} state
+ * @param {Partial<import('./types.js').AiCutoutStatus>} patch
+ * @returns {import('./types.js').EditorState}
+ */
+export function updateAiCutoutStatus(state, patch) {
+  const current = state.aiCutout ?? createAiCutoutStatus();
+  const changed = Object.keys(patch).some(
+    (key) =>
+      current[/** @type {keyof typeof current} */ (key)] !==
+      patch[/** @type {keyof typeof patch} */ (key)],
+  );
+  if (!changed) return state;
+  return { ...state, aiCutout: { ...current, ...patch } };
+}
+
+/**
  * Enter/leave eyedropper mode for the background key color
  * @param {import('./types.js').EditorState} state
  * @param {boolean} picking
@@ -352,7 +512,12 @@ export function setBackground(state, patch) {
  */
 export function setPickingKeyColor(state, picking) {
   if (state.pickingKeyColor === picking) return state;
-  return { ...state, pickingKeyColor: picking };
+  const next = {
+    ...state,
+    pickingKeyColor: picking,
+    aiPickTool: picking ? null : state.aiPickTool,
+  };
+  return picking ? clearPickNotice(next) : next;
 }
 
 // ============================================================

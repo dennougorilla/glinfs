@@ -19,6 +19,7 @@ import {
 } from '../../../src/features/editor/edits-preview.js';
 import { composeEditorFrame } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
+import { packMask } from '../../../src/shared/masks/mask-ops.js';
 import { createFakeContext } from '../shared/edits/fake-context.js';
 
 const GREEN = [0, 255, 0, 255];
@@ -254,6 +255,111 @@ describe('createEditorFrameRenderer', () => {
     expect(renderer.stats()).toMatchObject({ readbacks: 1, cachedFrames: 0 });
     expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
     expect(ctx.names().filter((n) => n === 'getImageData')).toHaveLength(1);
+  });
+
+  describe('AI cutout (maskSource option)', () => {
+    /**
+     * Mask source over the 20x10 frame at 10x5: frame index -> kept mask
+     * columns (every row), null for frames without a mask
+     * @param {Record<number, [number, number] | null>} keptColumns
+     * @param {number} [version]
+     */
+    function maskSourceOf(keptColumns, version = 1) {
+      return {
+        version,
+        getFinalMask: vi.fn((/** @type {number} */ index) => {
+          const cols = keptColumns[index];
+          if (!cols) return null;
+          const binary = new Uint8Array(10 * 5);
+          for (let y = 0; y < 5; y++) {
+            for (let x = cols[0]; x <= cols[1]; x++) binary[y * 10 + x] = 1;
+          }
+          return packMask(binary, 10, 5);
+        }),
+      };
+    }
+    const ai = () => edits({ method: 'ai' });
+
+    it('matches composeEditorFrame with the same mask source, with and without a crop', () => {
+      const maskSource = maskSourceOf({ 0: [2, 5] });
+      const layer = createTextLayer({ text: 'Hi', color: '#ff0000', y: 0.5 }, 5);
+      const e = { ...ai(), textLayers: [layer] };
+      const crop = /** @type {any} */ ({ x: 4, y: 2, width: 12, height: 6, aspectRatio: 'free' });
+      for (const c of [null, crop]) {
+        const expected = createFakeContext(20, 10);
+        composeEditorFrame(expected, frame('a'), c, e, 0, maskSource);
+        const actual = createFakeContext(20, 10);
+        const renderer = createEditorFrameRenderer();
+        renderer.render(actual, frame('a'), c, e, 0, { maskSource });
+        expect(Array.from(allPixels(actual))).toEqual(Array.from(allPixels(expected)));
+        renderer.render(actual, frame('a'), c, e, 0, { maskSource });
+        expect(Array.from(allPixels(actual))).toEqual(Array.from(allPixels(expected)));
+      }
+      // Mask columns 2..5 = frame columns 4..11; green stays (no color key)
+      const ctx = createFakeContext(20, 10);
+      createEditorFrameRenderer().render(ctx, frame('a'), null, ai(), 0, { maskSource });
+      expect(ctx.pixelAt(3, 0)[3]).toBe(0);
+      expect(ctx.pixelAt(4, 0)).toEqual(GREEN);
+      expect(ctx.pixelAt(11, 9)).toEqual(GREEN);
+      expect(ctx.pixelAt(12, 9)).toEqual([0, 0, 0, 0]);
+    });
+
+    it('caches per frame index (holds may select differently) and per mask version', () => {
+      const renderer = createEditorFrameRenderer();
+      const ctx = createFakeContext(20, 10);
+      const v1 = maskSourceOf({ 0: [0, 1], 1: [8, 9] });
+
+      // Two holds of one decoded frame, different masks
+      renderer.render(ctx, frame('h0', GREEN, 'shared'), null, ai(), 0, { maskSource: v1 });
+      expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+      renderer.render(ctx, frame('h1', GREEN, 'shared'), null, ai(), 1, { maskSource: v1 });
+      expect(ctx.pixelAt(0, 0)[3]).toBe(0);
+      expect(ctx.pixelAt(19, 0)).toEqual(GREEN);
+      expect(renderer.stats()).toMatchObject({ readbacks: 2, cachedFrames: 2 });
+
+      // Revisits (and text edits) come from the cache
+      renderer.render(ctx, frame('h0', GREEN, 'shared'), null, ai(), 0, { maskSource: v1 });
+      expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+      expect(renderer.stats().readbacks).toBe(2);
+      expect(v1.getFinalMask).toHaveBeenCalledTimes(2);
+
+      // A new build (new version) drops the cache
+      const v2 = maskSourceOf({ 0: [5, 5] }, 2);
+      renderer.render(ctx, frame('h0', GREEN, 'shared'), null, ai(), 0, { maskSource: v2 });
+      expect(ctx.pixelAt(0, 0)[3]).toBe(0);
+      expect(renderer.stats()).toMatchObject({ readbacks: 3, cachedFrames: 1 });
+    });
+
+    it('previews frames without a mask (or without a mask source) unkeyed', () => {
+      const renderer = createEditorFrameRenderer();
+      const ctx = createFakeContext(20, 10);
+      const maskSource = maskSourceOf({ 0: null });
+      renderer.render(ctx, frame('a'), null, ai(), 0, { maskSource });
+      expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+      expect(maskSource.getFinalMask).toHaveBeenCalledWith(0);
+
+      renderer.render(ctx, frame('a'), null, ai(), 0);
+      expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+    });
+
+    it('skips the mask during a crop drag, like the key', () => {
+      const renderer = createEditorFrameRenderer();
+      const ctx = createFakeContext(20, 10);
+      const maskSource = maskSourceOf({ 0: [9, 9] });
+      const crop = /** @type {any} */ ({ x: 0, y: 0, width: 10, height: 10, aspectRatio: 'free' });
+      renderer.render(ctx, frame('a'), crop, ai(), 0, { maskSource, skipKey: true });
+      expect(ctx.pixelAt(0, 0)).toEqual(GREEN);
+      expect(renderer.stats().readbacks).toBe(0);
+      expect(maskSource.getFinalMask).not.toHaveBeenCalled();
+    });
+
+    it('never runs the color key for the AI method', () => {
+      const renderer = createEditorFrameRenderer();
+      const ctx = createFakeContext(20, 10);
+      // Green is the key color: with the color method this frame would clear
+      renderer.render(ctx, frame('a'), null, edits({ method: 'ai', color: '#00ff00' }), 0);
+      expect(ctx.pixelAt(5, 5)).toEqual(GREEN);
+    });
   });
 
   it('draws the placeholder for a closed frame without reading back', () => {

@@ -4,7 +4,7 @@
  */
 
 import { composeOutputFrameRGBA } from '../../shared/edits/compose.js';
-import { isEditsEmpty } from '../../shared/edits/model.js';
+import { isAiCutoutActive, isEditsEmpty } from '../../shared/edits/model.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import {
   applyFrameSkip,
@@ -12,8 +12,10 @@ import {
   calculateFrameDelay,
   calculateMaxColors,
   computePaletteSampleStep,
+  findFramesMissingMasks,
   getEffectiveEncoderId,
   getEncoderPreset,
+  getExportedFrameIndices,
   sampledPixelCount,
   sampleFramePixels,
   selectPaletteSampleIndices,
@@ -255,7 +257,32 @@ export async function checkEncoderStatus() {
  * @property {boolean} [mergeIdenticalFrames=false] - Collapse runs of
  *   consecutive byte-identical frames into one GIF frame whose delay covers
  *   the run (imported clips, whose holds were expanded into repeated slots)
+ * @property {import('../../shared/masks/final-masks.js').MaskSource | null} [maskSource=null]
+ *   Final AI cutout masks, looked up by absolute clip index. Required when
+ *   the edits use the 'ai' background method: every exported frame must
+ *   have a mask, or encodeGif refuses to start (MissingCutoutMasksError).
  */
+
+/**
+ * encodeGif was asked for an AI cutout export while some exported frames
+ * have no final mask yet (not analyzed, or the masks were not built)
+ */
+export class MissingCutoutMasksError extends Error {
+  /**
+   * @param {number[]} frameIndices - Absolute clip indices without a mask
+   * @param {number} total - Frames the export would encode
+   */
+  constructor(frameIndices, total) {
+    const count = frameIndices.length;
+    super(
+      `AI cutout masks are missing for ${count} of ${total} frame${total === 1 ? '' : 's'} ` +
+        `(first: frame ${frameIndices[0]}). Analyze the clip before exporting.`,
+    );
+    this.name = 'MissingCutoutMasksError';
+    /** Absolute clip indices of the exported frames without a mask */
+    this.frameIndices = frameIndices;
+  }
+}
 
 /**
  * Encode frames to GIF using Worker
@@ -286,6 +313,7 @@ export async function encodeGif(params, signal) {
     rangeStart = 0,
     transparent = false,
     mergeIdenticalFrames = false,
+    maskSource = null,
   } = params;
 
   // Apply frame skip
@@ -293,6 +321,16 @@ export async function encodeGif(params, signal) {
 
   if (skippedFrames.length === 0) {
     throw new Error('No frames to encode');
+  }
+
+  // An AI cutout export needs every exported frame's mask up front: a
+  // frame without one would silently keep its background
+  if (isAiCutoutActive(edits?.background)) {
+    const exported = getExportedFrameIndices(frames.length, settings.frameSkip, rangeStart);
+    const missing = findFramesMissingMasks(exported, maskSource);
+    if (missing.length > 0) {
+      throw new MissingCutoutMasksError(missing, exported.length);
+    }
   }
   const totalSourceFrames = skippedFrames.length;
   // applyFrameSkip treats any skip <= 1 as "every frame"
@@ -317,11 +355,18 @@ export async function encodeGif(params, signal) {
   const encoderId = getEffectiveEncoderId(settings, transparent);
 
   // Unedited clips keep the VideoFrame.copyTo fast path; edits render
-  // through the compositor so text and keying match the preview.
+  // through the compositor so text, keying and AI masks match the preview.
   /** @type {FrameExtractor} */
   const extractFrame = isEditsEmpty(edits)
     ? (k) => getFrameRGBA(skippedFrames[k], crop)
-    : (k) => composeOutputFrameRGBA(skippedFrames[k], crop, edits, rangeStart + k * frameStep);
+    : (k) =>
+        composeOutputFrameRGBA(
+          skippedFrames[k],
+          crop,
+          edits,
+          rangeStart + k * frameStep,
+          maskSource,
+        );
 
   // Create worker manager
   const manager = createEncoderManager();

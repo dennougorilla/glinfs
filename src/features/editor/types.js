@@ -109,6 +109,31 @@
  * @property {string|null} selectedTextId - Text layer being edited (null = none)
  * @property {boolean} pickingKeyColor - Eyedropper mode: the next preview click picks
  *   the background key color
+ * @property {import('../../shared/edits/model.js').PickMode | null} aiPickTool - AI pick
+ *   tool: the next preview click adds a Keep/Remove pick (null = off)
+ * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
+ */
+
+/**
+ * AI cutout runtime status of an editor session. Parameters and picks live
+ * in the edits; this is only what the running analysis and mask build report.
+ * @typedef {Object} AiCutoutStatus
+ * @property {'idle'|'starting'|'downloading'|'verifying'|'initializing'|'analyzing'|'error'} phase
+ * @property {boolean | null} webgpu - A WebGPU adapter exists (null: not checked yet)
+ * @property {boolean} wasmAllowed - The user chose to run without WebGPU
+ * @property {boolean} needsWasmChoice - An analysis stopped because WebGPU is missing
+ * @property {'webgpu'|'wasm'|null} backend - Backend of the running model
+ * @property {number} loadedBytes - Model bytes downloaded
+ * @property {number} totalBytes - Model size
+ * @property {boolean} fromCache - The model came from the browser cache
+ * @property {number} framesDone - Frames analyzed in the running analysis
+ * @property {number} framesTotal - Frames the running analysis has to analyze
+ * @property {number | null} remainingMs - Estimated time left (null: unknown)
+ * @property {{ code: string, message: string } | null} error - Last analysis failure
+ * @property {string} notice - One-line outcome of the last analysis (e.g. cancelled)
+ * @property {boolean} building - Final masks are being rebuilt
+ * @property {number} maskVersion - Version of the final masks the preview uses (0: none)
+ * @property {number} storeVersion - Probability mask store version last seen
  */
 
 /**

@@ -6,11 +6,17 @@
  * like composeEditorFrame in shared/edits/compose.js — which is what the
  * renderer calls whenever background removal is off.
  *
- * Background removal is the expensive part (a readback plus a flood fill on
- * the main thread), so its result is cached per frame: the keyed output
- * region (ImageData) is stored under the frame's pixel identity and simply
- * written back on later draws. The cache holds one parameter set at a time
- * (key color, tolerance, mode, region) and is dropped whenever those change.
+ * Background removal is the expensive part (a readback plus a flood fill,
+ * or a mask lookup, on the main thread), so its result is cached per frame:
+ * the keyed output region (ImageData) is stored under the frame's pixel
+ * identity and simply written back on later draws. The cache holds one
+ * parameter set at a time (key color, tolerance, mode — or, for the AI
+ * cutout, the mask source's version — and the region) and is dropped
+ * whenever those change.
+ *
+ * AI cutout masks come from the optional `maskSource` render option (see
+ * shared/masks/final-masks.js). A frame it has no mask for previews without
+ * removal; its version changes whenever its masks do, which drops the cache.
  * Text is drawn on top of the (cached) keyed region on every draw, so
  * text-only edits never read pixels back.
  *
@@ -26,15 +32,19 @@
 
 import {
   ALPHA_THRESHOLD,
-  applyColorKey,
   findOpaqueEdgeColor,
   snapAlphaToBinary,
   toHexColor,
 } from '../../shared/edits/color-key.js';
-import { composeEditorFrame, drawTextLayersInRegion } from '../../shared/edits/compose.js';
+import {
+  composeEditorFrame,
+  drawTextLayersInRegion,
+  getRemovalStep,
+} from '../../shared/edits/compose.js';
 import {
   getActiveTextLayers,
   hasVisibleText,
+  isAiCutoutActive,
   isEditsEmpty,
   requiresTransparency,
 } from '../../shared/edits/model.js';
@@ -45,6 +55,7 @@ import { getDrawableSource, isFrameValid, syncCanvasSize } from '../../shared/ut
 /** @typedef {import('./types.js').CropArea} CropArea */
 /** @typedef {import('../../shared/edits/model.js').ClipEdits} ClipEdits */
 /** @typedef {import('../../shared/edits/model.js').BackgroundRemoval} BackgroundRemoval */
+/** @typedef {import('../../shared/masks/final-masks.js').MaskSource} MaskSource */
 /** @typedef {{ x: number, y: number, width: number, height: number }} Rect */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} Context2D */
 
@@ -80,13 +91,19 @@ export function getOutputRegion(frame, crop) {
 }
 
 /**
- * Cache identity of a frame's pixels. Imported holds are clones of one
- * decoded frame (same sharedKey) and key out identically.
+ * Cache identity of a frame's keyed region. Imported holds are clones of
+ * one decoded frame (same sharedKey) and key out identically with the color
+ * key. An AI mask belongs to a clip frame index (tracking can select
+ * differently on two holds), so the index is part of the identity there.
  * @param {Frame} frame
+ * @param {number} frameIndex
+ * @param {boolean} perIndex - The removal depends on the frame index
  * @returns {unknown}
  */
-function getFramePixelKey(frame) {
-  return frame.sharedKey ?? frame.id ?? frame;
+function getFramePixelKey(frame, frameIndex, perIndex) {
+  const pixels = frame.sharedKey ?? frame.id ?? frame;
+  if (!perIndex || (typeof pixels !== 'string' && typeof pixels !== 'number')) return pixels;
+  return `${pixels}#${frameIndex}`;
 }
 
 /**
@@ -94,12 +111,16 @@ function getFramePixelKey(frame) {
  * @param {BackgroundRemoval | null} background - null when removal is off
  * @param {Rect} region
  * @param {boolean} snap - Alpha snapped to 1 bit
+ * @param {MaskSource | null} maskSource - AI cutout masks
  * @returns {string}
  */
-function getKeyParamsKey(background, region, snap) {
-  const key = background
-    ? `${background.color}|${background.tolerance}|${background.mode}`
-    : 'no-key';
+function getKeyParamsKey(background, region, snap, maskSource) {
+  let key = 'no-key';
+  if (isAiCutoutActive(background)) {
+    key = `ai|${maskSource ? maskSource.version : 'no-masks'}`;
+  } else if (background) {
+    key = `${background.color}|${background.tolerance}|${background.mode}`;
+  }
   return `${key}|${snap ? 'snap' : 'alpha'}|${region.x},${region.y},${region.width},${region.height}`;
 }
 
@@ -185,8 +206,8 @@ export function createEditorFrameRenderer(options = {}) {
      * @param {Frame | null | undefined} frame
      * @param {CropArea | null | undefined} crop
      * @param {ClipEdits | null | undefined} edits
-     * @param {number} frameIndex - Absolute clip frame index (text ranges)
-     * @param {{ skipKey?: boolean, transparent?: boolean }} [options]
+     * @param {number} frameIndex - Absolute clip frame index (text ranges, masks)
+     * @param {{ skipKey?: boolean, transparent?: boolean, maskSource?: MaskSource | null }} [options]
      *   - skipKey: draw without background removal (or alpha snapping) and
      *     leave the cache alone (a crop drag in progress moves the region on
      *     every pointer move; keying each move would read back and
@@ -197,11 +218,14 @@ export function createEditorFrameRenderer(options = {}) {
      *     like the encoder does, in the same cached pass as the key, so a
      *     soft source edge previews as it will export. Opaque clips never
      *     read back for this.
+     *   - maskSource: final AI cutout masks, used when the background
+     *     method is 'ai' (frames without a mask preview unkeyed)
      */
     render(ctx, frame, crop, edits, frameIndex, options = {}) {
       const background = edits?.background;
       const keyOn = background?.enabled === true;
       const snap = options.transparent === true;
+      const maskSource = options.maskSource ?? null;
       if (options.skipKey && (keyOn || snap)) {
         composeEditorFrame(
           ctx,
@@ -231,17 +255,19 @@ export function createEditorFrameRenderer(options = {}) {
 
       const region = getOutputRegion(frame, crop);
       if (region.width > 0 && region.height > 0) {
-        cache.sync(getKeyParamsKey(keyOn ? background : null, region, snap));
-        const key = getFramePixelKey(frame);
+        const ai = keyOn && isAiCutoutActive(background);
+        cache.sync(getKeyParamsKey(keyOn ? background : null, region, snap, maskSource));
+        const key = getFramePixelKey(frame, frameIndex, ai);
         let keyed = cache.get(key);
         if (!keyed) {
           keyed = ctx.getImageData(region.x, region.y, region.width, region.height);
           readbacks++;
           // The ImageData's own size: a crop can carry fractional values
           // (centered aspect-ratio crops), which getImageData truncates
-          if (keyOn) {
-            applyColorKey(keyed.data, keyed.width, keyed.height, background);
-          }
+          const remove = keyOn
+            ? getRemovalStep(frame, region, edits, frameIndex, maskSource)
+            : null;
+          remove?.(keyed.data, keyed.width, keyed.height);
           if (snap) {
             snapAlphaToBinary(keyed.data);
           }
