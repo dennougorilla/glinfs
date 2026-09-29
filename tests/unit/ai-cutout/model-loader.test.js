@@ -2,6 +2,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   loadModelBytes,
+  looksLikeHtml,
   modelCacheKey,
   toHex,
   verifyModelBytes,
@@ -278,15 +279,58 @@ describe('loadModelBytes', () => {
     expect(result.cached).toBe(false);
   });
 
-  it('reports HTTP errors as download failures', async () => {
-    const error = await loadModelBytes(specFor(MODEL), {
-      fetchImpl: async () => new Response('missing', { status: 404 }),
-      cacheStorage: undefined,
-      subtle,
-      baseHref: BASE,
-    }).catch((e) => e);
-    expect(error.code).toBe(SegmentationErrorCode.DOWNLOAD_FAILED);
-    expect(error.message).toContain('HTTP 404');
+  it('reports HTTP errors as download failures, and 404 as a missing model', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const load = (/** @type {() => Promise<Response>} */ fetchImpl) =>
+      loadModelBytes(specFor(MODEL), {
+        fetchImpl,
+        cacheStorage: undefined,
+        subtle,
+        baseHref: BASE,
+      }).catch((e) => e);
+
+    const server = await load(async () => new Response('oops', { status: 503 }));
+    expect(server.code).toBe(SegmentationErrorCode.DOWNLOAD_FAILED);
+    expect(server.message).toContain('HTTP 503');
+
+    const missing = await load(async () => new Response('missing', { status: 404 }));
+    expect(missing.code).toBe(SegmentationErrorCode.MODEL_NOT_FOUND);
+    expect(missing.message).toContain('HTTP 404');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('npm run models:fetch'));
+    warn.mockRestore();
+  });
+
+  it('a web page served instead of the model (SPA fallback) is a missing model, not damage', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const page = '<!DOCTYPE html><html><head></head><body></body></html>';
+    const load = (/** @type {() => Promise<Response>} */ fetchImpl) =>
+      loadModelBytes(specFor(MODEL), {
+        fetchImpl,
+        cacheStorage: undefined,
+        subtle,
+        baseHref: BASE,
+      }).catch((e) => e);
+
+    const typed = await load(
+      async () => new Response(page, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }),
+    );
+    expect(typed.code).toBe(SegmentationErrorCode.MODEL_NOT_FOUND);
+    const untyped = await load(
+      async () =>
+        new Response(new TextEncoder().encode(`\n  ${page}`), {
+          headers: { 'Content-Type': 'application/octet-stream' },
+        }),
+    );
+    expect(untyped.code).toBe(SegmentationErrorCode.MODEL_NOT_FOUND);
+    warn.mockRestore();
+  });
+
+  it('looksLikeHtml tells pages from model bytes', () => {
+    const enc = (/** @type {string} */ t) => new TextEncoder().encode(t);
+    expect(looksLikeHtml(enc('<!doctype html><html>'))).toBe(true);
+    expect(looksLikeHtml(enc('  <HTML lang="en">'))).toBe(true);
+    expect(looksLikeHtml(MODEL)).toBe(false);
+    expect(looksLikeHtml(new Uint8Array(0))).toBe(false);
   });
 
   it('reports network errors as download failures', async () => {
