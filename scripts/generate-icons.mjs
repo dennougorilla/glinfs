@@ -99,15 +99,21 @@ const PALETTE = { K: COLORS.ink, W: COLORS.white, Y: COLORS.sand, R: COLORS.red 
 // Solid black like the macOS pointer, so the white sticker rim reads as the outline
 const INK_FILLED = new Set(['arrow', 'cross', 'ibeam']);
 
-/** Header animation frames, in order. The first one is the static logo. */
+/**
+ * Header logo frames, in playback order. `name` is matched by the logo's
+ * data-state (set by shared/tab-status.js); the first frame is the default.
+ */
 const FRAMES = [
-  { cursor: 'arrow' },
-  { cursor: 'arrow', rec: true },
-  { cursor: 'cross' },
-  { cursor: 'ibeam' },
-  { cursor: 'hand' },
-  { cursor: 'wait' },
+  { name: 'idle', cursor: 'arrow' },
+  { name: 'recording', cursor: 'arrow', rec: true },
+  { name: 'select', cursor: 'cross' },
+  { name: 'text', cursor: 'ibeam' },
+  { name: 'edit', cursor: 'hand' },
+  { name: 'busy', cursor: 'wait' },
 ];
+const frame = (name) => FRAMES.find((f) => f.name === name);
+/** Seconds per frame on hover; keep in sync with app-logo-frame's duration in global.css */
+const HOVER_STEP = 0.4;
 
 const createGrid = () => Array.from({ length: 32 }, () => Array(32).fill(null));
 
@@ -215,18 +221,20 @@ function drawFrame({ cursor, rec = false }) {
   return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body) };
 }
 
-function faviconSvg(frame) {
-  const { cyan, pink, body } = drawFrame(frame);
+function faviconSvg(f) {
+  const { cyan, pink, body } = drawFrame(f);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}</svg>\n`;
 }
 
 function headerSvg() {
-  const step = 0.75;
-  const frames = FRAMES.map((frame, i) => {
-    const { cyan, pink, body } = drawFrame(frame);
-    // Negative delays line the frames up: frame i shows during [i, i + 1) steps
-    const delay = -(((FRAMES.length - i) % FRAMES.length) * step);
-    return `<g class="app-logo-frame" style="animation-delay:${delay}s"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g>${body}</g>`;
+  const n = FRAMES.length;
+  const frames = FRAMES.map((f, i) => {
+    const { cyan, pink, body } = drawFrame(f);
+    // Negative delays line the frames up so hovering jumps straight to the
+    // next frame: frame i shows during step (i - 1) mod n
+    const slot = (i - 1 + n) % n;
+    const delay = +(-((n - slot) % n) * HOVER_STEP).toFixed(2);
+    return `<g class="app-logo-frame" data-frame="${f.name}" style="animation-delay:${delay}s"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g>${body}</g>`;
   }).join('\n            ');
   return `<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" shape-rendering="crispEdges">
             ${frames}
@@ -235,12 +243,13 @@ function headerSvg() {
 
 // --- favicons
 const files = {
-  'favicon.svg': FRAMES[0],
-  'favicon-recording.svg': { cursor: 'arrow', rec: true },
-  'favicon-busy.svg': { cursor: 'wait' },
+  'favicon.svg': frame('idle'),
+  'favicon-edit.svg': frame('edit'),
+  'favicon-recording.svg': frame('recording'),
+  'favicon-busy.svg': frame('busy'),
 };
-for (const [name, frame] of Object.entries(files)) {
-  writeFileSync(join(ROOT, 'public', name), faviconSvg(frame));
+for (const [name, f] of Object.entries(files)) {
+  writeFileSync(join(ROOT, 'public', name), faviconSvg(f));
 }
 
 // --- header logo
