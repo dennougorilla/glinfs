@@ -1,0 +1,272 @@
+/**
+ * Generates the pixel-art "meme sticker" cursor icons:
+ *   - public/favicon.svg, favicon-recording.svg, favicon-busy.svg (tab states)
+ *   - public/favicon.ico (16/32/48, needs Playwright + ImageMagick)
+ *   - the animated header logo inside src/index.html (between the logo markers)
+ *
+ * Usage: node scripts/generate-icons.mjs
+ *
+ * Everything is drawn on a 32×32 unit grid. One art pixel = 2 units, so the
+ * icon is pixel-perfect at 16px (1px) and 32px (2px).
+ */
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const COLORS = {
+  cyan: '#22d3ee',
+  pink: '#ec4899',
+  ink: '#111114',
+  white: '#ffffff',
+  sand: '#facc15',
+  red: '#ef4444',
+};
+
+// K = outline, W = fill, Y = sand (hourglass)
+const CURSORS = {
+  arrow: [
+    'K........',
+    'KK.......',
+    'KWK......',
+    'KWWK.....',
+    'KWWWK....',
+    'KWWWWK...',
+    'KWWWWWK..',
+    'KWWWWWWK.',
+    'KWWWWWKKK',
+    'KWWKWWK..',
+    'KWK.KWWK.',
+    'KK...KWWK',
+    '......KK.',
+  ],
+  cross: [
+    '...KKK...',
+    '...KWK...',
+    '...KWK...',
+    'KKKK.KKKK',
+    'KWW...WWK',
+    'KKKK.KKKK',
+    '...KWK...',
+    '...KWK...',
+    '...KKK...',
+  ],
+  ibeam: [
+    'KKK.KKK',
+    'KWWKWWK',
+    'KKKWKKK',
+    '..KWK..',
+    '..KWK..',
+    '..KWK..',
+    '..KWK..',
+    '..KWK..',
+    'KKKWKKK',
+    'KWWKWWK',
+    'KKK.KKK',
+  ],
+  hand: [
+    '...KK.....',
+    '..KWWK....',
+    '..KWWK....',
+    '..KWWKKK..',
+    '..KWWKWWKK',
+    'KKKWWKWWKW',
+    'KWWKWWWWWK',
+    'KWWWWWWWWK',
+    '.KWWWWWWWK',
+    '.KWWWWWWK.',
+    '..KWWWWWK.',
+    '..KKKKKKK.',
+  ],
+  wait: [
+    'KKKKKKKK',
+    '.KWWWWK.',
+    '.KYYYYK.',
+    '..KYYK..',
+    '...KK...',
+    '..KWYK..',
+    '.KWYYWK.',
+    '.KYYYYK.',
+    'KKKKKKKK',
+  ],
+};
+const REC_DOT = ['.WWW.', 'WRRRW', 'WRRRW', 'WRRRW', '.WWW.'];
+const PALETTE = { K: COLORS.ink, W: COLORS.white, Y: COLORS.sand, R: COLORS.red };
+// Solid black like the macOS pointer, so the white sticker rim reads as the outline
+const INK_FILLED = new Set(['arrow', 'cross', 'ibeam']);
+
+/** Header animation frames, in order. The first one is the static logo. */
+const FRAMES = [
+  { cursor: 'arrow' },
+  { cursor: 'arrow', rec: true },
+  { cursor: 'cross' },
+  { cursor: 'ibeam' },
+  { cursor: 'hand' },
+  { cursor: 'wait' },
+];
+
+/** Fill the gaps inside each row so the rims hug the outer shape */
+const solid = (rows) =>
+  rows.map((r) => {
+    const a = r.search(/[^.]/);
+    const b = r.length - [...r].reverse().join('').search(/[^.]/);
+    return a < 0 ? r : '.'.repeat(a) + 'S'.repeat(b - a) + '.'.repeat(r.length - b);
+  });
+
+const createGrid = () => Array.from({ length: 32 }, () => Array(32).fill(null));
+
+/** Paint art pixels (2×2 units each) onto a unit grid */
+function paint(grid, rows, palette, ox, oy) {
+  rows.forEach((row, y) => {
+    [...row].forEach((ch, x) => {
+      const color = palette[ch];
+      if (!color) return;
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const gx = ox + x * 2 + dx;
+          const gy = oy + y * 2 + dy;
+          if (gx >= 0 && gx < 32 && gy >= 0 && gy < 32) grid[gy][gx] = color;
+        }
+      }
+    });
+  });
+}
+
+function ring(grid, rows, color, ox, oy, d) {
+  for (const [dx, dy] of [
+    [-d, 0],
+    [d, 0],
+    [0, -d],
+    [0, d],
+    [-d, -d],
+    [d, d],
+    [-d, d],
+    [d, -d],
+  ]) {
+    paint(grid, rows, { S: color }, ox + dx, oy + dy);
+  }
+}
+
+/** One <path> per color: horizontal runs, stacked into rectangles when rows repeat */
+function toPaths(grid) {
+  const byColor = new Map();
+  /** @type {Map<string, { color: string, x: number, n: number, y: number, h: number }>} */
+  let open = new Map();
+  const close = (r) =>
+    byColor.set(r.color, `${byColor.get(r.color) ?? ''}M${r.x} ${r.y}h${r.n}v${r.h}h-${r.n}z`);
+  for (let y = 0; y <= 32; y++) {
+    const next = new Map();
+    const row = grid[y] ?? [];
+    let x = 0;
+    while (y < 32 && x < 32) {
+      const color = row[x];
+      let n = 1;
+      while (x + n < 32 && row[x + n] === color) n++;
+      if (color) {
+        const key = `${color}|${x}|${n}`;
+        const r = open.get(key);
+        if (r) {
+          r.h++;
+          open.delete(key);
+          next.set(key, r);
+        } else {
+          next.set(key, { color, x, n, y, h: 1 });
+        }
+      }
+      x += n;
+    }
+    open.forEach(close);
+    open = next;
+  }
+  return [...byColor].map(([color, d]) => `<path fill="${color}" d="${d}"/>`).join('');
+}
+
+/** @returns {{ cyan: string, pink: string, body: string }} markup for one frame */
+function drawFrame({ cursor, rec = false }) {
+  const rows = CURSORS[cursor];
+  const w = rows[0].length * 2;
+  const h = rows.length * 2;
+  const x = 2 * Math.round((16 - w / 2 + 2) / 2);
+  const y = 2 * Math.round((16 - h / 2) / 2);
+  const outline = solid(rows);
+
+  const cyan = createGrid();
+  paint(cyan, outline, { S: COLORS.cyan }, x - 6, y + 1);
+  const pink = createGrid();
+  paint(pink, outline, { S: COLORS.pink }, x + 6, y - 1);
+
+  // sticker: thin dark line → white rim → cursor
+  const body = createGrid();
+  ring(body, outline, COLORS.ink, x, y, 3);
+  ring(body, outline, COLORS.white, x, y, 2);
+  paint(body, outline, { S: COLORS.white }, x, y);
+  paint(body, rows, INK_FILLED.has(cursor) ? { ...PALETTE, W: COLORS.ink } : PALETTE, x, y);
+  if (rec) paint(body, REC_DOT, PALETTE, 20, 2);
+
+  return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body) };
+}
+
+function faviconSvg(frame) {
+  const { cyan, pink, body } = drawFrame(frame);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}</svg>\n`;
+}
+
+function headerSvg() {
+  const step = 0.75;
+  const frames = FRAMES.map((frame, i) => {
+    const { cyan, pink, body } = drawFrame(frame);
+    // Negative delays line the frames up: frame i shows during [i, i + 1) steps
+    const delay = -(((FRAMES.length - i) % FRAMES.length) * step);
+    return `<g class="app-logo-frame" style="animation-delay:${delay}s"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g>${body}</g>`;
+  }).join('\n            ');
+  return `<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" shape-rendering="crispEdges">
+            ${frames}
+          </svg>`;
+}
+
+// --- favicons
+const files = {
+  'favicon.svg': FRAMES[0],
+  'favicon-recording.svg': { cursor: 'arrow', rec: true },
+  'favicon-busy.svg': { cursor: 'wait' },
+};
+for (const [name, frame] of Object.entries(files)) {
+  writeFileSync(join(ROOT, 'public', name), faviconSvg(frame));
+}
+
+// --- header logo
+const htmlPath = join(ROOT, 'src', 'index.html');
+const html = readFileSync(htmlPath, 'utf8');
+const marker = /(<!-- logo:start[^>]*-->)[\s\S]*?(\s*<!-- logo:end -->)/;
+if (!marker.test(html)) throw new Error('logo markers not found in src/index.html');
+writeFileSync(
+  htmlPath,
+  html.replace(marker, (_, start, end) => `${start}\n          ${headerSvg()}${end}`),
+);
+
+// --- favicon.ico
+const { chromium } = await import('playwright');
+const tmp = mkdtempSync(join(tmpdir(), 'glinfs-icons-'));
+const browser = await chromium.launch();
+try {
+  const page = await browser.newPage();
+  const svg = readFileSync(join(ROOT, 'public', 'favicon.svg'), 'utf8');
+  const pngs = [];
+  for (const size of [16, 32, 48]) {
+    await page.setViewportSize({ width: size, height: size });
+    await page.setContent(
+      `<style>html,body{margin:0;background:transparent}img{display:block}</style><img width="${size}" height="${size}" src="data:image/svg+xml,${encodeURIComponent(svg)}">`,
+    );
+    const file = join(tmp, `${size}.png`);
+    await page.screenshot({ path: file, omitBackground: true });
+    pngs.push(file);
+  }
+  execFileSync('magick', [...pngs, join(ROOT, 'public', 'favicon.ico')]);
+} finally {
+  await browser.close();
+  rmSync(tmp, { recursive: true, force: true });
+}
+console.log('Icons generated.');
