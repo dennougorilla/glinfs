@@ -2348,10 +2348,6 @@
   background: var(--color-primary);
 }
 
-.editor-screen .editor-side-tab[aria-selected="true"] .editor-side-tab-icon {
-  color: var(--color-primary);
-}
-
 .editor-screen .editor-side-tab:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
@@ -2361,6 +2357,10 @@
 .editor-screen .editor-side-tab-icon {
   position: relative;
   display: inline-flex;
+}
+
+.editor-screen .editor-side-tab[aria-selected="true"] .editor-side-tab-icon {
+  color: var(--color-primary);
 }
 
 .editor-screen .editor-side-tab-label {
