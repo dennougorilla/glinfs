@@ -65,7 +65,7 @@ export function initTabStatus(doc = document, deps = {}) {
         : state === 'recording'
           ? '● Recording - Glinfs'
           : baseTitle;
-    // The header logo shows the matching frame while it is not hovered
+    // The header logo shows (and animates) the matching frame
     if (logo) {
       if (state === 'idle') delete logo.dataset.state;
       else logo.dataset.state = state;

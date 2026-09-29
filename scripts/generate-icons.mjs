@@ -44,30 +44,6 @@ const CURSORS = {
     'K...KKK..',
     '.....KK..',
   ],
-  cross: [
-    '...KKK...',
-    '...KWK...',
-    '...KWK...',
-    'KKKK.KKKK',
-    'KWW...WWK',
-    'KKKK.KKKK',
-    '...KWK...',
-    '...KWK...',
-    '...KKK...',
-  ],
-  ibeam: [
-    'KKK.KKK',
-    'KWWKWWK',
-    'KKKWKKK',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    'KKKWKKK',
-    'KWWKWWK',
-    'KKK.KKK',
-  ],
   hand: [
     '...KK.....',
     '..KWWK....',
@@ -82,10 +58,11 @@ const CURSORS = {
     '..KWWWWWK.',
     '..KKKKKKK.',
   ],
+  // Sand mostly at the bottom, so the header's flip animation reads
   wait: [
     'KKKKKKKK',
     '.KWWWWK.',
-    '.KYYYYK.',
+    '.KWWWWK.',
     '..KYYK..',
     '...KK...',
     '..KWYK..',
@@ -97,23 +74,19 @@ const CURSORS = {
 const REC_DOT = ['.WWW.', 'WRRRW', 'WRRRW', 'WRRRW', '.WWW.'];
 const PALETTE = { K: COLORS.ink, W: COLORS.white, Y: COLORS.sand, R: COLORS.red };
 // Solid black like the macOS pointer, so the white sticker rim reads as the outline
-const INK_FILLED = new Set(['arrow', 'cross', 'ibeam']);
+const INK_FILLED = new Set(['arrow']);
 
 /**
- * Header logo frames, in playback order. `name` is matched by the logo's
- * data-state (set by shared/tab-status.js); the first frame is the default.
+ * One frame per app state. `name` is matched by the header logo's data-state
+ * (set by shared/tab-status.js); the first frame is the default.
  */
 const FRAMES = [
   { name: 'idle', cursor: 'arrow' },
   { name: 'recording', cursor: 'arrow', rec: true },
-  { name: 'select', cursor: 'cross' },
-  { name: 'text', cursor: 'ibeam' },
   { name: 'edit', cursor: 'hand' },
   { name: 'busy', cursor: 'wait' },
 ];
 const frame = (name) => FRAMES.find((f) => f.name === name);
-/** Seconds per frame on hover; keep in sync with app-logo-frame's duration in global.css */
-const HOVER_STEP = 0.4;
 
 const createGrid = () => Array.from({ length: 32 }, () => Array(32).fill(null));
 
@@ -197,7 +170,7 @@ function toPaths(grid) {
   return [...byColor].map(([color, d]) => `<path fill="${color}" d="${d}"/>`).join('');
 }
 
-/** @returns {{ cyan: string, pink: string, body: string }} markup for one frame */
+/** @returns {{ cyan: string, pink: string, body: string, rec: string }} markup for one frame */
 function drawFrame({ cursor, rec = false }) {
   const rows = CURSORS[cursor];
   const w = rows[0].length * 2;
@@ -216,25 +189,22 @@ function drawFrame({ cursor, rec = false }) {
   fill(body, dilate(shape, 3), COLORS.ink);
   fill(body, dilate(shape, 2), COLORS.white);
   paint(body, rows, INK_FILLED.has(cursor) ? { ...PALETTE, W: COLORS.ink } : PALETTE, x, y);
-  if (rec) paint(body, REC_DOT, PALETTE, 20, 2);
+  // kept apart so the header can blink it
+  const dot = createGrid();
+  if (rec) paint(dot, REC_DOT, PALETTE, 20, 2);
 
-  return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body) };
+  return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body), rec: toPaths(dot) };
 }
 
 function faviconSvg(f) {
-  const { cyan, pink, body } = drawFrame(f);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}</svg>\n`;
+  const { cyan, pink, body, rec } = drawFrame(f);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}${rec}</svg>\n`;
 }
 
 function headerSvg() {
-  const n = FRAMES.length;
-  const frames = FRAMES.map((f, i) => {
-    const { cyan, pink, body } = drawFrame(f);
-    // Negative delays line the frames up so hovering jumps straight to the
-    // next frame: frame i shows during step (i - 1) mod n
-    const slot = (i - 1 + n) % n;
-    const delay = +(-((n - slot) % n) * HOVER_STEP).toFixed(2);
-    return `<g class="app-logo-frame" data-frame="${f.name}" style="animation-delay:${delay}s"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g>${body}</g>`;
+  const frames = FRAMES.map((f) => {
+    const { cyan, pink, body, rec } = drawFrame(f);
+    return `<g class="app-logo-frame" data-frame="${f.name}"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g><g class="app-logo-body">${body}</g>${rec ? `<g class="app-logo-rec">${rec}</g>` : ''}</g>`;
   }).join('\n            ');
   return `<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" shape-rendering="crispEdges">
             ${frames}
