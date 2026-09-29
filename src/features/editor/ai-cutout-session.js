@@ -25,10 +25,12 @@ import {
   buildClipMaskSource,
   describeAnalysisError,
   estimateRemainingMs,
+  getAiModelId,
   getBuildParamsKey,
   getSharedFinalMaskCache,
   isAbortError,
   isWasmAllowed,
+  isWasmChoiceError,
   peekClipMaskSource,
   setWasmAllowed,
 } from './ai-cutout.js';
@@ -232,8 +234,9 @@ export function createAiCutoutSession(options) {
   };
 
   /**
-   * Analyze frames that have no mask yet (the selection). Finished masks are
-   * kept on cancel or failure; a second call only does the rest.
+   * Analyze frames that have no mask yet from the clip's model (the
+   * selection). Finished masks are kept on cancel or failure; a second call
+   * only does the rest.
    * @param {Frame[]} frames
    * @returns {Promise<void>}
    */
@@ -242,7 +245,8 @@ export function createAiCutoutSession(options) {
     const controller = new AbortController();
     analysisController = controller;
     const clipId = getClipId();
-    if (clipId !== undefined) maskStore.touchClip(clipId);
+    const modelId = getAiModelId(getState()?.edits.background.ai);
+    if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
     report({
@@ -260,6 +264,7 @@ export function createAiCutoutSession(options) {
       const result = await manager.analyzeFrames(frames, {
         signal: controller.signal,
         clipId,
+        modelId,
         allowWasm: isWasmAllowed(),
         onProgress(progress) {
           if (disposed || analysisController !== controller) return;
@@ -289,6 +294,8 @@ export function createAiCutoutSession(options) {
       report({
         phase: 'idle',
         backend: result.backend,
+        // A retry that ran on WebGPU after all: the model works there
+        ...(result.backend === 'webgpu' ? { webgpuModelFailed: false } : {}),
         notice:
           result.analyzed > 0
             ? `Analyzed ${result.analyzed} frame${result.analyzed === 1 ? '' : 's'}.`
@@ -300,11 +307,17 @@ export function createAiCutoutSession(options) {
           phase: 'idle',
           notice: 'Analysis cancelled. Finished frames are kept; Analyze continues with the rest.',
         });
-      } else if (
-        /** @type {any} */ (error)?.code === SegmentationErrorCode.WEBGPU_UNAVAILABLE &&
-        !isWasmAllowed()
-      ) {
-        report({ phase: 'idle', needsWasmChoice: true, webgpu: false });
+      } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
+        // No WebGPU at all concerns the page; a model that failed on the
+        // adapter concerns that model only (the other one may run there)
+        const modelFailed =
+          /** @type {any} */ (error).code === SegmentationErrorCode.WEBGPU_MODEL_FAILED;
+        report({
+          phase: 'idle',
+          needsWasmChoice: true,
+          webgpuModelFailed: modelFailed,
+          ...(modelFailed ? {} : { webgpu: false }),
+        });
       } else {
         report({ phase: 'error', error: describeAnalysisError(error) });
       }

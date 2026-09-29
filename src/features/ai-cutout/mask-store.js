@@ -3,10 +3,11 @@
  * @module features/ai-cutout/mask-store
  *
  * Holds the AI cutout's per-frame probability masks (Uint8, 0-255) keyed by
- * frame key (`frame.sharedKey ?? frame.id`, so imported holds that share
- * pixels share one mask). Masks are grouped by clip so a deleted clip's
- * masks can be dropped, and the store stays under a memory cap by evicting
- * the least-recently-used clip's masks.
+ * mask key (the model plus `frame.sharedKey ?? frame.id`, so imported holds
+ * that share pixels share one mask). Masks are grouped by clip AND model: a
+ * deleted clip's masks (every model's) can be dropped, and the store stays
+ * under a memory cap by evicting the least-recently-used group — so the set
+ * of a model the clip no longer uses goes before the one it reads.
  *
  * Only plain byte arrays live here — never VideoFrames — so nothing in the
  * store needs closing.
@@ -28,17 +29,19 @@ export const DEFAULT_CLIP_ID = '';
  * @property {number} version - Store version after the change
  * @property {string} [key] - Frame key ('set' / 'delete')
  * @property {string} [clipId] - Affected clip ('set' / 'delete-clip' / 'evict')
+ * @property {string} [model] - Model of the evicted group ('evict')
  */
 
 /**
  * @typedef {Object} MaskStore
  * @property {(key: string) => ProbabilityMask | null} get - Also marks the clip recently used
  * @property {(key: string) => boolean} has
- * @property {(key: string, mask: ProbabilityMask, clipId?: string) => void} set
+ * @property {(key: string, mask: ProbabilityMask, clipId?: string, model?: string) => void} set
  * @property {(key: string) => boolean} delete
- * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip; returns how many
- * @property {(clipId: string) => void} touchClip - Mark a clip recently used (e.g. the active clip)
- * @property {(clipId: string) => string[]} keysForClip
+ * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip (all models); returns how many
+ * @property {(clipId: string, model?: string) => void} touchClip - Mark a clip's masks of one
+ *   model (default: of every model) recently used (e.g. the active clip)
+ * @property {(clipId: string) => string[]} keysForClip - Every model's
  * @property {() => void} clear
  * @property {(listener: (change: MaskStoreChange) => void) => () => void} subscribe
  * @property {number} version - Bumps on every change
@@ -50,19 +53,20 @@ export const DEFAULT_CLIP_ID = '';
 /**
  * Create a mask store.
  *
- * Eviction never touches the clip that is being written: a single clip whose
- * masks alone exceed the cap is kept whole (its analysis would otherwise be
- * lost while it is still being produced), and older clips are dropped first.
+ * Eviction never touches the group (clip and model) that is being written: a
+ * single group whose masks alone exceed the cap is kept whole (its analysis
+ * would otherwise be lost while it is still being produced), and older
+ * groups are dropped first.
  *
  * @param {{ capBytes?: number }} [options]
  * @returns {MaskStore}
  */
 export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
-  /** @type {Map<string, { mask: ProbabilityMask, clipId: string }>} */
+  /** @type {Map<string, { mask: ProbabilityMask, group: string }>} */
   const entries = new Map();
-  /** @type {Map<string, Set<string>>} clip id -> frame keys */
-  const clips = new Map();
-  /** @type {Map<string, number>} clip id -> last-use tick */
+  /** @type {Map<string, { clipId: string, model: string, keys: Set<string> }>} group id -> masks */
+  const groups = new Map();
+  /** @type {Map<string, number>} group id -> last-use tick */
   const lastUsed = new Map();
   /** @type {Set<(change: MaskStoreChange) => void>} */
   const listeners = new Set();
@@ -70,6 +74,13 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
   let version = 0;
   let byteLength = 0;
   let tick = 0;
+
+  /**
+   * @param {string} clipId
+   * @param {string} model
+   * @returns {string}
+   */
+  const groupId = (clipId, model) => `${clipId}\u0000${model}`;
 
   /** @param {Omit<MaskStoreChange, 'version'>} change */
   function changed(change) {
@@ -80,10 +91,10 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     }
   }
 
-  /** @param {string} clipId */
-  function touch(clipId) {
+  /** @param {string} id */
+  function touch(id) {
     tick++;
-    lastUsed.set(clipId, tick);
+    lastUsed.set(id, tick);
   }
 
   /**
@@ -96,49 +107,61 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     if (!entry) return false;
     entries.delete(key);
     byteLength -= entry.mask.data.byteLength;
-    const keys = clips.get(entry.clipId);
-    keys?.delete(key);
-    if (keys && keys.size === 0) {
-      clips.delete(entry.clipId);
-      lastUsed.delete(entry.clipId);
+    const group = groups.get(entry.group);
+    group?.keys.delete(key);
+    if (group && group.keys.size === 0) {
+      groups.delete(entry.group);
+      lastUsed.delete(entry.group);
     }
     return true;
   }
 
   /**
-   * Remove all of a clip's entries without notifying.
-   * @param {string} clipId
+   * Remove all of a group's entries without notifying.
+   * @param {string} id
    * @returns {number}
    */
-  function removeClip(clipId) {
-    const keys = clips.get(clipId);
-    if (!keys) return 0;
+  function removeGroup(id) {
+    const group = groups.get(id);
+    if (!group) return 0;
     let removed = 0;
-    for (const key of [...keys]) {
+    for (const key of [...group.keys]) {
       if (removeEntry(key)) removed++;
     }
-    clips.delete(clipId);
-    lastUsed.delete(clipId);
+    groups.delete(id);
+    lastUsed.delete(id);
     return removed;
   }
 
   /**
-   * Evict least-recently-used clips (never `keepClipId`) until under the cap.
-   * @param {string} keepClipId
+   * Group ids of a clip (every model).
+   * @param {string} clipId
+   * @returns {string[]}
    */
-  function evictOverCap(keepClipId) {
+  function groupsOfClip(clipId) {
+    return [...groups].filter(([, group]) => group.clipId === clipId).map(([id]) => id);
+  }
+
+  /**
+   * Evict least-recently-used groups (never `keepGroup`) until under the cap.
+   * @param {string} keepGroup
+   */
+  function evictOverCap(keepGroup) {
     while (byteLength > capBytes) {
       let victim = null;
       let oldest = Number.POSITIVE_INFINITY;
-      for (const [clipId, used] of lastUsed) {
-        if (clipId !== keepClipId && used < oldest) {
+      for (const [id, used] of lastUsed) {
+        if (id !== keepGroup && used < oldest) {
           oldest = used;
-          victim = clipId;
+          victim = id;
         }
       }
       if (victim === null) return;
-      removeClip(victim);
-      changed({ type: 'evict', clipId: victim });
+      const { clipId, model } = /** @type {{ clipId: string, model: string }} */ (
+        groups.get(victim)
+      );
+      removeGroup(victim);
+      changed({ type: 'evict', clipId, model });
     }
   }
 
@@ -146,7 +169,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     get(key) {
       const entry = entries.get(key);
       if (!entry) return null;
-      touch(entry.clipId);
+      touch(entry.group);
       return entry.mask;
     },
 
@@ -154,7 +177,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       return entries.has(key);
     },
 
-    set(key, mask, clipId = DEFAULT_CLIP_ID) {
+    set(key, mask, clipId = DEFAULT_CLIP_ID, model = '') {
       if (!(mask?.data instanceof Uint8Array)) {
         throw new TypeError('mask.data must be a Uint8Array');
       }
@@ -164,44 +187,54 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
         );
       }
       removeEntry(key);
-      entries.set(key, { mask, clipId });
+      const id = groupId(clipId, model);
+      entries.set(key, { mask, group: id });
       byteLength += mask.data.byteLength;
-      let keys = clips.get(clipId);
-      if (!keys) {
-        keys = new Set();
-        clips.set(clipId, keys);
+      let group = groups.get(id);
+      if (!group) {
+        group = { clipId, model, keys: new Set() };
+        groups.set(id, group);
       }
-      keys.add(key);
-      touch(clipId);
+      group.keys.add(key);
+      touch(id);
       changed({ type: 'set', key, clipId });
-      evictOverCap(clipId);
+      evictOverCap(id);
     },
 
     delete(key) {
-      const clipId = entries.get(key)?.clipId;
+      const entry = entries.get(key);
+      const clipId = entry ? groups.get(entry.group)?.clipId : undefined;
       if (!removeEntry(key)) return false;
       changed({ type: 'delete', key, clipId });
       return true;
     },
 
     deleteClip(clipId) {
-      const removed = removeClip(clipId);
+      let removed = 0;
+      for (const id of groupsOfClip(clipId)) removed += removeGroup(id);
       if (removed > 0) changed({ type: 'delete-clip', clipId });
       return removed;
     },
 
-    touchClip(clipId) {
-      if (clips.has(clipId)) touch(clipId);
+    touchClip(clipId, model) {
+      if (model !== undefined) {
+        const id = groupId(clipId, model);
+        if (groups.has(id)) touch(id);
+        return;
+      }
+      for (const id of groupsOfClip(clipId)) touch(id);
     },
 
     keysForClip(clipId) {
-      return [...(clips.get(clipId) ?? [])];
+      return groupsOfClip(clipId).flatMap((id) => [
+        .../** @type {{ keys: Set<string> }} */ (groups.get(id)).keys,
+      ]);
     },
 
     clear() {
       if (entries.size === 0) return;
       entries.clear();
-      clips.clear();
+      groups.clear();
       lastUsed.clear();
       byteLength = 0;
       changed({ type: 'clear' });

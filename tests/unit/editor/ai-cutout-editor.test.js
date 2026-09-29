@@ -101,7 +101,7 @@ describe('AI cutout in the mounted editor', () => {
     fake.analyzeFrames.mockReset();
     fake.analyzeFrames.mockImplementation(async (frames, options) => {
       const store = getSharedMaskStore();
-      const pending = segmentation.collectPendingFrames(frames, store);
+      const pending = segmentation.collectPendingFrames(frames, store, options.modelId);
       let done = 0;
       for (const { key } of pending) {
         store.set(
@@ -166,7 +166,7 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-section').hidden).toBe(false);
     expect($('#ai-color-fields').hidden).toBe(true);
     expect(/** @type {HTMLInputElement} */ ($('#background-enabled')).checked).toBe(true);
-    expect($('#ai-intro').textContent).toContain('about 200 MB');
+    expect($('#ai-intro').textContent).toContain('88 MB');
 
     // No adapter: the warning with the explicit slow option
     expect(fake.getCapabilities).toHaveBeenCalled();
@@ -225,6 +225,81 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-preview-note').hidden).toBe(true);
   });
 
+  it('switching the model shows that model’s analysis and reuses each model’s masks', async () => {
+    mount(4);
+    await chooseAi();
+    const anime = /** @type {HTMLInputElement} */ ($('#ai-model-anime'));
+    const general = /** @type {HTMLInputElement} */ ($('#ai-model-general'));
+    expect(anime.checked).toBe(true);
+    expect(anime.labels?.[0]?.textContent).toBe('Anime (88 MB)');
+    expect(general.labels?.[0]?.textContent).toBe('General (90 MB)');
+    expect($('#ai-model').tagName).toBe('FIELDSET');
+
+    // Anime analyzes the clip
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls[0][1]).toMatchObject({ modelId: 'anime' });
+    expect($('#ai-coverage').textContent).toBe('4 of 4 frames analyzed');
+    expect($('#ai-notice').textContent).toBe('Analyzed 4 frames.');
+    window.__TEST_HOOKS__.setEditorState({
+      edits: {
+        ...getEditorState()?.edits,
+        background: {
+          ...getEditorState()?.edits.background,
+          ai: { ...getEditorState()?.edits.background.ai, threshold: 0.3 },
+        },
+      },
+    });
+    await settle();
+
+    // General: nothing analyzed with it yet; the last outcome is gone
+    check('ai-model-general');
+    await settle();
+    expect(getEditorState()?.edits.background.ai).toMatchObject({
+      model: 'general',
+      threshold: 0.3,
+    });
+    expect($('#ai-coverage').textContent).toBe('0 of 4 frames analyzed');
+    expect($('#ai-analyze').textContent).toBe('Analyze selection (4 frames)');
+    expect($('#ai-notice').textContent).toBe('');
+    expect($('#ai-intro').textContent).toContain('General model');
+    expect($('#ai-intro').textContent).toContain('90 MB');
+    expect($('#ai-model-note').textContent).toContain('People, pets and objects');
+    expect($('#ai-preview-note').textContent).toBe('Not analyzed yet');
+
+    // The model choice is disabled while an analysis runs
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls[1][1]).toMatchObject({ modelId: 'general' });
+    expect(anime.disabled).toBe(true);
+    expect(general.disabled).toBe(true);
+    expect($('#ai-model-note').textContent).toContain('when the analysis ends');
+    // A change event that slips through is ignored
+    check('ai-model-anime');
+    await settle();
+    expect(getEditorState()?.edits.background.ai.model).toBe('general');
+    $('#ai-cancel').click();
+    await settle();
+    await settle();
+    expect(anime.disabled).toBe(false);
+
+    // Back to anime: its masks are reused, nothing to analyze
+    check('ai-model-anime');
+    await settle();
+    expect($('#ai-coverage').textContent).toBe('4 of 4 frames analyzed');
+    expect($('#ai-analyze').textContent).toBe('Selection analyzed');
+    expect(fake.analyzeFrames).toHaveBeenCalledTimes(2);
+  });
+
   it('the explicit WASM choice runs the analysis with WASM allowed', async () => {
     mount(2);
     await chooseAi();
@@ -232,6 +307,72 @@ describe('AI cutout in the mounted editor', () => {
     await settle();
     await settle();
     expect(fake.analyzeFrames.mock.calls[0][1].allowWasm).toBe(true);
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    expect($('#ai-wasm-note').hidden).toBe(false);
+  });
+
+  it('a model that fails on WebGPU asks for the slow choice for that model only', async () => {
+    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
+    mount(2);
+    await chooseAi();
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    check('ai-model-general');
+    await settle();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      Object.assign(new Error('The model could not run on WebGPU: shader limits'), {
+        code: 'webgpu-model-failed',
+      }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    // The browser has WebGPU: the copy names the model, not a missing WebGPU
+    expect(getEditorState()?.aiCutout).toMatchObject({
+      webgpu: true,
+      needsWasmChoice: true,
+      webgpuModelFailed: true,
+    });
+    expect($('#ai-error').hidden).toBe(true);
+    expect($('#ai-webgpu-warning').hidden).toBe(false);
+    const text = $('#ai-webgpu-warning-text').textContent ?? '';
+    expect(text).toContain('The General model could not run on WebGPU in this browser');
+    expect(text).not.toContain('does not provide');
+
+    // The anime model is not affected: switching clears the choice
+    check('ai-model-anime');
+    await settle();
+    expect(getEditorState()?.aiCutout).toMatchObject({
+      needsWasmChoice: false,
+      webgpuModelFailed: false,
+    });
+    expect($('#ai-webgpu-warning').hidden).toBe(true);
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({
+      modelId: 'anime',
+      allowWasm: false,
+    });
+    expect($('#ai-coverage').textContent).toBe('2 of 2 frames analyzed');
+  });
+
+  it('the slow choice after a model failed on WebGPU keeps the WASM note for that model', async () => {
+    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
+    mount(2);
+    await chooseAi();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'webgpu-model-failed' }),
+    );
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect($('#ai-webgpu-warning-text').textContent).toContain(
+      'The Anime model could not run on WebGPU',
+    );
+    $('#ai-run-wasm').click();
+    await settle();
+    await settle();
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1].allowWasm).toBe(true);
     expect($('#ai-webgpu-warning').hidden).toBe(true);
     expect($('#ai-wasm-note').hidden).toBe(false);
   });
@@ -291,7 +432,7 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.aiPickTool).toBeNull();
 
     // A pick on a frame without analysis is refused with a note
-    getSharedMaskStore().delete('a4');
+    getSharedMaskStore().delete('anime:a4');
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 4 });
     check('ai-pick-remove');
     overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
@@ -389,7 +530,7 @@ describe('AI cutout in the mounted editor', () => {
     // Frame 1 analyzed: a character on the left half, background on the right
     const data = new Uint8Array(100);
     for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 5);
-    getSharedMaskStore().set('a1', { data, width: 10, height: 10 }, 'clip-a');
+    getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
     await settle();
 
     const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
@@ -447,8 +588,8 @@ describe('AI cutout in the mounted editor', () => {
         }),
     );
     window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
-    getSharedMaskStore().delete('a1');
-    getSharedMaskStore().delete('a0');
+    getSharedMaskStore().delete('anime:a1');
+    getSharedMaskStore().delete('anime:a0');
     await settle();
     $('#ai-analyze').focus();
     $('#ai-analyze').click();
@@ -603,8 +744,8 @@ describe('AI cutout in the mounted editor', () => {
 
   it('drops a clip’s masks once its deletion is final, and everything on reset', async () => {
     const store = getSharedMaskStore();
-    store.set('q0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-q');
-    store.set('a0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-a');
+    store.set('anime:q0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-q');
+    store.set('anime:a0', { data: new Uint8Array(4), width: 2, height: 2 }, 'clip-a');
     setClipPayload({ frames: createTestFrames(2, 'a'), fps: 10, capturedAt: 0, id: 'clip-a' });
     enqueueClip({ frames: createTestFrames(2, 'q'), fps: 10, capturedAt: 0, id: 'clip-q' });
     // The queued clip's final masks are memoized in the shared cache
@@ -619,10 +760,10 @@ describe('AI cutout in the mounted editor', () => {
 
     expect(deleteQueuedClip('clip-q')).toBe(true);
     // Undo window: masks stay
-    expect(store.has('q0')).toBe(true);
+    expect(store.has('anime:q0')).toBe(true);
     vi.advanceTimersByTime(5000);
-    expect(store.has('q0')).toBe(false);
-    expect(store.has('a0')).toBe(true);
+    expect(store.has('anime:q0')).toBe(false);
+    expect(store.has('anime:a0')).toBe(true);
     // Masks of its frames still in the worker are dropped when they arrive
     expect(fake.forgetClip).toHaveBeenCalledWith('clip-q');
     expect(fake.forgetClip).not.toHaveBeenCalledWith('clip-a');

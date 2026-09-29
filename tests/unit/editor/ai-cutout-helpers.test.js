@@ -11,21 +11,23 @@ import {
 import {
   buildClipMaskSource,
   buildClipMaskSourceSettled,
-  DOWNLOAD_SIZE_LABEL,
   describeAnalysisError,
   describeAnalysisProgress,
   estimateRemainingMs,
   formatTimeLeft,
+  getAiModelId,
   getAnalysisCoverage,
   getAnalysisFraction,
   getBuildParamsKey,
   getClipProbSource,
+  getModelSizeLabel,
   getSharedFinalMaskCache,
   isAbortError,
   isFrameAnalyzed,
   isWasmAllowed,
   peekClipMaskSource,
   pickFindsCharacter,
+  RUNTIME_SIZE_LABEL,
   setWasmAllowed,
   TYPICAL_FRAME_MS,
 } from '../../../src/features/editor/ai-cutout.js';
@@ -55,8 +57,18 @@ const ai = normalizeEdits({}, 4).background.ai;
 describe('AI cutout helpers', () => {
   afterEach(() => setWasmAllowed(false));
 
-  it('says "about 200 MB" for the first download', () => {
-    expect(DOWNLOAD_SIZE_LABEL).toBe('about 200 MB');
+  it('labels each model’s download size and the shared runtime', () => {
+    expect(getModelSizeLabel('anime')).toBe('88 MB');
+    expect(getModelSizeLabel('general')).toBe('90 MB');
+    expect(RUNTIME_SIZE_LABEL).toBe('about 27 MB');
+  });
+
+  it('reads the model of the AI parameters (anime when missing or unknown)', () => {
+    expect(getAiModelId({ model: 'general' })).toBe('general');
+    expect(getAiModelId({ model: 'nope' })).toBe('anime');
+    expect(getAiModelId({})).toBe('anime');
+    expect(getAiModelId(null)).toBe('anime');
+    expect(ai.model).toBe('anime');
   });
 
   it('remembers the explicit WASM choice', () => {
@@ -76,14 +88,17 @@ describe('AI cutout helpers', () => {
     const clip = /** @type {any[]} */ (frames(3));
     clip[2] = { ...clip[2], sharedKey: 'f1' };
     clip[1] = { ...clip[1], sharedKey: 'f1' };
-    store.set('f1', mask([255, 0, 0, 0, 0, 0, 0, 0]));
+    store.set('anime:f1', mask([255, 0, 0, 0, 0, 0, 0, 0]));
     const getProb = getClipProbSource(clip, store);
     expect(getProb(0)).toBeNull();
     expect(getProb(2)).toBe(getProb(1));
     expect(getProb(9)).toBeNull();
-    expect(isFrameAnalyzed(clip[2], store)).toBe(true);
-    expect(isFrameAnalyzed(clip[0], store)).toBe(false);
-    expect(isFrameAnalyzed(null, store)).toBe(false);
+    expect(isFrameAnalyzed(clip[2], { maskStore: store })).toBe(true);
+    expect(isFrameAnalyzed(clip[0], { maskStore: store })).toBe(false);
+    expect(isFrameAnalyzed(null, { maskStore: store })).toBe(false);
+    // The general model has not analyzed anything
+    expect(getClipProbSource(clip, store, 'general')(1)).toBeNull();
+    expect(isFrameAnalyzed(clip[2], { maskStore: store, modelId: 'general' })).toBe(false);
   });
 
   it('reports the analysis coverage of the clip and the selection', () => {
@@ -91,35 +106,64 @@ describe('AI cutout helpers', () => {
     const clip = /** @type {any[]} */ (frames(4));
     clip[3] = { ...clip[3], sharedKey: 'shared' };
     clip[2] = { ...clip[2], sharedKey: 'shared' };
-    store.set('f0', mask(new Array(8).fill(0)));
-    const cover = getAnalysisCoverage(clip, { start: 1, end: 3 }, store);
+    store.set('anime:f0', mask(new Array(8).fill(0)));
+    const cover = getAnalysisCoverage(clip, { start: 1, end: 3 }, { maskStore: store });
     expect(cover.selectionFrames).toHaveLength(3);
     // f1 and one analysis for the shared hold
     expect(cover.pendingInSelection).toBe(2);
     expect(cover.analyzedInClip).toBe(1);
     expect(cover.clipFrames).toBe(4);
+    // Coverage is per model
+    const general = getAnalysisCoverage(
+      clip,
+      { start: 0, end: 3 },
+      { maskStore: store, modelId: 'general' },
+    );
+    expect(general.analyzedInClip).toBe(0);
+    expect(general.pendingInSelection).toBe(3);
   });
 
   it('builds and memoizes the final masks of a clip', async () => {
     const store = createMaskStore();
     const cache = createFinalMaskCache();
     const clip = /** @type {any[]} */ (frames(2));
-    store.set('f0', mask([255, 255, 0, 0, 0, 0, 0, 0]));
+    store.set('anime:f0', mask([255, 255, 0, 0, 0, 0, 0, 0]));
     expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache })).toBeNull();
     const source = await buildClipMaskSource({ frames: clip, ai, maskStore: store, cache });
     expect(source.getFinalMask(0)).not.toBeNull();
     expect(source.getFinalMask(1)).toBeNull();
     expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache })).toBe(source);
     // New masks invalidate the memo
-    store.set('f1', mask(new Array(8).fill(255)));
+    store.set('anime:f1', mask(new Array(8).fill(255)));
     expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache })).toBeNull();
+  });
+
+  it('builds from the chosen model’s masks only and never reuses another model’s build', async () => {
+    const store = createMaskStore();
+    const cache = createFinalMaskCache();
+    const clip = /** @type {any[]} */ (frames(2));
+    store.set('anime:f0', mask(new Array(8).fill(255)));
+    store.set('general:f1', mask(new Array(8).fill(255)));
+    const anime = await buildClipMaskSource({ frames: clip, ai, maskStore: store, cache });
+    expect(anime.getFinalMask(0)).not.toBeNull();
+    expect(anime.getFinalMask(1)).toBeNull();
+    const generalAi = { ...ai, model: 'general' };
+    expect(peekClipMaskSource({ frames: clip, ai: generalAi, maskStore: store, cache })).toBeNull();
+    const general = await buildClipMaskSource({
+      frames: clip,
+      ai: generalAi,
+      maskStore: store,
+      cache,
+    });
+    expect(general.getFinalMask(0)).toBeNull();
+    expect(general.getFinalMask(1)).not.toBeNull();
   });
 
   it('never shares memoized masks between clips of the same shape', async () => {
     const store = createMaskStore();
     const cache = createFinalMaskCache();
     const clip = /** @type {any[]} */ (frames(2));
-    store.set('f0', mask(new Array(8).fill(255)));
+    store.set('anime:f0', mask(new Array(8).fill(255)));
     const a = await buildClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'a' });
     expect(peekClipMaskSource({ frames: clip, ai, maskStore: store, cache, clipId: 'a' })).toBe(a);
     expect(
@@ -134,7 +178,7 @@ describe('AI cutout helpers', () => {
     const store = createMaskStore();
     const cache = createFinalMaskCache();
     const clip = /** @type {any[]} */ (frames(2));
-    store.set('f0', mask(new Array(8).fill(255)));
+    store.set('anime:f0', mask(new Array(8).fill(255)));
     const settled = buildClipMaskSourceSettled({
       frames: clip,
       ai,
@@ -157,7 +201,7 @@ describe('AI cutout helpers', () => {
     const store = createMaskStore();
     const cache = createFinalMaskCache();
     const clip = /** @type {any[]} */ (frames(2));
-    store.set('f0', mask(new Array(8).fill(255)));
+    store.set('anime:f0', mask(new Array(8).fill(255)));
     const controller = new AbortController();
     controller.abort();
     await expect(
@@ -176,8 +220,8 @@ describe('AI cutout helpers', () => {
     const store = createMaskStore();
     const clip = /** @type {any[]} */ (frames(3));
     // Left half foreground on frame 1 only; frame 2 not analyzed
-    store.set('f0', mask(new Array(8).fill(0)));
-    store.set('f1', mask([200, 200, 0, 0, 200, 200, 0, 0]));
+    store.set('anime:f0', mask(new Array(8).fill(0)));
+    store.set('anime:f1', mask([200, 200, 0, 0, 200, 200, 0, 0]));
     const at = (/** @type {number} */ frameIndex, /** @type {number} */ x, over = {}) =>
       pickFindsCharacter({
         frames: clip,
@@ -240,15 +284,15 @@ describe('AI cutout helpers', () => {
     expect(describeAnalysisProgress({ ...base, phase: 'downloading' })).toBe(
       'Downloading the model: 50.0 MB of 200.0 MB (25%)',
     );
-    // Decimal megabytes, like the "176 MB" of the README and credits
+    // Decimal megabytes, like the "88 MB" of the README and credits
     expect(
       describeAnalysisProgress({
         ...base,
         phase: 'downloading',
         loadedBytes: 12_000_000,
-        totalBytes: 176_069_933,
+        totalBytes: 88_070_957,
       }),
-    ).toBe('Downloading the model: 12.0 MB of 176.1 MB (6%)');
+    ).toBe('Downloading the model: 12.0 MB of 88.1 MB (13%)');
     expect(describeAnalysisProgress({ ...base, phase: 'downloading', fromCache: true })).toContain(
       'cache',
     );

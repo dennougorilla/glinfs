@@ -6,16 +6,18 @@
  * ORT and DOM code so both sides can import it).
  *
  * Manager -> worker:
- *   { type: 'init', model: ModelSpec, allowWasm: boolean }
- *   { type: 'segment', requestId, jobId, bitmap (transferred), sourceWidth,
- *     sourceHeight, maskWidth, maskHeight }
+ *   { type: 'init', model: ModelSpec, allowWasm: boolean }  - load a model
+ *     next to the loaded ones (a loaded one answers with 'ready' again)
+ *   { type: 'unload', modelId }  - stop loading a model / release its session
+ *   { type: 'segment', requestId, jobId, modelId, bitmap (transferred),
+ *     sourceWidth, sourceHeight, maskWidth, maskHeight }
  *   { type: 'cancel', jobId }  - drop that job's queued frames
  *
  * Worker -> manager:
- *   { type: 'status', phase: 'downloading' | 'verifying' | 'initializing',
- *     loadedBytes, totalBytes, fromCache }
- *   { type: 'ready', backend: 'webgpu' | 'wasm', adapter, fromCache, timings }
- *   { type: 'init-error', error: ErrorPayload }
+ *   { type: 'status', modelId, phase: 'downloading' | 'verifying' |
+ *     'initializing', loadedBytes, totalBytes, fromCache }
+ *   { type: 'ready', modelId, backend: 'webgpu' | 'wasm', adapter, fromCache, timings }
+ *   { type: 'init-error', modelId, error: ErrorPayload }  - never for an unloaded model
  *   { type: 'mask', requestId, width, height, data (ArrayBuffer, transferred),
  *     inferenceMs, totalMs }
  *   { type: 'segment-error', requestId, error: ErrorPayload }
@@ -28,8 +30,14 @@
  * @enum {string}
  */
 export const SegmentationErrorCode = Object.freeze({
-  /** No usable WebGPU adapter/session and the WASM fallback was not allowed */
+  /** No WebGPU adapter in this browser and the WASM fallback was not allowed */
   WEBGPU_UNAVAILABLE: 'webgpu-unavailable',
+  /**
+   * A WebGPU adapter exists but this model could not run on it (session
+   * creation or the warm-up run failed) and the WASM fallback was not
+   * allowed. It concerns this model only: another model may run on WebGPU.
+   */
+  WEBGPU_MODEL_FAILED: 'webgpu-model-failed',
   /** The model could not be downloaded (network error, HTTP error) */
   DOWNLOAD_FAILED: 'download-failed',
   /** The downloaded model's size or SHA-256 is not the pinned one */

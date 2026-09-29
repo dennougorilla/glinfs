@@ -5,7 +5,7 @@
  *
  * Headless Chromium has no WebGPU adapter, so these runs exercise the WASM
  * fallback. `page.route` serves tests/fixtures/models/stub-seg.onnx in place
- * of the real 176 MB model, and the DEV-only `__TEST_HOOKS__.aiCutout` hook
+ * of the real 88 MB model, and the DEV-only `__TEST_HOOKS__.aiCutout` hook
  * makes the manager accept the stub's size/hash. The stub computes
  * mask = mean(R, G, B) / 255, so every expected mask value below follows
  * directly from the colours drawn into the frames.
@@ -18,7 +18,7 @@ import { gotoCapture } from './helpers/app.js';
 
 const STUB_MODEL = readFileSync(new URL('../fixtures/models/stub-seg.onnx', import.meta.url));
 const STUB_SHA256 = createHash('sha256').update(STUB_MODEL).digest('hex');
-const MODEL_ROUTE = '**/models/isnetis.onnx';
+const MODEL_ROUTE = '**/models/isnetis-fp16.onnx';
 
 /** Mask values are bytes; allow for resampling at shape edges only */
 const TOLERANCE = 2;
@@ -244,7 +244,7 @@ test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
       return (await cache.keys()).map((request) => request.url);
     });
     expect(cachedKeys).toHaveLength(1);
-    expect(cachedKeys[0]).toContain(`models/isnetis.onnx?sha256=${STUB_SHA256}`);
+    expect(cachedKeys[0]).toContain(`models/isnetis-fp16.onnx?sha256=${STUB_SHA256}`);
   });
 
   test('portrait frames are letterboxed and cropped back horizontally', async ({ page }) => {

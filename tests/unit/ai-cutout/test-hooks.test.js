@@ -63,7 +63,7 @@ describe('installAiCutoutTestHooks', () => {
 
     const [passedFrames, options] = fakeManager.analyzeFrames.mock.calls[0];
     expect(passedFrames).toEqual([frames[1]]);
-    expect(options).toMatchObject({ allowWasm: true, clipId: 'clip-x' });
+    expect(options).toMatchObject({ allowWasm: true, clipId: 'clip-x', modelId: 'anime' });
     expect(result).toMatchObject({
       analyzed: 1,
       backend: 'wasm',
@@ -99,7 +99,7 @@ describe('installAiCutoutTestHooks', () => {
     });
     // 4×2 mask: row 0 = 0..3, row 1 = 10..13
     getSharedMaskStore().set(
-      'a',
+      'anime:a',
       { data: new Uint8Array([0, 1, 2, 3, 10, 11, 12, 13]), width: 4, height: 2 },
       'clip-z',
     );
@@ -115,7 +115,13 @@ describe('installAiCutoutTestHooks', () => {
       values: [0, 13, 13, 12],
     });
     expect(hooks.aiCutout.sampleMask(5, points)).toBeNull();
-    expect(hooks.aiCutout.getMaskStoreStats()).toMatchObject({ size: 1, byteLength: 8 });
+    // The general model has no mask for it
+    expect(hooks.aiCutout.sampleMask(1, points, 'general')).toBeNull();
+    expect(hooks.aiCutout.getMaskStoreStats()).toMatchObject({
+      size: 1,
+      byteLength: 8,
+      byModel: { anime: 1, general: 0 },
+    });
     hooks.aiCutout.clearMasks();
     expect(hooks.aiCutout.getMaskStoreStats().size).toBe(0);
   });

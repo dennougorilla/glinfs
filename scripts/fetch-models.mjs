@@ -1,60 +1,59 @@
 #!/usr/bin/env node
 /**
- * Download the AI cutout model into public/models/ and verify it.
+ * Download the AI cutout models into public/models/ and verify them.
  *
  *   npm run models:fetch            download (skipped when a verified copy exists)
- *   npm run models:fetch -- --check verify the existing file only, never download
+ *   npm run models:fetch -- --check verify the existing files only, never download
  *
- * The model (skytnt anime-segmentation isnetis.onnx, Apache-2.0, 176 MB) is
- * too large for git, so it is fetched from a PINNED Hugging Face commit and
- * checked against a pinned size and SHA-256. Any mismatch deletes the file
- * and exits non-zero, so a deploy can never ship a different model.
+ * Both remove files in the output directory that are not registry models.
  *
- * The pins are duplicated from src/features/ai-cutout/model-config.js (this
- * script must not depend on Vite's import.meta.env);
- * tests/unit/ai-cutout/model-config.test.js keeps both in sync.
+ * The models (src/features/ai-cutout/model-registry.js: fp16 conversions
+ * of the anime and the general IS-Net, Apache-2.0, about 88 and 90 MB) are
+ * too large for the repository, so each one is fetched from its asset in
+ * the `models-v1` GitHub Release and checked against a pinned size and
+ * SHA-256. Any mismatch deletes the file and exits non-zero, so a deploy
+ * can never ship a different model. (scripts/convert-models-fp16.py
+ * rebuilds the same bytes from the upstream Hugging Face files.)
+ *
+ * Every file in the output directory that is not a registry model (the
+ * fp32 isnetis.onnx of the first AI cutout release, an interrupted
+ * download) is removed first, and the output says so: Vite copies the whole
+ * directory into the build, so a leftover would ship with the app.
+ *
+ * The pins come straight from the registry (plain data without Vite
+ * imports); tests/unit/ai-cutout/model-config.test.js checks that the Pages
+ * deploy workflow uses the same hashes and file names.
  */
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { getModelDownloadUrl, MODEL_REGISTRY } from '../src/features/ai-cutout/model-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * @typedef {Object} ModelPin
- * @property {string} fileName
- * @property {string} repo - Hugging Face repository
- * @property {string} revision - Pinned commit hash (never a branch)
+ * @property {string} fileName - Local file name under the output directory
+ * @property {string} url - Download URL (the SHA-256 pin rejects a replaced asset)
  * @property {number} bytes - Exact size
  * @property {string} sha256 - Lowercase hex SHA-256
  */
 
 /** @type {ModelPin[]} */
-export const MODELS = [
-  {
-    fileName: 'isnetis.onnx',
-    repo: 'skytnt/anime-seg',
-    revision: '493cb60893f47441b26ec4fb9a306bce9e342982',
-    bytes: 176_069_933,
-    sha256: 'f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99',
-  },
-];
+export const MODELS = MODEL_REGISTRY.map((entry) => ({
+  fileName: entry.fileName,
+  url: getModelDownloadUrl(entry),
+  bytes: entry.bytes,
+  sha256: entry.sha256,
+}));
 
 /** Default output directory, served by Vite from publicDir */
 export const DEFAULT_OUT_DIR = resolve(__dirname, '../public/models');
-
-/**
- * @param {ModelPin} pin
- * @returns {string}
- */
-export function sourceUrl(pin) {
-  return `https://huggingface.co/${pin.repo}/resolve/${pin.revision}/${pin.fileName}`;
-}
 
 /**
  * Size and SHA-256 of a file, or null when it does not exist.
@@ -146,7 +145,7 @@ export async function ensureModel(pin, { outDir = DEFAULT_OUT_DIR, checkOnly = f
   }
 
   await mkdir(outDir, { recursive: true });
-  const url = sourceUrl(pin);
+  const { url } = pin;
   say(`${pin.fileName}: downloading ${url}`);
   let lastPercent = -10;
   const result = await download(url, dest, (received) => {
@@ -167,6 +166,37 @@ export async function ensureModel(pin, { outDir = DEFAULT_OUT_DIR, checkOnly = f
 }
 
 /**
+ * Remove every file in `outDir` that is not one of `pins` (directories are
+ * left alone), saying so for each one.
+ * @param {ModelPin[]} pins
+ * @param {{ outDir?: string, log?: (msg: string) => void }} [options]
+ * @returns {Promise<string[]>} Names of the removed files, sorted
+ */
+export async function removeUnlistedFiles(pins, { outDir = DEFAULT_OUT_DIR, log } = {}) {
+  const say = log ?? ((msg) => console.log(msg));
+  const keep = new Set(pins.map((pin) => pin.fileName));
+  let entries;
+  try {
+    entries = await readdir(outDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const removed = [];
+  const names = entries
+    .filter((entry) => entry.isFile() && !keep.has(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  for (const name of names) {
+    const path = resolve(outDir, name);
+    const { size } = await stat(path);
+    await rm(path, { force: true });
+    say(`${name}: not a model of this version, removed (${size} bytes)`);
+    removed.push(name);
+  }
+  return removed;
+}
+
+/**
  * CLI entry point.
  * @param {string[]} argv
  * @param {{ outDir?: string }} [options]
@@ -175,6 +205,7 @@ export async function ensureModel(pin, { outDir = DEFAULT_OUT_DIR, checkOnly = f
 export async function main(argv, { outDir = DEFAULT_OUT_DIR } = {}) {
   const checkOnly = argv.includes('--check');
   try {
+    await removeUnlistedFiles(MODELS, { outDir });
     for (const pin of MODELS) {
       await ensureModel(pin, { outDir, checkOnly });
     }

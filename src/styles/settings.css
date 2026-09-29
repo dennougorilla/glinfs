@@ -190,6 +190,42 @@
   color: var(--color-text-secondary);
 }
 
+/* Downloaded models (AI cutout): rows reuse .settings-item */
+.settings-screen .settings-models-intro,
+.settings-screen .settings-models-status {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.settings-screen .settings-models-intro {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.settings-screen .settings-models-status:empty {
+  display: none;
+}
+
+.settings-screen .settings-models-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-screen .settings-models-link {
+  color: var(--color-primary);
+}
+
+.settings-screen .settings-models-delete {
+  flex-shrink: 0;
+}
+
+/* Old model files show their file name, which has no spaces to wrap at */
+.settings-screen .settings-models-file {
+  overflow-wrap: anywhere;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .settings-header {

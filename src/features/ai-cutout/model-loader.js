@@ -6,14 +6,15 @@
  * SHA-256 are checked against the pinned values, and the verified bytes are
  * kept in Cache Storage so later visits skip the download. A cached copy is
  * re-verified on every load and evicted when it no longer matches, so a
- * corrupt entry can never wedge the feature.
+ * corrupt entry can never wedge the feature. Storing a verified download
+ * removes the same model's copies under earlier pins.
  *
  * Every browser API is injectable so the logic is unit-tested without a
  * browser.
  */
 
 import { MODEL_CACHE_NAME } from './model-config.js';
-import { SegmentationError, SegmentationErrorCode } from './protocol.js';
+import { createAbortError, SegmentationError, SegmentationErrorCode } from './protocol.js';
 
 /** @typedef {import('./model-config.js').ModelSpec} ModelSpec */
 
@@ -33,6 +34,8 @@ import { SegmentationError, SegmentationErrorCode } from './protocol.js';
  * @property {string} [baseHref] - Resolves a relative model URL (worker location)
  * @property {string} [cacheName]
  * @property {(progress: LoadProgress) => void} [onProgress]
+ * @property {AbortSignal} [signal] - Aborting stops the download and rejects
+ *   with an AbortError (the model was unloaded while it loaded)
  */
 
 /**
@@ -92,9 +95,11 @@ export async function verifyModelBytes(bytes, spec, subtle) {
  * @param {Response} response
  * @param {number} expectedBytes
  * @param {(loaded: number) => void} onChunk
+ * @param {AbortSignal} [signal] - Stops reading (a fetch abort already
+ *   fails the read; this also covers bodies that ignore it)
  * @returns {Promise<Uint8Array>}
  */
-async function readBody(response, expectedBytes, onChunk) {
+async function readBody(response, expectedBytes, onChunk, signal) {
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     onChunk(bytes.byteLength);
@@ -106,6 +111,10 @@ async function readBody(response, expectedBytes, onChunk) {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (signal?.aborted) {
+      await reader.cancel().catch(() => undefined);
+      throw createAbortError('Model load cancelled');
+    }
     if (loaded + value.byteLength > expectedBytes) {
       await reader.cancel();
       throw new SegmentationError(
@@ -136,6 +145,29 @@ async function openCache(cacheStorage, cacheName) {
 }
 
 /**
+ * Delete every entry of the same model URL whose key is not `key` (the
+ * same file under an earlier SHA-256 pin). Failures are ignored: a stale
+ * entry is only wasted space, and Settings can still delete it.
+ * @param {Cache} cache
+ * @param {string} key - The current key (URL with its `sha256` parameter)
+ * @returns {Promise<void>}
+ */
+async function removeOlderPins(cache, key) {
+  try {
+    const url = new URL(key);
+    url.search = '';
+    const requests = await cache.keys(url.href, { ignoreSearch: true });
+    await Promise.all(
+      requests
+        .filter((request) => request.url !== key)
+        .map((request) => cache.delete(request).catch(() => false)),
+    );
+  } catch {
+    // Listing is not essential
+  }
+}
+
+/**
  * Load the model: from Cache Storage when a verified copy is there,
  * otherwise from the network (then cached).
  * @param {ModelSpec} spec
@@ -150,7 +182,12 @@ export async function loadModelBytes(spec, deps = {}) {
     baseHref = globalThis.location?.href ?? 'http://localhost/',
     cacheName = MODEL_CACHE_NAME,
     onProgress,
+    signal,
   } = deps;
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw createAbortError('Model load cancelled');
+  };
+  throwIfAborted();
   if (!subtle) {
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
@@ -173,8 +210,10 @@ export async function loadModelBytes(spec, deps = {}) {
           fromCache: true,
         });
         await verifyModelBytes(bytes, spec, subtle);
+        throwIfAborted();
         return { bytes, fromCache: true, cached: true };
       } catch {
+        throwIfAborted();
         // Unreadable, corrupt or stale entry: drop it and download a fresh copy
         await cache.delete(key).catch(() => false);
       }
@@ -184,9 +223,10 @@ export async function loadModelBytes(spec, deps = {}) {
   let response;
   try {
     // no-store: the verified copy lives in Cache Storage; keeping a second
-    // 176 MB copy in the HTTP cache would only waste disk
-    response = await fetchImpl(spec.url, { cache: 'no-store' });
+    // copy of the model (about 90 MB) in the HTTP cache would only waste disk
+    response = await fetchImpl(spec.url, { cache: 'no-store', signal });
   } catch (error) {
+    throwIfAborted();
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
       `The model download failed: ${error instanceof Error ? error.message : error}`,
@@ -202,15 +242,20 @@ export async function loadModelBytes(spec, deps = {}) {
   onProgress?.({ phase: 'downloading', loadedBytes: 0, totalBytes: spec.bytes, fromCache: false });
   let bytes;
   try {
-    bytes = await readBody(response, spec.bytes, (loaded) =>
-      onProgress?.({
-        phase: 'downloading',
-        loadedBytes: loaded,
-        totalBytes: spec.bytes,
-        fromCache: false,
-      }),
+    bytes = await readBody(
+      response,
+      spec.bytes,
+      (loaded) =>
+        onProgress?.({
+          phase: 'downloading',
+          loadedBytes: loaded,
+          totalBytes: spec.bytes,
+          fromCache: false,
+        }),
+      signal,
     );
   } catch (error) {
+    throwIfAborted();
     if (error instanceof SegmentationError) throw error;
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
@@ -225,9 +270,13 @@ export async function loadModelBytes(spec, deps = {}) {
     fromCache: false,
   });
   await verifyModelBytes(bytes, spec, subtle);
+  throwIfAborted();
 
   let cached = false;
   if (cache) {
+    // Copies of this model under earlier pins can never load again: drop
+    // them before storing the new one (it also frees the quota for it)
+    await removeOlderPins(cache, key);
     try {
       await cache.put(
         key,

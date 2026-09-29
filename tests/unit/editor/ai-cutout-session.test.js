@@ -54,7 +54,7 @@ function createFakeManager(maskStore) {
     analyzeFrames: vi.fn(async (frames, options) => {
       manager.calls.push(options);
       if (manager.fail) throw manager.fail;
-      const pending = frames.filter((f) => !maskStore.has(f.id));
+      const pending = frames.filter((f) => !maskStore.has(`anime:${f.id}`));
       options.onProgress?.({
         phase: 'downloading',
         loadedBytes: 5,
@@ -73,7 +73,7 @@ function createFakeManager(maskStore) {
             options.signal?.addEventListener('abort', () => reject(createAbortError()));
           });
         }
-        maskStore.set(frame.id, prob(), options.clipId);
+        maskStore.set(`anime:${frame.id}`, prob(), options.clipId);
         done++;
         options.onProgress?.({
           phase: 'analyzing',
@@ -208,6 +208,28 @@ describe('AI cutout session', () => {
     expect(maskStore.size).toBe(4);
   });
 
+  it('a model that failed on WebGPU asks for the slow choice without marking WebGPU missing', async () => {
+    manager.fail = new SegmentationError(
+      SegmentationErrorCode.WEBGPU_MODEL_FAILED,
+      'The model could not run on WebGPU: shader limits',
+    );
+    await session.checkCapabilities();
+    await session.analyze(state.clip.frames);
+    expect(status).toMatchObject({
+      phase: 'idle',
+      needsWasmChoice: true,
+      webgpuModelFailed: true,
+      webgpu: true,
+      error: null,
+    });
+
+    // A retry that runs on WebGPU after all (the fake reports webgpu)
+    // clears the model's failure
+    manager.fail = null;
+    await session.analyze(state.clip.frames);
+    expect(status).toMatchObject({ needsWasmChoice: false, webgpuModelFailed: false });
+  });
+
   it('shows other failures as errors (retry clears them)', async () => {
     manager.fail = new SegmentationError(SegmentationErrorCode.DOWNLOAD_FAILED, 'HTTP 404');
     await session.analyze(state.clip.frames);
@@ -245,7 +267,7 @@ describe('AI cutout session', () => {
   });
 
   it('aborts the build in flight when a parameter changes', async () => {
-    for (const frame of state.clip.frames) maskStore.set(frame.id, prob());
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob());
     const cache = createFinalMaskCache();
     const build = vi.spyOn(cache, 'build');
     session.dispose();
@@ -274,7 +296,7 @@ describe('AI cutout session', () => {
   });
 
   it('drops the build when the AI method is off', () => {
-    for (const frame of state.clip.frames) maskStore.set(frame.id, prob());
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob());
     session.requestBuild();
     expect(status.building).toBe(true);
     setBackground({ method: 'color' });
@@ -294,8 +316,8 @@ describe('AI cutout session', () => {
       maskStore,
       cache: createFinalMaskCache(),
     });
-    maskStore.set('f0', prob());
-    maskStore.set('f1', prob());
+    maskStore.set('anime:f0', prob());
+    maskStore.set('anime:f1', prob());
     expect(status.storeVersion).toBe(maskStore.version);
     expect(changed).not.toHaveBeenCalled();
     vi.advanceTimersByTime(STORE_REBUILD_DELAY_MS);
@@ -338,7 +360,7 @@ describe('AI cutout session', () => {
     manager.analyzeFrames.mockImplementationOnce(async (/** @type {any[]} */ list, options) => {
       for (const frame of list) {
         await new Promise((resolve) => setTimeout(resolve, FRAME_EVERY_MS));
-        maskStore.set(frame.id, prob(), options.clipId);
+        maskStore.set(`anime:${frame.id}`, prob(), options.clipId);
       }
       return { analyzed: list.length, skipped: 0, backend: 'webgpu' };
     });

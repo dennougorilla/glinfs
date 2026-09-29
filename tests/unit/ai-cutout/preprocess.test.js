@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { getModelEntry } from '../../../src/features/ai-cutout/model-registry.js';
 import {
+  computeInputGeometry,
   computeLetterbox,
   computeMaskSize,
   probabilityToMask,
@@ -122,6 +124,63 @@ describe('rgbaToChw', () => {
   it('rejects mismatched buffers', () => {
     expect(() => rgbaToChw(new Uint8Array(3), 1, 1)).toThrow(RangeError);
     expect(() => rgbaToChw(new Uint8Array(4), 1, 1, new Float32Array(2))).toThrow(RangeError);
+  });
+
+  it('normalizes with the general model’s mean 0.5 / std 1 (DIS Inference.py)', () => {
+    const { preprocess } = getModelEntry('general');
+    // black, white, mid grey (value 51 = 0.2 in G)
+    const rgba = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255, 128, 51, 128, 255]);
+    const tensor = rgbaToChw(rgba, 3, 1, undefined, preprocess);
+    const expected = [0, 255, 128, 0, 255, 51, 0, 255, 128].map((v) => v / 255 - 0.5);
+    Array.from(tensor).forEach((value, i) => {
+      expect(value).toBeCloseTo(expected[i], 6);
+    });
+  });
+
+  it('divides by a per-channel std', () => {
+    const tensor = rgbaToChw(new Uint8Array([255, 255, 255, 255]), 1, 1, undefined, {
+      scale: 1 / 255,
+      mean: [0, 0.5, 0],
+      std: [2, 1, 0.5],
+    });
+    expect(Array.from(tensor)).toEqual([0.5, 0.5, 2]);
+  });
+
+  it('keeps the anime model’s plain / 255 (its registry contract)', () => {
+    const rgba = new Uint8ClampedArray([255, 51, 0, 255]);
+    expect(Array.from(rgbaToChw(rgba, 1, 1, undefined, getModelEntry('anime').preprocess))).toEqual(
+      Array.from(rgbaToChw(rgba, 1, 1)),
+    );
+  });
+});
+
+describe('computeInputGeometry', () => {
+  it('letterboxes for the anime model', () => {
+    expect(computeInputGeometry('letterbox', 1280, 720)).toEqual(computeLetterbox(1280, 720));
+  });
+
+  it('stretches over the whole square for the general model (no letterbox)', () => {
+    expect(computeInputGeometry('stretch', 1280, 720)).toEqual({
+      size: 1024,
+      width: 1024,
+      height: 1024,
+      padX: 0,
+      padY: 0,
+    });
+    expect(computeInputGeometry('stretch', 3, 5000, 64)).toMatchObject({ width: 64, height: 64 });
+  });
+
+  it('reads the stretched output back from the whole square', () => {
+    // 4×4 output: left half 1, right half 0 -> an 8×2 mask keeps the split
+    const probability = new Float32Array(16);
+    for (let y = 0; y < 4; y++) probability.fill(1, y * 4, y * 4 + 2);
+    const mask = probabilityToMask(probability, computeInputGeometry('stretch', 8, 2, 4), 8, 2);
+    expect(Array.from(mask.data.slice(0, 8))).toEqual([255, 255, 255, 191, 64, 0, 0, 0]);
+  });
+
+  it('rejects unknown modes and bad sizes', () => {
+    expect(() => computeInputGeometry(/** @type {any} */ ('crop'), 10, 10)).toThrow(RangeError);
+    expect(() => computeInputGeometry('stretch', 0, 10)).toThrow(RangeError);
   });
 });
 

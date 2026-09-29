@@ -138,7 +138,10 @@
  * @property {'idle'|'starting'|'downloading'|'verifying'|'initializing'|'analyzing'|'error'} phase
  * @property {boolean | null} webgpu - A WebGPU adapter exists (null: not checked yet)
  * @property {boolean} wasmAllowed - The user chose to run without WebGPU
- * @property {boolean} needsWasmChoice - An analysis stopped because WebGPU is missing
+ * @property {boolean} needsWasmChoice - An analysis with the chosen model stopped
+ *   because it may not run without WebGPU (cleared when the model changes)
+ * @property {boolean} webgpuModelFailed - WebGPU exists but the chosen model could
+ *   not run on it (its session or warm-up failed); cleared when the model changes
  * @property {'webgpu'|'wasm'|null} backend - Backend of the running model
  * @property {number} loadedBytes - Model bytes downloaded
  * @property {number} totalBytes - Model size

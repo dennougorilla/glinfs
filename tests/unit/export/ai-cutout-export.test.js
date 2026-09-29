@@ -99,7 +99,11 @@ describe('Export with the AI cutout', () => {
     vi.mocked(encodeGif).mockClear();
     fake.analyzeFrames.mockReset();
     fake.analyzeFrames.mockImplementation(async (frames, options) => {
-      const pending = segmentation.collectPendingFrames(frames, getSharedMaskStore());
+      const pending = segmentation.collectPendingFrames(
+        frames,
+        getSharedMaskStore(),
+        options.modelId,
+      );
       options.onProgress?.({
         phase: 'downloading',
         loadedBytes: 1,
@@ -146,8 +150,8 @@ describe('Export with the AI cutout', () => {
   });
 
   it('says how many exported frames need the analysis and analyzes only those first', async () => {
-    storeMask('x1');
-    storeMask('x2');
+    storeMask('anime:x1');
+    storeMask('anime:x2');
     inject();
     dialog = openExportDialog();
     await flush();
@@ -238,6 +242,22 @@ describe('Export with the AI cutout', () => {
     expect(encodeGif).toHaveBeenCalledTimes(1);
   });
 
+  it('names the model when it could not run on WebGPU (the browser has WebGPU)', async () => {
+    inject();
+    dialog = openExportDialog();
+    await flush();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      new SegmentationError(SegmentationErrorCode.WEBGPU_MODEL_FAILED, 'shader limits'),
+    );
+    $('#export-start')?.click();
+    await flush();
+    const text = $('#export-ai-prep')?.textContent ?? '';
+    expect(text).toContain('The Anime model could not run on WebGPU');
+    expect(text).not.toContain('WebGPU is not available');
+    expect($('#export-ai-run-wasm')).not.toBeNull();
+    expect(encodeGif).not.toHaveBeenCalled();
+  });
+
   it('shows other failures with Retry', async () => {
     inject();
     dialog = openExportDialog();
@@ -270,8 +290,8 @@ describe('Export with the AI cutout', () => {
         (/** @type {any} */ _frames, /** @type {any} */ options) =>
           new Promise((_resolve, reject) => {
             // Half of the exported frames finish before the stop
-            storeMask('x1');
-            storeMask('x2');
+            storeMask('anime:x1');
+            storeMask('anime:x2');
             fail = reject;
             options.signal.addEventListener('abort', () => reject(createAbortError()));
           }),
@@ -291,9 +311,9 @@ describe('Export with the AI cutout', () => {
       }
       await flush();
       expect($('#export-settings')).not.toBeNull();
-      expect(getSharedMaskStore().has('x1')).toBe(true);
-      expect(getSharedMaskStore().has('x2')).toBe(true);
-      expect(getSharedMaskStore().has('x3')).toBe(false);
+      expect(getSharedMaskStore().has('anime:x1')).toBe(true);
+      expect(getSharedMaskStore().has('anime:x2')).toBe(true);
+      expect(getSharedMaskStore().has('anime:x3')).toBe(false);
       expect(encodeGif).not.toHaveBeenCalled();
       // The note counts what is still missing
       expect($('#export-ai-note')?.textContent).toMatch(/^2 of 4 frames/);

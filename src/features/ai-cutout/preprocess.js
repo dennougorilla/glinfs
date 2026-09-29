@@ -2,8 +2,8 @@
  * AI cutout pre/post-processing (pure, no DOM)
  * @module features/ai-cutout/preprocess
  *
- * Mirrors skytnt's `get_mask` (see PREPROCESS in model-config.js for the
- * upstream sources):
+ * Each model has its own contract (`preprocess` in model-registry.js, with
+ * the upstream sources). The anime model mirrors skytnt's `get_mask`:
  *
  *   h, w = (s, int(s * w / h)) if h > w else (int(s * h / w), s)
  *   ph, pw = s - h, s - w
@@ -12,8 +12,12 @@
  *   mask = mask[ph // 2:ph // 2 + h, pw // 2:pw // 2 + w]
  *   mask = cv2.resize(mask, (w0, h0))
  *
- * The worker draws the frame into the letterbox rectangle of a black s×s
- * canvas (the zero padding), converts it with rgbaToChw, runs the model and
+ * The general model (DIS) stretches the frame to s×s and normalizes with
+ * mean 0.5 / std 1; its output is resized back from the whole square.
+ *
+ * The worker draws the frame into the input rectangle of a black s×s
+ * canvas (computeInputGeometry: the letterbox rectangle, or the whole
+ * square for a stretch), converts it with rgbaToChw, runs the model and
  * turns the output back into a mask with probabilityToMask.
  */
 
@@ -77,6 +81,28 @@ export function computeLetterbox(sourceWidth, sourceHeight, size = MODEL_INPUT_S
 }
 
 /**
+ * Where the frame goes inside the square model input for a resize mode:
+ * the letterbox rectangle, or the whole square for a stretch (the output is
+ * then read back from the whole square too).
+ * @param {'letterbox' | 'stretch'} resize
+ * @param {number} sourceWidth
+ * @param {number} sourceHeight
+ * @param {number} [size]
+ * @returns {Letterbox}
+ */
+export function computeInputGeometry(resize, sourceWidth, sourceHeight, size = MODEL_INPUT_SIZE) {
+  if (resize === 'stretch') {
+    assertPositiveSize(sourceWidth, 'sourceWidth');
+    assertPositiveSize(sourceHeight, 'sourceHeight');
+    return { size, width: size, height: size, padX: 0, padY: 0 };
+  }
+  if (resize !== 'letterbox') {
+    throw new RangeError(`Unknown resize mode "${resize}"`);
+  }
+  return computeLetterbox(sourceWidth, sourceHeight, size);
+}
+
+/**
  * Resolution a frame's probability mask is stored at: the source size scaled
  * down so the long side is at most `maxSide` (never scaled up).
  * @param {number} sourceWidth
@@ -95,16 +121,29 @@ export function computeMaskSize(sourceWidth, sourceHeight, maxSide = MASK_MAX_SI
 }
 
 /**
- * Convert an RGBA image (the letterboxed s×s canvas) to the model's input:
- * float32 CHW planes R, G, B with values / 255. Alpha is ignored — the
+ * Per-channel normalization: `(value * scale - mean[c]) / std[c]`.
+ * @typedef {Object} ChannelNormalization
+ * @property {number} scale
+ * @property {readonly number[]} mean - R, G, B
+ * @property {readonly number[]} std - R, G, B
+ */
+
+/** `value / 255`, no mean or std (the anime model) */
+const PLAIN_SCALE = Object.freeze({ scale: 1 / 255, mean: [0, 0, 0], std: [1, 1, 1] });
+
+/**
+ * Convert an RGBA image (the s×s input canvas) to the model's input:
+ * float32 CHW planes R, G, B, each value normalized as
+ * `(v * scale - mean) / std` (default: v / 255). Alpha is ignored — the
  * caller composites onto black first, like the zero padding.
  * @param {Uint8ClampedArray | Uint8Array} rgba - width × height × 4 bytes
  * @param {number} width
  * @param {number} height
  * @param {Float32Array} [out] - Reused output buffer (3 × width × height)
+ * @param {ChannelNormalization} [normalization]
  * @returns {Float32Array}
  */
-export function rgbaToChw(rgba, width, height, out) {
+export function rgbaToChw(rgba, width, height, out, normalization = PLAIN_SCALE) {
   const pixels = width * height;
   if (rgba.length !== pixels * 4) {
     throw new RangeError(`Expected ${pixels * 4} RGBA bytes, got ${rgba.length}`);
@@ -113,13 +152,25 @@ export function rgbaToChw(rgba, width, height, out) {
   if (tensor.length !== pixels * 3) {
     throw new RangeError(`Output buffer must hold ${pixels * 3} floats, got ${tensor.length}`);
   }
-  const scale = 1 / 255;
+  const { scale, mean, std } = normalization;
   const gOffset = pixels;
   const bOffset = pixels * 2;
+  if (mean.every((m) => m === 0) && std.every((s) => s === 1)) {
+    // The common case stays a single multiply per value
+    for (let i = 0, p = 0; i < pixels; i++, p += 4) {
+      tensor[i] = rgba[p] * scale;
+      tensor[gOffset + i] = rgba[p + 1] * scale;
+      tensor[bOffset + i] = rgba[p + 2] * scale;
+    }
+    return tensor;
+  }
+  // (v * scale - mean) / std  ==  v * (scale / std) - mean / std
+  const [rMul, gMul, bMul] = [0, 1, 2].map((c) => scale / std[c]);
+  const [rAdd, gAdd, bAdd] = [0, 1, 2].map((c) => -mean[c] / std[c]);
   for (let i = 0, p = 0; i < pixels; i++, p += 4) {
-    tensor[i] = rgba[p] * scale;
-    tensor[gOffset + i] = rgba[p + 1] * scale;
-    tensor[bOffset + i] = rgba[p + 2] * scale;
+    tensor[i] = rgba[p] * rMul + rAdd;
+    tensor[gOffset + i] = rgba[p + 1] * gMul + gAdd;
+    tensor[bOffset + i] = rgba[p + 2] * bMul + bAdd;
   }
   return tensor;
 }

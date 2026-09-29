@@ -21,12 +21,16 @@ Add captions in the editor's **Text** panel: type the text, pick the font, size,
 
 The **Background** panel removes a solid background: turn on **Remove background** (it picks the most common edge color) or use **Pick from preview** and click the background, then adjust the **Tolerance**. **Edges only** removes the matching color connected to the frame border; **All matching** removes it everywhere. Removed pixels become transparent in the GIF. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
 
-### AI cutout (anime)
-In the **Background** panel, set **Method** to **AI cutout (anime)** to cut the characters out of every frame with an anime segmentation model that runs in your browser. **Analyze selection** analyzes the frames between IN and OUT; the first analysis downloads about 200 MB once (the model and its runtime, kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
+### AI cutout
+In the **Background** panel, set **Method** to **AI cutout** to cut the subject out of every frame with a segmentation model that runs in your browser. Choose the **Model**: **Anime** for anime and illustrated characters, or **General** for people, pets and objects in live-action video. **Analyze selection** analyzes the frames between IN and OUT with the chosen model; the first analysis with a model downloads it once (88 MB for Anime, 90 MB for General, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). Your frames never leave your device. Progress shows the download, then the frames done and the time left; you can keep editing meanwhile, and **Cancel** keeps the frames already analyzed.
 
-The analysis needs WebGPU to be fast (under a second per frame on a recent GPU). Without WebGPU it can still run on the CPU after you choose **Run without WebGPU (very slow)**, at about 14 seconds per frame.
+Each model keeps its own analysis: switching the model shows that model's progress, and switching back reuses the frames it already analyzed. Threshold, smoothing, edge and picks stay as they are across a switch (a pick selects whatever the other model finds at that spot). The model cannot be changed while an analysis runs.
+
+The analysis needs WebGPU to be fast (under a second per frame on a recent GPU). Without WebGPU it can still run on the CPU after you choose **Run without WebGPU (very slow)**, at about 14 seconds per frame. The same choice appears when the browser has WebGPU but the chosen model cannot run on it; it concerns that model only, so the other model still runs on WebGPU.
 
 Once frames are analyzed, adjust **Threshold** (higher keeps less), **Smooth between frames** and **Edge** (grow or shrink the cutout by up to 8 pixels). **Keep** and **Remove** pick tools: click a character in the preview to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it. Picks are listed with their time and can be removed one by one or with **Clear picks**. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
+
+**Settings → Downloaded models** lists each model with its size and license and whether this browser keeps it; **Delete** removes a downloaded model from the browser's cache (not while an analysis uses it). The next analysis with it downloads it again. Files left in that cache by earlier versions (a model under an earlier pin, or the fp32 anime model of the first AI cutout release) are listed as **Old model file** and can be deleted the same way; downloading a new version of a model removes its earlier copies by itself.
 
 ### Touch up
 The **Touch up** section of the **Background** panel fixes what either method got wrong. Turn on **Brush** and paint on the preview: **Erase** makes the painted pixels transparent, **Restore** brings back the original pixels there. **Size** sets the brush (the circle on the preview shows it). Each stroke applies to **This frame** or to the **Selection** (the frames between IN and OUT when you paint it; on a frame outside IN and OUT it applies to that frame only). A stroke paints only over the frame: dragging off the preview stops it at the edge, and coming back starts a new stroke. Press Escape while painting to cancel the stroke. **Undo last stroke**, **Clear on this frame** and **Clear all** take strokes away again. With the AI method, touch-ups also apply to frames that are not analyzed yet. Touch-ups apply only while background removal is on; turning removal off keeps them for later.
@@ -41,7 +45,7 @@ Press **Export** in the editor (or Ctrl/Cmd+E) to open the Export GIF dialog ove
 
 ## Privacy
 
-All processing happens entirely in your browser. Your screen recordings never leave your device - no uploads, no servers, no tracking. The AI cutout's model is downloaded once from this site and runs locally; frames are never sent anywhere.
+All processing happens entirely in your browser. Your screen recordings never leave your device - no uploads, no servers, no tracking. The AI cutout's models are downloaded once from this site and runs locally; frames are never sent anywhere.
 
 ## Getting Started
 
@@ -86,25 +90,79 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs skytnt's
-[anime-segmentation](https://github.com/SkyTNT/anime-segmentation) model
-(`isnetis.onnx`, Apache-2.0, 176 MB) in the browser with
-[ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker.
-The model is not in the repository. Download it once for local development:
+The AI cutout runs one of two IS-Net segmentation models in the browser with
+[ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
+
+- **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
+  model (`isnetis-fp16.onnx`, Apache-2.0, 88 MB)
+- **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
+  (`isnet-general-fp16.onnx`, Apache-2.0, 90 MB)
+
+Both are fp16 conversions of the upstream fp32 files (176 and 179 MB): half
+the download, and faster on WebGPU, with the same masks for practical
+purposes (see below). Both are described once in
+`src/features/ai-cutout/model-registry.js` (the shipped file's size and
+SHA-256, the upstream file it was converted from, license and
+preprocessing); the worker, the fetch script, Settings and the deploy
+workflow read it.
+The models are not in the repository; they are assets of the
+[`models-v1` release](https://github.com/dennougorilla/glinfs/releases/tag/models-v1).
+Download them once for local development:
 
 ```bash
 npm run models:fetch            # into public/models/ (git-ignored), verified by SHA-256
 npm run models:fetch -- --check # verify an existing copy without downloading
 ```
 
+Both remove every other file in `public/models/` (such as the fp32
+`isnetis.onnx` of the first AI cutout release) and list what they removed,
+since Vite copies that whole directory into the build.
+
+#### Converting the models to fp16
+
+`scripts/convert-models-fp16.py` makes the release assets from the upstream
+files (pinned Hugging Face commits, checked by SHA-256). It keeps only the
+output the worker reads (the general model's 11 side outputs go) and converts
+the rest to float16 with `onnxconverter-common`, keeping the input and the
+output float32, so the worker code is the same for fp32 and fp16. With the
+versions pinned in `scripts/requirements-models.txt` (Python 3.11) the output
+is byte-for-byte identical to the release assets:
+
+```bash
+python3.11 -m venv .venv-models
+.venv-models/bin/pip install -r scripts/requirements-models.txt
+.venv-models/bin/python scripts/convert-models-fp16.py --src /path/to/fp32 --out /path/to/fp16
+```
+
+`--src` holds `isnetis.onnx` and `isnet-general-use.onnx` (downloaded there
+when missing). The script prints each file's size and SHA-256, which must
+equal the registry's pins. To publish new conversions, upload them to a new
+release, then update the release URL, sizes and SHA-256s in the registry, the
+deploy workflow's cache key and checks, and `THIRD_PARTY_NOTICES.md` (the
+unit tests check that these agree).
+
+Measured through the app's own worker on WebGPU (headless Chromium, Apple
+Metal 3 adapter), fp16 against fp32, masks thresholded at 0.5:
+
+| Model | Test images | Mean abs. difference | Max abs. difference | Pixels that agree | Median per frame (fp32 → fp16) |
+| --- | --- | --- | --- | --- | --- |
+| Anime | 6 CC0 anime-style illustrations | 0.00005–0.00016 | 0.051 | ≥ 99.99% | 469 → 356 ms |
+| General | 4 CC0 photos | 0.00001–0.00117 | 0.075 | ≥ 99.55% | 705 → 515 ms |
+
+(Mask values are the app's 8-bit masks, 0–1; 12 frames per image, 3 of them
+compared. fp16 was faster on every image in two runs; absolute times vary with
+the machine's load.)
+
 The Pages deploy workflow runs the same script before `vite build`, so the
-site serves the model from its own origin. The browser downloads it only when
-someone starts an analysis, checks its SHA-256 and keeps it in Cache Storage.
+site serves the models from its own origin. The browser downloads a model only
+when someone starts an analysis with it, checks its SHA-256 and keeps it in Cache Storage.
 `npm run build` and the E2E suite do not need it: E2E serves the tiny stub
-model in `tests/fixtures/models/` (regenerate it with
-`node scripts/generate-stub-seg-model.mjs`). To check the real model on this
+models in `tests/fixtures/models/` (regenerate them with
+`node scripts/generate-stub-seg-model.mjs`). To check a real model on this
 machine's GPU, run
-`E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`.
+`E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`
+(add `E2E_REAL_MODEL_ID=general` with a live-action photo for the general
+model; `E2E_REAL_IMAGE` takes several comma-separated paths).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
 
 ### Architecture

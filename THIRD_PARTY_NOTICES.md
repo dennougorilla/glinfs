@@ -4,7 +4,7 @@ Glinfs is licensed under GPL-3.0-only (see [LICENSE](LICENSE)). The AI cutout
 feature uses the third-party components below. Their licenses apply to those
 components only.
 
-## anime-segmentation model (`isnetis.onnx`)
+## anime-segmentation model (`isnetis-fp16.onnx`, converted from `isnetis.onnx`)
 
 - Source: https://github.com/SkyTNT/anime-segmentation (code) and
   https://huggingface.co/skytnt/anime-seg (weights), file `isnetis.onnx` at
@@ -12,11 +12,48 @@ components only.
   (SHA-256 `f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99`)
 - Copyright: SkyTNT
 - License: Apache License 2.0
-- Use in Glinfs: the unmodified model file is downloaded by
+- Modifications: Glinfs ships an fp16 conversion of that file,
+  `isnetis-fp16.onnx` (SHA-256
+  `f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0`):
+  weights and activations converted to float16 by
+  `scripts/convert-models-fp16.py` (onnxconverter-common, input and output
+  kept float32); the network itself is unchanged. The conversion is recorded
+  in the file's ONNX metadata (`glinfs.converted_from`, `glinfs.conversion`).
+  The converted file is under the same Apache License 2.0.
+- Use in Glinfs: the converted file is published as an asset of this
+  repository's `models-v1` GitHub Release, downloaded by
   `npm run models:fetch` / the Pages deploy workflow and served next to the
-  app as `models/isnetis.onnx`; the browser runs it locally. It is not stored
-  in this repository. The preprocessing in
+  app as `models/isnetis-fp16.onnx`; the browser runs it locally. It is not
+  stored in this repository. The preprocessing in
   `src/features/ai-cutout/preprocess.js` follows the project's `inference.py`.
+
+## DIS IS-Net general-use model (`isnet-general-fp16.onnx`, converted from `isnet-general-use.onnx`)
+
+- Source: https://github.com/xuebinqin/DIS (code and weights; the model
+  card on Hugging Face also says apache-2.0) and the published ONNX export
+  https://huggingface.co/BritishWerewolf/IS-Net, file `onnx/model.onnx` at
+  commit `9783722d9f964c0286a411e7e8e6fede947d5a53`
+  (SHA-256 `60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a`,
+  byte-identical to rembg's `isnet-general-use.onnx`)
+- Copyright: Xuebin Qin and the DIS authors
+- License: Apache License 2.0
+- Modifications: Glinfs ships an fp16 conversion of that file,
+  `isnet-general-fp16.onnx` (SHA-256
+  `437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b`),
+  made by `scripts/convert-models-fp16.py`: the 11 side outputs and the
+  layers that only fed them are removed (the main output `output_image` is
+  kept), and weights and activations are converted to float16
+  (onnxconverter-common, input and output kept float32). The conversion is
+  recorded in the file's ONNX metadata (`glinfs.converted_from`,
+  `glinfs.conversion`). The converted file is under the same Apache License
+  2.0.
+- Use in Glinfs: the converted file is published as an asset of this
+  repository's `models-v1` GitHub Release, downloaded by
+  `npm run models:fetch` / the Pages deploy workflow and served next to the
+  app as `models/isnet-general-fp16.onnx`; the browser runs it locally. It
+  is not stored in this repository. The preprocessing in
+  `src/features/ai-cutout/preprocess.js` follows DIS `IS-Net/Inference.py`
+  (without its per-image min-max normalization).
 
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 
@@ -51,7 +88,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Apache License 2.0 (full text, applies to the anime-segmentation model)
+## Apache License 2.0 (full text, applies to the anime-segmentation and DIS IS-Net models)
 
 ```
 Apache License

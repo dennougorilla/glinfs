@@ -13,6 +13,7 @@ import {
   updateSetting,
 } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
+import { renderDownloadedModelsSection } from './downloaded-models.js';
 
 /**
  * Resolve a setting whose stored "auto" (null) value means a platform-
@@ -124,6 +125,9 @@ export function renderSettings(container, handlers = {}) {
     // Render thumbnail quality setting
     const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
     content.appendChild(thumbnailSection);
+
+    // AI cutout models kept in Cache Storage (not a stored setting)
+    content.appendChild(renderDownloadedModelsSection(cleanups));
 
     screen.append(header, content);
     container.appendChild(screen);

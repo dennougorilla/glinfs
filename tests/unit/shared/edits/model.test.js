@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AI_MODELS,
   areTouchUpsActive,
   createDefaultAiCutout,
   createDefaultEdits,
@@ -27,7 +28,7 @@ describe('createDefaultEdits', () => {
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
-        ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
+        ai: { model: 'anime', threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
       touchUps: [],
     });
@@ -345,6 +346,18 @@ describe('background method and AI cutout', () => {
     expect(normalizeEdits({ background: { ai: 'bad' } }, 5).background.ai).toEqual(
       createDefaultAiCutout(),
     );
+  });
+
+  it('keeps a known model; edits without one (or with an unknown one) use the anime model', () => {
+    const ai = (/** @type {Record<string, unknown>} */ input) =>
+      normalizeEdits({ background: { ai: input } }, 5).background.ai;
+    expect(ai({ model: 'general' }).model).toBe('general');
+    expect(ai({ model: 'anime' }).model).toBe('anime');
+    // v0.7 / PR #138 edits have no model field
+    expect(ai({ threshold: 0.4 }).model).toBe('anime');
+    expect(ai({ model: 'isnetis' }).model).toBe('anime');
+    expect(ai({ model: 7 }).model).toBe('anime');
+    expect(AI_MODELS).toEqual(['anime', 'general']);
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {

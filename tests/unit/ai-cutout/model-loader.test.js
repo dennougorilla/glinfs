@@ -14,7 +14,7 @@ const BASE = 'https://example.test/glinfs/';
 /** @param {Uint8Array} bytes */
 function specFor(bytes, overrides = {}) {
   return {
-    url: '/glinfs/models/isnetis.onnx',
+    url: '/glinfs/models/isnetis-fp16.onnx',
     bytes: bytes.byteLength,
     sha256: createHash('sha256').update(bytes).digest('hex'),
     inputName: 'img',
@@ -50,7 +50,19 @@ function createFakeCaches() {
     put: vi.fn(async (key, response) => {
       entries.set(key, new Uint8Array(await response.arrayBuffer()));
     }),
-    delete: vi.fn(async (key) => entries.delete(key)),
+    delete: vi.fn(async (key) => entries.delete(typeof key === 'string' ? key : key.url)),
+    keys: vi.fn(async (request, options) => {
+      const strip = (/** @type {string} */ url) => url.split('?')[0];
+      return [...entries.keys()]
+        .filter((key) =>
+          request === undefined
+            ? true
+            : options?.ignoreSearch
+              ? strip(key) === strip(request)
+              : key === request,
+        )
+        .map((url) => ({ url }));
+    }),
   };
   return {
     entries,
@@ -71,7 +83,7 @@ describe('toHex / modelCacheKey', () => {
   it('keys the cache by absolute URL plus the expected hash', () => {
     const spec = specFor(MODEL);
     expect(modelCacheKey(spec, BASE)).toBe(
-      `https://example.test/glinfs/models/isnetis.onnx?sha256=${spec.sha256}`,
+      `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${spec.sha256}`,
     );
   });
 });
@@ -120,7 +132,7 @@ describe('loadModelBytes', () => {
     expect(Array.from(result.bytes)).toEqual(Array.from(MODEL));
     expect(result.fromCache).toBe(false);
     expect(result.cached).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledWith(spec.url, { cache: 'no-store' });
+    expect(fetchImpl).toHaveBeenCalledWith(spec.url, { cache: 'no-store', signal: undefined });
     const phases = onProgress.mock.calls.map(([p]) => `${p.phase}:${p.loadedBytes}`);
     expect(phases).toEqual([
       'downloading:0',
@@ -131,6 +143,37 @@ describe('loadModelBytes', () => {
       'verifying:1000',
     ]);
     expect(entries.has(modelCacheKey(spec, BASE))).toBe(true);
+  });
+
+  it('removes older pins of the same model after a verified download, and nothing else', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const stale = `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${'0'.repeat(64)}`;
+    const other = 'https://example.test/glinfs/models/isnet-general-fp16.onnx?sha256=abc';
+    entries.set(stale, new Uint8Array(3));
+    entries.set(other, new Uint8Array(3));
+    await loadModelBytes(spec, {
+      fetchImpl: vi.fn(async () => chunkedResponse(MODEL)),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    });
+    expect([...entries.keys()].sort()).toEqual([modelCacheKey(spec, BASE), other].sort());
+  });
+
+  it('keeps older pins when the download fails verification', async () => {
+    const spec = specFor(MODEL, { sha256: 'ab'.repeat(32) });
+    const { storage, entries } = createFakeCaches();
+    const stale = `https://example.test/glinfs/models/isnetis-fp16.onnx?sha256=${'0'.repeat(64)}`;
+    entries.set(stale, new Uint8Array(3));
+    const error = await loadModelBytes(spec, {
+      fetchImpl: vi.fn(async () => chunkedResponse(MODEL)),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    }).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.HASH_MISMATCH);
+    expect([...entries.keys()]).toEqual([stale]);
   });
 
   it('serves a verified cached copy without fetching', async () => {
@@ -324,6 +367,69 @@ describe('loadModelBytes', () => {
       baseHref: BASE,
     });
     expect(result.bytes.byteLength).toBe(1000);
+  });
+
+  it('stops a download when its signal aborts: AbortError, nothing cached', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => chunkedResponse(MODEL, 4));
+    const error = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.loadedBytes >= 250) controller.abort();
+      },
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(fetchImpl.mock.calls[0][1].signal).toBe(controller.signal);
+    expect(entries.size).toBe(0);
+  });
+
+  it('reports a fetch aborted by its signal as an AbortError, not a download failure', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => {
+      controller.abort();
+      throw new DOMException('The operation was aborted', 'AbortError');
+    });
+    const error = await loadModelBytes(specFor(MODEL), {
+      fetchImpl,
+      cacheStorage: undefined,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(typeof error.code).not.toBe('string'); // not a SegmentationError code
+  });
+
+  it('does nothing for an already-aborted signal, and drops a cached copy read after an abort', async () => {
+    const spec = specFor(MODEL);
+    const fetchImpl = vi.fn();
+    const aborted = AbortSignal.abort();
+    await expect(
+      loadModelBytes(spec, { fetchImpl, cacheStorage: undefined, subtle, signal: aborted }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const { storage, entries } = createFakeCaches();
+    entries.set(modelCacheKey(spec, BASE), MODEL.slice());
+    const controller = new AbortController();
+    const error = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      signal: controller.signal,
+      onProgress: () => controller.abort(),
+    }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // A cancelled load is not a corrupt entry: the cached copy stays
+    expect(entries.has(modelCacheKey(spec, BASE))).toBe(true);
   });
 
   it('refuses to run without crypto.subtle', async () => {

@@ -11,20 +11,22 @@
 
 import { getClipPayload } from '../../shared/app-store.js';
 import { getSharedMaskStore } from './mask-store.js';
-import { frameKey, getSegmentationManager, setDevModelOverride } from './segmentation-manager.js';
+import { DEFAULT_MODEL_ID, getModelIds } from './model-registry.js';
+import { getSegmentationManager, maskKey, setDevModelOverride } from './segmentation-manager.js';
 
 /**
  * @typedef {import('./segmentation-manager.js').AnalysisProgress} AnalysisProgress
  */
 
 /**
- * Mask of the active clip's frame `index`, or null.
+ * Mask of the active clip's frame `index` made by `modelId`, or null.
  * @param {number} index
+ * @param {string} modelId
  * @returns {import('./preprocess.js').ProbabilityMask | null}
  */
-function maskForFrame(index) {
+function maskForFrame(index, modelId) {
   const frame = getClipPayload()?.frames[index];
-  return frame ? getSharedMaskStore().get(frameKey(frame)) : null;
+  return frame ? getSharedMaskStore().get(maskKey(frame, modelId)) : null;
 }
 
 /**
@@ -34,10 +36,12 @@ function maskForFrame(index) {
 export function installAiCutoutTestHooks(hooks) {
   hooks.aiCutout = {
     /**
-     * Accept a different model (the stub): expected size/hash, and whether
-     * WASM runs without asking. Resets the manager so the next analysis
-     * starts a fresh worker with these values; null restores the real model.
-     * @param {{ sha256?: string, bytes?: number, allowWasm?: boolean } | null} override
+     * Accept different models (the stubs): expected size/hash (for every
+     * model, or per model id under `models`), whether WASM runs without
+     * asking, and whether the worker fetches every graph output. Resets the
+     * manager so the next analysis starts a fresh worker with these values;
+     * null restores the real models.
+     * @param {import('./segmentation-manager.js').DevModelOverride | null} override
      */
     setModelOverride(override) {
       setDevModelOverride(override);
@@ -49,11 +53,16 @@ export function installAiCutoutTestHooks(hooks) {
 
     /**
      * Analyze the active clip's frames through the app's manager and worker.
-     * @param {{ allowWasm?: boolean, abortAfterFrames?: number, frameIndices?: number[] }} [options]
+     * @param {{ allowWasm?: boolean, abortAfterFrames?: number, frameIndices?: number[], modelId?: string }} [options]
      * @returns {Promise<Object>} Result, timings and the progress phases seen,
      *   or `{ error: { name, code, message } }`
      */
-    async analyzeClip({ allowWasm = false, abortAfterFrames, frameIndices } = {}) {
+    async analyzeClip({
+      allowWasm = false,
+      abortAfterFrames,
+      frameIndices,
+      modelId = DEFAULT_MODEL_ID,
+    } = {}) {
       const clip = getClipPayload();
       if (!clip) throw new Error('No active clip');
       const frames = frameIndices ? frameIndices.map((i) => clip.frames[i]) : clip.frames;
@@ -70,6 +79,7 @@ export function installAiCutoutTestHooks(hooks) {
       try {
         const result = await manager.analyzeFrames(frames, {
           allowWasm,
+          modelId,
           clipId: clip.id,
           signal: controller.signal,
           onProgress(/** @type {AnalysisProgress} */ progress) {
@@ -108,14 +118,15 @@ export function installAiCutoutTestHooks(hooks) {
     },
 
     /**
-     * Mask values of frame `index` at pixel positions given in SOURCE
-     * coordinates normalized to 0..1.
+     * Mask values of frame `index` (made by `modelId`) at pixel positions
+     * given in SOURCE coordinates normalized to 0..1.
      * @param {number} index
      * @param {{ x: number, y: number }[]} points
+     * @param {string} [modelId]
      * @returns {{ width: number, height: number, values: number[] } | null}
      */
-    sampleMask(index, points) {
-      const mask = maskForFrame(index);
+    sampleMask(index, points, modelId = DEFAULT_MODEL_ID) {
+      const mask = maskForFrame(index, modelId);
       if (!mask) return null;
       const values = points.map(({ x, y }) => {
         const px = Math.min(mask.width - 1, Math.floor(x * mask.width));
@@ -126,12 +137,14 @@ export function installAiCutoutTestHooks(hooks) {
     },
 
     /**
-     * Frame `index`'s mask as a grayscale PNG data URL (for inspection).
+     * Frame `index`'s mask (made by `modelId`) as a grayscale PNG data URL
+     * (for inspection).
      * @param {number} index
+     * @param {string} [modelId]
      * @returns {Promise<string | null>}
      */
-    async maskToPngDataUrl(index) {
-      const mask = maskForFrame(index);
+    async maskToPngDataUrl(index, modelId = DEFAULT_MODEL_ID) {
+      const mask = maskForFrame(index, modelId);
       if (!mask) return null;
       const canvas = document.createElement('canvas');
       canvas.width = mask.width;
@@ -150,10 +163,31 @@ export function installAiCutoutTestHooks(hooks) {
       return canvas.toDataURL('image/png');
     },
 
-    /** @returns {{ size: number, byteLength: number, version: number }} */
+    /**
+     * @returns {{ size: number, byteLength: number, version: number, byModel: Record<string, number> }}
+     *   byModel: masks of the active clip per model id
+     */
     getMaskStoreStats() {
       const store = getSharedMaskStore();
-      return { size: store.size, byteLength: store.byteLength, version: store.version };
+      const clip = getClipPayload();
+      /** @type {Record<string, number>} */
+      const byModel = {};
+      for (const modelId of getModelIds()) {
+        byModel[modelId] = clip
+          ? new Set(clip.frames.map((frame) => maskKey(frame, modelId)).filter((k) => store.has(k)))
+              .size
+          : 0;
+      }
+      return { size: store.size, byteLength: store.byteLength, version: store.version, byModel };
+    },
+
+    /** @returns {{ loadedModelIds: string[], busy: string[] }} */
+    getManagerState() {
+      const manager = getSegmentationManager();
+      return {
+        loadedModelIds: manager.loadedModelIds,
+        busy: getModelIds().filter((id) => manager.isModelBusy(id)),
+      };
     },
 
     /** Drop every stored mask. */

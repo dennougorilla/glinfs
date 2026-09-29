@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,29 +10,31 @@ import {
   hashFile,
   MODELS,
   main,
-  sourceUrl,
+  removeUnlistedFiles,
 } from '../../../scripts/fetch-models.mjs';
 import {
+  buildGeneralStubModel,
   buildStubModel,
   encodeVarint,
+  STUB_GENERAL_MODEL_PATH,
   STUB_MODEL_PATH,
 } from '../../../scripts/generate-stub-seg-model.mjs';
 import {
-  getModelSourceUrl,
+  DEFAULT_MODEL_ID,
+  getModelDownloadUrl,
+  getModelEntry,
+  getModelIds,
   getModelSpec,
   getModelUrl,
+  getUpstreamModelUrl,
+  isModelId,
   MASK_MAX_SIDE,
-  MODEL_BYTES,
   MODEL_CACHE_NAME,
-  MODEL_FILE_NAME,
-  MODEL_HF_REPO,
-  MODEL_HF_REVISION,
-  MODEL_INPUT_NAME,
   MODEL_INPUT_SIZE,
-  MODEL_OUTPUT_NAME,
-  MODEL_SHA256,
-  PREPROCESS,
+  MODEL_REGISTRY,
+  MODEL_RELEASE_URL,
 } from '../../../src/features/ai-cutout/model-config.js';
+import { formatModelSize } from '../../../src/features/ai-cutout/model-registry.js';
 import {
   createAbortError,
   fromErrorPayload,
@@ -40,74 +42,200 @@ import {
   SegmentationErrorCode,
   toErrorPayload,
 } from '../../../src/features/ai-cutout/protocol.js';
+import { AI_MODELS, getAiModel } from '../../../src/shared/edits/model.js';
 
-describe('model-config', () => {
-  it('pins the anime-segmentation model by commit, size and SHA-256', () => {
-    expect(MODEL_HF_REPO).toBe('skytnt/anime-seg');
-    expect(MODEL_HF_REVISION).toMatch(/^[0-9a-f]{40}$/);
-    expect(MODEL_SHA256).toMatch(/^[0-9a-f]{64}$/);
-    expect(MODEL_BYTES).toBe(176_069_933);
-    expect(MODEL_FILE_NAME).toBe('isnetis.onnx');
-    expect(MODEL_INPUT_SIZE).toBe(1024);
-    expect(MASK_MAX_SIDE).toBe(1024);
-    expect([MODEL_INPUT_NAME, MODEL_OUTPUT_NAME]).toEqual(['img', 'mask']);
-    expect(MODEL_CACHE_NAME).toBe('glinfs-models-v1');
-  });
+const ANIME_SHA256 = 'f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0';
+const GENERAL_SHA256 = '437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b';
 
-  it('keeps the pins identical to scripts/fetch-models.mjs', () => {
-    const pin = MODELS.find((m) => m.fileName === MODEL_FILE_NAME);
-    expect(pin).toEqual({
-      fileName: MODEL_FILE_NAME,
-      repo: MODEL_HF_REPO,
-      revision: MODEL_HF_REVISION,
-      bytes: MODEL_BYTES,
-      sha256: MODEL_SHA256,
-    });
-    expect(sourceUrl(/** @type {any} */ (pin))).toBe(getModelSourceUrl());
-    expect(getModelSourceUrl()).toContain(`/resolve/${MODEL_HF_REVISION}/`);
-  });
+const repoFile = (/** @type {string} */ path) =>
+  readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../..', path), 'utf-8');
 
-  it('uses the same SHA-256 as the Pages deploy workflow (cache key and final check)', () => {
-    const workflow = readFileSync(
-      resolve(dirname(fileURLToPath(import.meta.url)), '../../../.github/workflows/deploy.yml'),
-      'utf-8',
-    );
-    const hashes = workflow.match(/[0-9a-f]{64}/g) ?? [];
-    expect(hashes.length).toBeGreaterThanOrEqual(2);
-    expect(new Set(hashes)).toEqual(new Set([MODEL_SHA256]));
-    expect(workflow.indexOf('npm run models:fetch')).toBeLessThan(
-      workflow.indexOf('npm run build'),
-    );
-  });
-
-  it('serves the model same-origin under the base path', () => {
-    expect(getModelUrl('/glinfs/')).toBe('/glinfs/models/isnetis.onnx');
-    expect(getModelUrl('/glinfs')).toBe('/glinfs/models/isnetis.onnx');
-    expect(getModelUrl()).toBe('/models/isnetis.onnx'); // vitest BASE_URL is '/'
-  });
-
-  it('describes the model for the worker', () => {
-    expect(getModelSpec('/glinfs/')).toEqual({
-      url: '/glinfs/models/isnetis.onnx',
-      bytes: MODEL_BYTES,
-      sha256: MODEL_SHA256,
+describe('model registry', () => {
+  it('pins the fp16 anime-segmentation model and the upstream file it comes from', () => {
+    expect(getModelEntry('anime')).toMatchObject({
+      label: 'Anime',
+      fileName: 'isnetis-fp16.onnx',
+      bytes: 88_070_957,
+      sha256: ANIME_SHA256,
+      convertedFrom: {
+        repo: 'skytnt/anime-seg',
+        revision: '493cb60893f47441b26ec4fb9a306bce9e342982',
+        path: 'isnetis.onnx',
+        bytes: 176_069_933,
+        sha256: 'f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99',
+      },
+      license: { name: 'Apache-2.0' },
       inputName: 'img',
       outputName: 'mask',
       inputSize: 1024,
     });
   });
 
-  it('documents the upstream preprocessing contract', () => {
-    expect(PREPROCESS).toMatchObject({
-      colorOrder: 'rgb',
-      mean: null,
-      std: null,
-      layout: 'nchw',
-      pad: 'center-zero',
+  it('pins the fp16 general IS-Net (DIS) model and the upstream file it comes from', () => {
+    expect(getModelEntry('general')).toMatchObject({
+      label: 'General',
+      fileName: 'isnet-general-fp16.onnx',
+      bytes: 90_448_072,
+      sha256: GENERAL_SHA256,
+      convertedFrom: {
+        repo: 'BritishWerewolf/IS-Net',
+        revision: '9783722d9f964c0286a411e7e8e6fede947d5a53',
+        path: 'onnx/model.onnx',
+        bytes: 178_648_008,
+        sha256: '60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a',
+      },
+      license: { name: 'Apache-2.0' },
+      inputName: 'input_image',
+      outputName: 'output_image',
+      inputSize: 1024,
+    });
+  });
+
+  it('has well-formed, unique entries and a frozen shape', () => {
+    const ids = getModelIds();
+    expect(ids).toEqual(['anime', 'general']);
+    expect(new Set(MODEL_REGISTRY.map((e) => e.fileName)).size).toBe(ids.length);
+    for (const entry of MODEL_REGISTRY) {
+      expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
+      expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(entry.convertedFrom.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(Number.isSafeInteger(entry.bytes)).toBe(true);
+      // fp16 halves the upstream fp32 file
+      expect(entry.bytes).toBeLessThan(entry.convertedFrom.bytes * 0.55);
+      expect(Object.isFrozen(entry.convertedFrom)).toBe(true);
+      expect(entry.license.url).toMatch(/^https:\/\//);
+      expect(Object.isFrozen(entry)).toBe(true);
+      expect(Object.isFrozen(entry.preprocess)).toBe(true);
+    }
+    expect(DEFAULT_MODEL_ID).toBe('anime');
+    expect(MODEL_INPUT_SIZE).toBe(1024);
+    expect(MASK_MAX_SIDE).toBe(1024);
+    expect(MODEL_CACHE_NAME).toBe('glinfs-models-v1');
+    expect(isModelId('general')).toBe(true);
+    expect(isModelId('isnetis')).toBe(false);
+    expect(() => getModelEntry('nope')).toThrow(RangeError);
+    expect(formatModelSize(178_648_008)).toBe('179 MB');
+    expect(formatModelSize(getModelEntry('anime').bytes)).toBe('88 MB');
+    expect(formatModelSize(getModelEntry('general').bytes)).toBe('90 MB');
+    // One helper for every size: download progress asks for a decimal
+    expect(formatModelSize(getModelEntry('anime').bytes, 1)).toBe('88.1 MB');
+    expect(formatModelSize(0, 1)).toBe('0.0 MB');
+  });
+
+  it('matches the model ids and the default model the edits accept', () => {
+    expect([...AI_MODELS]).toEqual(getModelIds());
+    expect(getAiModel(undefined)).toBe(DEFAULT_MODEL_ID);
+    expect(getAiModel({ model: 'bogus' })).toBe(DEFAULT_MODEL_ID);
+    expect(getAiModel({ model: 'general' })).toBe('general');
+  });
+
+  it('documents each upstream preprocessing contract', () => {
+    // skytnt get_mask: letterbox, / 255, no mean/std
+    expect(getModelEntry('anime').preprocess).toEqual({
+      resize: 'letterbox',
+      scale: 1 / 255,
+      mean: [0, 0, 0],
+      std: [1, 1, 1],
       output: 'probability',
     });
-    expect(PREPROCESS.scale).toBeCloseTo(1 / 255);
-    expect(Object.isFrozen(PREPROCESS)).toBe(true);
+    // DIS Inference.py: stretch to 1024², / 255, mean 0.5, std 1
+    expect(getModelEntry('general').preprocess).toEqual({
+      resize: 'stretch',
+      scale: 1 / 255,
+      mean: [0.5, 0.5, 0.5],
+      std: [1, 1, 1],
+      output: 'probability',
+    });
+  });
+});
+
+describe('model-config', () => {
+  it('feeds scripts/fetch-models.mjs from the registry (one release asset per model)', () => {
+    expect(MODELS).toHaveLength(MODEL_REGISTRY.length);
+    for (const entry of MODEL_REGISTRY) {
+      const pin = MODELS.find((m) => m.fileName === entry.fileName);
+      expect(pin).toEqual({
+        fileName: entry.fileName,
+        url: getModelDownloadUrl(entry),
+        bytes: entry.bytes,
+        sha256: entry.sha256,
+      });
+      // The asset name is the local file name
+      expect(getModelDownloadUrl(entry)).toBe(`${MODEL_RELEASE_URL}/${entry.fileName}`);
+    }
+    expect(MODEL_RELEASE_URL).toBe(
+      'https://github.com/dennougorilla/glinfs/releases/download/models-v1',
+    );
+    expect(getModelDownloadUrl(getModelEntry('anime'))).toBe(
+      'https://github.com/dennougorilla/glinfs/releases/download/models-v1/isnetis-fp16.onnx',
+    );
+    expect(getUpstreamModelUrl(getModelEntry('general'))).toBe(
+      'https://huggingface.co/BritishWerewolf/IS-Net/resolve/9783722d9f964c0286a411e7e8e6fede947d5a53/onnx/model.onnx',
+    );
+  });
+
+  it('converts from the same upstream files to the same asset names as scripts/convert-models-fp16.py', () => {
+    const script = repoFile('scripts/convert-models-fp16.py');
+    const flat = script.replace(/"\s*\n\s*"/g, ''); // join Python's implicit string concatenation
+    for (const entry of MODEL_REGISTRY) {
+      const { bytes, sha256 } = entry.convertedFrom;
+      expect(flat).toContain(`"id": "${entry.id}"`);
+      expect(flat).toContain(`"asset": "${entry.fileName}"`);
+      expect(flat).toContain(`"upstream_url": "${getUpstreamModelUrl(entry)}"`);
+      expect(flat).toContain(
+        `"upstream_bytes": ${bytes.toLocaleString('en-US').replaceAll(',', '_')}`,
+      );
+      expect(flat).toContain(`"upstream_sha256": "${sha256}"`);
+      expect(flat).toContain(`"keep_outputs": ["${entry.outputName}"]`);
+    }
+    expect(repoFile('scripts/requirements-models.txt')).toMatch(/^onnxconverter-common==\d/m);
+  });
+
+  it('uses the same SHA-256s and files as the Pages deploy workflow (cache key and final check)', () => {
+    const workflow = repoFile('.github/workflows/deploy.yml');
+    const hashes = workflow.match(/[0-9a-f]{64}/g) ?? [];
+    // Each hash appears in the cache key and in the final check
+    expect(hashes.length).toBeGreaterThanOrEqual(2 * MODEL_REGISTRY.length);
+    expect(new Set(hashes)).toEqual(new Set(MODEL_REGISTRY.map((e) => e.sha256)));
+    for (const entry of MODEL_REGISTRY) {
+      expect(workflow).toContain(`public/models/${entry.fileName}`);
+      expect(workflow).toContain(`check ${entry.fileName} ${entry.sha256}`);
+    }
+    expect(workflow.indexOf('npm run models:fetch')).toBeLessThan(
+      workflow.indexOf('npm run build'),
+    );
+    // The Pages artifact must stay under 1 GB
+    expect(workflow).toContain('-ge 1000000000');
+    const total = MODEL_REGISTRY.reduce((sum, e) => sum + e.bytes, 0);
+    expect(total).toBeLessThan(200_000_000);
+  });
+
+  it('serves each model same-origin under the base path', () => {
+    expect(getModelUrl('anime', '/glinfs/')).toBe('/glinfs/models/isnetis-fp16.onnx');
+    expect(getModelUrl('anime', '/glinfs')).toBe('/glinfs/models/isnetis-fp16.onnx');
+    expect(getModelUrl('anime')).toBe('/models/isnetis-fp16.onnx'); // vitest BASE_URL is '/'
+    expect(getModelUrl('general', '/glinfs/')).toBe('/glinfs/models/isnet-general-fp16.onnx');
+  });
+
+  it('describes each model for the worker', () => {
+    expect(getModelSpec('anime', '/glinfs/')).toEqual({
+      id: 'anime',
+      url: '/glinfs/models/isnetis-fp16.onnx',
+      bytes: 88_070_957,
+      sha256: ANIME_SHA256,
+      inputName: 'img',
+      outputName: 'mask',
+      inputSize: 1024,
+      preprocess: getModelEntry('anime').preprocess,
+    });
+    expect(getModelSpec('general')).toMatchObject({
+      id: 'general',
+      url: '/models/isnet-general-fp16.onnx',
+      sha256: GENERAL_SHA256,
+      inputName: 'input_image',
+      outputName: 'output_image',
+      preprocess: { resize: 'stretch', mean: [0.5, 0.5, 0.5] },
+    });
   });
 });
 
@@ -146,14 +274,24 @@ describe('scripts/generate-stub-seg-model.mjs', () => {
     expect(() => encodeVarint(-1)).toThrow(RangeError);
   });
 
-  it('reproduces the committed stub model byte for byte', () => {
-    const committed = readFileSync(STUB_MODEL_PATH);
-    expect(Buffer.from(buildStubModel()).equals(committed)).toBe(true);
+  it('reproduces the committed stub models byte for byte', () => {
+    expect(Buffer.from(buildStubModel()).equals(readFileSync(STUB_MODEL_PATH))).toBe(true);
+    expect(Buffer.from(buildGeneralStubModel()).equals(readFileSync(STUB_GENERAL_MODEL_PATH))).toBe(
+      true,
+    );
   });
 
   it('names the same input/output and op as documented', () => {
     const text = Buffer.from(buildStubModel()).toString('latin1');
     for (const token of ['img', 'mask', 'ReduceMean', 'axes', 'keepdims']) {
+      expect(text).toContain(token);
+    }
+  });
+
+  it('gives the general stub the general model’s names and a side output', () => {
+    const general = getModelEntry('general');
+    const text = Buffer.from(buildGeneralStubModel()).toString('latin1');
+    for (const token of [general.inputName, general.outputName, 'side_1', 'ReduceMean', 'Add']) {
       expect(text).toContain(token);
     }
   });
@@ -165,8 +303,7 @@ describe('scripts/fetch-models.mjs', () => {
   const content = Buffer.from('not really a model');
   const pin = {
     fileName: 'tiny.onnx',
-    repo: 'someone/tiny',
-    revision: 'a'.repeat(40),
+    url: 'https://example.test/releases/download/v1/tiny.onnx',
     bytes: content.length,
     sha256: createHash('sha256').update(content).digest('hex'),
   };
@@ -181,12 +318,6 @@ describe('scripts/fetch-models.mjs', () => {
     dir = mkdtempSync(join(tmpdir(), 'glinfs-models-'));
     return dir;
   }
-
-  it('builds pinned Hugging Face URLs', () => {
-    expect(sourceUrl(pin)).toBe(
-      `https://huggingface.co/someone/tiny/resolve/${'a'.repeat(40)}/tiny.onnx`,
-    );
-  });
 
   it('describes size and hash mismatches', () => {
     expect(describeMismatch(pin, { bytes: pin.bytes, sha256: pin.sha256 })).toBeNull();
@@ -218,7 +349,7 @@ describe('scripts/fetch-models.mjs', () => {
     const fetchSpy = vi.fn(async () => new Response(content));
     vi.stubGlobal('fetch', fetchSpy);
     await expect(ensureModel(pin, { outDir: out, log: quiet })).resolves.toBe('downloaded');
-    expect(fetchSpy).toHaveBeenCalledWith(sourceUrl(pin), { redirect: 'follow' });
+    expect(fetchSpy).toHaveBeenCalledWith(pin.url, { redirect: 'follow' });
     expect(readFileSync(join(out, pin.fileName)).equals(content)).toBe(true);
   });
 
@@ -248,6 +379,43 @@ describe('scripts/fetch-models.mjs', () => {
       /deleted/,
     );
     await expect(hashFile(join(out, pin.fileName))).resolves.toBeNull();
+  });
+
+  it('removes files that are not in the registry (the old fp32 models) and says so', async () => {
+    const out = tempDir();
+    writeFileSync(join(out, pin.fileName), content);
+    writeFileSync(join(out, 'isnetis.onnx'), 'fp32 model of the first release');
+    writeFileSync(join(out, 'isnet-general-use.onnx'), 'upstream fp32 general model');
+    writeFileSync(join(out, `${pin.fileName}.download`), 'an interrupted download');
+    mkdirSync(join(out, 'keep-me'));
+    const log = vi.fn();
+    await expect(removeUnlistedFiles([pin], { outDir: out, log })).resolves.toEqual([
+      'isnet-general-use.onnx',
+      'isnetis.onnx',
+      `${pin.fileName}.download`,
+    ]);
+    expect(readdirSync(out).sort()).toEqual(['keep-me', pin.fileName]);
+    const lines = log.mock.calls.map(([line]) => line);
+    expect(lines).toContain('isnetis.onnx: not a model of this version, removed (31 bytes)');
+    expect(lines).toHaveLength(3);
+    // Nothing to do in a missing directory
+    await expect(
+      removeUnlistedFiles([pin], { outDir: join(out, 'missing'), log }),
+    ).resolves.toEqual([]);
+  });
+
+  it('main() removes unlisted files before checking the models', async () => {
+    const out = tempDir();
+    writeFileSync(join(out, 'isnetis.onnx'), 'old');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(main(['--check'], { outDir: out })).resolves.toBe(1);
+    expect(readdirSync(out)).toEqual([]);
+    expect(logSpy.mock.calls.map(([line]) => line)).toContain(
+      'isnetis.onnx: not a model of this version, removed (3 bytes)',
+    );
+    logSpy.mockRestore();
+    error.mockRestore();
   });
 
   it('main() returns a non-zero exit code and says why', async () => {

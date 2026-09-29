@@ -47,7 +47,7 @@ describe('createClip with edits', () => {
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
-        ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
+        ai: { model: 'anime', threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
       touchUps: [],
     });
@@ -166,7 +166,7 @@ describe('background reducers', () => {
       tolerance: 100,
       mode: 'connected',
       colorChosen: true,
-      ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
+      ai: { model: 'anime', threshold: 0.5, smoothing: true, edge: 0, picks: [] },
     });
     state = setBackground(state, { mode: 'global', color: 'bad' });
     expect(state.edits.background).toMatchObject({ mode: 'global', color: '#00ff00' });

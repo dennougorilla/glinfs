@@ -45,14 +45,17 @@ import { on } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSourceSettled,
   describeAnalysisError,
   estimateRemainingMs,
+  getAiModelId,
   isAbortError,
   isWasmAllowed,
+  isWasmChoiceError,
   peekClipMaskSource,
   setWasmAllowed,
 } from '../editor/ai-cutout.js';
@@ -664,7 +667,11 @@ function updateMissingMasksNote() {
   if (!store || !session || !clipInfo.aiCutout) return;
   const { frameSkip } = store.getState().settings;
   const exported = framesAt(getExportedFrameIndices(frames.length, frameSkip, rangeStart));
-  const missing = collectPendingFrames(exported, getSharedMaskStore()).length;
+  const missing = collectPendingFrames(
+    exported,
+    getSharedMaskStore(),
+    getAiModelId(edits?.background.ai),
+  ).length;
   updateExportAiNote(session.body, missing, exported.length);
 }
 
@@ -698,16 +705,19 @@ function showAiPrep(next) {
  */
 async function prepareAiMasks(indices, signal) {
   const maskStore = getSharedMaskStore();
+  const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
+  const modelId = getAiModelId(ai);
   const exported = framesAt(indices);
-  const pending = collectPendingFrames(exported, maskStore);
+  const pending = collectPendingFrames(exported, maskStore, modelId);
   if (pending.length > 0) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: pending.length });
-    if (clipId !== undefined) maskStore.touchClip(clipId);
+    if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
     await getSegmentationManager().analyzeFrames(exported, {
       signal,
       clipId,
+      modelId,
       allowWasm: isWasmAllowed(),
       onProgress(progress) {
         if (signal.aborted) return;
@@ -734,7 +744,6 @@ async function prepareAiMasks(indices, signal) {
       },
     });
   }
-  const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background.ai;
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;
   showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });
@@ -1118,8 +1127,12 @@ async function handleExport() {
       // with Retry
       dialogStore.setState(resetExport);
       const cause = /** @type {any} */ (error.cause);
-      if (cause?.code === SegmentationErrorCode.WEBGPU_UNAVAILABLE && !isWasmAllowed()) {
-        aiPrep = { phase: 'needs-wasm' };
+      if (isWasmChoiceError(cause) && !isWasmAllowed()) {
+        aiPrep = {
+          phase: 'needs-wasm',
+          modelFailed: cause.code === SegmentationErrorCode.WEBGPU_MODEL_FAILED,
+          modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
+        };
       } else {
         aiPrep = { phase: 'error', message: describeAnalysisError(cause).message };
         emit('export:error', { error: aiPrep.message });

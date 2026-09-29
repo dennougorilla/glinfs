@@ -43,10 +43,16 @@ import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { getModelEntry } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
-import { getSharedFinalMaskCache, isFrameAnalyzed, pickFindsCharacter } from './ai-cutout.js';
+import {
+  getAiModelId,
+  getSharedFinalMaskCache,
+  isFrameAnalyzed,
+  pickFindsCharacter,
+} from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
   centerCropAfterConstraint,
@@ -861,6 +867,7 @@ function render(container) {
       onAiCancel: handleAiCancel,
       onAiAllowWasm: handleAiAllowWasm,
       onSetAiParams: handleSetAiParams,
+      onSetAiModel: handleSetAiModel,
       onSetAiPickTool: handleSetAiPickTool,
       onAiPick: handleAiPick,
       onRemoveAiPick: handleRemoveAiPick,
@@ -924,7 +931,7 @@ function updateAiPreviewNote(container, state) {
   let text = '';
   if (isAiCutoutActive(state.edits.background)) {
     const frame = state.clip?.frames[state.currentFrame];
-    if (!isFrameAnalyzed(frame)) {
+    if (!isFrameAnalyzed(frame, { modelId: getAiModelId(state.edits.background.ai) })) {
       text = 'Not analyzed yet';
     } else if (!aiSession?.maskSource?.getFinalMask(state.currentFrame)) {
       text = 'Updating the cutout\u2026';
@@ -1453,6 +1460,33 @@ function handleSetAiParams(patch) {
 }
 
 /**
+ * Choose the AI model. Each model keeps its own masks, so the section now
+ * shows that model's analysis (switching back reuses the earlier masks);
+ * threshold, smoothing, edge and picks stay as they are. Not while an
+ * analysis runs (the choice is disabled then): it analyzes with the model
+ * it started with.
+ * @param {import('../../shared/edits/model.js').AiModel} modelId
+ */
+function handleSetAiModel(modelId) {
+  if (!store) return;
+  const state = store.getState();
+  if (getAiModelId(state.edits.background.ai) === modelId || aiSession?.analyzing) return;
+  store.setState((s) => {
+    const next = setAiParams(s, { model: modelId });
+    // The last analysis' outcome (and a model's failure on WebGPU)
+    // belonged to the other model
+    return updateAiCutoutStatus(next, {
+      notice: '',
+      error: null,
+      needsWasmChoice: false,
+      webgpuModelFailed: false,
+      phase: s.aiCutout.phase === 'error' ? 'idle' : s.aiCutout.phase,
+    });
+  });
+  announce(`${getModelEntry(modelId).label} model selected`);
+}
+
+/**
  * @param {import('../../shared/edits/model.js').PickMode | null} tool
  * @param {{ fromKeyboard?: boolean }} [options] - fromKeyboard: the toggle
  *   was switched with the keyboard, so the keyboard pick target (the
@@ -1500,7 +1534,7 @@ function handleAiPick(point) {
   const mode = state.aiPickTool;
   if (!mode) return;
   const frame = state.clip?.frames[state.currentFrame];
-  if (!isFrameAnalyzed(frame)) {
+  if (!isFrameAnalyzed(frame, { modelId: getAiModelId(state.edits.background.ai) })) {
     const message = PICK_NEEDS_ANALYSIS_NOTICE;
     announce(message);
     store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
@@ -1568,7 +1602,10 @@ function startAiCutoutSession() {
   aiSession = session;
 
   const clipId = getActiveClipId();
-  if (clipId !== undefined) maskStore.touchClip(clipId);
+  // Only the masks of the clip's model: the other model's set may be evicted first
+  if (clipId !== undefined) {
+    maskStore.touchClip(clipId, getAiModelId(sessionStore.getState().edits.background.ai));
+  }
 
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight
