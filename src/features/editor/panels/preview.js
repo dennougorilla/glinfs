@@ -238,8 +238,8 @@ export function renderEditorPreview(state, handlers, frame) {
   canvasContainer.appendChild(overlayCanvas);
   canvasContainer.appendChild(brushCursor);
   canvasContainer.appendChild(aiNote);
+  canvasContainer.appendChild(renderViewSwitch(handlers, cleanups));
   previewWrapper.appendChild(canvasContainer);
-  previewWrapper.appendChild(renderViewSwitch(handlers, cleanups));
   previewPanel.appendChild(previewWrapper);
 
   return { element: previewPanel, baseCanvas, overlayCanvas, cleanups };

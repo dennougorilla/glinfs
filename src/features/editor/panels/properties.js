@@ -23,6 +23,41 @@ import { renderTouchUpSection } from './touch-up-panel.js';
 /** @type {Record<import('../types.js').SidebarTab, string>} */
 const TAB_LABELS = { frame: 'Frame', text: 'Text', background: 'Background' };
 
+/**
+ * Tab icons (24px viewBox, stroked like the app's other icons): crop
+ * marks, a "T", and a person cut out of a dashed frame
+ * @type {Record<import('../types.js').SidebarTab, string>}
+ */
+const TAB_ICONS = {
+  frame: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  text: '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
+  background:
+    '<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/><circle cx="12" cy="10" r="3"/><path d="M7 21v-1a5 5 0 0 1 10 0v1"/>',
+};
+
+/**
+ * @param {import('../types.js').SidebarTab} tab
+ * @returns {SVGSVGElement}
+ */
+function createTabIcon(tab) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [name, value] of Object.entries({
+    viewBox: '0 0 24 24',
+    width: '18',
+    height: '18',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': '2',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'aria-hidden': 'true',
+  })) {
+    svg.setAttribute(name, value);
+  }
+  svg.innerHTML = TAB_ICONS[tab];
+  return svg;
+}
+
 /** @type {string[]} */
 const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
 
@@ -210,17 +245,20 @@ export function renderEditorPropertiesPanel(state, handlers) {
         tabindex: selected ? '0' : '-1',
       },
       [
-        createElement('span', {}, [TAB_LABELS[tab]]),
-        ...(tab === 'background'
-          ? [
-              createElement('span', {
-                className: 'editor-side-tab-badge',
-                id: 'editor-side-tab-badge',
-                'aria-hidden': 'true',
-                hidden: 'true',
-              }),
-            ]
-          : []),
+        createElement('span', { className: 'editor-side-tab-icon' }, [
+          createTabIcon(tab),
+          ...(tab === 'background'
+            ? [
+                createElement('span', {
+                  className: 'editor-side-tab-badge',
+                  id: 'editor-side-tab-badge',
+                  'aria-hidden': 'true',
+                  hidden: 'true',
+                }),
+              ]
+            : []),
+        ]),
+        createElement('span', { className: 'editor-side-tab-label' }, [TAB_LABELS[tab]]),
       ],
     );
     tablist.appendChild(button);
