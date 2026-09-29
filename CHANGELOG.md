@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/dennougorilla/glinfs/compare/v0.8.0...v0.9.0) (2026-09-29)
+
+
+### Features
+
+* **icon:** pixel cursor sticker icon, animated header logo and tab status ([#144](https://github.com/dennougorilla/glinfs/issues/144)) ([f374843](https://github.com/dennougorilla/glinfs/commit/f3748430e773b88f03b7df775f0cb9d5934be6d1))
+
 ## [0.8.0](https://github.com/dennougorilla/glinfs/compare/v0.7.0...v0.8.0) (2026-09-29)
 
 
