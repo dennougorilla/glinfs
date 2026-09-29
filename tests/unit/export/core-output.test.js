@@ -189,6 +189,23 @@ describe('estimateMergedRuns', () => {
     expect(estimateMergedRuns([0, 1, 2, 3], frames, edits).runLengths).toEqual([1, 2, 1]);
   });
 
+  it('splits a run where a touch-up starts or ends, only while removal is on', () => {
+    const frames = framesWith(['a', 'a', 'a', 'a']);
+    const edits = createDefaultEdits();
+    edits.background.enabled = true;
+    edits.touchUps.push({
+      id: 's',
+      mode: 'erase',
+      radius: 0.05,
+      points: [{ x: 0.5, y: 0.5 }],
+      start: 2,
+      end: 2,
+    });
+    expect(estimateMergedRuns([0, 1, 2, 3], frames, edits).runLengths).toEqual([2, 1, 1]);
+    edits.background.enabled = false;
+    expect(estimateMergedRuns([0, 1, 2, 3], frames, edits).runLengths).toEqual([4]);
+  });
+
   it('works on sparse (frame-skipped) indices', () => {
     const frames = framesWith(['a', 'a', 'a', 'a', 'b', 'b']);
     expect(estimateMergedRuns([0, 2, 4], frames, null).representatives).toEqual([0, 4]);

@@ -4,6 +4,8 @@
  * Clears pixels close to a key color in an RGBA buffer, either everywhere
  * ('global') or only where they connect to the buffer border ('connected',
  * a flood fill that leaves same-colored foreground details untouched).
+ * The keep/remove decision can also be taken on its own (decideColorKey)
+ * and applied later (clearDecidedPixels), so touch-ups can change it first.
  * No DOM access: callers pass ImageData.data or a VideoFrame copy.
  *
  * @module shared/edits/color-key
@@ -62,11 +64,12 @@ export function toHexColor({ r, g, b }) {
 }
 
 /**
- * Flood-fill scratch buffers, reused across connected-mode calls and grown
- * only when a larger frame arrives. Keying runs on every exported and
- * previewed frame, and fresh buffers cost ~10 MB of garbage per 1080p frame.
- * Safe because applyColorKey is synchronous and never re-entered; every
- * realm (window, worker) gets its own module instance.
+ * Flood-fill scratch buffers (the decision buffer and the fill stack),
+ * reused across calls and grown only when a larger frame arrives. Keying
+ * runs on every exported and previewed frame, and fresh buffers cost
+ * ~10 MB of garbage per 1080p frame. Safe because decideColorKey is
+ * synchronous and never re-entered (callers consume the decision before
+ * the next call); every realm (window, worker) gets its own module instance.
  */
 let scratchVisited = new Uint8Array(0);
 let scratchStack = new Int32Array(0);
@@ -87,33 +90,32 @@ function getFloodScratch(pixelCount) {
 }
 
 /**
- * Clear pixels matching the key color. Mutates `rgba` in place: cleared
- * pixels become RGBA 0,0,0,0.
+ * Decide which pixels the color key removes, without touching `rgba`.
  *
- * A pixel matches when its Euclidean RGB distance to the key color is at
- * most (tolerance / 100) * MAX_RGB_DISTANCE (tolerance 0 = exact color).
- * - 'global': every matching pixel is cleared.
- * - 'connected': 4-neighbour flood fill seeded from every matching border
- *   pixel; only matching pixels connected to the border are cleared.
- *   Already-transparent pixels (alpha < 128) count as matching for
- *   connectivity, so transparency in the source joins regions, but they are
- *   not counted in the return value.
+ * Same rule as applyColorKey (see there); the result is a per-pixel
+ * decision, 1 = remove, 0 = keep, for the first width * height entries.
+ * - 'global': every opaque (alpha >= ALPHA_THRESHOLD) matching pixel.
+ * - 'connected': the 4-neighbour flood fill from every fillable border
+ *   pixel (matching, or already transparent) decides the removed set; the
+ *   fill's `visited` marks ARE the decision, so the scratch buffer is
+ *   returned as is.
  *
- * Iterative (explicit Int32Array stack), O(width * height).
- *
- * Does nothing unless the color method is the active one: with the 'ai'
- * method the segmentation masks remove the background instead.
+ * The returned buffer is the module's reused scratch: it is valid until the
+ * next applyColorKey / decideColorKey call and must not be kept.
  *
  * @param {Uint8ClampedArray | Uint8Array} rgba - RGBA buffer, width * height * 4 bytes
  * @param {number} width
  * @param {number} height
  * @param {import('./model.js').BackgroundRemoval | null | undefined} background
- * @returns {number} Number of opaque pixels cleared
+ * @returns {Uint8Array | null} The decision, or null when the color key does
+ *   not run (removal off, the AI method, no valid key color, empty buffer)
  */
-export function applyColorKey(rgba, width, height, background) {
-  if (!background?.enabled || background.method === 'ai' || width <= 0 || height <= 0) return 0;
+export function decideColorKey(rgba, width, height, background) {
+  if (!background?.enabled || background.method === 'ai' || width <= 0 || height <= 0) {
+    return null;
+  }
   const key = parseHexColor(background.color);
-  if (!key) return 0;
+  if (!key) return null;
 
   const tolerance = Math.min(100, Math.max(0, Number(background.tolerance) || 0));
   const limit = (tolerance / 100) * MAX_RGB_DISTANCE;
@@ -133,36 +135,18 @@ export function applyColorKey(rgba, width, height, background) {
     return dr * dr + dg * dg + db * db <= limitSq;
   };
 
-  /**
-   * Clear pixel p; returns 1 when it was opaque (counted), else 0
-   * @param {number} p
-   * @returns {number}
-   */
-  const clear = (p) => {
-    const o = p * 4;
-    const wasOpaque = rgba[o + 3] >= ALPHA_THRESHOLD ? 1 : 0;
-    rgba[o] = 0;
-    rgba[o + 1] = 0;
-    rgba[o + 2] = 0;
-    rgba[o + 3] = 0;
-    return wasOpaque;
-  };
-
-  let cleared = 0;
+  // Connected: flood fill from the border. `visited` marks pixels already
+  // pushed, so each pixel enters the stack at most once and the stack never
+  // exceeds pixelCount entries. Every pushed pixel is removed.
+  const { visited, stack } = getFloodScratch(pixelCount);
 
   if (background.mode === 'global') {
     for (let p = 0; p < pixelCount; p++) {
-      if (rgba[p * 4 + 3] >= ALPHA_THRESHOLD && matchesKey(p)) {
-        cleared += clear(p);
-      }
+      if (rgba[p * 4 + 3] >= ALPHA_THRESHOLD && matchesKey(p)) visited[p] = 1;
     }
-    return cleared;
+    return visited;
   }
 
-  // Connected: flood fill from the border. `visited` marks pixels already
-  // pushed, so each pixel enters the stack at most once and the stack never
-  // exceeds pixelCount entries.
-  const { visited, stack } = getFloodScratch(pixelCount);
   let top = 0;
 
   /** @param {number} p */
@@ -187,7 +171,6 @@ export function applyColorKey(rgba, width, height, background) {
 
   while (top > 0) {
     const p = stack[--top];
-    cleared += clear(p);
     const x = p % width;
     if (x > 0) seed(p - 1);
     if (x < width - 1) seed(p + 1);
@@ -195,7 +178,64 @@ export function applyColorKey(rgba, width, height, background) {
     if (p < pixelCount - width) seed(p + width);
   }
 
+  return visited;
+}
+
+/**
+ * Clear the pixels a removal decision marks (1): RGBA becomes 0,0,0,0.
+ * @param {Uint8ClampedArray | Uint8Array} rgba - RGBA buffer, pixelCount * 4 bytes
+ * @param {Uint8Array} decision - 1 = remove, per pixel (at least pixelCount entries)
+ * @param {number} pixelCount
+ * @returns {number} Number of opaque (alpha >= ALPHA_THRESHOLD) pixels cleared
+ */
+export function clearDecidedPixels(rgba, decision, pixelCount) {
+  let cleared = 0;
+  for (let p = 0; p < pixelCount; p++) {
+    if (!decision[p]) continue;
+    const o = p * 4;
+    if (rgba[o + 3] >= ALPHA_THRESHOLD) cleared++;
+    rgba[o] = 0;
+    rgba[o + 1] = 0;
+    rgba[o + 2] = 0;
+    rgba[o + 3] = 0;
+  }
   return cleared;
+}
+
+/**
+ * Clear pixels matching the key color. Mutates `rgba` in place: cleared
+ * pixels become RGBA 0,0,0,0.
+ *
+ * A pixel matches when its Euclidean RGB distance to the key color is at
+ * most (tolerance / 100) * MAX_RGB_DISTANCE (tolerance 0 = exact color).
+ * - 'global': every matching pixel is cleared.
+ * - 'connected': 4-neighbour flood fill seeded from every matching border
+ *   pixel; only matching pixels connected to the border are cleared.
+ *   Already-transparent pixels (alpha < 128) count as matching for
+ *   connectivity, so transparency in the source joins regions, but they are
+ *   not counted in the return value.
+ *
+ * Two passes: decideColorKey decides the removed set from the untouched
+ * pixels (the flood fill never revisits a pixel, so clearing during the
+ * fill and clearing afterwards remove the same pixels), then the decided
+ * pixels are cleared. Keeping the decision separate lets touch-ups
+ * (shared/edits/touch-ups.js) change it before anything is cleared.
+ *
+ * Iterative (explicit Int32Array stack), O(width * height).
+ *
+ * Does nothing unless the color method is the active one: with the 'ai'
+ * method the segmentation masks remove the background instead.
+ *
+ * @param {Uint8ClampedArray | Uint8Array} rgba - RGBA buffer, width * height * 4 bytes
+ * @param {number} width
+ * @param {number} height
+ * @param {import('./model.js').BackgroundRemoval | null | undefined} background
+ * @returns {number} Number of opaque pixels cleared
+ */
+export function applyColorKey(rgba, width, height, background) {
+  const decision = decideColorKey(rgba, width, height, background);
+  if (!decision) return 0;
+  return clearDecidedPixels(rgba, decision, width * height);
 }
 
 /**

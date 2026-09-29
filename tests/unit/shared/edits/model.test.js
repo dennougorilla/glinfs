@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  areTouchUpsActive,
   createDefaultAiCutout,
   createDefaultEdits,
   createTextLayer,
+  DEFAULT_TOUCH_UP_RADIUS,
   EDIT_LIMITS,
   getActiveTextLayers,
+  getActiveTouchUps,
   isAiCutoutActive,
   isColorKeyActive,
   isEditsEmpty,
+  limitStrokePoints,
   normalizeEdits,
   requiresTransparency,
 } from '../../../../src/shared/edits/model.js';
@@ -25,6 +29,7 @@ describe('createDefaultEdits', () => {
         colorChosen: false,
         ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
+      touchUps: [],
     });
   });
 
@@ -392,5 +397,137 @@ describe('background method and AI cutout', () => {
     expect(isColorKeyActive(edits.background)).toBe(false);
     expect(isAiCutoutActive(null)).toBe(false);
     expect(isColorKeyActive(undefined)).toBe(false);
+  });
+});
+
+describe('touch-ups (mask brush strokes)', () => {
+  const valid = {
+    id: 's1',
+    mode: 'restore',
+    radius: 0.05,
+    points: [
+      { x: 0.2, y: 0.3 },
+      { x: 0.4, y: 0.5 },
+    ],
+    start: 1,
+    end: 2,
+  };
+
+  it('edits without the field (saved before touch-ups existed) have none', () => {
+    expect(normalizeEdits({ textLayers: [], background: {} }, 5).touchUps).toEqual([]);
+    expect(normalizeEdits(undefined, 5).touchUps).toEqual([]);
+    expect(normalizeEdits({ touchUps: 'nope' }, 5).touchUps).toEqual([]);
+  });
+
+  it('keeps a valid stroke as is', () => {
+    expect(normalizeEdits({ touchUps: [valid] }, 5).touchUps).toEqual([valid]);
+  });
+
+  it('clamps points, radius and range; coerces the mode; drops unusable points and strokes', () => {
+    const [stroke, ...rest] = normalizeEdits(
+      {
+        touchUps: [
+          {
+            mode: 'paint',
+            radius: 9,
+            points: [{ x: -1, y: 2 }, { x: Number.NaN, y: 0 }, null, { x: 0.5 }, 'x'],
+            start: 7,
+            end: 3,
+          },
+          { id: 'empty', points: [] },
+          { id: 'none' },
+          null,
+          [valid],
+        ],
+      },
+      5,
+    ).touchUps;
+    expect(rest).toEqual([]);
+    expect(stroke.mode).toBe('erase');
+    expect(stroke.radius).toBe(EDIT_LIMITS.touchUpRadius.max);
+    expect(stroke.points).toEqual([{ x: 0, y: 1 }]);
+    expect(stroke.start).toBe(4);
+    expect(stroke.end).toBe(4);
+    expect(typeof stroke.id).toBe('string');
+    expect(normalizeEdits({ touchUps: [{ ...valid, radius: 0 }] }, 5).touchUps[0].radius).toBe(
+      EDIT_LIMITS.touchUpRadius.min,
+    );
+    expect(normalizeEdits({ touchUps: [{ ...valid, radius: 'big' }] }, 5).touchUps[0].radius).toBe(
+      DEFAULT_TOUCH_UP_RADIUS,
+    );
+  });
+
+  it('keeps at most the stroke limit and limits long paths with limitStrokePoints', () => {
+    const many = Array.from({ length: EDIT_LIMITS.touchUps.max + 5 }, (_, i) => ({
+      ...valid,
+      id: `s${i}`,
+    }));
+    const kept = normalizeEdits({ touchUps: many }, 5).touchUps;
+    expect(kept).toHaveLength(EDIT_LIMITS.touchUps.max);
+    expect(kept[0].id).toBe('s0');
+
+    const points = Array.from({ length: 1234 }, (_, i) => ({ x: i / 1233, y: 0.5 }));
+    const [long] = normalizeEdits({ touchUps: [{ ...valid, points }] }, 5).touchUps;
+    expect(long.points).toEqual(limitStrokePoints(points, EDIT_LIMITS.touchUpPoints.max));
+    expect(long.points.length).toBeLessThanOrEqual(EDIT_LIMITS.touchUpPoints.max);
+    expect(long.points[0]).toEqual(points[0]);
+    expect(long.points.at(-1)).toEqual(points.at(-1));
+
+    // A path within the limit is saved exactly as painted
+    const atLimit = points.slice(0, EDIT_LIMITS.touchUpPoints.max);
+    const [same] = normalizeEdits({ touchUps: [{ ...valid, points: atLimit }] }, 5).touchUps;
+    expect(same.points).toEqual(atLimit);
+  });
+
+  it('limitStrokePoints drops every other point until the path fits, keeping both ends', () => {
+    const points = [1, 2, 3];
+    expect(limitStrokePoints(points, 5)).toBe(points);
+    expect(limitStrokePoints([1, 2, 3, 4, 5], 4)).toEqual([1, 3, 5]);
+    expect(limitStrokePoints([1, 2, 3, 4, 5, 6], 5)).toEqual([1, 3, 5, 6]);
+    // Halved again while still too long
+    expect(limitStrokePoints([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).toEqual([1, 5, 9]);
+    expect(limitStrokePoints([1, 2, 3, 4], 2)).toEqual([1, 4]);
+  });
+
+  it('keeps already-normalized strokes, and an unchanged array, by reference', () => {
+    const first = normalizeEdits({ touchUps: [valid, { ...valid, id: 's2' }] }, 5);
+    const again = normalizeEdits({ ...first, textLayers: [] }, 5);
+    expect(again.touchUps).toBe(first.touchUps);
+    expect(again.touchUps[0]).toBe(first.touchUps[0]);
+
+    // A new stroke: the old ones stay the same objects
+    const added = normalizeEdits({ ...first, touchUps: [...first.touchUps, valid] }, 5);
+    expect(added.touchUps[0]).toBe(first.touchUps[0]);
+    expect(added.touchUps[1]).toBe(first.touchUps[1]);
+    expect(added.touchUps[2]).not.toBe(valid);
+
+    // A shorter clip clamps the ranges again
+    const shorter = normalizeEdits(first, 2);
+    expect(shorter.touchUps[0]).not.toBe(first.touchUps[0]);
+    expect(shorter.touchUps[0]).toMatchObject({ start: 1, end: 1 });
+  });
+
+  it('getActiveTouchUps: strokes covering the frame, only while removal is on', () => {
+    const edits = normalizeEdits(
+      {
+        background: { enabled: true },
+        touchUps: [valid, { ...valid, id: 's2', start: 3, end: 4 }],
+      },
+      5,
+    );
+    expect(getActiveTouchUps(edits, 1).map((s) => s.id)).toEqual(['s1']);
+    expect(getActiveTouchUps(edits, 3).map((s) => s.id)).toEqual(['s2']);
+    expect(getActiveTouchUps(edits, 0)).toEqual([]);
+    const off = { ...edits, background: { ...edits.background, enabled: false } };
+    expect(getActiveTouchUps(off, 1)).toEqual([]);
+    expect(getActiveTouchUps(null, 1)).toEqual([]);
+    expect(areTouchUpsActive(edits.background)).toBe(true);
+    expect(areTouchUpsActive(off.background)).toBe(false);
+  });
+
+  it('touch-ups alone never make the edits non-empty (they need removal on)', () => {
+    const edits = normalizeEdits({ touchUps: [valid] }, 5);
+    expect(isEditsEmpty(edits)).toBe(true);
+    expect(requiresTransparency({ edits })).toBe(false);
   });
 });

@@ -14,6 +14,7 @@
 /** @typedef {'connected'|'global'} BackgroundMode */
 /** @typedef {'color'|'ai'} BackgroundMethod */
 /** @typedef {'keep'|'remove'} PickMode */
+/** @typedef {'erase'|'restore'} TouchUpMode */
 
 /**
  * @typedef {Object} TextLayer
@@ -72,9 +73,26 @@
  */
 
 /**
+ * A mask brush stroke painted on top of background removal (either
+ * method): 'erase' removes the pixels under it, 'restore' brings the
+ * original pixels back. Only applies while background removal is on.
+ * @typedef {Object} TouchUp
+ * @property {string} id
+ * @property {TouchUpMode} mode
+ * @property {number} radius - brush radius as a fraction of the SOURCE
+ *   frame's shorter side (EDIT_LIMITS.touchUpRadius)
+ * @property {{ x: number, y: number }[]} points - the stroke's path,
+ *   fractions of the SOURCE frame (0..1), at least one point
+ * @property {number} start - first clip frame index it applies to (inclusive, absolute)
+ * @property {number} end   - last clip frame index (inclusive, absolute)
+ */
+
+/**
  * @typedef {Object} ClipEdits
  * @property {TextLayer[]} textLayers  - drawn in array order (last = on top)
  * @property {BackgroundRemoval} background
+ * @property {TouchUp[]} touchUps      - applied in array order (later strokes win);
+ *   kept outside `background` so painting never rebuilds the AI masks
  */
 
 /** Valid '#rrggbb' color */
@@ -95,6 +113,9 @@ export const BACKGROUND_METHODS = /** @type {const} */ (['color', 'ai']);
 /** @type {readonly PickMode[]} */
 export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 
+/** @type {readonly TouchUpMode[]} */
+export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);
+
 /** Numeric ranges enforced by normalizeEdits */
 export const EDIT_LIMITS = /** @type {const} */ ({
   size: { min: 0.02, max: 0.5 },
@@ -105,7 +126,13 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiThreshold: { min: 0.05, max: 0.95 },
   aiEdge: { min: -8, max: 8 },
   aiPicks: { max: 16 },
+  touchUpRadius: { min: 0.0025, max: 0.15 },
+  touchUps: { max: 200 },
+  touchUpPoints: { max: 500 },
 });
+
+/** Brush radius of a new stroke (fraction of the source frame's shorter side) */
+export const DEFAULT_TOUCH_UP_RADIUS = 0.03;
 
 /** Defaults for a new text layer (start/end/id are derived per call) */
 const TEXT_LAYER_DEFAULTS = /** @type {const} */ ({
@@ -144,10 +171,10 @@ const BACKGROUND_DEFAULTS = /** @type {const} */ ({
 let idCounter = 0;
 
 /**
- * Unique id for a text layer
+ * Unique id for a text layer or a touch-up stroke
  * @returns {string}
  */
-function createLayerId() {
+export function createLayerId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
@@ -205,7 +232,11 @@ function lastFrameIndex(frameCount) {
  * @returns {ClipEdits}
  */
 export function createDefaultEdits() {
-  return { textLayers: [], background: { ...BACKGROUND_DEFAULTS, ai: createDefaultAiCutout() } };
+  return {
+    textLayers: [],
+    background: { ...BACKGROUND_DEFAULTS, ai: createDefaultAiCutout() },
+    touchUps: [],
+  };
 }
 
 /**
@@ -362,6 +393,108 @@ function normalizeBackground(background, frameCount) {
 }
 
 /**
+ * The one point-limit rule of a stroke path, used both while painting (see
+ * extendStrokePath in ./touch-ups.js) and when edits are normalized, so a
+ * stroke never changes between its live preview and its saved form: while
+ * the path has more than `max` points, every other point is dropped
+ * (indices 0, 2, 4, ...), always keeping the last. A path within the limit
+ * is returned as is.
+ * @template T
+ * @param {T[]} points
+ * @param {number} max - At least 2
+ * @returns {T[]}
+ */
+export function limitStrokePoints(points, max) {
+  let kept = points;
+  while (kept.length > max) {
+    const last = kept.length - 1;
+    /** @type {T[]} */
+    const halved = [];
+    for (let i = 0; i < last; i += 2) halved.push(kept[i]);
+    halved.push(kept[last]);
+    kept = halved;
+  }
+  return kept;
+}
+
+/**
+ * Strokes normalizeTouchUp produced, with the frame count they were
+ * normalized for: such a stroke is valid as is and is kept by reference
+ * (every edit normalizes the whole ClipEdits, and rebuilding every stroke's
+ * points on each text drag or slider step would be wasted work and would
+ * defeat identity-based caches). Strokes are never mutated once normalized.
+ * @type {WeakMap<object, number>}
+ */
+const normalizedTouchUps = new WeakMap();
+
+/**
+ * Normalize one touch-up stroke; null when it has no usable point. Points
+ * without finite x/y are dropped, the rest clamped into 0..1 and limited
+ * to EDIT_LIMITS.touchUpPoints.max (limitStrokePoints); the radius is
+ * clamped; the frame range is clamped into the clip like a text layer's.
+ * A stroke this function already returned for the same frame count comes
+ * back as is.
+ * @param {unknown} stroke
+ * @param {number} frameCount
+ * @returns {TouchUp | null}
+ */
+function normalizeTouchUp(stroke, frameCount) {
+  if (!stroke || typeof stroke !== 'object' || Array.isArray(stroke)) return null;
+  if (normalizedTouchUps.get(stroke) === frameCount) return /** @type {TouchUp} */ (stroke);
+  const t = /** @type {Record<string, unknown>} */ (stroke);
+  const { position, touchUpRadius, touchUpPoints } = EDIT_LIMITS;
+  const raw = Array.isArray(t.points) ? t.points : [];
+  /** @type {{ x: number, y: number }[]} */
+  const points = [];
+  for (const point of raw) {
+    if (!point || typeof point !== 'object') continue;
+    const { x, y } = /** @type {Record<string, unknown>} */ (point);
+    if (typeof x !== 'number' || typeof y !== 'number') continue;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    points.push({
+      x: clampNumber(x, position.min, position.max, 0.5),
+      y: clampNumber(y, position.min, position.max, 0.5),
+    });
+  }
+  if (points.length === 0) return null;
+  const last = lastFrameIndex(frameCount);
+  const start = Math.round(clampNumber(t.start, 0, last, 0));
+  const end = Math.max(start, Math.round(clampNumber(t.end, 0, last, start)));
+  /** @type {TouchUp} */
+  const normalized = {
+    id: typeof t.id === 'string' && t.id ? t.id : createLayerId(),
+    mode: normalizeEnum(t.mode, TOUCH_UP_MODES, 'erase'),
+    radius: clampNumber(t.radius, touchUpRadius.min, touchUpRadius.max, DEFAULT_TOUCH_UP_RADIUS),
+    points: limitStrokePoints(points, touchUpPoints.max),
+    start,
+    end,
+  };
+  normalizedTouchUps.set(normalized, frameCount);
+  return normalized;
+}
+
+/**
+ * Normalize the touch-up strokes: unusable ones are dropped and only the
+ * first EDIT_LIMITS.touchUps.max are kept. Input without the field (edits
+ * saved before touch-ups existed) has none. Already-normalized strokes, and
+ * an array of nothing else, are returned by reference.
+ * @param {unknown} touchUps
+ * @param {number} frameCount
+ * @returns {TouchUp[]}
+ */
+function normalizeTouchUps(touchUps, frameCount) {
+  if (!Array.isArray(touchUps)) return [];
+  const normalized = touchUps
+    .map((stroke) => normalizeTouchUp(stroke, frameCount))
+    .filter((stroke) => stroke !== null)
+    .slice(0, EDIT_LIMITS.touchUps.max);
+  // Nothing changed (every stroke kept by reference): keep the array too
+  const unchanged =
+    normalized.length === touchUps.length && normalized.every((s, i) => s === touchUps[i]);
+  return unchanged ? /** @type {TouchUp[]} */ (touchUps) : normalized;
+}
+
+/**
  * Normalize edits from any (possibly undefined, partial or corrupt) input.
  *
  * Always returns a NEW object. Numbers are clamped to their ranges, colors
@@ -382,6 +515,7 @@ export function normalizeEdits(edits, frameCount) {
       .filter((layer) => layer !== null && typeof layer === 'object' && !Array.isArray(layer))
       .map((layer) => normalizeTextLayer(layer, frameCount)),
     background: normalizeBackground(e.background, frameCount),
+    touchUps: normalizeTouchUps(e.touchUps, frameCount),
   };
 }
 
@@ -416,8 +550,33 @@ export function isAiCutoutActive(background) {
 }
 
 /**
+ * Whether touch-ups apply: they refine a removal, so only while background
+ * removal (either method) is on
+ * @param {BackgroundRemoval | null | undefined} background
+ * @returns {boolean}
+ */
+export function areTouchUpsActive(background) {
+  return background?.enabled === true;
+}
+
+/**
+ * Touch-up strokes that apply to `frameIndex`, in paint order: none while
+ * background removal is off
+ * @param {ClipEdits | null | undefined} edits
+ * @param {number} frameIndex - Absolute clip frame index
+ * @returns {TouchUp[]}
+ */
+export function getActiveTouchUps(edits, frameIndex) {
+  const touchUps = edits?.touchUps;
+  if (!touchUps || touchUps.length === 0 || !areTouchUpsActive(edits.background)) return [];
+  return touchUps.filter((stroke) => stroke.start <= frameIndex && frameIndex <= stroke.end);
+}
+
+/**
  * True when the edits change nothing: background removal (either method)
- * is off and no layer has non-blank text. Tolerates null/undefined.
+ * is off and no layer has non-blank text (touch-ups only apply while
+ * removal is on, so they never make edits non-empty on their own).
+ * Tolerates null/undefined.
  * @param {ClipEdits | null | undefined} edits
  * @returns {boolean}
  */

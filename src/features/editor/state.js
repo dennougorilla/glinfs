@@ -4,11 +4,15 @@
  */
 
 import {
+  areTouchUpsActive,
   createDefaultEdits,
   createTextLayer,
+  DEFAULT_TOUCH_UP_RADIUS,
   EDIT_LIMITS,
   normalizeEdits,
+  TOUCH_UP_MODES,
 } from '../../shared/edits/model.js';
+import { removeTouchUpsFromFrame } from '../../shared/edits/touch-ups.js';
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
 import { clampCropArea, createClip, setFrameRange } from './core.js';
@@ -38,7 +42,20 @@ export function initEditorState(clip) {
     pickingKeyColor: false,
     aiPickTool: null,
     aiCutout: createAiCutoutStatus(),
+    brush: createBrushState(),
   };
+}
+
+/** @type {readonly import('./types.js').BrushScope[]} */
+export const BRUSH_SCOPES = /** @type {const} */ (['frame', 'selection']);
+
+/**
+ * Mask brush tool of a new editor session: off, erasing, default size,
+ * one frame per stroke
+ * @returns {import('./types.js').BrushState}
+ */
+export function createBrushState() {
+  return { on: false, mode: 'erase', radius: DEFAULT_TOUCH_UP_RADIUS, scope: 'frame' };
 }
 
 /**
@@ -279,10 +296,16 @@ export function setEdits(state, edits) {
   const selectedTextId = normalized.textLayers.some((layer) => layer.id === state.selectedTextId)
     ? state.selectedTextId
     : null;
+  // Touch-ups need background removal: turning it off leaves the brush
+  const brush =
+    state.brush?.on && !areTouchUpsActive(normalized.background)
+      ? { ...state.brush, on: false }
+      : state.brush;
   return {
     ...state,
     edits: normalized,
     selectedTextId,
+    brush,
     clip: { ...state.clip, edits: normalized },
   };
 }
@@ -463,6 +486,7 @@ export function setAiPickTool(state, tool) {
     ...state,
     aiPickTool: tool,
     pickingKeyColor: tool ? false : state.pickingKeyColor,
+    brush: tool ? brushOff(state.brush) : state.brush,
   };
   // Leaving the tool (a pick that worked, Escape, the toggle) ends the
   // refused pick the notice was about
@@ -516,8 +540,165 @@ export function setPickingKeyColor(state, picking) {
     ...state,
     pickingKeyColor: picking,
     aiPickTool: picking ? null : state.aiPickTool,
+    brush: picking ? brushOff(state.brush) : state.brush,
   };
   return picking ? clearPickNotice(next) : next;
+}
+
+// ============================================================
+// Touch-ups (mask brush)
+// ============================================================
+
+/**
+ * The brush switched off (the same object when it already is)
+ * @param {import('./types.js').BrushState | undefined} brush
+ * @returns {import('./types.js').BrushState}
+ */
+function brushOff(brush) {
+  const current = brush ?? createBrushState();
+  return current.on ? { ...current, on: false } : current;
+}
+
+/**
+ * Patch the mask brush tool (mode, size, scope, on/off). Values are
+ * validated; the brush only turns on while background removal is on, and
+ * turning it on leaves the pick tools and the eyedropper (one preview tool
+ * at a time).
+ * @param {import('./types.js').EditorState} state
+ * @param {Partial<import('./types.js').BrushState>} patch
+ * @returns {import('./types.js').EditorState}
+ */
+export function setBrush(state, patch) {
+  const current = state.brush ?? createBrushState();
+  const { touchUpRadius } = EDIT_LIMITS;
+  const radius =
+    typeof patch.radius === 'number' && Number.isFinite(patch.radius)
+      ? clamp(patch.radius, touchUpRadius.min, touchUpRadius.max)
+      : current.radius;
+  /** @type {import('./types.js').BrushState} */
+  const next = {
+    on:
+      typeof patch.on === 'boolean'
+        ? patch.on && areTouchUpsActive(state.edits?.background)
+        : current.on,
+    mode: TOUCH_UP_MODES.includes(/** @type {any} */ (patch.mode))
+      ? /** @type {import('../../shared/edits/model.js').TouchUpMode} */ (patch.mode)
+      : current.mode,
+    radius,
+    scope: BRUSH_SCOPES.includes(/** @type {any} */ (patch.scope))
+      ? /** @type {import('./types.js').BrushScope} */ (patch.scope)
+      : current.scope,
+  };
+  if (
+    next.on === current.on &&
+    next.mode === current.mode &&
+    next.radius === current.radius &&
+    next.scope === current.scope
+  ) {
+    return state;
+  }
+  const withBrush = { ...state, brush: next };
+  if (!next.on || current.on) return withBrush;
+  return clearPickNotice({ ...withBrush, pickingKeyColor: false, aiPickTool: null });
+}
+
+/**
+ * Whether the frame on screen lies outside the IN..OUT selection
+ * @param {import('./types.js').EditorState} state
+ * @returns {boolean}
+ */
+export function isCurrentFrameOutsideSelection(state) {
+  const { start, end } = state.selectedRange;
+  return state.currentFrame < start || state.currentFrame > end;
+}
+
+/**
+ * Frame range a new stroke applies to under the brush's scope: the current
+ * frame, or the IN..OUT selection. A stroke always covers the frame it is
+ * painted on, so with the Selection scope on a frame outside IN..OUT it
+ * applies to that frame only (the Touch up section says so) instead of to
+ * frames the user cannot see.
+ * @param {import('./types.js').EditorState} state
+ * @returns {{ start: number, end: number }}
+ */
+export function getBrushStrokeRange(state) {
+  if ((state.brush?.scope ?? 'frame') === 'selection' && !isCurrentFrameOutsideSelection(state)) {
+    return { start: state.selectedRange.start, end: state.selectedRange.end };
+  }
+  return { start: state.currentFrame, end: state.currentFrame };
+}
+
+/**
+ * Add touch-up strokes in order, as many as fit in EDIT_LIMITS.touchUps.max
+ * (unchanged when none fits)
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').TouchUp[]} strokes
+ * @returns {import('./types.js').EditorState}
+ */
+export function addTouchUps(state, strokes) {
+  const touchUps = state.edits.touchUps ?? [];
+  const room = EDIT_LIMITS.touchUps.max - touchUps.length;
+  if (room <= 0 || strokes.length === 0) return state;
+  return setEdits(state, { ...state.edits, touchUps: [...touchUps, ...strokes.slice(0, room)] });
+}
+
+/**
+ * Add a touch-up stroke (ignored once EDIT_LIMITS.touchUps.max exist)
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').TouchUp} stroke
+ * @returns {import('./types.js').EditorState}
+ */
+export function addTouchUp(state, stroke) {
+  return addTouchUps(state, [stroke]);
+}
+
+/**
+ * Remove the most recent stroke
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function undoTouchUp(state) {
+  const touchUps = state.edits.touchUps ?? [];
+  if (touchUps.length === 0) return state;
+  return setEdits(state, { ...state.edits, touchUps: touchUps.slice(0, -1) });
+}
+
+/**
+ * Whether "Clear on this frame" fits in the stroke limit (splitting a
+ * stroke that spans the frame adds one stroke)
+ * @param {import('./types.js').EditorState} state
+ * @param {number} frameIndex
+ * @returns {boolean}
+ */
+export function canClearTouchUpsOnFrame(state, frameIndex) {
+  const touchUps = state.edits.touchUps ?? [];
+  return removeTouchUpsFromFrame(touchUps, frameIndex).length <= EDIT_LIMITS.touchUps.max;
+}
+
+/**
+ * Take one frame out of every stroke's range (see removeTouchUpsFromFrame):
+ * only that frame changes. Unchanged when no stroke covers the frame or
+ * the split would exceed the stroke limit.
+ * @param {import('./types.js').EditorState} state
+ * @param {number} frameIndex
+ * @returns {import('./types.js').EditorState}
+ */
+export function clearTouchUpsOnFrame(state, frameIndex) {
+  const touchUps = state.edits.touchUps ?? [];
+  if (!touchUps.some((s) => s.start <= frameIndex && frameIndex <= s.end)) return state;
+  const next = removeTouchUpsFromFrame(touchUps, frameIndex);
+  if (next.length > EDIT_LIMITS.touchUps.max) return state;
+  return setEdits(state, { ...state.edits, touchUps: next });
+}
+
+/**
+ * Remove every stroke
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').EditorState}
+ */
+export function clearAllTouchUps(state) {
+  if ((state.edits.touchUps ?? []).length === 0) return state;
+  return setEdits(state, { ...state.edits, touchUps: [] });
 }
 
 // ============================================================

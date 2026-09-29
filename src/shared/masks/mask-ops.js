@@ -18,6 +18,8 @@
  * @module shared/masks/mask-ops
  */
 
+import { clearDecidedPixels } from '../edits/color-key.js';
+
 /**
  * Join rule, IoU part: a component of the neighbouring frame joins a pick's
  * selection when its intersection-over-union with the selection is at least
@@ -713,13 +715,19 @@ export function maskBit(packed, x, y) {
 }
 
 /**
+ * Decision buffer of applyMaskToRegion, reused and grown only for a larger
+ * region (the function is synchronous and never re-entered)
+ */
+let maskDecisionScratch = new Uint8Array(0);
+
+/**
  * Clear the pixels of an output region that a final mask excludes: RGBA
  * becomes 0,0,0,0 (like the color key) where the mask is 0.
  *
  * The region is a rectangle of the SOURCE frame (the crop, or the whole
  * frame) whose pixels are `rgba`; the mask covers the whole source frame at
  * its own resolution. Each region pixel samples the mask pixel under its
- * center (nearest neighbour).
+ * center (nearest neighbour): decideMaskRemoval, then clearDecidedPixels.
  *
  * @param {Uint8Array | Uint8ClampedArray} rgba - regionW * regionH * 4 bytes
  * @param {number} regionW - Pixel columns of `rgba`
@@ -730,7 +738,7 @@ export function maskBit(packed, x, y) {
  * @param {{ x: number, y: number, width: number, height: number }} regionInSourcePx
  * @param {number} sourceW
  * @param {number} sourceH
- * @returns {number} Pixels cleared
+ * @returns {number} Opaque pixels cleared (see clearDecidedPixels)
  */
 export function applyMaskToRegion(
   rgba,
@@ -746,6 +754,57 @@ export function applyMaskToRegion(
   if (regionW <= 0 || regionH <= 0 || maskW <= 0 || maskH <= 0 || sourceW <= 0 || sourceH <= 0) {
     return 0;
   }
+  const size = regionW * regionH;
+  if (maskDecisionScratch.length < size) maskDecisionScratch = new Uint8Array(size);
+  const decision = decideMaskRemoval(
+    regionW,
+    regionH,
+    finalMask,
+    maskW,
+    maskH,
+    regionInSourcePx,
+    sourceW,
+    sourceH,
+    maskDecisionScratch,
+  );
+  return clearDecidedPixels(rgba, decision, size);
+}
+
+/**
+ * The keep/remove decision a final mask makes for an output region, without
+ * touching any pixels: 1 (remove) where the mask is 0, 0 (keep) where it is
+ * 1. Each region pixel samples the mask pixel under its center (nearest
+ * neighbour). applyMaskToRegion clears the decided pixels right away; the
+ * touch-ups change the decision in between (see shared/edits/compose.js).
+ *
+ * @param {number} regionW - Pixel columns of the region
+ * @param {number} regionH - Pixel rows of the region
+ * @param {Uint8Array} finalMask - Packed bits (see PackedMask)
+ * @param {number} maskW
+ * @param {number} maskH
+ * @param {{ x: number, y: number, width: number, height: number }} regionInSourcePx
+ * @param {number} sourceW
+ * @param {number} sourceH
+ * @param {Uint8Array} [out] - Reused output (at least regionW * regionH)
+ * @returns {Uint8Array} 1 = remove, per region pixel (all 0 for degenerate sizes)
+ */
+export function decideMaskRemoval(
+  regionW,
+  regionH,
+  finalMask,
+  maskW,
+  maskH,
+  regionInSourcePx,
+  sourceW,
+  sourceH,
+  out,
+) {
+  const size = Math.max(0, regionW) * Math.max(0, regionH);
+  const decision = out && out.length >= size ? out : new Uint8Array(size);
+  if (regionW <= 0 || regionH <= 0 || maskW <= 0 || maskH <= 0 || sourceW <= 0 || sourceH <= 0) {
+    decision.fill(0, 0, size);
+    return decision;
+  }
   const region = regionInSourcePx;
   const scaleX = (region.width || regionW) / regionW;
   const scaleY = (region.height || regionH) / regionH;
@@ -754,21 +813,14 @@ export function applyMaskToRegion(
     const sx = region.x + (x + 0.5) * scaleX;
     cols[x] = Math.min(maskW - 1, Math.max(0, Math.floor((sx * maskW) / sourceW)));
   }
-
-  let cleared = 0;
   for (let y = 0; y < regionH; y++) {
     const sy = region.y + (y + 0.5) * scaleY;
     const maskRow = Math.min(maskH - 1, Math.max(0, Math.floor((sy * maskH) / sourceH))) * maskW;
-    let p = y * regionW * 4;
-    for (let x = 0; x < regionW; x++, p += 4) {
+    const row = y * regionW;
+    for (let x = 0; x < regionW; x++) {
       const i = maskRow + cols[x];
-      if ((finalMask[i >> 3] >> (7 - (i & 7))) & 1) continue;
-      rgba[p] = 0;
-      rgba[p + 1] = 0;
-      rgba[p + 2] = 0;
-      rgba[p + 3] = 0;
-      cleared++;
+      decision[row + x] = (finalMask[i >> 3] >> (7 - (i & 7))) & 1 ? 0 : 1;
     }
   }
-  return cleared;
+  return decision;
 }

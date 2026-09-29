@@ -49,6 +49,7 @@ describe('createClip with edits', () => {
         colorChosen: false,
         ai: { threshold: 0.5, smoothing: true, edge: 0, picks: [] },
       },
+      touchUps: [],
     });
   });
 
