@@ -28,20 +28,21 @@ const COLORS = {
 
 // K = outline, W = fill, Y = sand (hourglass)
 const CURSORS = {
+  // macOS-style pointer; drawn solid black (see INK_FILLED)
   arrow: [
     'K........',
     'KK.......',
-    'KWK......',
-    'KWWK.....',
-    'KWWWK....',
-    'KWWWWK...',
-    'KWWWWWK..',
-    'KWWWWWWK.',
-    'KWWWWWKKK',
-    'KWWKWWK..',
-    'KWK.KWWK.',
-    'KK...KWWK',
-    '......KK.',
+    'KKK......',
+    'KKKK.....',
+    'KKKKK....',
+    'KKKKKK...',
+    'KKKKKKK..',
+    'KKKKKKKK.',
+    'KKKKKKKKK',
+    'KKKKK....',
+    'KK.KKK...',
+    'K...KKK..',
+    '.....KK..',
   ],
   cross: [
     '...KKK...',
@@ -108,14 +109,6 @@ const FRAMES = [
   { cursor: 'wait' },
 ];
 
-/** Fill the gaps inside each row so the rims hug the outer shape */
-const solid = (rows) =>
-  rows.map((r) => {
-    const a = r.search(/[^.]/);
-    const b = r.length - [...r].reverse().join('').search(/[^.]/);
-    return a < 0 ? r : '.'.repeat(a) + 'S'.repeat(b - a) + '.'.repeat(r.length - b);
-  });
-
 const createGrid = () => Array.from({ length: 32 }, () => Array(32).fill(null));
 
 /** Paint art pixels (2×2 units each) onto a unit grid */
@@ -135,19 +128,33 @@ function paint(grid, rows, palette, ox, oy) {
   });
 }
 
-function ring(grid, rows, color, ox, oy, d) {
-  for (const [dx, dy] of [
-    [-d, 0],
-    [d, 0],
-    [0, -d],
-    [0, d],
-    [-d, -d],
-    [d, d],
-    [-d, d],
-    [d, -d],
-  ]) {
-    paint(grid, rows, { S: color }, ox + dx, oy + dy);
-  }
+/** Silhouette of a cursor as a unit-grid mask */
+function silhouette(rows, ox, oy) {
+  const grid = createGrid();
+  paint(grid, rows, { K: true, W: true, Y: true }, ox, oy);
+  return grid.map((row) => row.map(Boolean));
+}
+
+/** Grow a mask by r units (square kernel), optionally shifted by dx/dy */
+function dilate(mask, r, dx = 0, dy = 0) {
+  return mask.map((row, y) =>
+    row.map((_, x) => {
+      for (let j = -r; j <= r; j++) {
+        for (let i = -r; i <= r; i++) {
+          if (mask[y - dy + j]?.[x - dx + i]) return true;
+        }
+      }
+      return false;
+    }),
+  );
+}
+
+function fill(grid, mask, color) {
+  mask.forEach((row, y) => {
+    row.forEach((on, x) => {
+      if (on) grid[y][x] = color;
+    });
+  });
 }
 
 /** One <path> per color: horizontal runs, stacked into rectangles when rows repeat */
@@ -191,18 +198,17 @@ function drawFrame({ cursor, rec = false }) {
   const h = rows.length * 2;
   const x = 2 * Math.round((16 - w / 2 + 2) / 2);
   const y = 2 * Math.round((16 - h / 2) / 2);
-  const outline = solid(rows);
+  const shape = silhouette(rows, x, y);
 
   const cyan = createGrid();
-  paint(cyan, outline, { S: COLORS.cyan }, x - 6, y + 1);
+  fill(cyan, dilate(shape, 3, -3, 1), COLORS.cyan);
   const pink = createGrid();
-  paint(pink, outline, { S: COLORS.pink }, x + 6, y - 1);
+  fill(pink, dilate(shape, 3, 3, -1), COLORS.pink);
 
   // sticker: thin dark line → white rim → cursor
   const body = createGrid();
-  ring(body, outline, COLORS.ink, x, y, 3);
-  ring(body, outline, COLORS.white, x, y, 2);
-  paint(body, outline, { S: COLORS.white }, x, y);
+  fill(body, dilate(shape, 3), COLORS.ink);
+  fill(body, dilate(shape, 2), COLORS.white);
   paint(body, rows, INK_FILLED.has(cursor) ? { ...PALETTE, W: COLORS.ink } : PALETTE, x, y);
   if (rec) paint(body, REC_DOT, PALETTE, 20, 2);
 
