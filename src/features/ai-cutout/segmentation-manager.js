@@ -289,14 +289,20 @@ export class SegmentationManager {
   /**
    * Analyze every frame that has no mask yet and store the results. Calls
    * run one after another; a call that finds nothing to do never starts the
-   * worker or downloads the model.
+   * worker or downloads the model. A call waiting for an earlier one rejects
+   * as soon as its signal aborts (the earlier call keeps running, and later
+   * calls still wait for it).
    * @param {Frame[]} frames
    * @param {AnalyzeOptions} [options]
    * @returns {Promise<AnalyzeResult>}
    */
   analyzeFrames(frames, options = {}) {
-    const run = this.#tail.then(() => this.#analyze(frames, options));
-    this.#tail = run.catch(() => undefined);
+    const previous = this.#tail;
+    const run = raceAbort(previous, options.signal).then(() => this.#analyze(frames, options));
+    // The queue moves on only once both this call and the one it waited
+    // for have settled: an abort while waiting must not let the next call
+    // overtake a run that is still going
+    this.#tail = Promise.allSettled([previous, run]);
     return run;
   }
 

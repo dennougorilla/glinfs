@@ -303,6 +303,13 @@
   color: var(--color-text-secondary);
 }
 
+/* The editor speed is the GIF speed: say so under the select */
+.editor-screen .editor-speed-hint {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 .property-value {
   font-size: var(--font-size-sm);
   font-family: var(--font-mono);

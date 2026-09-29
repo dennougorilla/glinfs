@@ -8,12 +8,14 @@
  *   real buffer stats pipeline (setCaptureState -> updateBufferStatus).
  * - Editor tests now use the awaited injection + hash navigation pattern and
  *   the selectors that actually exist (.tl-playhead, .btn-play).
- * - The old US5 preview-UI tests were removed; the Canvas preview is covered
- *   in export-preview.spec.js.
+ * - The old US5 preview-UI tests were removed; the export (a dialog over the
+ *   editor since the export v2) is covered in export-dialog.spec.js.
  */
 
 import { expect, test } from '@playwright/test';
 import {
+  exportDialog,
+  exportFromEditor,
   gotoCapture,
   gotoEditorWithClip,
   gotoExportWithClip,
@@ -190,8 +192,9 @@ test.describe('US4: Professional Form Controls', () => {
   test('export settings have styled select elements', async ({ page }) => {
     await gotoExportWithClip(page, { frameCount: 30, fps: 30 });
 
-    // Frame skip + speed selects
-    const selectElements = page.locator('select');
+    // Preset, frame rate, loop and scale selects (the editor's own selects
+    // stay in the DOM under the dialog)
+    const selectElements = exportDialog(page).locator('select');
     const count = await selectElements.count();
     expect(count).toBeGreaterThan(0);
 
@@ -215,13 +218,13 @@ test.describe('US4: Professional Form Controls', () => {
     await page.locator('.prop-accordion-summary', { hasText: 'Playback' }).click();
     await expect(page.locator('.editor-sidebar select').first()).toBeVisible();
 
-    // Export
+    // Export (the #/export deep link opens the editor with the dialog)
     await page.evaluate(async () => {
       await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 30, fps: 30 });
       location.hash = '#/export';
     });
-    await page.waitForSelector('.export-canvas', { state: 'visible' });
-    await expect(page.locator('.export-settings-panel select').first()).toBeVisible();
+    await expect(exportDialog(page).locator('#export-settings')).toBeVisible();
+    await expect(exportDialog(page).locator('select').first()).toBeVisible();
   });
 });
 
@@ -257,14 +260,11 @@ test.describe('Integration: Full UX Flow', () => {
     await expect(page.locator('.timeline-sel-frames')).toHaveText('(61 frames)');
     await expect(page.locator('.btn-play')).toBeVisible();
 
-    // 3. Export with styled controls and canvas preview
-    await page.evaluate(async () => {
-      await window.__TEST_HOOKS__.injectMockEditorPayload({ frameCount: 61, fps: 30 });
-      location.hash = '#/export';
-    });
-    await page.waitForSelector('.export-canvas', { state: 'visible' });
-
-    await expect(page.locator('.export-settings-panel')).toBeVisible();
-    await expect(page.locator('.export-preview-play-btn')).toBeVisible();
+    // 3. Export: the dialog over the editor exports that selection
+    await exportFromEditor(page);
+    const dialog = exportDialog(page);
+    await expect(dialog.locator('#export-settings')).toBeVisible();
+    await expect(dialog.locator('#export-summary')).toContainText('61 frames');
+    await expect(dialog.locator('#export-start')).toBeEnabled();
   });
 });

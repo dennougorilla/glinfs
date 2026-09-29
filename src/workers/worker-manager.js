@@ -103,7 +103,11 @@ export class GifEncoderManager {
   }
 
   /**
-   * Initialize Worker
+   * Initialize Worker. Called again after an encode finished, it starts the
+   * next encode on the worker already running (the worker resets its
+   * session on every INIT), so repeated small encodes — the target-size
+   * estimates — don't pay for a new worker each time. After dispose() a
+   * new worker is started.
    * @param {EncoderManagerConfig} config
    * @param {number} [timeoutMs=INIT_TIMEOUT_MS] - Initialization timeout in ms
    * @returns {Promise<void>}
@@ -114,6 +118,9 @@ export class GifEncoderManager {
       let timeoutId = null;
       let isSettled = false;
 
+      /** @type {(() => void) | null} */
+      let removeInitListeners = null;
+
       /**
        * Cleanup function to clear timeout and remove listeners
        */
@@ -122,6 +129,8 @@ export class GifEncoderManager {
           clearTimeout(timeoutId);
           timeoutId = null;
         }
+        removeInitListeners?.();
+        removeInitListeners = null;
       };
 
       /**
@@ -141,10 +150,20 @@ export class GifEncoderManager {
       };
 
       try {
-        // Create Worker (using Vite's special syntax)
-        this.worker = new Worker(new URL('./gif-encoder-worker.js', import.meta.url), {
-          type: 'module',
-        });
+        // A worker whose listeners are set up can take the next INIT as is
+        const reuse = this.worker !== null && this._isInitialized;
+        if (reuse) {
+          // Not ready for frames until the worker confirms the new session
+          this._isInitialized = false;
+        } else {
+          // A worker left from a failed init is stopped, never leaked
+          this._terminateWorker();
+          // Create Worker (using Vite's special syntax)
+          this.worker = new Worker(new URL('./gif-encoder-worker.js', import.meta.url), {
+            type: 'module',
+          });
+        }
+        const worker = this.worker;
 
         // Set up initialization timeout
         timeoutId = setTimeout(() => {
@@ -167,13 +186,13 @@ export class GifEncoderManager {
           const data = event.data;
 
           if (data.event === Events.READY) {
-            this.worker?.removeEventListener('message', handleReady);
-            this._setupListeners();
-            this._setupGlobalErrorHandler();
+            if (!reuse) {
+              this._setupListeners();
+              this._setupGlobalErrorHandler();
+            }
             this._isInitialized = true;
             settle('resolve');
           } else if (data.event === Events.ERROR) {
-            this.worker?.removeEventListener('message', handleReady);
             settle(
               'reject',
               createWorkerError(
@@ -193,8 +212,14 @@ export class GifEncoderManager {
           settle('reject', new Error(error.message || 'Worker initialization failed'));
         };
 
-        this.worker.addEventListener('message', handleReady);
-        this.worker.addEventListener('error', handleError, { once: true });
+        // Both are removed once init settles; a reused worker's init also
+        // fails fast on a crash instead of waiting for the timeout
+        worker.addEventListener('message', handleReady);
+        worker.addEventListener('error', handleError);
+        removeInitListeners = () => {
+          worker.removeEventListener('message', handleReady);
+          worker.removeEventListener('error', handleError);
+        };
 
         // Send initialization message
         const initMessage = createInitMessage({
@@ -214,7 +239,7 @@ export class GifEncoderManager {
         // The sample can be ~1MB; transfer it (detaching the caller's copy)
         // instead of structured-cloning it.
         const transfer = config.paletteSample ? [config.paletteSample.buffer] : [];
-        this.worker.postMessage(initMessage, transfer);
+        worker.postMessage(initMessage, transfer);
       } catch (error) {
         settle('reject', error instanceof Error ? error : new Error('Failed to create worker'));
       }
@@ -311,15 +336,7 @@ export class GifEncoderManager {
    * worker is terminated.
    */
   dispose() {
-    if (this.worker) {
-      // Remove global error handler before terminating
-      if (this._globalErrorHandler) {
-        this.worker.removeEventListener('error', this._globalErrorHandler);
-        this._globalErrorHandler = null;
-      }
-      this.worker.terminate();
-      this.worker = null;
-    }
+    this._terminateWorker();
 
     // Reject a pending finish() before clearing callbacks — terminating the
     // worker means COMPLETE/ERROR/CANCELLED will never arrive.
@@ -333,6 +350,20 @@ export class GifEncoderManager {
     if (rejectPending) {
       rejectPending(new DOMException('Encoding cancelled', 'AbortError'));
     }
+  }
+
+  /**
+   * Terminate the worker, if any, removing the global error handler first
+   * @private
+   */
+  _terminateWorker() {
+    if (!this.worker) return;
+    if (this._globalErrorHandler) {
+      this.worker.removeEventListener('error', this._globalErrorHandler);
+      this._globalErrorHandler = null;
+    }
+    this.worker.terminate();
+    this.worker = null;
   }
 
   /**

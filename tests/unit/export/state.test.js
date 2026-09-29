@@ -10,9 +10,7 @@ import {
   openDialog,
   resetExport,
   setEncoderStatus,
-  setPreviewPlaying,
   startEncoding,
-  togglePreviewPlaying,
   updateProgress,
   updateSettings,
 } from '../../../src/features/export/state.js';
@@ -37,7 +35,6 @@ describe('initExportState', () => {
     expect(state.job).toBeNull();
     expect(state.estimatedSizeMB).toBe(0);
     expect(state.encoderStatus).toBe('gifenc-js');
-    expect(state.preview).toEqual({ isPlaying: true });
     expect(state.settings).toBeTypeOf('object');
   });
 });
@@ -103,6 +100,28 @@ describe('updateSettings', () => {
     const high = updateSettings(state, { quality: 1.0 }, dims);
 
     expect(high.estimatedSizeMB).toBeGreaterThan(low.estimatedSizeMB);
+  });
+});
+
+describe('updateSettings with an output scale and merged frames', () => {
+  const dims = { frameCount: 10, width: 1000, height: 500 };
+
+  it('estimates the scaled output', () => {
+    const state = initExportState();
+    const full = updateSettings(state, { scale: 1 }, dims);
+    const half = updateSettings(state, { scale: 0.5 }, dims);
+    expect(half.settings.scale).toBe(0.5);
+    // A quarter of the pixels (plus fixed overhead)
+    expect(half.estimatedSizeMB).toBeLessThan(full.estimatedSizeMB * 0.3);
+  });
+
+  it('counts GIF frames through countFrames when frames merge', () => {
+    const state = initExportState();
+    const countFrames = vi.fn(() => 2);
+    const merged = updateSettings(state, { frameSkip: 2 }, { ...dims, countFrames });
+    const plain = updateSettings(state, { frameSkip: 2 }, dims);
+    expect(countFrames).toHaveBeenCalledWith(2);
+    expect(merged.estimatedSizeMB).toBeLessThan(plain.estimatedSizeMB);
   });
 });
 
@@ -240,28 +259,6 @@ describe('setEncoderStatus', () => {
     const next = setEncoderStatus(state, 'unavailable');
 
     expect(next.encoderStatus).toBe('unavailable');
-  });
-});
-
-describe('togglePreviewPlaying', () => {
-  it('flips isPlaying from true to false and back', () => {
-    const state = initExportState();
-    expect(state.preview.isPlaying).toBe(true);
-
-    const paused = togglePreviewPlaying(state);
-    expect(paused.preview.isPlaying).toBe(false);
-
-    const resumed = togglePreviewPlaying(paused);
-    expect(resumed.preview.isPlaying).toBe(true);
-  });
-});
-
-describe('setPreviewPlaying', () => {
-  it('sets isPlaying explicitly', () => {
-    const state = initExportState();
-
-    expect(setPreviewPlaying(state, false).preview.isPlaying).toBe(false);
-    expect(setPreviewPlaying(state, true).preview.isPlaying).toBe(true);
   });
 });
 

@@ -4,17 +4,13 @@
  */
 
 import { createStore } from '../../shared/store.js';
-import { createDefaultSettings, estimateSize, getCroppedDimensions } from './core.js';
-
-/**
- * Initialize preview state
- * @returns {import('./types.js').PreviewState}
- */
-function initPreviewState() {
-  return {
-    isPlaying: true,
-  };
-}
+import {
+  createDefaultSettings,
+  estimateSize,
+  getCroppedDimensions,
+  getScaledDimensions,
+} from './core.js';
+import { BYTES_PER_MB } from './size-planner.js';
 
 /**
  * Initialize export state
@@ -27,7 +23,6 @@ export function initExportState() {
     job: null,
     estimatedSizeMB: 0,
     encoderStatus: 'gifenc-js',
-    preview: initPreviewState(),
   };
 }
 
@@ -56,7 +51,7 @@ export function openDialog(state, clip, crop) {
   return {
     ...state,
     isDialogOpen: true,
-    estimatedSizeMB: estimatedBytes / (1024 * 1024),
+    estimatedSizeMB: estimatedBytes / BYTES_PER_MB,
   };
 }
 
@@ -77,26 +72,31 @@ export function closeDialog(state) {
  * Update export settings
  * @param {import('./types.js').ExportState} state
  * @param {Partial<import('./types.js').ExportSettings>} settings
- * @param {{ frameCount: number, width: number, height: number }} dimensions
+ * @param {{ frameCount: number, width: number, height: number, countFrames?: (frameSkip: number) => number }} dimensions
+ *   width/height before the output scale (it is applied here). countFrames:
+ *   GIF frames for a frame skip when the export merges identical frames
+ *   (defaults to one GIF frame per exported frame)
  * @returns {import('./types.js').ExportState}
  */
 export function updateSettings(state, settings, dimensions) {
   const newSettings = { ...state.settings, ...settings };
+  const output = getScaledDimensions(dimensions.width, dimensions.height, newSettings.scale ?? 1);
+  const counted = dimensions.countFrames?.(newSettings.frameSkip);
 
   const estimatedBytes = estimateSize({
-    frameCount: dimensions.frameCount,
-    width: dimensions.width,
-    height: dimensions.height,
+    frameCount: counted ?? dimensions.frameCount,
+    width: output.width,
+    height: output.height,
     quality: newSettings.quality,
     dithering: newSettings.dithering,
-    frameSkip: newSettings.frameSkip,
+    frameSkip: counted === undefined ? newSettings.frameSkip : 1,
     encoderPreset: newSettings.encoderPreset,
   });
 
   return {
     ...state,
     settings: newSettings,
-    estimatedSizeMB: estimatedBytes / (1024 * 1024),
+    estimatedSizeMB: estimatedBytes / BYTES_PER_MB,
   };
 }
 
@@ -236,41 +236,6 @@ export function setEncoderStatus(state, status) {
   return {
     ...state,
     encoderStatus: status,
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PREVIEW STATE ACTIONS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Toggle preview playback state
- * @param {import('./types.js').ExportState} state
- * @returns {import('./types.js').ExportState}
- */
-export function togglePreviewPlaying(state) {
-  return {
-    ...state,
-    preview: {
-      ...state.preview,
-      isPlaying: !state.preview.isPlaying,
-    },
-  };
-}
-
-/**
- * Set preview playing state
- * @param {import('./types.js').ExportState} state
- * @param {boolean} isPlaying
- * @returns {import('./types.js').ExportState}
- */
-export function setPreviewPlaying(state, isPlaying) {
-  return {
-    ...state,
-    preview: {
-      ...state.preview,
-      isPlaying,
-    },
   };
 }
 

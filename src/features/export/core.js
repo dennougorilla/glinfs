@@ -4,6 +4,8 @@
  */
 
 import { ALPHA_THRESHOLD } from '../../shared/edits/color-key.js';
+import { scaleOutputSize } from '../../shared/edits/compose.js';
+import { getActiveTextLayers } from '../../shared/edits/model.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { stratifiedPixelIndices } from './pixel-sampling.js';
 
@@ -222,6 +224,8 @@ export function createDefaultSettings() {
       openInNewTab: userSettings.export.openInNewTab,
       encoderPreset: userSettings.export.encoderPreset,
       encoderId: userSettings.export.encoderId,
+      scale: normalizeOutputScale(userSettings.export.scale),
+      targetSizeMB: normalizeTargetSizeMB(userSettings.export.targetSizeMB),
     };
   } catch {
     // Fallback to hardcoded defaults if import fails
@@ -234,6 +238,8 @@ export function createDefaultSettings() {
       openInNewTab: false,
       encoderPreset: 'balanced',
       encoderId: 'gifenc-js',
+      scale: 1,
+      targetSizeMB: null,
     };
   }
 }
@@ -518,14 +524,191 @@ export function calculateEffectiveFps(sourceFps, frameSkip, playbackSpeed) {
 
 /**
  * The encoder an export actually uses. The WASM encoder cannot write a
- * transparent index, so transparent exports always use gifenc, whatever the
- * stored preference says (the preference itself is left untouched). Shared by
- * encodeGif and the export UI so the selected card, the job label and the
- * encoder that runs can never disagree.
+ * transparent index, and its lossy compression is fixed (no color count to
+ * lower), so transparent exports and exports aiming at a target size always
+ * use gifenc, whatever the stored preference says (the preference itself is
+ * left untouched). Shared by encodeGif and the export UI so the selected
+ * card, the job label and the encoder that runs can never disagree.
  * @param {import('./types.js').ExportSettings} settings
  * @param {boolean} [transparent]
+ * @param {boolean} [sizeLimited] - A target file size is set
  * @returns {import('./encoders/types.js').EncoderId}
  */
-export function getEffectiveEncoderId(settings, transparent) {
-  return transparent ? 'gifenc-js' : settings.encoderId;
+export function getEffectiveEncoderId(settings, transparent, sizeLimited = false) {
+  return transparent || sizeLimited ? 'gifenc-js' : settings.encoderId;
+}
+
+// ============================================================
+// Output scale, speed limits, GIF facts
+// ============================================================
+
+/**
+ * Output scales the export offers, largest first
+ * @type {ReadonlyArray<{ value: number, label: string }>}
+ */
+export const OUTPUT_SCALES = Object.freeze([
+  { value: 1, label: '100 %' },
+  { value: 0.75, label: '75 %' },
+  { value: 0.5, label: '50 %' },
+  { value: 1 / 3, label: '33 %' },
+  { value: 0.25, label: '25 %' },
+]);
+
+/**
+ * A stored scale snapped to the nearest offered one (1 for anything invalid)
+ * @param {unknown} value
+ * @returns {number}
+ */
+export function normalizeOutputScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0 || n >= 1) return 1;
+  let best = OUTPUT_SCALES[0].value;
+  for (const { value: candidate } of OUTPUT_SCALES) {
+    if (Math.abs(candidate - n) < Math.abs(best - n)) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * GIF dimensions at an output scale (each side rounded, at least 1 px) —
+ * the same rounding the compositor uses
+ * @param {number} width
+ * @param {number} height
+ * @param {number} [scale=1]
+ * @returns {{ width: number, height: number }}
+ */
+export function getScaledDimensions(width, height, scale = 1) {
+  return scaleOutputSize(width, height, scale);
+}
+
+/**
+ * A stored target size in MB, or null for "off" (non-positive, missing or
+ * not a number)
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+export function normalizeTargetSizeMB(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Whether GIF delays can express a playback speed. A GIF frame lasts a whole
+ * number of centiseconds and at least MIN_DELAY_CS, so above some speed the
+ * frames cannot get shorter and the GIF plays slower than asked.
+ *
+ * With identical-frame merging a GIF frame covers a run of source frames
+ * and its delay is the run's whole duration (calculateFrameDelay with the
+ * run length), so pass the runs: only runs too short for MIN_DELAY_CS slow
+ * the GIF down. Without runs every GIF frame is one source frame.
+ * @param {number} fps - Source FPS
+ * @param {number} speed - Playback speed multiplier
+ * @param {number} frameSkip - Frame skip factor
+ * @param {number[]} [runLengths] - Source frames (after frame skip) of each
+ *   GIF frame, when identical frames merge
+ * @returns {{ limited: boolean, effectiveSpeed: number, minDelayCs: number }}
+ *   effectiveSpeed: the speed the GIF actually plays at
+ */
+export function getSpeedLimitInfo(fps, speed, frameSkip, runLengths) {
+  const skip = Math.max(1, frameSkip);
+  const runs = runLengths?.length ? runLengths : [1];
+  let idealTotalCs = 0;
+  let delayTotalCs = 0;
+  let limited = false;
+  for (const run of runs) {
+    const idealCs = (100 * skip * run) / (fps * speed);
+    idealTotalCs += idealCs;
+    delayTotalCs += calculateFrameDelay(fps, speed, skip, run);
+    if (idealCs < MIN_DELAY_CS) limited = true;
+  }
+  return {
+    limited,
+    effectiveSpeed: limited ? (speed * idealTotalCs) / delayTotalCs : speed,
+    minDelayCs: MIN_DELAY_CS,
+  };
+}
+
+/**
+ * Size, dimensions and image count of an encoded GIF, read from its block
+ * stream (header, logical screen descriptor, then one image descriptor per
+ * frame). Pixel data is skipped, so this is cheap even for large GIFs.
+ * @param {Uint8Array} bytes
+ * @returns {{ width: number, height: number, frameCount: number } | null}
+ *   null when the bytes are not a well-formed GIF
+ */
+export function readGifInfo(bytes) {
+  if (!bytes || bytes.length < 13) return null;
+  const header = String.fromCharCode(...bytes.subarray(0, 6));
+  if (header !== 'GIF89a' && header !== 'GIF87a') return null;
+  const width = bytes[6] | (bytes[7] << 8);
+  const height = bytes[8] | (bytes[9] << 8);
+  const fields = bytes[10];
+  let pos = 13 + (fields & 0x80 ? 3 * (1 << ((fields & 7) + 1)) : 0);
+  let frameCount = 0;
+
+  /** Skip data sub-blocks; false when they run past the end */
+  const skipSubBlocks = () => {
+    while (pos < bytes.length && bytes[pos] !== 0) pos += bytes[pos] + 1;
+    if (pos >= bytes.length) return false;
+    pos++;
+    return true;
+  };
+
+  while (pos < bytes.length) {
+    const block = bytes[pos++];
+    if (block === 0x3b) return { width, height, frameCount };
+    if (block === 0x21) {
+      pos++; // extension label
+      if (!skipSubBlocks()) return null;
+    } else if (block === 0x2c) {
+      if (pos + 9 > bytes.length) return null;
+      const imageFields = bytes[pos + 8];
+      pos += 9 + (imageFields & 0x80 ? 3 * (1 << ((imageFields & 7) + 1)) : 0);
+      pos++; // LZW minimum code size
+      if (!skipSubBlocks()) return null;
+      frameCount++;
+    } else {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * How many GIF frames identical-frame merging will leave, estimated without
+ * rendering: consecutive exported frames share pixels when they share a
+ * pixel key (imported holds are clones of one decoded frame, see
+ * Frame.sharedKey), and a text layer starting or ending between them
+ * splits the run. Used for size estimates only (the encoder compares the
+ * real output bytes).
+ * @param {number[]} frameIndices - Absolute clip indices the export encodes
+ * @param {import('../capture/types.js').Frame[]} clipFrames
+ * @param {import('../../shared/edits/model.js').ClipEdits | null} edits
+ * @returns {{ count: number, representatives: number[], runLengths: number[] }}
+ *   representatives: the first absolute index of each run
+ */
+export function estimateMergedRuns(frameIndices, clipFrames, edits) {
+  /** @type {number[]} */
+  const representatives = [];
+  /** @type {number[]} */
+  const runLengths = [];
+  let previousKey = null;
+  let previousText = '';
+  for (const index of frameIndices) {
+    const frame = clipFrames[index];
+    const key = frame ? (frame.sharedKey ?? frame.id ?? frame) : index;
+    const text = getActiveTextLayers(edits, index)
+      .map((layer) => layer.id)
+      .join('|');
+    if (representatives.length > 0 && key === previousKey && text === previousText) {
+      runLengths[runLengths.length - 1]++;
+    } else {
+      representatives.push(index);
+      runLengths.push(1);
+    }
+    previousKey = key;
+    previousText = text;
+  }
+  return { count: representatives.length, representatives, runLengths };
 }

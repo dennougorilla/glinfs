@@ -377,6 +377,11 @@ export async function createMockFrames(count, options = {}) {
  * @param {string|null} [options.sourceName] - Mark the clip as imported from this file
  * @param {import('../edits/model.js').ClipEdits} [options.edits] - Edits the editor
  *   restores on mount (carried as savedEditorState.edits, like a demoted clip)
+ * @param {{ start: number, end: number }} [options.selectedRange] - Selection the
+ *   editor restores (savedEditorState)
+ * @param {import('../../features/editor/types.js').CropArea | null} [options.cropArea] - Crop
+ *   the editor restores (savedEditorState)
+ * @param {number} [options.playbackSpeed] - Speed the editor restores (savedEditorState)
  * @returns {Promise<import('../app-store.js').ClipPayload>} Mock ClipPayload
  */
 export async function createMockClipPayload(options = {}) {
@@ -391,6 +396,9 @@ export async function createMockClipPayload(options = {}) {
     hasAlpha,
     sourceName,
     edits,
+    selectedRange,
+    cropArea,
+    playbackSpeed,
   } = options;
 
   const frames = await createMockFrames(frameCount, {
@@ -410,13 +418,19 @@ export async function createMockClipPayload(options = {}) {
   };
   if (hasAlpha !== undefined) payload.hasAlpha = hasAlpha;
   if (sourceName !== undefined) payload.sourceName = sourceName;
-  if (edits !== undefined) {
+  if (
+    edits !== undefined ||
+    selectedRange !== undefined ||
+    cropArea !== undefined ||
+    playbackSpeed !== undefined
+  ) {
+    const range = selectedRange ?? { start: 0, end: frameCount - 1 };
     payload.savedEditorState = /** @type {any} */ ({
-      selectedRange: { start: 0, end: frameCount - 1 },
-      cropArea: null,
-      playbackSpeed: 1,
-      currentFrame: 0,
-      edits,
+      selectedRange: range,
+      cropArea: cropArea ?? null,
+      playbackSpeed: playbackSpeed ?? 1,
+      currentFrame: range.start,
+      ...(edits !== undefined ? { edits } : {}),
     });
   }
   return payload;
@@ -436,11 +450,15 @@ export async function createMockClipPayload(options = {}) {
  * @param {string} [options.color] - Base color for the pattern (any CSS color)
  * @param {import('../edits/model.js').ClipEdits} [options.edits] - Edits to export
  * @param {boolean} [options.hasAlpha] - Source has transparent pixels
+ * @param {number} [options.playbackSpeed] - The editor's playback speed
+ * @param {import('../../features/capture/types.js').Frame[]} [options.frames] - Use
+ *   these frames (e.g. the clip payload's, so the editor restoring this
+ *   payload shows the active clip) instead of creating new ones
  * @returns {Promise<import('../app-store.js').EditorPayload>} Mock EditorPayload
  */
 export async function createMockEditorPayload(options = {}) {
   const {
-    frameCount = 30,
+    frameCount: requestedCount = 30,
     fps = 30,
     width = 640,
     height = 480,
@@ -450,23 +468,30 @@ export async function createMockEditorPayload(options = {}) {
     color,
     edits,
     hasAlpha,
+    playbackSpeed,
   } = options;
 
-  const frames = await createMockFrames(frameCount, {
-    width,
-    height,
-    pattern,
-    fps,
-    ...(color ? { color } : {}),
-  });
+  const frames =
+    options.frames ??
+    (await createMockFrames(requestedCount, {
+      width,
+      height,
+      pattern,
+      fps,
+      ...(color ? { color } : {}),
+    }));
+  const frameCount = frames.length;
   const range = selectedRange || { start: 0, end: frameCount - 1 };
 
   /** @type {Record<string, unknown>} */
   const extras = {};
   if (edits !== undefined) extras.edits = edits;
   if (hasAlpha !== undefined) extras.hasAlpha = hasAlpha;
+  /** @type {Record<string, unknown>} */
+  const payloadExtras = playbackSpeed !== undefined ? { playbackSpeed } : {};
 
   return /** @type {import('../app-store.js').EditorPayload} */ ({
+    ...payloadExtras,
     selectedRange: range,
     cropArea,
     clip: {

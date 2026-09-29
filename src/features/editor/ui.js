@@ -12,7 +12,6 @@ import {
 } from '../../shared/app-store.js';
 import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries.js';
 import { registerHotkey } from '../../shared/hotkeys.js';
-import { navigate } from '../../shared/router.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
@@ -40,7 +39,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} onToggleGrid - Toggle grid
  * @property {(ratio: string) => void} onAspectRatioChange - Aspect ratio changed
  * @property {(speed: number) => void} onSpeedChange - Speed changed
- * @property {() => void} onExport - Export clicked
+ * @property {() => void} onExport - Export clicked (opens the Export GIF dialog)
  * @property {(id: string) => void} [onPromoteClip] - Queue clip entry clicked (promote to active)
  * @property {(id: string) => void} [onDeleteClip] - Queue clip delete clicked
  * @property {() => void} [onDeleteActiveClip] - Active clip delete clicked (#100 round 4)
@@ -212,10 +211,11 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
       key: 'e',
       modifiers,
       scope: 'route',
+      // Opens the Export GIF dialog (its modal scope then suspends these
+      // route hotkeys until it closes)
       handler: (e) => {
         e.preventDefault();
         handlers.onExport();
-        navigate('/export');
       },
     });
 

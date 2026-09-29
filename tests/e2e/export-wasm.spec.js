@@ -11,7 +11,7 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { gotoExportWithClip } from './helpers/app.js';
+import { exportDialog, gotoExportWithClip } from './helpers/app.js';
 
 test('gifsicle-wasm encoder completes a real export without CSP violations', async ({ page }) => {
   /** @type {string[]} */
@@ -25,15 +25,19 @@ test('gifsicle-wasm encoder completes a real export without CSP violations', asy
   });
 
   await gotoExportWithClip(page, { frameCount: 6, fps: 30 });
+  const dialog = exportDialog(page);
 
   // Select the WASM encoder card
-  const wasmCard = page.locator('.encoder-card', { hasText: 'libimagequant' });
+  const wasmCard = dialog.locator('[data-encoder-id="gifsicle-wasm"]', {
+    hasText: 'libimagequant',
+  });
   await expect(wasmCard).toBeVisible();
   await wasmCard.click();
+  await expect(dialog.getByRole('radio', { name: /libimagequant/ })).toBeChecked();
 
   // Run the export; WASM fetch + compile + encode of 6 small frames
-  await page.locator('.btn-export-main').click();
-  await expect(page.locator('.export-complete-v2')).toBeVisible({ timeout: 30000 });
+  await dialog.locator('#export-start').click();
+  await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 30000 });
 
   violations.push(...(await page.evaluate(() => window.__CSP_VIOLATIONS__ ?? [])));
   expect(violations).toEqual([]);

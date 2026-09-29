@@ -1,23 +1,31 @@
 /**
- * Export UI Components - Professional Layout
+ * Export dialog UI: the dialog shell and its views (settings, AI
+ * preparation, encoding, result, error). Pure DOM building; the controller
+ * in ./index.js owns the state and decides which view is shown.
+ *
+ * Every class is prefixed `export-` and styled under the `.export-dialog`
+ * root (src/styles/export.css), so nothing here can restyle another screen.
+ *
  * @module features/export/ui
  */
 
-import { hasActiveScreenCapture } from '../../shared/app-store.js';
-import { createElement, createErrorScreen, on } from '../../shared/utils/dom.js';
+import { createElement, on } from '../../shared/utils/dom.js';
 import {
-  formatBytes,
   formatDurationPrecise,
   formatPercent,
   formatRemaining,
 } from '../../shared/utils/format.js';
-import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { describeAnalysisProgress, getAnalysisFraction } from '../editor/ai-cutout.js';
-import { ENCODER_PRESETS, getEffectiveEncoderId } from './core.js';
+import {
+  ENCODER_PRESETS,
+  getEffectiveEncoderId,
+  getScaledDimensions,
+  OUTPUT_SCALES,
+} from './core.js';
+import { BYTES_PER_MB, formatFileSize } from './size-planner.js';
 
 /**
  * Static encoder definitions for UI display
- * More reliable than dynamic fetching which can fail
  * @type {ReadonlyArray<{id: import('./encoders/types.js').EncoderId, name: string, description: string, isWasm: boolean}>}
  */
 const ENCODER_OPTIONS = [
@@ -35,6 +43,18 @@ const ENCODER_OPTIONS = [
   },
 ];
 
+/** Note shown on the disabled WASM encoder card for transparent exports */
+export const TRANSPARENT_ENCODER_NOTE = 'Transparent GIFs use the JavaScript encoder';
+
+/** Note shown on the disabled WASM encoder card while a target size is set */
+export const TARGET_SIZE_ENCODER_NOTE = 'A target size uses the JavaScript encoder';
+
+/** @type {readonly [1, 2, 3, 4, 5]} */
+const FRAME_SKIP_OPTIONS = /** @type {const} */ ([1, 2, 3, 4, 5]);
+
+/** Loop choices (NETSCAPE loop count: 0 = forever, n = repeat n more times) */
+const LOOP_OPTIONS = [0, 1, 2, 3, 5, 10];
+
 /**
  * @typedef {Object} ExportUIHandlers
  * @property {(settings: Partial<import('./types.js').ExportSettings>) => void} onSettingsChange
@@ -42,17 +62,17 @@ const ENCODER_OPTIONS = [
  * @property {() => void} onCancel
  * @property {() => void} onDownload
  * @property {() => void} onOpenInTab
- * @property {() => void} onBackToEditor
- * @property {() => void} onTogglePlay - Toggle preview playback
- * @property {() => void} onAdjustSettings - Return to settings after export complete
- * @property {() => void} onCreateNew - Start new capture, releasing current frames
+ * @property {() => void} [onCopy] - Copy the GIF (only offered when supported)
+ * @property {() => void} onBackToEditing - Close the dialog
+ * @property {() => void} onExportAgain - Result → settings
+ * @property {() => void} onBackToSettings - Error → settings
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice, then export
  * @property {() => void} [onAiBack] - Leave the AI preparation view for the settings
  */
 
 /**
  * Preparation of an AI cutout export (analysis of frames that still lack a
- * mask, then the final masks), shown instead of the preview and settings
+ * mask, then the final masks)
  * @typedef {Object} ExportAiPrep
  * @property {'starting'|'downloading'|'verifying'|'initializing'|'analyzing'|'building'|'needs-wasm'|'error'} phase
  * @property {number} [loadedBytes]
@@ -67,579 +87,302 @@ const ENCODER_OPTIONS = [
  */
 
 /**
- * Clip facts the export screen displays
+ * Clip facts the dialog displays
  * @typedef {Object} ExportClipInfo
- * @property {number} frameCount
- * @property {number} width
- * @property {number} height
- * @property {number} duration - Seconds
+ * @property {number} frameCount - Frames in the editor's selection
+ * @property {number} width - Output width before the output scale (crop)
+ * @property {number} height - Output height before the output scale
+ * @property {number} duration - Seconds at 1x
+ * @property {number} fps
+ * @property {number} speed - The editor's playback speed (the GIF speed)
  * @property {boolean} [transparent] - The GIF will have transparent pixels
  *   (source alpha or background removal); only the JavaScript encoder can
  *   write them
  * @property {boolean} [aiCutout] - The export uses the AI cutout
  */
 
-/** Note shown on the disabled WASM encoder card for transparent exports */
-export const TRANSPARENT_ENCODER_NOTE = 'Transparent GIFs use the JavaScript encoder';
-
-/** @type {readonly [1, 2, 3, 4, 5]} */
-const FRAME_SKIP_OPTIONS = /** @type {const} */ ([1, 2, 3, 4, 5]);
-
-/** @type {readonly number[]} */
-const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+/**
+ * Derived facts for the settings view (computed by the controller)
+ * @typedef {Object} ExportSettingsFacts
+ * @property {{ width: number, height: number }} output - GIF size after the scale
+ * @property {number} gifFrames - Frames the GIF will have (after skip/merge)
+ * @property {number} durationSeconds - Playback length of the GIF
+ * @property {{ limited: boolean, effectiveSpeed: number }} speedLimit
+ * @property {boolean} sizeLimited - A target size is set
+ */
 
 /**
- * Render the export screen
- * @param {HTMLElement} container
- * @param {import('./types.js').ExportState} state
- * @param {ExportUIHandlers} handlers
- * @param {ExportClipInfo} clipInfo
- * @param {ExportAiPrep | null} [aiPrep] - AI cutout preparation in progress
- * @returns {{ cleanup: () => void, canvas: HTMLCanvasElement | null }} Cleanup function and canvas element
+ * Settings a target-size export ended up using, shown on the result
+ * @typedef {Object} ExportTargetReport
+ * @property {number} targetMB
+ * @property {boolean} fits
+ * @property {string} settingsText - e.g. "64 colors · every 2nd frame · 75 %"
  */
-export function renderExportScreen(container, state, handlers, clipInfo, aiPrep = null) {
-  const cleanups = [];
 
-  // Update step indicator
-  updateStepIndicator('export', { isCapturing: hasActiveScreenCapture() });
+/**
+ * Facts of the finished GIF
+ * @typedef {Object} ExportResultInfo
+ * @property {number} size - Bytes
+ * @property {number} width
+ * @property {number} height
+ * @property {number | null} frameCount - Null when the GIF could not be read
+ * @property {ExportTargetReport | null} [target]
+ * @property {boolean} [canCopy] - The browser can put a GIF on the clipboard
+ */
 
-  // Main layout
-  const screen = createElement('div', { className: 'export-screen screen' });
+/**
+ * Progress of a target-size export: estimating rungs, or encoding one
+ * @typedef {Object} ExportSizeStep
+ * @property {'estimate' | 'encode'} phase
+ * @property {number} index
+ * @property {number} total
+ * @property {number} targetMB
+ * @property {number} [attempt]
+ * @property {number} [previousBytes]
+ */
 
-  // Toolbar
-  const toolbar = createElement('div', { className: 'export-toolbar' });
-  const toolbarLeft = createElement('div', { className: 'export-toolbar-left' });
+/** "0.5×" style speed label */
+export function formatSpeed(/** @type {number} */ speed) {
+  return `${Number(speed.toFixed(2))}×`;
+}
 
-  const backBtn = createElement(
-    'button',
+/** "640×480" */
+function formatDims(/** @type {{ width: number, height: number }} */ dims) {
+  return `${dims.width}×${dims.height}`;
+}
+
+// ============================================================
+// Shell
+// ============================================================
+
+/**
+ * Build the dialog shell: a full-screen backdrop holding the dialog with its
+ * title and Close button. The body is filled per view by renderDialogView.
+ * @param {{ onClose: () => void }} handlers
+ * @returns {{ backdrop: HTMLElement, dialog: HTMLElement, title: HTMLElement, closeButton: HTMLButtonElement, body: HTMLElement, cleanup: () => void }}
+ */
+export function createExportDialogShell(handlers) {
+  const title = createElement(
+    'h2',
+    { id: 'export-dialog-title', className: 'export-dialog-title', tabindex: '-1' },
+    ['Export GIF'],
+  );
+  const closeButton = /** @type {HTMLButtonElement} */ (
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'export-dialog-close',
+        id: 'export-dialog-close',
+        'aria-label': 'Close',
+        title: 'Close (Esc)',
+      },
+      ['×'],
+    )
+  );
+  const body = createElement('div', { className: 'export-dialog-content' });
+  const dialog = createElement(
+    'div',
     {
-      className: 'btn btn-ghost',
-      type: 'button',
-      'aria-label': 'Back to editor',
+      className: 'export-dialog',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'export-dialog-title',
+      'data-testid': 'export-dialog',
     },
-    ['\u2190 Editor'],
+    [createElement('header', { className: 'export-dialog-header' }, [title, closeButton]), body],
   );
-  cleanups.push(on(backBtn, 'click', handlers.onBackToEditor));
-  toolbarLeft.appendChild(backBtn);
+  const backdrop = createElement('div', { className: 'export-dialog-backdrop' }, [dialog]);
+  const cleanup = on(closeButton, 'click', () => handlers.onClose());
+  return { backdrop, dialog, title, closeButton, body, cleanup };
+}
 
-  const title = createElement('span', { className: 'export-title' }, ['Export GIF']);
-  toolbarLeft.appendChild(title);
+// ============================================================
+// Views
+// ============================================================
 
-  toolbar.appendChild(toolbarLeft);
-  toolbar.appendChild(createElement('div', { className: 'export-toolbar-right' }));
-  screen.appendChild(toolbar);
+/**
+ * Which view the dialog shows for a state
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportAiPrep | null} aiPrep
+ * @returns {'settings' | 'ai-prep' | 'encoding' | 'result' | 'error'}
+ */
+export function getDialogView(state, aiPrep) {
+  if (aiPrep) return 'ai-prep';
+  if (state.job?.status === 'encoding') return 'encoding';
+  if (state.job?.status === 'complete' && state.job.result) return 'result';
+  if (state.job?.status === 'error') return 'error';
+  return 'settings';
+}
 
-  // Content area
-  const content = createElement('div', { className: 'export-content' });
+/**
+ * Whether the dialog is busy: an AI preparation or an encode is running.
+ * Close and Escape are disabled then; Cancel is the only way out.
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportAiPrep | null} aiPrep
+ * @returns {boolean}
+ */
+export function isDialogBusy(state, aiPrep) {
+  if (aiPrep) return aiPrep.phase !== 'needs-wasm' && aiPrep.phase !== 'error';
+  return state.job?.status === 'encoding';
+}
 
-  // Preview Panel
-  const previewPanel = createElement('div', { className: 'export-preview-panel' });
-  const previewWrapper = createElement('div', { className: 'export-preview-wrapper' });
+/**
+ * @typedef {Object} DialogViewParams
+ * @property {import('./types.js').ExportState} state
+ * @property {ExportUIHandlers} handlers
+ * @property {ExportClipInfo} clipInfo
+ * @property {ExportSettingsFacts} facts
+ * @property {ExportAiPrep | null} aiPrep
+ * @property {ExportSizeStep | null} sizeStep
+ * @property {ExportResultInfo | null} resultInfo
+ */
 
-  /** @type {HTMLCanvasElement | null} */
-  let previewCanvas = null;
-
-  // Show different content based on state
-  if (aiPrep) {
-    previewWrapper.appendChild(renderAiPreparation(aiPrep, handlers, cleanups));
-  } else if (state.job?.status === 'encoding') {
-    previewWrapper.appendChild(renderEncodingProgress(state.job, handlers, cleanups));
-  } else if (state.job?.status === 'complete' && state.job.result) {
-    previewWrapper.appendChild(renderComplete(state.job, handlers, cleanups));
-  } else if (state.job?.status === 'error') {
-    previewWrapper.appendChild(renderError(state.job, handlers, cleanups));
+/**
+ * Render the view for the current state into the dialog body
+ * @param {HTMLElement} body
+ * @param {DialogViewParams} params
+ * @returns {{ cleanup: () => void, view: ReturnType<typeof getDialogView>, focusTarget: HTMLElement | null }}
+ */
+export function renderDialogView(body, params) {
+  /** @type {(() => void)[]} */
+  const cleanups = [];
+  const view = getDialogView(params.state, params.aiPrep);
+  /** @type {HTMLElement} */
+  let element;
+  if (view === 'ai-prep') {
+    element = renderAiPreparation(/** @type {ExportAiPrep} */ (params.aiPrep), params, cleanups);
+  } else if (view === 'encoding') {
+    element = renderEncodingProgress(params, cleanups);
+  } else if (view === 'result') {
+    element = renderResult(params, cleanups);
+  } else if (view === 'error') {
+    element = renderError(params, cleanups);
   } else {
-    // Show Canvas-based preview
-    const { element, canvas } = renderCanvasPreview(state.preview, handlers, clipInfo, cleanups);
-    previewWrapper.appendChild(element);
-    previewCanvas = canvas;
+    element = renderSettings(params, cleanups);
   }
-
-  previewPanel.appendChild(previewWrapper);
-  content.appendChild(previewPanel);
-
-  // Settings Panel (only show when not preparing/encoding/complete/error)
-  if (!aiPrep && (!state.job || state.job.status === 'idle')) {
-    content.appendChild(renderSettingsPanel(state, handlers, clipInfo, cleanups));
-  } else {
-    // Encoding/complete/error views replace the settings panel, but the
-    // live monitor must not vanish mid-recording ("not visible while the
-    // GIF is being created"). A slim column keeps the slot mounted across
-    // every job state; :has() collapses it when no capture is live.
-    content.appendChild(
-      createElement('div', { className: 'export-live-column' }, [
-        createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
-      ]),
-    );
-  }
-
-  screen.appendChild(content);
-
-  // Status bar
-  screen.appendChild(
-    createElement('div', { className: 'export-status-bar' }, [
-      createElement('div', { className: 'export-status-section' }, [
-        createElement('div', { className: 'status-item' }, [
-          'Frames: ',
-          createElement('span', { className: 'value' }, [String(clipInfo.frameCount)]),
-        ]),
-        createElement('div', { className: 'status-item' }, [
-          'Duration: ',
-          // clipInfo.duration is in seconds; GIF clips are usually well under
-          // a minute, so show fractional seconds rather than m:ss
-          createElement('span', { className: 'value' }, [formatDurationPrecise(clipInfo.duration)]),
-        ]),
-      ]),
-      createElement('div', { className: 'export-status-section' }, [
-        ...(clipInfo.transparent
-          ? [
-              createElement(
-                'div',
-                {
-                  className: 'status-item export-transparency-badge',
-                  'data-testid': 'export-transparency-badge',
-                  title: 'Removed or transparent pixels stay transparent in the GIF',
-                },
-                ['Transparent background'],
-              ),
-            ]
-          : []),
-        createElement('div', { className: 'status-item' }, [
-          'Size: ',
-          createElement('span', { className: 'value' }, [
-            `${clipInfo.width}\u00D7${clipInfo.height}`,
-          ]),
-        ]),
-      ]),
-    ]),
-  );
-
-  container.innerHTML = '';
-  container.appendChild(screen);
-
+  body.replaceChildren(element);
+  const focusTarget = /** @type {HTMLElement | null} */ (body.querySelector('[data-autofocus]'));
   return {
-    cleanup: () =>
-      cleanups.forEach((fn) => {
-        fn();
-      }),
-    canvas: previewCanvas,
+    cleanup: () => {
+      for (const fn of cleanups) fn();
+    },
+    view,
+    focusTarget,
   };
 }
 
+// ------------------------------------------------------------
+// Settings
+// ------------------------------------------------------------
+
 /**
- * Render Canvas-based preview for real-time playback
- * Uses the same pattern as Editor's canvas container
- * @param {import('./types.js').PreviewState} previewState
- * @param {ExportUIHandlers} handlers
- * @param {{ width: number, height: number }} clipInfo
- * @param {(() => void)[]} cleanups
- * @returns {{ element: HTMLElement, canvas: HTMLCanvasElement }}
+ * A labelled row: label on the left, control on the right
+ * @param {string} id - Control id (the label's `for`)
+ * @param {string} label
+ * @param {HTMLElement} control
+ * @param {HTMLElement[]} [extra] - Hints under the row
  */
-function renderCanvasPreview(previewState, handlers, clipInfo, cleanups) {
-  // Canvas container - matches editor-canvas-container pattern
-  const canvasContainer = createElement('div', { className: 'export-canvas-container' });
-
-  // Create preview canvas
-  const canvas = /** @type {HTMLCanvasElement} */ (
-    createElement('canvas', {
-      className: 'export-canvas',
-      'aria-label': 'GIF Preview',
-    })
-  );
-
-  // Set initial canvas size to match clip dimensions
-  canvas.width = clipInfo.width;
-  canvas.height = clipInfo.height;
-
-  canvasContainer.appendChild(canvas);
-
-  // Play/Pause overlay button
-  const playPauseBtn = createElement(
-    'button',
-    {
-      className: `export-preview-play-btn ${previewState.isPlaying ? 'playing' : ''}`,
-      type: 'button',
-      'aria-label': previewState.isPlaying ? 'Pause preview' : 'Play preview',
-      title: previewState.isPlaying ? 'Pause (Space)' : 'Play (Space)',
-    },
-    [previewState.isPlaying ? '\u23F8' : '\u25B6'],
-  );
-  cleanups.push(on(playPauseBtn, 'click', handlers.onTogglePlay));
-  canvasContainer.appendChild(playPauseBtn);
-
-  // Size indicator
-  const sizeIndicator = createElement('div', { className: 'export-preview-size' }, [
-    `${clipInfo.width}\u00D7${clipInfo.height}`,
+function settingRow(id, label, control, extra = []) {
+  return createElement('div', { className: 'export-field' }, [
+    createElement('label', { className: 'export-field-label', for: id }, [label]),
+    control,
+    ...extra,
   ]);
-  canvasContainer.appendChild(sizeIndicator);
-
-  return { element: canvasContainer, canvas };
 }
 
 /**
- * Keep the preview toggle's visual and accessible state in sync without
- * replacing the canvas that the playback loop is currently drawing into.
- *
- * @param {HTMLElement} container
- * @param {boolean} isPlaying
+ * @param {string} id
+ * @param {string} title
+ * @param {HTMLElement[]} children
  */
-export function updatePreviewPlaybackUI(container, isPlaying) {
-  const button = container.querySelector('.export-preview-play-btn');
-  if (!button) return;
-
-  button.classList.toggle('playing', isPlaying);
-  button.setAttribute('aria-label', isPlaying ? 'Pause preview' : 'Play preview');
-  button.setAttribute('title', isPlaying ? 'Pause (Space)' : 'Play (Space)');
-  button.textContent = isPlaying ? '\u23F8' : '\u25B6';
+function section(id, title, children) {
+  return createElement('section', { className: 'export-section', 'aria-labelledby': id }, [
+    createElement('h3', { className: 'export-section-title', id }, [title]),
+    ...children,
+  ]);
 }
 
 /**
- * Render encoder selection cards
- *
- * Transparent exports can only be written by the JavaScript encoder: the
- * WASM card is shown disabled with a note, and the JS card shows as
- * selected, without touching the stored preference.
- *
- * @param {import('./types.js').ExportState} state
- * @param {ExportUIHandlers} handlers
+ * @param {Array<{ value: string, label: string }>} options
+ * @param {string} value
+ * @param {string} id
+ * @returns {HTMLSelectElement}
+ */
+function select(options, value, id) {
+  const element = /** @type {HTMLSelectElement} */ (
+    createElement(
+      'select',
+      { id, className: 'export-select' },
+      options.map((option) => createElement('option', { value: option.value }, [option.label])),
+    )
+  );
+  element.value = value;
+  return element;
+}
+
+/**
+ * @param {DialogViewParams} params
  * @param {(() => void)[]} cleanups
- * @param {boolean} [transparent]
  * @returns {HTMLElement}
  */
-function renderEncoderSelection(state, handlers, cleanups, transparent = false) {
-  const group = createElement('div', { className: 'settings-group encoder-selection-group' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Select Encoder']),
-  ]);
+function renderSettings(params, cleanups) {
+  const { state, handlers, clipInfo, facts } = params;
+  const settings = state.settings;
+  const root = createElement('div', {
+    className: 'export-view export-settings',
+    id: 'export-settings',
+  });
 
-  const cardsContainer = createElement('div', { className: 'encoder-cards' });
-  const effectiveEncoderId = getEffectiveEncoderId(state.settings, transparent);
-
-  for (const encoder of ENCODER_OPTIONS) {
-    const isSelected = effectiveEncoderId === encoder.id;
-    const isDisabled = transparent && encoder.isWasm;
-    const card = createElement(
-      'div',
-      {
-        className: [
-          'encoder-card',
-          isSelected && 'selected',
-          isDisabled && 'export-transparency-encoder-disabled',
+  // Summary: what will be exported
+  const summary = createElement('div', { className: 'export-summary' }, [
+    createElement('p', { className: 'export-summary-line', id: 'export-summary' }, [
+      `${formatDims(facts.output)} · ${facts.gifFrames} frames · ${formatDurationPrecise(
+        facts.durationSeconds,
+      )} at ${formatSpeed(clipInfo.speed)}`,
+    ]),
+    ...(clipInfo.transparent
+      ? [
+          createElement(
+            'span',
+            {
+              className: 'export-badge',
+              'data-testid': 'export-transparency-badge',
+              title: 'Removed or transparent pixels stay transparent in the GIF',
+            },
+            ['Transparent background'],
+          ),
         ]
-          .filter(Boolean)
-          .join(' '),
-        'data-encoder-id': encoder.id,
-        ...(isDisabled ? { 'aria-disabled': 'true' } : {}),
-      },
-      [
-        createElement('div', { className: 'encoder-card-header' }, [
-          createElement('div', { className: 'encoder-card-radio' }, [
-            isSelected ? '\u25C9' : '\u25CB',
-          ]),
-          createElement('div', { className: 'encoder-card-info' }, [
-            createElement('div', { className: 'encoder-card-name' }, [encoder.name]),
-            createElement(
-              'span',
-              {
-                className: `encoder-card-badge ${encoder.isWasm ? 'wasm' : 'js'}`,
-              },
-              [encoder.isWasm ? 'WASM' : 'JS'],
-            ),
-          ]),
-        ]),
-        createElement('div', { className: 'encoder-card-description' }, [encoder.description]),
-        ...(isDisabled
-          ? [
-              createElement(
-                'div',
-                {
-                  className: 'export-transparency-encoder-note',
-                  'data-testid': 'export-transparency-encoder-note',
-                },
-                [TRANSPARENT_ENCODER_NOTE],
-              ),
-            ]
-          : []),
-      ],
-    );
-
-    if (!isDisabled) {
-      cleanups.push(
-        on(card, 'click', () => {
-          handlers.onSettingsChange({
-            encoderId: /** @type {import('./encoders/types.js').EncoderId} */ (encoder.id),
-          });
-        }),
-      );
-    }
-
-    cardsContainer.appendChild(card);
-  }
-
-  group.appendChild(cardsContainer);
-  return group;
-}
-
-/**
- * Render gifenc-specific settings (quality controls)
- * @param {import('./types.js').ExportState} state
- * @param {ExportUIHandlers} handlers
- * @param {(() => void)[]} cleanups
- * @returns {HTMLElement}
- */
-function renderGifencSettings(state, handlers, cleanups) {
-  const group = createElement('div', { className: 'settings-group encoder-settings-section' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Quality Settings']),
+      : []),
   ]);
+  root.appendChild(summary);
 
-  // Quality slider
-  const qualityRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Quality']),
-      createElement('span', { className: 'setting-value' }, [
-        `${Math.round(state.settings.quality * 100)}%`,
-      ]),
-    ]),
-  ]);
+  const columns = createElement('div', { className: 'export-columns' });
+  const left = createElement('div', { className: 'export-column' });
+  const right = createElement('div', { className: 'export-column' });
 
-  const qualityInput = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'range',
-      min: '0.1',
-      max: '1.0',
-      step: '0.1',
-    })
-  );
-  qualityInput.value = String(state.settings.quality);
-
-  cleanups.push(
-    on(qualityInput, 'input', () => {
-      const valueEl = qualityRow.querySelector('.setting-value');
-      if (valueEl) {
-        valueEl.textContent = `${Math.round(Number(qualityInput.value) * 100)}%`;
-      }
-    }),
-  );
-  cleanups.push(
-    on(qualityInput, 'change', () => {
-      handlers.onSettingsChange({ quality: Number(qualityInput.value) });
-    }),
-  );
-
-  qualityRow.appendChild(qualityInput);
-  group.appendChild(qualityRow);
-
-  // Preset dropdown
-  const presetRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Preset']),
-    ]),
-  ]);
-
-  const presetSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      ENCODER_PRESETS.map((preset) => createElement('option', { value: preset.id }, [preset.name])),
-    )
-  );
-  presetSelect.value = state.settings.encoderPreset;
-
-  const currentPreset = ENCODER_PRESETS.find((p) => p.id === state.settings.encoderPreset);
-  const presetDesc = createElement('div', { className: 'setting-description' }, [
-    currentPreset?.description || '',
-  ]);
-
-  cleanups.push(
-    on(presetSelect, 'change', () => {
-      const preset = ENCODER_PRESETS.find((p) => p.id === presetSelect.value);
-      if (preset) {
-        presetDesc.textContent = preset.description;
-      }
-      handlers.onSettingsChange({
-        encoderPreset: /** @type {import('./types.js').EncoderPreset} */ (presetSelect.value),
-      });
-    }),
-  );
-
-  presetRow.appendChild(presetSelect);
-  group.appendChild(presetRow);
-  group.appendChild(presetDesc);
-
-  // Dithering checkbox
-  const ditherRow = createElement('div', { className: 'checkbox-row' });
-  const ditherCheckbox = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'checkbox',
-      id: 'dither-check',
-    })
-  );
-  ditherCheckbox.checked = state.settings.dithering;
-
-  cleanups.push(
-    on(ditherCheckbox, 'change', () => {
-      handlers.onSettingsChange({ dithering: ditherCheckbox.checked });
-    }),
-  );
-
-  ditherRow.appendChild(ditherCheckbox);
-  ditherRow.appendChild(createElement('label', { for: 'dither-check' }, ['Enable dithering']));
-
-  const ditherHint = createElement('div', { className: 'setting-hint' }, [
-    'Smoother gradients, slightly larger files',
-  ]);
-
-  group.appendChild(ditherRow);
-  group.appendChild(ditherHint);
-
-  return group;
-}
-
-/**
- * Render gifsicle-specific settings (info message)
- * @returns {HTMLElement}
- */
-function renderGifsicleSettings() {
-  const group = createElement('div', { className: 'settings-group encoder-settings-section' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Quality Settings']),
-  ]);
-
-  const infoBox = createElement('div', { className: 'encoder-info-box' }, [
-    createElement('div', { className: 'encoder-info-icon' }, ['\u2139\uFE0F']),
-    createElement('div', { className: 'encoder-info-content' }, [
-      createElement('p', { className: 'encoder-info-title' }, ['Automatic optimization']),
-      createElement('p', { className: 'encoder-info-description' }, [
-        'Gifsicle uses libimagequant to automatically optimize colors for the best possible quality. No manual adjustment needed.',
-      ]),
-    ]),
-  ]);
-
-  group.appendChild(infoBox);
-  return group;
-}
-
-/**
- * Render common playback settings
- * @param {import('./types.js').ExportState} state
- * @param {ExportUIHandlers} handlers
- * @param {{ frameCount: number }} clipInfo
- * @param {(() => void)[]} cleanups
- * @returns {HTMLElement}
- */
-function renderPlaybackSettings(state, handlers, clipInfo, cleanups) {
-  const group = createElement('div', { className: 'settings-group' }, [
-    createElement('div', { className: 'settings-group-title' }, ['Playback']),
-  ]);
-
-  // Frame skip
-  const skipRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Frame Skip']),
-    ]),
-  ]);
-
-  const skipSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      FRAME_SKIP_OPTIONS.map((skip) => {
-        const effectiveFrames = Math.ceil(clipInfo.frameCount / skip);
-        return createElement('option', { value: String(skip) }, [
-          `Every ${skip === 1 ? 'frame' : `${skip} frames`} (${effectiveFrames})`,
-        ]);
-      }),
-    )
-  );
-  skipSelect.value = String(state.settings.frameSkip);
-
-  cleanups.push(
-    on(skipSelect, 'change', () => {
-      handlers.onSettingsChange({
-        frameSkip: /** @type {1|2|3|4|5} */ (Number(skipSelect.value)),
-      });
-    }),
-  );
-
-  skipRow.appendChild(skipSelect);
-  group.appendChild(skipRow);
-
-  // Speed
-  const speedRow = createElement('div', { className: 'setting-row' }, [
-    createElement('div', { className: 'setting-header' }, [
-      createElement('span', { className: 'setting-label' }, ['Speed']),
-    ]),
-  ]);
-
-  const speedSelect = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      {},
-      SPEED_OPTIONS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`]),
-      ),
-    )
-  );
-  speedSelect.value = String(state.settings.playbackSpeed);
-
-  cleanups.push(
-    on(speedSelect, 'change', () => {
-      handlers.onSettingsChange({ playbackSpeed: Number(speedSelect.value) });
-    }),
-  );
-
-  speedRow.appendChild(speedSelect);
-  group.appendChild(speedRow);
-
-  return group;
-}
-
-/**
- * Render settings panel
- * @param {import('./types.js').ExportState} state
- * @param {ExportUIHandlers} handlers
- * @param {ExportClipInfo} clipInfo
- * @param {(() => void)[]} cleanups
- * @returns {HTMLElement}
- */
-function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
-  const panel = createElement('div', { className: 'export-settings-panel' });
-
-  // Live source monitor slot (#100 v3): same top-of-right-panel spot as the
-  // editor, so "recording continues" stays visible while configuring the
-  // export. Populated by live-monitor.js; empty/invisible when not live.
-  panel.appendChild(
-    createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
-  );
-
-  // Header
-  panel.appendChild(
-    createElement('div', { className: 'settings-header' }, [
-      createElement('span', { className: 'settings-title' }, ['Export Settings']),
-    ]),
-  );
-
-  // Settings content
-  const content = createElement('div', { className: 'settings-content' });
-
-  // 1. Encoder selection (always visible)
-  content.appendChild(renderEncoderSelection(state, handlers, cleanups, clipInfo.transparent));
-
-  // 2. Encoder-specific settings (dynamic based on the encoder in effect)
-  if (getEffectiveEncoderId(state.settings, clipInfo.transparent) === 'gifenc-js') {
-    content.appendChild(renderGifencSettings(state, handlers, cleanups));
+  left.appendChild(renderEncoderSection(state, handlers, clipInfo, facts, cleanups));
+  if (getEffectiveEncoderId(settings, clipInfo.transparent, facts.sizeLimited) === 'gifenc-js') {
+    left.appendChild(renderQualitySection(state, handlers, cleanups));
   } else {
-    content.appendChild(renderGifsicleSettings());
+    left.appendChild(
+      section('export-quality-heading', 'Quality', [
+        createElement('p', { className: 'export-hint' }, [
+          'libimagequant picks the colors automatically for the best quality. No manual adjustment needed.',
+        ]),
+      ]),
+    );
   }
-
-  // 3. Common playback settings (always visible)
-  content.appendChild(renderPlaybackSettings(state, handlers, clipInfo, cleanups));
-
-  panel.appendChild(content);
+  right.appendChild(renderPlaybackSection(state, handlers, clipInfo, facts, cleanups));
+  right.appendChild(renderSizeSection(state, handlers, clipInfo, cleanups));
+  columns.append(left, right);
+  root.appendChild(columns);
 
   // AI cutout: frames without a mask are analyzed before encoding
   if (clipInfo.aiCutout) {
-    panel.appendChild(
+    root.appendChild(
       createElement('p', {
-        className: 'export-ai-note',
+        className: 'export-note',
         id: 'export-ai-note',
         role: 'status',
         hidden: 'true',
@@ -647,16 +390,378 @@ function renderSettingsPanel(state, handlers, clipInfo, cleanups) {
     );
   }
 
-  // Actions
-  const actions = createElement('div', { className: 'settings-actions' });
-  const exportBtn = createElement('button', { className: 'btn btn-export-main', type: 'button' }, [
-    'Export GIF',
-  ]);
-  cleanups.push(on(exportBtn, 'click', handlers.onExport));
-  actions.appendChild(exportBtn);
-  panel.appendChild(actions);
+  const exportButton = createElement(
+    'button',
+    {
+      type: 'button',
+      className: 'btn btn-primary export-start',
+      id: 'export-start',
+      'data-autofocus': 'true',
+    },
+    ['Export GIF'],
+  );
+  cleanups.push(on(exportButton, 'click', handlers.onExport));
+  root.appendChild(
+    createElement('footer', { className: 'export-footer' }, [
+      createElement('p', { className: 'export-estimate', id: 'export-estimate' }, [
+        facts.sizeLimited && settings.targetSizeMB
+          ? `Target ≤ ${formatFileSize(settings.targetSizeMB * BYTES_PER_MB)} (estimated ${formatFileSize(
+              state.estimatedSizeMB * BYTES_PER_MB,
+            )} with these settings)`
+          : `Estimated size ≈ ${formatFileSize(state.estimatedSizeMB * BYTES_PER_MB)}`,
+      ]),
+      exportButton,
+    ]),
+  );
+  return root;
+}
 
-  return panel;
+/**
+ * Encoder cards as a radio group. Transparent exports and target sizes can
+ * only use the JavaScript encoder: the WASM card is shown disabled with a
+ * note and the JS card as selected, without touching the stored preference.
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {ExportClipInfo} clipInfo
+ * @param {ExportSettingsFacts} facts
+ * @param {(() => void)[]} cleanups
+ */
+function renderEncoderSection(state, handlers, clipInfo, facts, cleanups) {
+  const effective = getEffectiveEncoderId(state.settings, clipInfo.transparent, facts.sizeLimited);
+  const forced = Boolean(clipInfo.transparent) || facts.sizeLimited;
+  const cards = createElement('div', {
+    className: 'export-encoder-cards',
+    role: 'radiogroup',
+    'aria-labelledby': 'export-encoder-heading',
+  });
+  for (const encoder of ENCODER_OPTIONS) {
+    const selected = effective === encoder.id;
+    const disabled = forced && encoder.isWasm;
+    const inputId = `export-encoder-${encoder.id}`;
+    const input = /** @type {HTMLInputElement} */ (
+      createElement('input', {
+        type: 'radio',
+        name: 'export-encoder',
+        id: inputId,
+        className: 'export-encoder-radio',
+        value: encoder.id,
+        disabled: disabled ? 'true' : undefined,
+      })
+    );
+    input.checked = selected;
+    if (!disabled) {
+      cleanups.push(
+        on(input, 'change', () => {
+          if (input.checked) handlers.onSettingsChange({ encoderId: encoder.id });
+        }),
+      );
+    }
+    const note = clipInfo.transparent ? TRANSPARENT_ENCODER_NOTE : TARGET_SIZE_ENCODER_NOTE;
+    cards.appendChild(
+      createElement(
+        'label',
+        {
+          className: [
+            'export-encoder-card',
+            selected && 'export-encoder-card--selected',
+            disabled && 'export-encoder-card--disabled',
+          ]
+            .filter(Boolean)
+            .join(' '),
+          for: inputId,
+          'data-encoder-id': encoder.id,
+          'aria-disabled': disabled ? 'true' : undefined,
+        },
+        [
+          input,
+          createElement('span', { className: 'export-encoder-head' }, [
+            createElement('span', { className: 'export-encoder-name' }, [encoder.name]),
+            createElement(
+              'span',
+              {
+                className: `export-encoder-badge export-encoder-badge--${encoder.isWasm ? 'wasm' : 'js'}`,
+              },
+              [encoder.isWasm ? 'WASM' : 'JS'],
+            ),
+          ]),
+          createElement('span', { className: 'export-encoder-description' }, [encoder.description]),
+          ...(disabled
+            ? [
+                createElement(
+                  'span',
+                  {
+                    className: 'export-encoder-note',
+                    'data-testid': clipInfo.transparent
+                      ? 'export-transparency-encoder-note'
+                      : 'export-target-encoder-note',
+                  },
+                  [note],
+                ),
+              ]
+            : []),
+        ],
+      ),
+    );
+  }
+  return section('export-encoder-heading', 'Encoder', [cards]);
+}
+
+/**
+ * gifenc quality controls
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ */
+function renderQualitySection(state, handlers, cleanups) {
+  const settings = state.settings;
+  const qualityValue = createElement(
+    'output',
+    {
+      className: 'export-field-value',
+      for: 'export-quality',
+      id: 'export-quality-value',
+    },
+    [`${Math.round(settings.quality * 100)}%`],
+  );
+  const quality = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'range',
+      id: 'export-quality',
+      className: 'export-range',
+      min: '0.1',
+      max: '1.0',
+      step: '0.1',
+    })
+  );
+  quality.value = String(settings.quality);
+  cleanups.push(
+    on(quality, 'input', () => {
+      qualityValue.textContent = `${Math.round(Number(quality.value) * 100)}%`;
+    }),
+    on(quality, 'change', () => handlers.onSettingsChange({ quality: Number(quality.value) })),
+  );
+
+  const preset = select(
+    ENCODER_PRESETS.map((p) => ({ value: p.id, label: p.name })),
+    settings.encoderPreset,
+    'export-preset',
+  );
+  const presetHint = createElement('p', { className: 'export-hint', id: 'export-preset-hint' }, [
+    ENCODER_PRESETS.find((p) => p.id === settings.encoderPreset)?.description ?? '',
+  ]);
+  cleanups.push(
+    on(preset, 'change', () => {
+      const chosen = ENCODER_PRESETS.find((p) => p.id === preset.value);
+      if (chosen) presetHint.textContent = chosen.description;
+      handlers.onSettingsChange({
+        encoderPreset: /** @type {import('./types.js').EncoderPreset} */ (preset.value),
+      });
+    }),
+  );
+
+  const dither = /** @type {HTMLInputElement} */ (
+    createElement('input', { type: 'checkbox', id: 'export-dither', className: 'export-checkbox' })
+  );
+  dither.checked = settings.dithering;
+  cleanups.push(
+    on(dither, 'change', () => handlers.onSettingsChange({ dithering: dither.checked })),
+  );
+
+  return section('export-quality-heading', 'Quality', [
+    createElement('div', { className: 'export-field' }, [
+      createElement('label', { className: 'export-field-label', for: 'export-quality' }, [
+        'Quality',
+      ]),
+      qualityValue,
+      quality,
+    ]),
+    settingRow('export-preset', 'Preset', preset, [presetHint]),
+    createElement('div', { className: 'export-check' }, [
+      dither,
+      createElement('label', { for: 'export-dither' }, ['Dithering']),
+      createElement('span', { className: 'export-hint' }, [
+        'Smoother gradients, slightly larger files',
+      ]),
+    ]),
+  ]);
+}
+
+/**
+ * Frame rate (frame skip), loop count and the speed set in the editor
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {ExportClipInfo} clipInfo
+ * @param {ExportSettingsFacts} facts
+ * @param {(() => void)[]} cleanups
+ */
+function renderPlaybackSection(state, handlers, clipInfo, facts, cleanups) {
+  const settings = state.settings;
+  const frameRate = select(
+    FRAME_SKIP_OPTIONS.map((skip) => {
+      const fps = Math.round((clipInfo.fps / skip) * 10) / 10;
+      const frames = Math.ceil(clipInfo.frameCount / skip);
+      const which =
+        skip === 1
+          ? 'Every frame'
+          : `Every ${skip === 2 ? '2nd' : skip === 3 ? '3rd' : `${skip}th`} frame`;
+      return { value: String(skip), label: `${which} · ${fps} fps (${frames})` };
+    }),
+    String(settings.frameSkip),
+    'export-frame-skip',
+  );
+  cleanups.push(
+    on(frameRate, 'change', () =>
+      handlers.onSettingsChange({
+        frameSkip: /** @type {1|2|3|4|5} */ (Number(frameRate.value)),
+      }),
+    ),
+  );
+
+  const loopValues = LOOP_OPTIONS.includes(settings.loopCount)
+    ? LOOP_OPTIONS
+    : [...LOOP_OPTIONS, settings.loopCount].sort((a, b) => a - b);
+  const loop = select(
+    loopValues.map((count) => ({
+      value: String(count),
+      label: count === 0 ? 'Forever' : count === 1 ? 'Repeat once' : `Repeat ${count} times`,
+    })),
+    String(settings.loopCount),
+    'export-loop',
+  );
+  cleanups.push(
+    on(loop, 'change', () => handlers.onSettingsChange({ loopCount: Number(loop.value) })),
+  );
+
+  const speedNote = createElement(
+    'p',
+    {
+      className: 'export-note export-note--warning',
+      id: 'export-speed-note',
+      role: 'status',
+      hidden: facts.speedLimit.limited ? undefined : 'true',
+    },
+    facts.speedLimit.limited
+      ? [
+          `GIF frames can't be shorter than 0.02 s, so at ${formatSpeed(clipInfo.speed)} this GIF plays at about ${formatSpeed(
+            facts.speedLimit.effectiveSpeed,
+          )}. Skipping frames keeps it faster.`,
+        ]
+      : [],
+  );
+
+  return section('export-playback-heading', 'Playback', [
+    settingRow('export-frame-skip', 'Frame rate', frameRate),
+    settingRow('export-loop', 'Loop', loop),
+    createElement('div', { className: 'export-field' }, [
+      createElement('span', { className: 'export-field-label' }, ['Speed']),
+      createElement('span', { className: 'export-field-value', id: 'export-speed' }, [
+        formatSpeed(clipInfo.speed),
+      ]),
+      createElement('p', { className: 'export-hint' }, ['Set in the editor’s Playback panel']),
+    ]),
+    speedNote,
+  ]);
+}
+
+/**
+ * Output scale and target file size
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportUIHandlers} handlers
+ * @param {ExportClipInfo} clipInfo
+ * @param {(() => void)[]} cleanups
+ */
+function renderSizeSection(state, handlers, clipInfo, cleanups) {
+  const settings = state.settings;
+  const currentScale = settings.scale ?? 1;
+  const scale = select(
+    OUTPUT_SCALES.map((option) => ({
+      value: String(option.value),
+      label: `${option.label} (${formatDims(
+        getScaledDimensions(clipInfo.width, clipInfo.height, option.value),
+      )})`,
+    })),
+    String(currentScale),
+    'export-scale',
+  );
+  cleanups.push(
+    on(scale, 'change', () => handlers.onSettingsChange({ scale: Number(scale.value) })),
+  );
+
+  const targetOn = settings.targetSizeMB !== null && settings.targetSizeMB !== undefined;
+  const enabled = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'checkbox',
+      id: 'export-target-enabled',
+      className: 'export-checkbox',
+    })
+  );
+  enabled.checked = targetOn;
+  const amount = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'number',
+      id: 'export-target-mb',
+      className: 'export-number',
+      min: '0.1',
+      step: '0.1',
+      inputmode: 'decimal',
+      'aria-label': 'Target size in MB',
+      disabled: targetOn ? undefined : 'true',
+    })
+  );
+  amount.value = String(targetOn ? settings.targetSizeMB : lastTargetSuggestion(state));
+  const commitAmount = () => {
+    const n = Number(amount.value);
+    if (Number.isFinite(n) && n > 0) {
+      handlers.onSettingsChange({ targetSizeMB: Math.round(n * 100) / 100 });
+    } else {
+      amount.value = String(settings.targetSizeMB ?? lastTargetSuggestion(state));
+    }
+  };
+  cleanups.push(
+    on(enabled, 'change', () => {
+      if (enabled.checked) {
+        const n = Number(amount.value);
+        handlers.onSettingsChange({
+          targetSizeMB: Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 1,
+        });
+      } else {
+        handlers.onSettingsChange({ targetSizeMB: null });
+      }
+    }),
+    on(amount, 'change', commitAmount),
+  );
+
+  return section('export-size-heading', 'Size', [
+    settingRow('export-scale', 'Scale', scale),
+    createElement('div', { className: 'export-field export-target' }, [
+      createElement('div', { className: 'export-check' }, [
+        enabled,
+        createElement('label', { for: 'export-target-enabled' }, ['Target size']),
+      ]),
+      createElement('div', { className: 'export-target-amount' }, [
+        amount,
+        createElement('span', { className: 'export-unit', 'aria-hidden': 'true' }, ['MB']),
+      ]),
+    ]),
+    createElement('p', { className: 'export-hint', id: 'export-target-note' }, [
+      targetOn
+        ? 'Colors, frames and then the scale are lowered as needed to fit. Uses the JavaScript encoder.'
+        : 'Off. Turn on to fit the GIF under a file size (for chat apps with upload limits).',
+    ]),
+  ]);
+}
+
+/**
+ * The number the target field starts with when it is off: half the
+ * estimate, rounded to a friendly value (at least 0.5 MB)
+ * @param {import('./types.js').ExportState} state
+ * @returns {number}
+ */
+function lastTargetSuggestion(state) {
+  const half = state.estimatedSizeMB / 2;
+  if (!(half > 0)) return 2;
+  if (half < 1) return Math.max(0.5, Math.round(half * 10) / 10);
+  return Math.round(half);
 }
 
 /**
@@ -670,11 +775,15 @@ export function updateExportAiNote(container, missing, total) {
   if (!(note instanceof HTMLElement)) return;
   const text =
     missing > 0
-      ? `${missing} of ${total} frames are not analyzed yet. Export analyzes them first (they preview without the cutout).`
+      ? `${missing} of ${total} frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).`
       : '';
   if (note.textContent !== text) note.textContent = text;
   note.hidden = text === '';
 }
+
+// ------------------------------------------------------------
+// AI preparation
+// ------------------------------------------------------------
 
 /**
  * One line describing the AI preparation
@@ -721,24 +830,32 @@ function getAiPreparationFraction(aiPrep) {
 }
 
 /**
- * Render the AI cutout preparation (progress, the no-WebGPU choice, or an
- * error)
+ * The AI cutout preparation (progress, the no-WebGPU choice, or an error)
  * @param {ExportAiPrep} aiPrep
- * @param {ExportUIHandlers} handlers
+ * @param {DialogViewParams} params
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
  */
-function renderAiPreparation(aiPrep, handlers, cleanups) {
-  const root = createElement('div', { className: 'export-ai-prep', id: 'export-ai-prep' });
+function renderAiPreparation(aiPrep, params, cleanups) {
+  const { handlers } = params;
+  const root = createElement('div', {
+    className: 'export-view export-ai-prep',
+    id: 'export-ai-prep',
+  });
 
   /**
    * @param {string} id
    * @param {string} label
    * @param {string} className
    * @param {(() => void) | undefined} onClick
+   * @param {boolean} [autofocus]
    */
-  const button = (id, label, className, onClick) => {
-    const btn = createElement('button', { type: 'button', id, className }, [label]);
+  const button = (id, label, className, onClick, autofocus = false) => {
+    const btn = createElement(
+      'button',
+      { type: 'button', id, className, 'data-autofocus': autofocus ? 'true' : undefined },
+      [label],
+    );
     if (onClick) cleanups.push(on(btn, 'click', onClick));
     return btn;
   };
@@ -747,16 +864,17 @@ function renderAiPreparation(aiPrep, handlers, cleanups) {
 
   if (aiPrep.phase === 'needs-wasm') {
     root.append(
-      createElement('h2', { className: 'export-ai-title' }, ['WebGPU is not available']),
-      createElement('p', { className: 'export-ai-text', role: 'alert' }, [
+      createElement('h3', { className: 'export-view-title' }, ['WebGPU is not available']),
+      createElement('p', { className: 'export-text', role: 'alert' }, [
         'Some frames still need the AI analysis, which needs WebGPU in this browser. It can run on the CPU instead, but that is very slow (about 14 seconds per frame).',
       ]),
-      createElement('div', { className: 'export-ai-actions' }, [
+      createElement('div', { className: 'export-actions' }, [
         button(
           'export-ai-run-wasm',
           'Run without WebGPU (very slow)',
           'btn btn-primary',
           handlers.onAiAllowWasm,
+          true,
         ),
         back(),
       ]),
@@ -766,14 +884,14 @@ function renderAiPreparation(aiPrep, handlers, cleanups) {
 
   if (aiPrep.phase === 'error') {
     root.append(
-      createElement('h2', { className: 'export-ai-title' }, [
+      createElement('h3', { className: 'export-view-title' }, [
         'The AI cutout could not be prepared',
       ]),
-      createElement('p', { className: 'export-ai-text', role: 'alert' }, [
+      createElement('p', { className: 'export-text', role: 'alert' }, [
         aiPrep.message ?? 'The analysis failed.',
       ]),
-      createElement('div', { className: 'export-ai-actions' }, [
-        button('export-ai-retry', 'Retry', 'btn btn-primary', handlers.onExport),
+      createElement('div', { className: 'export-actions' }, [
+        button('export-ai-retry', 'Retry', 'btn btn-primary', handlers.onExport, true),
         back(),
       ]),
     );
@@ -783,7 +901,7 @@ function renderAiPreparation(aiPrep, handlers, cleanups) {
   const bar = /** @type {HTMLProgressElement} */ (
     createElement('progress', {
       id: 'export-ai-progress-bar',
-      className: 'export-ai-progress-bar',
+      className: 'export-progress-bar',
       max: '1',
       'aria-labelledby': 'export-ai-progress-text',
     })
@@ -791,18 +909,18 @@ function renderAiPreparation(aiPrep, handlers, cleanups) {
   const fraction = getAiPreparationFraction(aiPrep);
   if (fraction !== null) bar.value = fraction;
   root.append(
-    createElement('h2', { className: 'export-ai-title' }, ['Preparing the AI cutout']),
-    createElement('p', { className: 'export-ai-text' }, [
+    createElement('h3', { className: 'export-view-title' }, ['Preparing the AI cutout']),
+    createElement('p', { className: 'export-text' }, [
       'Frames that were not analyzed in the editor are analyzed now, on this device.',
     ]),
     createElement(
       'p',
-      { className: 'export-ai-progress-text', id: 'export-ai-progress-text', role: 'status' },
+      { className: 'export-progress-text', id: 'export-ai-progress-text', role: 'status' },
       [describeAiPreparation(aiPrep)],
     ),
     bar,
-    createElement('div', { className: 'export-ai-actions' }, [
-      button('export-ai-cancel', 'Cancel', 'btn btn-secondary', handlers.onCancel),
+    createElement('div', { className: 'export-actions' }, [
+      button('export-ai-cancel', 'Cancel', 'btn btn-secondary', handlers.onCancel, true),
     ]),
   );
   return root;
@@ -830,290 +948,255 @@ export function updateAiPreparationUI(container, aiPrep) {
   }
 }
 
+// ------------------------------------------------------------
+// Encoding
+// ------------------------------------------------------------
+
 /**
- * Render encoding progress
- * @param {import('./types.js').EncodingJob} job
- * @param {ExportUIHandlers} handlers
- * @param {(() => void)[]} cleanups
- * @returns {HTMLElement}
+ * One line describing a target-size step, or '' without one
+ * @param {ExportSizeStep | null} step
+ * @returns {string}
  */
-function renderEncodingProgress(job, handlers, cleanups) {
-  const progress = createElement('div', { className: 'export-progress' }, [
-    createElement('div', { className: 'progress-icon' }, ['\u2699\uFE0F']),
-    createElement('h2', { className: 'progress-title' }, ['Creating your GIF...']),
-    createElement('div', { className: 'progress-bar-container' }, [
-      createElement('div', { className: 'progress-bar' }, [
-        createElement('div', {
-          className: 'progress-bar-fill',
-          style: `width: ${job.progress}%`,
-        }),
-      ]),
-      createElement('div', { className: 'progress-info' }, [
-        createElement('span', {}, [`${job.currentFrame} / ${job.totalFrames} frames`]),
-        createElement('span', { className: 'percent' }, [formatPercent(job.progress / 100)]),
-      ]),
-    ]),
-  ]);
-
-  if (job.estimatedRemaining && job.estimatedRemaining > 0) {
-    progress.appendChild(
-      createElement('p', { className: 'progress-time' }, [formatRemaining(job.estimatedRemaining)]),
-    );
+export function describeSizeStep(step) {
+  if (!step) return '';
+  const target = formatFileSize(step.targetMB * BYTES_PER_MB);
+  if (step.phase === 'estimate') {
+    return `Finding settings for ${target}: checking option ${step.index + 1} of ${step.total}`;
   }
-
-  const cancelBtn = createElement('button', { className: 'btn btn-secondary', type: 'button' }, [
-    'Cancel',
-  ]);
-  cleanups.push(on(cancelBtn, 'click', handlers.onCancel));
-  progress.appendChild(cancelBtn);
-
-  return progress;
+  if ((step.attempt ?? 1) > 1 && step.previousBytes !== undefined) {
+    return `${formatFileSize(step.previousBytes)} is still over ${target}. Trying smaller settings (attempt ${step.attempt})`;
+  }
+  return `Encoding to fit ${target}`;
 }
 
 /**
- * Render complete state
- * @param {import('./types.js').EncodingJob} job
- * @param {ExportUIHandlers} handlers
+ * @param {DialogViewParams} params
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
  */
-function renderComplete(job, handlers, cleanups) {
-  const size = job.result?.size || 0;
+function renderEncodingProgress(params, cleanups) {
+  const job = /** @type {import('./types.js').EncodingJob} */ (params.state.job);
+  const bar = /** @type {HTMLProgressElement} */ (
+    createElement('progress', {
+      className: 'export-progress-bar',
+      id: 'export-progress-bar',
+      max: '100',
+      'aria-labelledby': 'export-progress-title',
+    })
+  );
+  const estimating = params.sizeStep?.phase === 'estimate';
+  if (!estimating) bar.value = job.progress;
 
-  // Create the main container with two-column layout
-  const complete = createElement('div', { className: 'export-complete-v2' });
-
-  // Left: GIF Preview
-  const previewSection = createElement('div', { className: 'complete-preview-section' });
-
-  if (job.result) {
-    const blobUrl = URL.createObjectURL(job.result);
-    const previewImg = createElement('img', {
-      className: 'complete-preview-img',
-      src: blobUrl,
-      alt: 'Exported GIF preview',
-    });
-    previewSection.appendChild(previewImg);
-
-    // Cleanup blob URL when done
-    cleanups.push(() => URL.revokeObjectURL(blobUrl));
-  }
-
-  complete.appendChild(previewSection);
-
-  // Right: Info and Actions
-  const infoSection = createElement('div', { className: 'complete-info-section' });
-
-  // Success header with animated checkmark
-  const header = createElement('div', { className: 'complete-header' }, [
-    createElement('div', { className: 'complete-icon-ring' }, [
-      createElement('div', { className: 'complete-icon-check' }, [createCheckmarkSVG()]),
-    ]),
-    createElement('div', { className: 'complete-header-text' }, [
-      createElement('h2', { className: 'complete-title' }, ['Ready to share']),
-      createElement('p', { className: 'complete-subtitle' }, [
-        'Your GIF has been created successfully',
-      ]),
-    ]),
-  ]);
-  infoSection.appendChild(header);
-
-  // File info cards
-  const fileStats = createElement('div', { className: 'complete-stats' }, [
-    createElement('div', { className: 'complete-stat-card complete-stat-primary' }, [
-      createElement('div', { className: 'stat-value' }, [formatBytes(size)]),
-      createElement('div', { className: 'stat-label' }, ['File Size']),
-    ]),
-  ]);
-  infoSection.appendChild(fileStats);
-
-  // Primary action: Download
-  const primaryActions = createElement('div', { className: 'complete-primary-actions' });
-
-  const downloadBtn = createElement('button', { className: 'btn-download-large', type: 'button' }, [
-    createDownloadSVG(),
-    createElement('span', {}, ['Download GIF']),
-  ]);
-  cleanups.push(on(downloadBtn, 'click', handlers.onDownload));
-  primaryActions.appendChild(downloadBtn);
-  infoSection.appendChild(primaryActions);
-
-  // Secondary actions
-  const secondaryActions = createElement('div', { className: 'complete-secondary-actions' });
-
-  const openBtn = createElement('button', { className: 'btn-action-secondary', type: 'button' }, [
-    createExternalLinkSVG(),
-    createElement('span', {}, ['Open in New Tab']),
-  ]);
-  cleanups.push(on(openBtn, 'click', handlers.onOpenInTab));
-  secondaryActions.appendChild(openBtn);
-
-  const adjustBtn = createElement('button', { className: 'btn-action-secondary', type: 'button' }, [
-    createSettingsSVG(),
-    createElement('span', {}, ['Adjust & Re-export']),
-  ]);
-  cleanups.push(on(adjustBtn, 'click', handlers.onAdjustSettings));
-  secondaryActions.appendChild(adjustBtn);
-
-  const createNewBtn = createElement(
+  const cancel = createElement(
     'button',
-    { className: 'btn-action-secondary btn-create-new', type: 'button' },
-    [createPlusSVG(), createElement('span', {}, ['Create New GIF'])],
-  );
-  cleanups.push(on(createNewBtn, 'click', handlers.onCreateNew));
-  secondaryActions.appendChild(createNewBtn);
-
-  infoSection.appendChild(secondaryActions);
-
-  // Back to editor link
-  const backLink = createElement('div', { className: 'complete-back-link' }, [
-    createElement('button', { className: 'btn-text-link', type: 'button' }, [
-      '\u2190 Back to Editor',
-    ]),
-  ]);
-  const backButton = backLink.querySelector('button');
-  if (backButton) {
-    cleanups.push(on(backButton, 'click', handlers.onBackToEditor));
-  }
-  infoSection.appendChild(backLink);
-
-  complete.appendChild(infoSection);
-
-  return complete;
-}
-
-/**
- * Create checkmark SVG icon
- * @returns {SVGSVGElement}
- */
-function createCheckmarkSVG() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '3');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = '<polyline points="20 6 9 17 4 12"></polyline>';
-  return svg;
-}
-
-/**
- * Create download SVG icon
- * @returns {SVGSVGElement}
- */
-function createDownloadSVG() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML =
-    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>';
-  return svg;
-}
-
-/**
- * Create external link SVG icon
- * @returns {SVGSVGElement}
- */
-function createExternalLinkSVG() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML =
-    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>';
-  return svg;
-}
-
-/**
- * Create settings/gear SVG icon
- * @returns {SVGSVGElement}
- */
-function createSettingsSVG() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML =
-    '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>';
-  return svg;
-}
-
-/**
- * Create plus SVG icon
- * @returns {SVGSVGElement}
- */
-function createPlusSVG() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML =
-    '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>';
-  return svg;
-}
-
-/**
- * Render error state
- * @param {import('./types.js').EncodingJob} job
- * @param {ExportUIHandlers} handlers
- * @param {(() => void)[]} cleanups
- * @returns {HTMLElement}
- */
-function renderError(job, handlers, cleanups) {
-  return createErrorScreen(
     {
-      title: 'Export Failed',
-      message: job.error || 'Unknown error occurred',
-      actions: [
-        {
-          label: '\u21BB Try Again',
-          onClick: handlers.onExport,
-          primary: true,
-        },
-        {
-          label: '\u2190 Back',
-          onClick: handlers.onBackToEditor,
-          primary: false,
-        },
-      ],
+      type: 'button',
+      className: 'btn btn-secondary',
+      id: 'export-cancel',
+      'data-autofocus': 'true',
     },
-    cleanups,
+    ['Cancel'],
   );
+  cleanups.push(on(cancel, 'click', params.handlers.onCancel));
+
+  return createElement('div', { className: 'export-view export-progress', id: 'export-progress' }, [
+    createElement('h3', { className: 'export-view-title', id: 'export-progress-title' }, [
+      'Creating your GIF…',
+    ]),
+    createElement(
+      'p',
+      {
+        className: 'export-progress-text',
+        id: 'export-progress-step',
+        role: 'status',
+        hidden: params.sizeStep ? undefined : 'true',
+      },
+      [describeSizeStep(params.sizeStep)],
+    ),
+    bar,
+    createElement('div', { className: 'export-progress-info' }, [
+      createElement('span', { id: 'export-progress-frames' }, [
+        `${job.currentFrame} / ${job.totalFrames} frames`,
+      ]),
+      createElement(
+        'span',
+        { id: 'export-progress-percent', className: 'export-progress-percent' },
+        [formatPercent(job.progress / 100)],
+      ),
+    ]),
+    createElement('p', { className: 'export-hint', id: 'export-progress-time' }, [
+      job.estimatedRemaining && job.estimatedRemaining > 0
+        ? formatRemaining(job.estimatedRemaining)
+        : '',
+    ]),
+    createElement('div', { className: 'export-actions' }, [cancel]),
+  ]);
 }
 
 /**
- * Update progress bar
- * @param {HTMLElement} container
+ * Update the encoding progress in place
+ * @param {ParentNode} container
  * @param {import('./types.js').EncodingJob} job
  */
 export function updateProgressUI(container, job) {
-  const fill = container.querySelector('.progress-bar-fill');
-  if (fill) {
-    /** @type {HTMLElement} */ (fill).style.width = `${job.progress}%`;
+  const bar = container.querySelector('#export-progress-bar');
+  if (bar instanceof HTMLProgressElement) {
+    bar.value = job.progress;
   }
+  const frames = container.querySelector('#export-progress-frames');
+  if (frames) frames.textContent = `${job.currentFrame} / ${job.totalFrames} frames`;
+  const percent = container.querySelector('#export-progress-percent');
+  if (percent) percent.textContent = formatPercent(job.progress / 100);
+  const time = container.querySelector('#export-progress-time');
+  if (time && job.estimatedRemaining) {
+    time.textContent = formatRemaining(job.estimatedRemaining);
+  }
+}
 
-  const info = container.querySelectorAll('.progress-info span');
-  if (info.length >= 2) {
-    info[0].textContent = `${job.currentFrame} / ${job.totalFrames} frames`;
-    info[1].textContent = formatPercent(job.progress / 100);
+/**
+ * Update the target-size step line (and the bar: indeterminate while
+ * estimating) in place
+ * @param {ParentNode} container
+ * @param {ExportSizeStep | null} step
+ */
+export function updateSizeStepUI(container, step) {
+  const line = container.querySelector('#export-progress-step');
+  if (line instanceof HTMLElement) {
+    line.textContent = describeSizeStep(step);
+    line.hidden = !step;
   }
+  const bar = container.querySelector('#export-progress-bar');
+  if (bar instanceof HTMLProgressElement && step?.phase === 'estimate') {
+    bar.removeAttribute('value');
+  }
+}
 
-  const timeRemaining = container.querySelector('.progress-time');
-  if (timeRemaining && job.estimatedRemaining) {
-    timeRemaining.textContent = formatRemaining(job.estimatedRemaining);
-  }
+// ------------------------------------------------------------
+// Result
+// ------------------------------------------------------------
+
+/**
+ * @param {DialogViewParams} params
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderResult(params, cleanups) {
+  const { handlers } = params;
+  const job = /** @type {import('./types.js').EncodingJob} */ (params.state.job);
+  const blob = /** @type {Blob} */ (job.result);
+  const info = params.resultInfo ?? {
+    size: blob.size,
+    width: 0,
+    height: 0,
+    frameCount: null,
+  };
+
+  const url = URL.createObjectURL(blob);
+  cleanups.push(() => URL.revokeObjectURL(url));
+  const img = createElement('img', {
+    className: 'export-result-img',
+    src: url,
+    alt: 'The exported GIF',
+  });
+
+  /** @param {string} id @param {string} label @param {string} className @param {() => void} onClick @param {boolean} [autofocus] */
+  const button = (id, label, className, onClick, autofocus = false) => {
+    const btn = createElement(
+      'button',
+      { type: 'button', id, className, 'data-autofocus': autofocus ? 'true' : undefined },
+      [label],
+    );
+    cleanups.push(on(btn, 'click', onClick));
+    return btn;
+  };
+
+  /** @param {string} term @param {string} value @param {string} id */
+  const fact = (term, value, id) =>
+    createElement('div', { className: 'export-fact' }, [
+      createElement('dt', {}, [term]),
+      createElement('dd', { id }, [value]),
+    ]);
+
+  const target = info.target;
+  return createElement('div', { className: 'export-view export-result', id: 'export-result' }, [
+    createElement('div', { className: 'export-result-preview' }, [img]),
+    createElement('div', { className: 'export-result-info' }, [
+      createElement('h3', { className: 'export-view-title', id: 'export-result-title' }, [
+        'Your GIF is ready',
+      ]),
+      createElement('dl', { className: 'export-facts' }, [
+        fact('Size', formatFileSize(info.size), 'export-result-size'),
+        fact('Dimensions', info.width > 0 ? formatDims(info) : '—', 'export-result-dimensions'),
+        fact(
+          'Frames',
+          info.frameCount === null ? '—' : String(info.frameCount),
+          'export-result-frames',
+        ),
+      ]),
+      ...(target
+        ? [
+            createElement(
+              'p',
+              {
+                className: `export-note${target.fits ? '' : ' export-note--warning'}`,
+                id: 'export-result-target',
+                role: 'status',
+              },
+              [
+                target.fits
+                  ? `Fits the ${formatFileSize(target.targetMB * BYTES_PER_MB)} target with ${target.settingsText}.`
+                  : `Could not get under ${formatFileSize(target.targetMB * BYTES_PER_MB)}, even with ${target.settingsText}. This is the smallest version.`,
+              ],
+            ),
+          ]
+        : []),
+      createElement('div', { className: 'export-actions' }, [
+        button('export-download', 'Download GIF', 'btn btn-primary', handlers.onDownload, true),
+        button('export-open-tab', 'Open in new tab', 'btn btn-secondary', handlers.onOpenInTab),
+        ...(info.canCopy && handlers.onCopy
+          ? [button('export-copy', 'Copy', 'btn btn-secondary', handlers.onCopy)]
+          : []),
+      ]),
+      createElement('div', { className: 'export-actions export-actions--secondary' }, [
+        button('export-again', 'Export again', 'btn btn-ghost', handlers.onExportAgain),
+        button(
+          'export-back-to-editing',
+          'Back to editing',
+          'btn btn-ghost',
+          handlers.onBackToEditing,
+        ),
+      ]),
+    ]),
+  ]);
+}
+
+// ------------------------------------------------------------
+// Error
+// ------------------------------------------------------------
+
+/**
+ * @param {DialogViewParams} params
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderError(params, cleanups) {
+  const job = /** @type {import('./types.js').EncodingJob} */ (params.state.job);
+  const back = createElement(
+    'button',
+    {
+      type: 'button',
+      className: 'btn btn-primary',
+      id: 'export-error-back',
+      'data-autofocus': 'true',
+    },
+    ['Back to settings'],
+  );
+  cleanups.push(on(back, 'click', params.handlers.onBackToSettings));
+  return createElement('div', { className: 'export-view export-error', id: 'export-error' }, [
+    createElement('h3', { className: 'export-view-title' }, ['Export failed']),
+    createElement('p', { className: 'export-text', role: 'alert', id: 'export-error-message' }, [
+      job.error || 'Unknown error occurred',
+    ]),
+    createElement('div', { className: 'export-actions' }, [back]),
+  ]);
 }

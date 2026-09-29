@@ -19,6 +19,7 @@ import {
   decodeExportedGif,
   discClip,
   editorPreviewAlpha,
+  exportDialog,
   exportFromEditor,
   gifPixel,
   gotoCaptureWithStubModel,
@@ -183,20 +184,23 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     }, N - 1);
     await exportFromEditor(page);
     await expect(page.locator('#export-ai-note')).toHaveText(
-      `6 of ${N} frames are not analyzed yet. Export analyzes them first (they preview without the cutout).`,
+      `6 of ${N} frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).`,
     );
 
     await holdFramesAfter(page, 2);
-    await page.locator('.btn-export-main').click();
+    const dialog = exportDialog(page);
+    await dialog.locator('#export-start').click();
     await expect(page.locator('#export-ai-prep')).toBeVisible();
     await expect(page.locator('#export-ai-progress-text')).toHaveText(
       /^Analyzed 2 of 6 frames · .* left$/,
       { timeout: 60_000 },
     );
     await expect(page.locator('#export-ai-cancel')).toBeVisible();
+    // While the preparation runs, Cancel is the only way out
+    await expect(dialog.getByRole('button', { name: 'Close' })).toBeDisabled();
     await releaseFrames(page, { drop: false });
 
-    await expect(page.locator('.export-complete-v2')).toBeVisible({ timeout: 60_000 });
+    await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 60_000 });
     expect(await maskCount(page)).toBe(N);
     const frames = await decodeExportedGif(page);
     expect(frames).toHaveLength(N);

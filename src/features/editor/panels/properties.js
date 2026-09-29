@@ -10,8 +10,12 @@ import { renderBackgroundPanel, renderTextPanel } from './edits-panel.js';
 /** @type {string[]} */
 const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
 
-/** @type {number[]} */
-const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 1.5, 2];
+/**
+ * Playback speeds the editor offers. The editor speed is also the GIF's
+ * speed (the export uses it for the frame delays).
+ * @type {readonly number[]}
+ */
+export const PLAYBACK_SPEEDS = Object.freeze([0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]);
 
 /**
  * Render the right-hand properties panel
@@ -37,19 +41,27 @@ export function renderEditorPropertiesPanel(state, handlers) {
     createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
   );
 
-  // Speed control
+  // Speed control: the preview plays at this speed and the GIF is exported
+  // at it. A clip may carry a speed outside the list (an older default such
+  // as 1.25x from Settings): it is offered as well so the select shows it.
   const speedGroup = createElement('div', { className: 'property-group' }, [
     createElement('div', { className: 'property-group-title' }, ['Playback']),
     createElement('div', { className: 'property-row' }, [
-      createElement('span', { className: 'property-label' }, ['Speed']),
+      createElement('label', { className: 'property-label', for: 'editor-speed' }, ['Speed']),
+    ]),
+    createElement('p', { className: 'editor-speed-hint', id: 'editor-speed-hint' }, [
+      'The GIF plays at this speed too',
     ]),
   ]);
+  const speeds = PLAYBACK_SPEEDS.includes(state.playbackSpeed)
+    ? PLAYBACK_SPEEDS
+    : [...PLAYBACK_SPEEDS, state.playbackSpeed].sort((a, b) => a - b);
   const speedSelect = /** @type {HTMLSelectElement} */ (
     createElement(
       'select',
-      {},
-      PLAYBACK_SPEEDS.map((speed) =>
-        createElement('option', { value: String(speed) }, [`${speed}x`]),
+      { id: 'editor-speed', 'aria-describedby': 'editor-speed-hint' },
+      speeds.map((speed) =>
+        createElement('option', { value: String(speed) }, [`${Number(speed.toFixed(2))}×`]),
       ),
     )
   );
