@@ -11,16 +11,58 @@ describe('initTabStatus', () => {
   const icons = () =>
     [...document.querySelectorAll('link[rel~="icon"]')].map((l) => l.getAttribute('href'));
 
+  /** @type {Set<(route: string) => void>} */
+  let routeListeners;
+  /** @param {string} route */
+  const goTo = (route) => {
+    for (const fn of routeListeners) fn(route);
+  };
+  const logoState = () => document.querySelector('.app-logo')?.getAttribute('data-state') ?? null;
+
   beforeEach(() => {
+    routeListeners = new Set();
+    document.body.innerHTML = '<a class="app-logo" href="#/capture"></a>';
     document.head.innerHTML = `
       <link rel="icon" href="/glinfs/favicon.ico" sizes="48x48">
       <link rel="icon" href="/glinfs/favicon.svg" type="image/svg+xml">`;
     document.title = BASE_TITLE;
-    stop = initTabStatus(document);
+    stop = initTabStatus(document, {
+      getRoute: () => '/capture',
+      subscribeRoute: (fn) => {
+        routeListeners.add(fn);
+        return () => routeListeners.delete(fn);
+      },
+    });
   });
 
   afterEach(() => {
     stop();
+  });
+
+  it('shows the edit icon in the editor and marks the header logo', () => {
+    goTo('/editor');
+
+    expect(icons()).toEqual(['/glinfs/favicon-edit.svg', '/glinfs/favicon-edit.svg']);
+    expect(document.title).toBe(BASE_TITLE);
+    expect(logoState()).toBe('edit');
+
+    goTo('/capture');
+    expect(icons()).toEqual(['/glinfs/favicon.ico', '/glinfs/favicon.svg']);
+    expect(logoState()).toBeNull();
+  });
+
+  it('lets a live capture outrank editing, and an export outrank both', () => {
+    goTo('/editor');
+    emit('capture:started', {});
+    expect(logoState()).toBe('recording');
+
+    emit('export:started', {});
+    expect(logoState()).toBe('busy');
+
+    emit('export:closed', {});
+    emit('capture:stopped', {});
+    expect(logoState()).toBe('edit');
+    expect(icons()[1]).toBe('/glinfs/favicon-edit.svg');
   });
 
   it('shows the recording icon and title while a capture is live', () => {
@@ -65,8 +107,10 @@ describe('initTabStatus', () => {
     emit('capture:started', {});
     stop();
     emit('capture:started', {});
+    goTo('/editor');
 
     expect(document.title).toBe(BASE_TITLE);
+    expect(logoState()).toBeNull();
     expect(icons()).toEqual(['/glinfs/favicon.ico', '/glinfs/favicon.svg']);
     stop = () => {};
   });

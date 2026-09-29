@@ -28,44 +28,21 @@ const COLORS = {
 
 // K = outline, W = fill, Y = sand (hourglass)
 const CURSORS = {
+  // macOS-style pointer; drawn solid black (see INK_FILLED)
   arrow: [
     'K........',
     'KK.......',
-    'KWK......',
-    'KWWK.....',
-    'KWWWK....',
-    'KWWWWK...',
-    'KWWWWWK..',
-    'KWWWWWWK.',
-    'KWWWWWKKK',
-    'KWWKWWK..',
-    'KWK.KWWK.',
-    'KK...KWWK',
-    '......KK.',
-  ],
-  cross: [
-    '...KKK...',
-    '...KWK...',
-    '...KWK...',
-    'KKKK.KKKK',
-    'KWW...WWK',
-    'KKKK.KKKK',
-    '...KWK...',
-    '...KWK...',
-    '...KKK...',
-  ],
-  ibeam: [
-    'KKK.KKK',
-    'KWWKWWK',
-    'KKKWKKK',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    '..KWK..',
-    'KKKWKKK',
-    'KWWKWWK',
-    'KKK.KKK',
+    'KKK......',
+    'KKKK.....',
+    'KKKKK....',
+    'KKKKKK...',
+    'KKKKKKK..',
+    'KKKKKKKK.',
+    'KKKKKKKKK',
+    'KKKKK....',
+    'KK.KKK...',
+    'K...KKK..',
+    '.....KK..',
   ],
   hand: [
     '...KK.....',
@@ -81,10 +58,11 @@ const CURSORS = {
     '..KWWWWWK.',
     '..KKKKKKK.',
   ],
+  // Sand mostly at the bottom, so the header's flip animation reads
   wait: [
     'KKKKKKKK',
     '.KWWWWK.',
-    '.KYYYYK.',
+    '.KWWWWK.',
     '..KYYK..',
     '...KK...',
     '..KWYK..',
@@ -96,25 +74,19 @@ const CURSORS = {
 const REC_DOT = ['.WWW.', 'WRRRW', 'WRRRW', 'WRRRW', '.WWW.'];
 const PALETTE = { K: COLORS.ink, W: COLORS.white, Y: COLORS.sand, R: COLORS.red };
 // Solid black like the macOS pointer, so the white sticker rim reads as the outline
-const INK_FILLED = new Set(['arrow', 'cross', 'ibeam']);
+const INK_FILLED = new Set(['arrow']);
 
-/** Header animation frames, in order. The first one is the static logo. */
+/**
+ * One frame per app state. `name` is matched by the header logo's data-state
+ * (set by shared/tab-status.js); the first frame is the default.
+ */
 const FRAMES = [
-  { cursor: 'arrow' },
-  { cursor: 'arrow', rec: true },
-  { cursor: 'cross' },
-  { cursor: 'ibeam' },
-  { cursor: 'hand' },
-  { cursor: 'wait' },
+  { name: 'idle', cursor: 'arrow' },
+  { name: 'recording', cursor: 'arrow', rec: true },
+  { name: 'edit', cursor: 'hand' },
+  { name: 'busy', cursor: 'wait' },
 ];
-
-/** Fill the gaps inside each row so the rims hug the outer shape */
-const solid = (rows) =>
-  rows.map((r) => {
-    const a = r.search(/[^.]/);
-    const b = r.length - [...r].reverse().join('').search(/[^.]/);
-    return a < 0 ? r : '.'.repeat(a) + 'S'.repeat(b - a) + '.'.repeat(r.length - b);
-  });
+const frame = (name) => FRAMES.find((f) => f.name === name);
 
 const createGrid = () => Array.from({ length: 32 }, () => Array(32).fill(null));
 
@@ -135,19 +107,33 @@ function paint(grid, rows, palette, ox, oy) {
   });
 }
 
-function ring(grid, rows, color, ox, oy, d) {
-  for (const [dx, dy] of [
-    [-d, 0],
-    [d, 0],
-    [0, -d],
-    [0, d],
-    [-d, -d],
-    [d, d],
-    [-d, d],
-    [d, -d],
-  ]) {
-    paint(grid, rows, { S: color }, ox + dx, oy + dy);
-  }
+/** Silhouette of a cursor as a unit-grid mask */
+function silhouette(rows, ox, oy) {
+  const grid = createGrid();
+  paint(grid, rows, { K: true, W: true, Y: true }, ox, oy);
+  return grid.map((row) => row.map(Boolean));
+}
+
+/** Grow a mask by r units (square kernel), optionally shifted by dx/dy */
+function dilate(mask, r, dx = 0, dy = 0) {
+  return mask.map((row, y) =>
+    row.map((_, x) => {
+      for (let j = -r; j <= r; j++) {
+        for (let i = -r; i <= r; i++) {
+          if (mask[y - dy + j]?.[x - dx + i]) return true;
+        }
+      }
+      return false;
+    }),
+  );
+}
+
+function fill(grid, mask, color) {
+  mask.forEach((row, y) => {
+    row.forEach((on, x) => {
+      if (on) grid[y][x] = color;
+    });
+  });
 }
 
 /** One <path> per color: horizontal runs, stacked into rectangles when rows repeat */
@@ -184,43 +170,41 @@ function toPaths(grid) {
   return [...byColor].map(([color, d]) => `<path fill="${color}" d="${d}"/>`).join('');
 }
 
-/** @returns {{ cyan: string, pink: string, body: string }} markup for one frame */
+/** @returns {{ cyan: string, pink: string, body: string, rec: string }} markup for one frame */
 function drawFrame({ cursor, rec = false }) {
   const rows = CURSORS[cursor];
   const w = rows[0].length * 2;
   const h = rows.length * 2;
   const x = 2 * Math.round((16 - w / 2 + 2) / 2);
   const y = 2 * Math.round((16 - h / 2) / 2);
-  const outline = solid(rows);
+  const shape = silhouette(rows, x, y);
 
   const cyan = createGrid();
-  paint(cyan, outline, { S: COLORS.cyan }, x - 6, y + 1);
+  fill(cyan, dilate(shape, 3, -3, 1), COLORS.cyan);
   const pink = createGrid();
-  paint(pink, outline, { S: COLORS.pink }, x + 6, y - 1);
+  fill(pink, dilate(shape, 3, 3, -1), COLORS.pink);
 
   // sticker: thin dark line → white rim → cursor
   const body = createGrid();
-  ring(body, outline, COLORS.ink, x, y, 3);
-  ring(body, outline, COLORS.white, x, y, 2);
-  paint(body, outline, { S: COLORS.white }, x, y);
+  fill(body, dilate(shape, 3), COLORS.ink);
+  fill(body, dilate(shape, 2), COLORS.white);
   paint(body, rows, INK_FILLED.has(cursor) ? { ...PALETTE, W: COLORS.ink } : PALETTE, x, y);
-  if (rec) paint(body, REC_DOT, PALETTE, 20, 2);
+  // kept apart so the header can blink it
+  const dot = createGrid();
+  if (rec) paint(dot, REC_DOT, PALETTE, 20, 2);
 
-  return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body) };
+  return { cyan: toPaths(cyan), pink: toPaths(pink), body: toPaths(body), rec: toPaths(dot) };
 }
 
-function faviconSvg(frame) {
-  const { cyan, pink, body } = drawFrame(frame);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}</svg>\n`;
+function faviconSvg(f) {
+  const { cyan, pink, body, rec } = drawFrame(f);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges" role="img"><title>Glinfs</title>${cyan}${pink}${body}${rec}</svg>\n`;
 }
 
 function headerSvg() {
-  const step = 0.75;
-  const frames = FRAMES.map((frame, i) => {
-    const { cyan, pink, body } = drawFrame(frame);
-    // Negative delays line the frames up: frame i shows during [i, i + 1) steps
-    const delay = -(((FRAMES.length - i) % FRAMES.length) * step);
-    return `<g class="app-logo-frame" style="animation-delay:${delay}s"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g>${body}</g>`;
+  const frames = FRAMES.map((f) => {
+    const { cyan, pink, body, rec } = drawFrame(f);
+    return `<g class="app-logo-frame" data-frame="${f.name}"><g class="app-logo-shadow app-logo-shadow--cyan">${cyan}</g><g class="app-logo-shadow app-logo-shadow--pink">${pink}</g><g class="app-logo-body">${body}</g>${rec ? `<g class="app-logo-rec">${rec}</g>` : ''}</g>`;
   }).join('\n            ');
   return `<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" shape-rendering="crispEdges">
             ${frames}
@@ -229,12 +213,13 @@ function headerSvg() {
 
 // --- favicons
 const files = {
-  'favicon.svg': FRAMES[0],
-  'favicon-recording.svg': { cursor: 'arrow', rec: true },
-  'favicon-busy.svg': { cursor: 'wait' },
+  'favicon.svg': frame('idle'),
+  'favicon-edit.svg': frame('edit'),
+  'favicon-recording.svg': frame('recording'),
+  'favicon-busy.svg': frame('busy'),
 };
-for (const [name, frame] of Object.entries(files)) {
-  writeFileSync(join(ROOT, 'public', name), faviconSvg(frame));
+for (const [name, f] of Object.entries(files)) {
+  writeFileSync(join(ROOT, 'public', name), faviconSvg(f));
 }
 
 // --- header logo
