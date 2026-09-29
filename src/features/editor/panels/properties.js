@@ -1,11 +1,27 @@
 /**
- * Editor properties panel (right column): live monitor slot, aspect ratio,
- * and the Playback / Overlay / Crop Range / Text / Background accordions
+ * Editor properties panel (right column): live monitor slot, then three
+ * tabs — Frame (aspect ratio, playback, crop range, overlay), Text and
+ * Background — and the Touch up mode, which replaces the tabs while the
+ * mask brush is on (see touch-up-panel.js).
+ *
+ * The tabs follow the ARIA tabs pattern: a roving tabindex, arrow keys /
+ * Home / End move between them and select (automatic activation). Their
+ * keydowns are consumed so the editor's arrow-key and Space shortcuts do
+ * not fire on a focused tab. The chosen tab lives in state.sidebarTab; the
+ * DOM is switched at once (updateSidebarTabs) and again from state, which
+ * is idempotent.
  * @module features/editor/panels/properties
  */
 
 import { createElement, on } from '../../../shared/utils/dom.js';
+import { getAnalysisFraction } from '../ai-cutout.js';
+import { SIDEBAR_TABS } from '../state.js';
+import { isAnalysisRunning } from './ai-cutout-panel.js';
 import { renderBackgroundPanel, renderTextPanel } from './edits-panel.js';
+import { renderTouchUpSection } from './touch-up-panel.js';
+
+/** @type {Record<import('../types.js').SidebarTab, string>} */
+const TAB_LABELS = { frame: 'Frame', text: 'Text', background: 'Background' };
 
 /** @type {string[]} */
 const ASPECT_RATIOS = ['free', '1:1', '16:9', '4:3', '9:16'];
@@ -30,16 +46,16 @@ export function renderEditorPropertiesPanel(state, handlers) {
   // Sidebar
   const sidebar = createElement('div', { className: 'editor-sidebar' });
 
-  // Panel content (tabs removed - all controls shown together for simplicity)
-  const panelContent = createElement('div', { className: 'panel-content' });
-
   // Live source monitor slot (#100 layout v3 / plan 1): docked at the TOP of
   // the right panel — the underused properties column cedes its prime space
   // to a permanently visible monitor. Populated by live-monitor.js while a
   // capture session is live, empty and invisible otherwise.
-  panelContent.appendChild(
+  sidebar.appendChild(
     createElement('div', { className: 'live-monitor-slot', 'data-live-monitor': 'true' }),
   );
+
+  // Frame tab content (scrolls inside its panel)
+  const panelContent = createElement('div', { className: 'panel-content editor-side-frame' });
 
   // Speed control: the preview plays at this speed and the GIF is exported
   // at it. A clip may carry a speed outside the list (an older default such
@@ -144,11 +160,9 @@ export function renderEditorPropertiesPanel(state, handlers) {
     cropInfoGroup.appendChild(createClearCropButton());
   }
 
-  // Low-frequency property groups fold into accordions (#100 v3): the user
-  // adjusts Aspect constantly (kept always-visible above) but touches
-  // Playback/Overlay/Crop rarely — the monitor gets their vertical space.
-  // Native <details> keeps this zero-JS; Crop opens itself while a crop
-  // exists so its values are never hidden mid-operation.
+  // Frame tab: Aspect (above, adjusted constantly), Playback and the crop
+  // values; the grid overlay stays a small collapsible (#100 v3). Native
+  // <details> keeps this zero-JS.
   const makeAccordion = (label, node, open = false, id = undefined) => {
     const details = createElement('details', { className: 'prop-accordion', id }, [
       createElement('summary', { className: 'prop-accordion-summary' }, [label]),
@@ -157,27 +171,119 @@ export function renderEditorPropertiesPanel(state, handlers) {
     if (open) details.setAttribute('open', '');
     return details;
   };
-  panelContent.appendChild(makeAccordion('Playback', speedGroup));
+  panelContent.appendChild(speedGroup);
+  panelContent.appendChild(cropInfoGroup);
   panelContent.appendChild(makeAccordion('Overlay', gridGroup));
-  panelContent.appendChild(makeAccordion('Crop Range', cropInfoGroup, Boolean(state.cropArea)));
 
-  // Clip edits. Placed after the existing groups so their controls keep
-  // their document order (e.g. the speed select stays the panel's first).
-  // Values are applied by updateEditsPanel() after mount and on changes.
+  // Clip edits: one tab each. Values are applied by updateEditsPanel()
+  // after mount and on changes.
   const textPanel = renderTextPanel(handlers);
   cleanups.push(...textPanel.cleanups);
-  panelContent.appendChild(makeAccordion('Text', textPanel.element, true, 'editor-text-accordion'));
 
   const backgroundPanel = renderBackgroundPanel(handlers);
   cleanups.push(...backgroundPanel.cleanups);
-  panelContent.appendChild(
-    makeAccordion(
-      'Background',
-      backgroundPanel.element,
-      state.edits?.background.enabled === true,
-      'editor-bg-accordion',
-    ),
+
+  /** @type {Record<import('../types.js').SidebarTab, HTMLElement>} */
+  const contents = {
+    frame: panelContent,
+    text: createElement('div', { className: 'panel-content' }, [textPanel.element]),
+    background: createElement('div', { className: 'panel-content' }, [backgroundPanel.element]),
+  };
+
+  const tablist = createElement('div', {
+    className: 'editor-side-tabs',
+    role: 'tablist',
+    'aria-label': 'Properties',
+  });
+  for (const tab of SIDEBAR_TABS) {
+    const selected = tab === state.sidebarTab;
+    const button = createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'editor-side-tab',
+        role: 'tab',
+        id: `editor-side-tab-${tab}`,
+        'data-tab': tab,
+        'aria-controls': `editor-side-panel-${tab}`,
+        'aria-selected': String(selected),
+        tabindex: selected ? '0' : '-1',
+      },
+      [
+        createElement('span', {}, [TAB_LABELS[tab]]),
+        ...(tab === 'background'
+          ? [
+              createElement('span', {
+                className: 'editor-side-tab-badge',
+                id: 'editor-side-tab-badge',
+                'aria-hidden': 'true',
+                hidden: 'true',
+              }),
+            ]
+          : []),
+      ],
+    );
+    tablist.appendChild(button);
+  }
+
+  const panels = createElement('div', { className: 'editor-side-panels' });
+  for (const tab of SIDEBAR_TABS) {
+    const panel = createElement(
+      'div',
+      {
+        className: 'editor-side-panel',
+        role: 'tabpanel',
+        id: `editor-side-panel-${tab}`,
+        'aria-labelledby': `editor-side-tab-${tab}`,
+        'data-tab': tab,
+        hidden: tab === state.sidebarTab ? undefined : 'true',
+      },
+      [contents[tab]],
+    );
+    panels.appendChild(panel);
+  }
+
+  /** @param {import('../types.js').SidebarTab} tab */
+  const selectTab = (tab) => {
+    applySidebarTab(sidebar, tab);
+    handlers.onSelectSidebarTab?.(tab);
+  };
+  cleanups.push(
+    on(tablist, 'click', (e) => {
+      const target = e.target instanceof Element ? e.target.closest('[role="tab"]') : null;
+      if (target instanceof HTMLElement && target.dataset.tab) {
+        selectTab(/** @type {import('../types.js').SidebarTab} */ (target.dataset.tab));
+      }
+    }),
+    on(tablist, 'keydown', (e) => {
+      const event = /** @type {KeyboardEvent} */ (e);
+      const current = event.target instanceof HTMLElement ? event.target.dataset.tab : undefined;
+      const index = SIDEBAR_TABS.indexOf(/** @type {any} */ (current));
+      if (index === -1 || event.altKey || event.ctrlKey || event.metaKey) return;
+      /** @type {number | null} */
+      let next = null;
+      if (event.key === 'ArrowRight') next = (index + 1) % SIDEBAR_TABS.length;
+      else if (event.key === 'ArrowLeft') {
+        next = (index - 1 + SIDEBAR_TABS.length) % SIDEBAR_TABS.length;
+      } else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = SIDEBAR_TABS.length - 1;
+      else if (event.key === ' ' || event.key === 'Enter') next = index;
+      if (next === null) return;
+      // Consumed: the editor's hotkeys (frame step, play) must not fire too
+      event.preventDefault();
+      const tab = SIDEBAR_TABS[next];
+      selectTab(tab);
+      /** @type {HTMLElement | null} */ (tablist.querySelector(`[data-tab="${tab}"]`))?.focus();
+    }),
   );
+
+  // Touch up mode: replaces the tabs while the brush is on
+  const touchUp = renderTouchUpSection(handlers);
+  cleanups.push(...touchUp.cleanups);
+
+  sidebar.appendChild(tablist);
+  sidebar.appendChild(panels);
+  sidebar.appendChild(touchUp.element);
 
   // Clear Crop clicks are handled via delegation so the listener survives
   // updateCropInfoPanel() re-creating the button on crop updates (issue #37)
@@ -190,9 +296,96 @@ export function renderEditorPropertiesPanel(state, handlers) {
     }),
   );
 
-  sidebar.appendChild(panelContent);
-
   return { element: sidebar, cleanups };
+}
+
+/**
+ * Show a tab: its button selected and focusable (roving tabindex), its
+ * panel visible, the others hidden
+ * @param {ParentNode} root - The sidebar or an ancestor
+ * @param {import('../types.js').SidebarTab} tab
+ */
+export function applySidebarTab(root, tab) {
+  for (const button of root.querySelectorAll('.editor-side-tab')) {
+    const selected = /** @type {HTMLElement} */ (button).dataset.tab === tab;
+    if (button.getAttribute('aria-selected') !== String(selected)) {
+      button.setAttribute('aria-selected', String(selected));
+      button.setAttribute('tabindex', selected ? '0' : '-1');
+    }
+  }
+  for (const panel of root.querySelectorAll('.editor-side-panel')) {
+    const el = /** @type {HTMLElement} */ (panel);
+    const hidden = el.dataset.tab !== tab;
+    if (el.hidden !== hidden) el.hidden = hidden;
+  }
+}
+
+/**
+ * Text of the Background tab's badge: the analysis progress while one
+ * runs (so it shows from the other tabs), a dot while removal is on,
+ * else nothing
+ * @param {import('../types.js').EditorState} state
+ * @returns {{ text: string, running: boolean, on: boolean }}
+ */
+export function getBackgroundTabBadge(state) {
+  const on = state.edits?.background?.enabled === true;
+  const status = state.aiCutout;
+  if (on && state.edits.background.method === 'ai' && status && isAnalysisRunning(status.phase)) {
+    const measured = status.phase === 'downloading' || status.phase === 'analyzing';
+    const text = measured ? `${Math.round(getAnalysisFraction(status) * 100)}%` : '\u2026';
+    return { text, running: true, on };
+  }
+  return { text: '', running: false, on };
+}
+
+/**
+ * Apply the state to the sidebar: the chosen tab, the Background tab's
+ * badge, and the Touch up mode (tabs hidden, the mode panel shown)
+ * @param {ParentNode} container
+ * @param {import('../types.js').EditorState} state
+ */
+export function updateSidebarTabs(container, state) {
+  const sidebar = container.querySelector('.editor-side-tabs')?.parentElement;
+  if (!sidebar) return;
+  applySidebarTab(sidebar, state.sidebarTab);
+
+  const badge = /** @type {HTMLElement | null} */ (sidebar.querySelector('#editor-side-tab-badge'));
+  if (badge) {
+    const { text, running, on } = getBackgroundTabBadge(state);
+    if (badge.textContent !== text) badge.textContent = text;
+    badge.hidden = !on;
+    badge.classList.toggle('editor-side-tab-badge--running', running);
+    const tab = badge.closest('.editor-side-tab');
+    const label = running ? `Background (analyzing ${text})` : on ? 'Background (on)' : null;
+    if (label) tab?.setAttribute('aria-label', label);
+    else tab?.removeAttribute('aria-label');
+  }
+
+  // Touch up mode: the brush being on (only while removal is on)
+  const touchUp = state.brush?.on === true && state.edits?.background?.enabled === true;
+  const tablist = /** @type {HTMLElement | null} */ (sidebar.querySelector('.editor-side-tabs'));
+  const panels = /** @type {HTMLElement | null} */ (sidebar.querySelector('.editor-side-panels'));
+  if (!tablist || !panels || tablist.hidden === touchUp) return;
+  const focused = document.activeElement;
+  tablist.hidden = touchUp;
+  panels.hidden = touchUp;
+  // Also set by updateTouchUpSection; shown here first so focus can move in
+  const section = /** @type {HTMLElement | null} */ (sidebar.querySelector('#touchup-section'));
+  if (section) section.hidden = !touchUp;
+  sidebar.classList.toggle('editor-side--touch-up', touchUp);
+  // Focus follows the swap when it was in the part that just hid: into the
+  // mode (Done) on entering — also from <body>, where a click on the
+  // entry's label leaves it — and back to the entry on leaving. Leaving with
+  // focus elsewhere (e.g. Escape over the preview) keeps it there.
+  const hiddenPart = touchUp ? panels : section;
+  const lost =
+    (focused instanceof HTMLElement && Boolean(hiddenPart?.contains(focused))) ||
+    (touchUp && (focused === null || focused === document.body));
+  if (!lost) return;
+  const target = touchUp
+    ? sidebar.querySelector('#touchup-done')
+    : sidebar.querySelector('#touchup-brush');
+  if (target instanceof HTMLElement) target.focus();
 }
 
 /**

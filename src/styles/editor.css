@@ -2228,7 +2228,6 @@
   color: var(--color-text-secondary);
 }
 
-.editor-screen .editor-brush-toggle--active span,
 .editor-screen .editor-brush-input:checked + span {
   border-color: var(--color-primary);
   background: var(--color-primary-muted);
@@ -2291,4 +2290,427 @@
 .editor-screen .editor-brush-cursor[hidden],
 .editor-screen .editor-canvas-container:not(.editor-brush-painting) .editor-brush-cursor {
   display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Right sidebar tabs (Frame / Text / Background) and the Touch up mode.
+   Scoped under .editor-screen; every class is prefixed editor-side-
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.editor-screen .editor-side-tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-header);
+}
+
+.editor-screen .editor-side-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.editor-screen .editor-side-tab:hover {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-side-tab[aria-selected="true"] {
+  color: var(--color-text);
+  background: var(--color-panel);
+  box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+.editor-screen .editor-side-tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* Background tab badge: a dot while removal is on, the progress while an
+   analysis runs */
+.editor-screen .editor-side-tab-badge {
+  min-width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+}
+
+.editor-screen .editor-side-tab-badge--running {
+  height: auto;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: 500;
+  line-height: 1.5;
+  color: #fff;
+}
+
+.editor-screen .editor-side-tab-badge[hidden],
+.editor-screen .editor-side-tabs[hidden],
+.editor-screen .editor-side-panels[hidden],
+.editor-screen .editor-side-panel[hidden] {
+  display: none;
+}
+
+/* Panels fill the rest of the sidebar; each scrolls inside */
+.editor-screen .editor-side-panels,
+.editor-screen .editor-side-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The tab already names Text / Background: hide the panels' own titles */
+.editor-screen .editor-side-panel .editor-text-panel > .property-group-title {
+  display: none;
+}
+
+.editor-screen .editor-side-panel .editor-text-panel,
+.editor-screen .editor-side-panel .editor-bg-panel {
+  padding-top: 0;
+}
+
+.editor-screen .editor-side-frame .prop-accordion {
+  border-top: 1px solid var(--color-border-subtle);
+  border-bottom: 0;
+}
+
+.editor-screen .editor-side-frame .prop-accordion-summary {
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+/* Background tab: "Remove background" switch */
+.editor-screen .editor-bg-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  position: relative;
+  cursor: pointer;
+}
+
+.editor-screen .editor-bg-switch-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* The checkbox covers the whole row, invisible: clicks anywhere toggle it */
+.editor-screen .editor-bg-switch-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.editor-screen .editor-bg-switch-track {
+  flex-shrink: 0;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  transition: background var(--transition-fast);
+}
+
+.editor-screen .editor-bg-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast);
+}
+
+.editor-screen .editor-bg-switch-input:checked + .editor-bg-switch-track {
+  background: var(--color-primary);
+}
+
+.editor-screen .editor-bg-switch-input:checked + .editor-bg-switch-track::after {
+  transform: translateX(14px);
+}
+
+.editor-screen .editor-bg-switch-input:focus-visible + .editor-bg-switch-track {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.editor-screen .editor-bg-lead {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.editor-screen .editor-bg-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.editor-screen .editor-bg-lead[hidden],
+.editor-screen .editor-bg-settings[hidden] {
+  display: none;
+}
+
+/* Collapsed "Advanced" and "About models" disclosures */
+.editor-screen .editor-bg-advanced,
+.editor-screen .editor-ai-about {
+  border-radius: var(--radius-sm);
+}
+
+.editor-screen .editor-bg-advanced-summary,
+.editor-screen .editor-ai-about-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.editor-screen .editor-bg-advanced-summary::-webkit-details-marker,
+.editor-screen .editor-ai-about-summary::-webkit-details-marker {
+  display: none;
+}
+
+.editor-screen .editor-bg-advanced-summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.editor-screen .editor-bg-advanced[open] > .editor-bg-advanced-summary::before {
+  transform: rotate(90deg);
+}
+
+.editor-screen .editor-bg-advanced-summary:hover,
+.editor-screen .editor-ai-about-summary:hover {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-bg-advanced-summary:focus-visible,
+.editor-screen .editor-ai-about-summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.editor-screen .editor-bg-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border);
+  margin-left: 2px;
+}
+
+.editor-screen .editor-ai-about-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-style: italic;
+  font-weight: 700;
+}
+
+.editor-screen .editor-ai-about[open] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Touch up entry (Background tab) */
+.editor-screen .editor-brush-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.editor-screen .editor-brush-entry .editor-brush-toggle span {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  background: var(--color-bg-tertiary);
+}
+
+.editor-screen .editor-brush-entry .editor-brush-toggle:hover span {
+  border-color: var(--color-primary);
+}
+
+.editor-screen .editor-brush-entry .editor-brush-input:disabled + span {
+  opacity: 0.5;
+}
+
+.editor-screen .editor-brush-note:empty {
+  display: none;
+}
+
+/* Touch up mode: replaces the tabs, bar on top with Done */
+.editor-screen .editor-side-panels + .editor-brush-section {
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.editor-screen .editor-brush-section[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-brush-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-5);
+  background: var(--color-primary-muted);
+  border-bottom: 1px solid var(--color-primary);
+}
+
+.editor-screen .editor-brush-bar .editor-brush-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.editor-screen .editor-brush-done {
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+.editor-screen .editor-brush-done:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+.editor-screen .editor-brush-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+
+.editor-screen .editor-brush-body .editor-brush-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.editor-screen .editor-brush-body #touchup-undo {
+  grid-column: 1 / -1;
+}
+
+.editor-screen .editor-brush-keys {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* Preview: Result / Original / Mask switch over the canvas */
+.editor-screen .editor-view-switch {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: rgba(24, 24, 27, 0.9);
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-screen .editor-view-switch[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-view-switch-legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-view-switch-option {
+  position: relative;
+  cursor: pointer;
+}
+
+.editor-screen .editor-view-switch-option input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.editor-screen .editor-view-switch-option span {
+  display: block;
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-view-switch-option:hover span {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-view-switch-option input:checked + span {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.editor-screen .editor-view-switch-option input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+@media (max-width: 900px) {
+  .editor-screen .editor-sidebar:has(.editor-side-tabs) {
+    flex-direction: column;
+    max-height: 320px;
+  }
 }

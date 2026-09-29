@@ -25,6 +25,7 @@ import {
   gotoCaptureWithStubModel,
   injectDiscClip,
   maskCount,
+  openAdvanced,
   pauseEditorPlayback,
   readAiStatus,
   serveStubModel,
@@ -122,6 +123,7 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     await expect(page.locator('#ai-progress-bar')).toHaveJSProperty('value', 0.25);
 
     // Editing stays possible while the analysis runs
+    await openAdvanced(page, 'ai-advanced');
     await page.locator('#ai-threshold').fill('40');
     await expect(page.locator('#ai-threshold-value')).toHaveText('40%');
 

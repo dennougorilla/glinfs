@@ -19,7 +19,7 @@
 
 import { clipStrokeMove, isPointInFrame } from '../../../shared/edits/touch-ups.js';
 import { isComposingEvent, isEditableTarget } from '../../../shared/hotkeys.js';
-import { createElement } from '../../../shared/utils/dom.js';
+import { createElement, on } from '../../../shared/utils/dom.js';
 import { getCursorForHandle, hitTestCropHandle, renderFrameOnly, renderOverlay } from '../api.js';
 import { calculateCropFromDrag, detectBoundaryHit, moveCrop, resizeCropByHandle } from '../core.js';
 import {
@@ -28,6 +28,7 @@ import {
   hitTestEditorText,
   sampleSourcePixel,
 } from '../edits-preview.js';
+import { getEffectivePreviewView } from '../state.js';
 
 /** Overlay name outside the pick tools */
 const CROP_OVERLAY_LABEL = 'Crop overlay';
@@ -44,6 +45,66 @@ export const PICK_OVERLAY_LABEL =
  */
 export function isBrushActive(state) {
   return Boolean(state?.brush?.on && state.edits?.background?.enabled);
+}
+
+/** @type {{ value: import('../types.js').PreviewView, label: string }[]} */
+const VIEW_OPTIONS = [
+  { value: 'result', label: 'Result' },
+  { value: 'original', label: 'Original' },
+  { value: 'mask', label: 'Mask' },
+];
+
+/**
+ * Result / Original / Mask switch over the preview, shown while background
+ * removal is on. Radios (not buttons): arrow keys move between the views
+ * and the hotkey dispatcher leaves them alone.
+ * @param {import('../ui.js').EditorUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderViewSwitch(handlers, cleanups) {
+  return createElement(
+    'fieldset',
+    { className: 'editor-view-switch', id: 'preview-view', hidden: 'true' },
+    [
+      createElement('legend', { className: 'editor-view-switch-legend' }, ['Preview']),
+      ...VIEW_OPTIONS.map(({ value, label }) => {
+        const id = `preview-view-${value}`;
+        const input = /** @type {HTMLInputElement} */ (
+          createElement('input', { type: 'radio', name: 'preview-view', id, value })
+        );
+        cleanups.push(
+          on(input, 'change', () => {
+            if (input.checked) handlers.onSetPreviewView?.(value);
+          }),
+        );
+        return createElement('label', { className: 'editor-view-switch-option', for: id }, [
+          input,
+          createElement('span', {}, [label]),
+        ]);
+      }),
+    ],
+  );
+}
+
+/**
+ * Apply the state to the preview's view switch
+ * @param {ParentNode} container
+ * @param {import('../types.js').EditorState} state
+ */
+export function updatePreviewViewSwitch(container, state) {
+  const root = container.querySelector('#preview-view');
+  if (!(root instanceof HTMLElement)) return;
+  const removalOn = state.edits?.background?.enabled === true;
+  root.hidden = !removalOn;
+  const view = getEffectivePreviewView(state);
+  for (const { value } of VIEW_OPTIONS) {
+    const input = /** @type {HTMLInputElement | null} */ (
+      root.querySelector(`#preview-view-${value}`)
+    );
+    if (input && input.checked !== (view === value)) input.checked = view === value;
+  }
+  container.querySelector('.editor-canvas-container')?.setAttribute('data-preview-view', view);
 }
 
 /** Marker step per arrow key press, as a fraction of the frame (Shift: big) */
@@ -178,6 +239,7 @@ export function renderEditorPreview(state, handlers, frame) {
   canvasContainer.appendChild(brushCursor);
   canvasContainer.appendChild(aiNote);
   previewWrapper.appendChild(canvasContainer);
+  previewWrapper.appendChild(renderViewSwitch(handlers, cleanups));
   previewPanel.appendChild(previewWrapper);
 
   return { element: previewPanel, baseCanvas, overlayCanvas, cleanups };

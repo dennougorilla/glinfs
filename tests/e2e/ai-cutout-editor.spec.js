@@ -24,6 +24,7 @@ import {
   gifPixel,
   gotoCaptureWithStubModel,
   injectDiscClip,
+  openAdvanced,
   pauseEditorPlayback,
   serveStubModel,
   waitForAiMasks,
@@ -256,6 +257,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     }
 
     // Threshold 70 %: grey disc B (63 %) falls below it, white disc A stays
+    await openAdvanced(page, 'ai-advanced');
     await page.locator('#ai-threshold').fill('70');
     await expect(page.locator('#ai-threshold-value')).toHaveText('70%');
     await waitForAiMasks(page);

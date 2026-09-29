@@ -113,7 +113,21 @@
  *   tool: the next preview click adds a Keep/Remove pick (null = off)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
  * @property {BrushState} brush - Mask brush tool (not persisted; the strokes live in
- *   edits.touchUps)
+ *   edits.touchUps). While it is on the sidebar shows the Touch up mode.
+ * @property {SidebarTab} sidebarTab - Tab shown in the right sidebar
+ * @property {PreviewView} previewView - What the preview shows while background
+ *   removal is on (view only; never affects the export)
+ */
+
+/**
+ * Tab of the right sidebar
+ * @typedef {'frame'|'text'|'background'} SidebarTab
+ */
+
+/**
+ * Preview view while background removal is on: the result, the frame
+ * without the removal, or the removed areas tinted over the frame
+ * @typedef {'result'|'original'|'mask'} PreviewView
  */
 
 /**

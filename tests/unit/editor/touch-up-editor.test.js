@@ -355,6 +355,11 @@ describe('Mask brush in the mounted editor', () => {
     expect(getEditorState()?.brush.on).toBe(false);
     expect(getEditorState()?.cropArea).not.toBeNull();
     expect($('.editor-canvas-container').classList.contains('editor-brush-painting')).toBe(false);
+    // Leaving the mode from Done (focused on entering) returns focus to the
+    // Touch up entry, a form control where Escape only leaves tools; from
+    // outside the panel the next Escape clears the crop
+    expect(document.activeElement?.id).toBe('touchup-brush');
+    /** @type {HTMLElement} */ (document.activeElement).blur();
     press('Escape');
     expect(getEditorState()?.cropArea).toBeNull();
 

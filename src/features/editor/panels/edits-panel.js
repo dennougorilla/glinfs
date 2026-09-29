@@ -16,8 +16,12 @@
 import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
-import { renderAiCutoutSection, updateAiCutoutSection } from './ai-cutout-panel.js';
-import { renderTouchUpSection, updateTouchUpSection } from './touch-up-panel.js';
+import {
+  advancedDetails,
+  renderAiCutoutSection,
+  updateAiCutoutSection,
+} from './ai-cutout-panel.js';
+import { renderTouchUpEntry, updateTouchUpSection } from './touch-up-panel.js';
 
 /** @typedef {import('../../../shared/edits/model.js').TextLayer} TextLayer */
 
@@ -413,7 +417,9 @@ export function renderTextPanel(handlers) {
 }
 
 /**
- * Render the Background panel (goes inside the "Background" accordion)
+ * Render the Background panel (the sidebar's Background tab). Off, it is
+ * only the "Remove background" switch and one line; on, the method switch
+ * and ONLY the chosen method's settings, then the Touch up entry.
  * @param {import('../ui.js').EditorUIHandlers} handlers
  * @returns {{ element: HTMLElement, cleanups: (() => void)[] }}
  */
@@ -421,13 +427,39 @@ export function renderBackgroundPanel(handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
-  const enabled = checkbox('background-enabled', 'Remove background', 'editor-bg-check');
-  cleanups.push(
-    on(enabled.input, 'change', () => handlers.onToggleBackground?.(enabled.input.checked)),
+  // "Remove background" switch: a checkbox with the switch role, styled as
+  // a toggle (see module doc for why a checkbox)
+  const enabledInput = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'checkbox',
+      id: 'background-enabled',
+      role: 'switch',
+      className: 'editor-bg-switch-input',
+      'aria-describedby': 'background-lead',
+    })
   );
+  cleanups.push(
+    on(enabledInput, 'change', () => handlers.onToggleBackground?.(enabledInput.checked)),
+  );
+  const enabledSwitch = createElement(
+    'label',
+    { className: 'editor-bg-switch', for: 'background-enabled' },
+    [
+      createElement('span', { className: 'editor-bg-switch-label' }, ['Remove background']),
+      enabledInput,
+      createElement('span', { className: 'editor-bg-switch-track', 'aria-hidden': 'true' }),
+    ],
+  );
+  const lead = createElement('p', { className: 'editor-bg-lead', id: 'background-lead' }, [
+    'Make the background transparent in the GIF.',
+  ]);
 
   const colorInput = /** @type {HTMLInputElement} */ (
-    createElement('input', { type: 'color', id: 'background-color', className: 'editor-bg-color' })
+    createElement('input', {
+      type: 'color',
+      id: 'background-color',
+      className: 'editor-bg-color',
+    })
   );
   cleanups.push(
     on(colorInput, 'input', () => handlers.onSetBackground?.({ color: colorInput.value })),
@@ -491,8 +523,8 @@ export function renderBackgroundPanel(handlers) {
   const ai = renderAiCutoutSection(handlers);
   cleanups.push(...ai.cleanups);
 
-  // Mask brush over either method
-  const touchUp = renderTouchUpSection(handlers);
+  // Entry into the Touch up mode (the mask brush over either method)
+  const touchUp = renderTouchUpEntry(handlers);
   cleanups.push(...touchUp.cleanups);
 
   const colorFields = createElement(
@@ -517,30 +549,30 @@ export function renderBackgroundPanel(handlers) {
           tolerance.output,
         ]),
       ]),
-      createElement('div', { className: 'editor-text-field' }, [
-        createElement('label', { className: 'editor-text-field-label', for: 'background-mode' }, [
-          'Remove',
+      advancedDetails('background-advanced', [
+        createElement('div', { className: 'editor-text-field' }, [
+          createElement('label', { className: 'editor-text-field-label', for: 'background-mode' }, [
+            'Remove',
+          ]),
+          createElement('div', { className: 'editor-text-field-control' }, [mode]),
         ]),
-        createElement('div', { className: 'editor-text-field-control' }, [mode]),
+        createElement('p', { className: 'editor-bg-hint' }, [
+          'Edges only removes the key color connected to the frame edges.',
+        ]),
       ]),
     ],
+  );
+
+  const settings = createElement(
+    'div',
+    { className: 'editor-bg-settings', id: 'background-settings', hidden: 'true' },
+    [ai.methodSwitch, colorFields, ai.section, touchUp.element],
   );
 
   const element = createElement(
     'div',
     { className: 'property-group editor-bg-panel', 'data-edits-panel': 'background' },
-    [
-      createElement('div', { className: 'property-group-title' }, ['Background']),
-      enabled.wrapper,
-      ai.methodSwitch,
-      colorFields,
-      ai.section,
-      touchUp.element,
-      createElement('p', { className: 'editor-bg-hint' }, [
-        'GIF transparency is on or off per pixel: removed pixels become fully transparent, everything else stays opaque.',
-      ]),
-      alphaNote,
-    ],
+    [enabledSwitch, lead, settings, alphaNote],
   );
 
   return { element, cleanups };
@@ -703,6 +735,9 @@ function updateBackgroundPanel(container, state, fps) {
   const { background } = state.edits;
 
   setChecked(/** @type {HTMLInputElement} */ (q(root, '#background-enabled')), background.enabled);
+  // Off: the switch and its line only (the settings are hidden, not greyed)
+  /** @type {HTMLElement} */ (q(root, '#background-settings')).hidden = !background.enabled;
+  /** @type {HTMLElement} */ (q(root, '#background-lead')).hidden = background.enabled;
   setValue(/** @type {HTMLInputElement} */ (q(root, '#background-color')), background.color);
   setChecked(/** @type {HTMLInputElement} */ (q(root, '#background-pick')), state.pickingKeyColor);
   q(root, '.editor-bg-pick')?.classList.toggle('editor-bg-pick--active', state.pickingKeyColor);
@@ -720,5 +755,6 @@ function updateBackgroundPanel(container, state, fps) {
   /** @type {HTMLElement} */ (q(root, '#background-alpha-note')).hidden = !state.clip?.hasAlpha;
 
   updateAiCutoutSection(root, state, fps);
-  updateTouchUpSection(root, state);
+  // The Touch up mode panel lives outside this panel (it replaces the tabs)
+  updateTouchUpSection(container, state);
 }

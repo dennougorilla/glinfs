@@ -12,6 +12,7 @@ import {
   closeExportDialog,
   exportFromEditor,
   gotoEditorWithClip,
+  openSidebarTab,
   pauseEditorPlayback,
 } from './helpers/app.js';
 
@@ -36,10 +37,11 @@ async function activeClipId(page) {
  * @param {string} caption
  */
 async function addEdits(page, caption) {
+  await openSidebarTab(page, 'text');
   await page.locator('#text-add').click();
   await page.locator('#text-layer-text').fill(caption);
   await page.locator('#text-layer-color').fill('#ff8800');
-  await page.locator('#editor-bg-accordion summary').click();
+  await openSidebarTab(page, 'background');
   await page.locator('#background-enabled').check();
   await page.locator('#background-tolerance').fill('42');
   await expect.poll(async () => (await readEditorState(page))?.edits.background.tolerance).toBe(42);
@@ -134,10 +136,13 @@ test.describe('Editor edits persistence', () => {
   test('a deliberately chosen default key color is not replaced by edge detection', async ({
     page,
   }) => {
-    await page.locator('#editor-bg-accordion summary').click();
-    // Choose the default green on purpose (the clip's edge is #2050a0)
+    // The key color shows once removal is on (which detects the clip's
+    // edge, #2050a0); choose the default green on purpose, then turn it off
+    await openSidebarTab(page, 'background');
+    await page.locator('#background-enabled').check();
     await page.locator('#background-color').fill('#ff0000');
     await page.locator('#background-color').fill('#00ff00');
+    await page.locator('#background-enabled').uncheck();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
@@ -148,7 +153,7 @@ test.describe('Editor edits persistence', () => {
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: false, color: '#00ff00', colorChosen: true });
-    await page.locator('#editor-bg-accordion summary').click();
+    await openSidebarTab(page, 'background');
     await page.locator('#background-enabled').check();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
@@ -166,6 +171,7 @@ test.describe('Editor edits persistence', () => {
 
     // Closing dropped the payload the dialog was opened for, so the next
     // mount restores the clip's own saved state (not a stale snapshot)
+    await openSidebarTab(page, 'text');
     await page.locator('#text-layer-text').fill('After export');
     await expect
       .poll(async () => (await readEditorState(page))?.edits.textLayers[0].text)
@@ -210,6 +216,7 @@ test.describe('Editor edits persistence', () => {
 
     // Edit B, then promote A from the queue: B demotes with its edits (the
     // swap carries them explicitly), A comes back with its own
+    await openSidebarTab(page, 'text');
     await page.locator('#text-add').click();
     await page.locator('#text-layer-text').fill('Clip B');
     await promoteFromQueue(page, idA);

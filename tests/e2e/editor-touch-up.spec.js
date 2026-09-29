@@ -7,9 +7,12 @@
  * on the (removed) green brings the original green back. "This frame"
  * strokes change one frame, "Selection" strokes every frame in IN..OUT;
  * Undo, Clear on this frame and Clear all take strokes away again. The
- * brush only works while background removal is on; Escape cancels a stroke
- * in progress, then leaves the brush before anything else, and a stroke
- * that leaves the preview stops at its edge. Over the AI cutout (stub model on the WASM
+ * brush is the sidebar's Touch up mode (entered from the Background tab,
+ * left with Done or Escape) and only works while background removal is on;
+ * Escape cancels a stroke in progress, then leaves the mode before anything
+ * else, and a stroke that leaves the preview stops at its edge. The
+ * preview's Result / Original / Mask switch shows the removal differently
+ * without changing the export. Over the AI cutout (stub model on the WASM
  * fallback, two-disc clip) the same strokes erase a kept character and
  * restore removed background.
  * @module tests/e2e/editor-touch-up.spec
@@ -20,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   chooseAiCutout,
+  closeExportDialog,
   decodeExportedGif,
   discClip,
   editorFramePointToViewport,
@@ -30,6 +34,7 @@ import {
   gotoCapture,
   gotoCaptureWithStubModel,
   injectDiscClip,
+  openSidebarTab,
   pauseEditorPlayback,
   serveStubModel,
   waitForAiMasks,
@@ -89,20 +94,34 @@ function readEditorState(page) {
 }
 
 /**
- * Open the Background accordion and turn the color key on (the detected
- * edge color is the green)
+ * Open the Background tab and turn the color key on (the detected edge
+ * color is the green)
  * @param {import('@playwright/test').Page} page
  */
 async function enableColorKey(page) {
-  const accordion = page.locator('#editor-bg-accordion');
-  if ((await accordion.getAttribute('open')) === null) {
-    await accordion.locator('summary').click();
-  }
+  await openSidebarTab(page, 'background');
   await page.locator('#background-enabled').check();
   await expect
     .poll(async () => (await readEditorState(page))?.edits.background)
     .toMatchObject({ enabled: true, color: '#00ff00' });
   await expect.poll(() => editorPreviewAlpha(page, 5, 5)).toBe(0);
+}
+
+/**
+ * RGBA of a preview canvas pixel (frame pixels)
+ * @param {import('@playwright/test').Page} page
+ * @param {number} x
+ * @param {number} y
+ * @returns {Promise<number[]>}
+ */
+function previewPixel(page, x, y) {
+  return page.evaluate(
+    ([px, py]) => {
+      const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector('.editor-canvas'));
+      return Array.from(canvas.getContext('2d')?.getImageData(px, py, 1, 1).data ?? []);
+    },
+    [x, y],
+  );
 }
 
 /**
@@ -172,25 +191,98 @@ test.describe('Mask brush (touch up)', () => {
     await openSquareClip(page);
   });
 
-  test('needs background removal: the section is disabled and says so', async ({ page }) => {
-    const accordion = page.locator('#editor-bg-accordion');
-    await accordion.locator('summary').click();
-    await expect(page.locator('#touchup-section')).toBeVisible();
-    await expect(page.locator('#touchup-needs-removal')).toBeVisible();
-    await expect(page.locator('#touchup-needs-removal')).toContainText(
-      'Touch-ups apply only while background removal is on',
-    );
-    await expect(page.locator('#touchup-brush')).toBeDisabled();
+  test('Background tab: off shows only the switch; on shows one method and the Touch up entry', async ({
+    page,
+  }) => {
+    await openSidebarTab(page, 'background');
+    await expect(page.locator('#background-lead')).toBeVisible();
+    await expect(page.locator('#background-settings')).toBeHidden();
+    await expect(page.locator('label[for="touchup-brush"]')).toBeHidden();
+    await expect(page.locator('#preview-view')).toBeHidden();
+    await expect(page.locator('#editor-side-tab-badge')).toBeHidden();
 
     await page.locator('#background-enabled').check();
-    await expect(page.locator('#touchup-needs-removal')).toBeHidden();
+    await expect(page.locator('#background-lead')).toBeHidden();
+    await expect(page.locator('#ai-color-fields')).toBeVisible();
+    await expect(page.locator('#ai-section')).toBeHidden();
+    await expect(page.locator('#background-mode')).toBeHidden(); // under Advanced
     await expect(page.locator('#touchup-brush')).toBeEnabled();
+    await expect(page.locator('#touchup-needs-removal')).toBeHidden();
+    await expect(page.locator('#preview-view')).toBeVisible();
+    // The Background tab shows removal is on from the other tabs
+    await expect(page.locator('#editor-side-tab-badge')).toBeVisible();
 
-    // The AI method offers the same section
+    // The AI method replaces the color settings and offers the same entry
     await page.locator('label[for="ai-method-ai"]').click();
     await expect(page.locator('#ai-section')).toBeVisible();
-    await expect(page.locator('#touchup-section')).toBeVisible();
+    await expect(page.locator('#ai-color-fields')).toBeHidden();
+    await expect(page.locator('#ai-intro')).toBeHidden(); // under About models
     await expect(page.locator('#touchup-brush')).toBeEnabled();
+  });
+
+  test('Touch up mode: the tools replace the tabs; Done and Escape leave it and keep the strokes', async ({
+    page,
+  }) => {
+    await enableColorKey(page);
+    await page.locator('label[for="touchup-brush"]').click();
+    await expect(page.locator('#touchup-section')).toBeVisible();
+    await expect(page.locator('#touchup-title')).toHaveText('Touch up');
+    await expect(page.getByRole('tablist', { name: 'Properties' })).toBeHidden();
+    await expect(page.locator('#editor-side-panel-background')).toBeHidden();
+    await expect(page.locator('.editor-canvas-container')).toHaveClass(/editor-brush-painting/);
+
+    await page.locator('#touchup-size').fill(SIZE_12PX);
+    await paint(page, 70, 90, 60);
+    await page.locator('#touchup-done').click();
+    await expect.poll(async () => (await readEditorState(page))?.brush.on).toBe(false);
+    await expect(page.locator('#touchup-section')).toBeHidden();
+    await expect(page.getByRole('tab', { name: 'Background', selected: true })).toBeVisible();
+    await expect(page.locator('#touchup-brush')).toBeFocused();
+    await expect(page.locator('#touchup-entry-summary')).toContainText('1 stroke in total');
+    await expect(page.locator('.editor-canvas-container')).not.toHaveClass(/editor-brush-painting/);
+    // Done keeps the stroke (already applied); painting is off outside the mode
+    expect((await readEditorState(page))?.edits.touchUps).toHaveLength(1);
+    await expect.poll(() => editorPreviewAlpha(page, 80, 60)).toBe(0);
+
+    // Escape from a mode control leaves it too
+    await page.locator('label[for="touchup-brush"]').click();
+    await expect(page.locator('#touchup-done')).toBeFocused();
+    await page.locator('label[for="touchup-mode-restore"]').click();
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await readEditorState(page))?.brush.on).toBe(false);
+    await expect(page.getByRole('tablist', { name: 'Properties' })).toBeVisible();
+    expect((await readEditorState(page))?.edits.touchUps).toHaveLength(1);
+  });
+
+  test('preview view switch: Original shows the frame, Mask tints the removed area; export unchanged', async ({
+    page,
+  }) => {
+    await enableColorKey(page);
+    const result = await previewPixel(page, 10, 10);
+    expect(result[3]).toBe(0);
+
+    await page.locator('label[for="preview-view-original"]').click();
+    await expect.poll(async () => (await readEditorState(page))?.previewView).toBe('original');
+    await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
+
+    await page.locator('label[for="preview-view-mask"]').click();
+    await expect.poll(async () => (await previewPixel(page, 10, 10))[3]).toBe(255);
+    const removed = await previewPixel(page, 10, 10);
+    // Removed green reads red; the kept square keeps its own red untouched
+    expect(removed[0]).toBeGreaterThan(removed[1]);
+    expect(removed[0]).toBeGreaterThan(150);
+    expect(await previewPixel(page, 80, 60)).toEqual([255, 0, 0, 255]);
+
+    // View only: the export is still the transparent result
+    const frames = await exportAndDecode(page);
+    expect(gifPixel(frames[0], 10, 10)[3]).toBe(0);
+    await closeExportDialog(page);
+
+    // Removal off hides the switch and shows the plain frame
+    await openSidebarTab(page, 'background');
+    await page.locator('#background-enabled').uncheck();
+    await expect(page.locator('#preview-view')).toBeHidden();
+    await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
   });
 
   test('Erase on "This frame": only that frame loses the kept pixels in the export', async ({
@@ -360,11 +452,19 @@ test.describe('Mask brush (touch up)', () => {
     expect((await readEditorState(page))?.cropArea).not.toBeNull();
     await expect(page.locator('.editor-brush-cursor')).toBeHidden();
 
-    // Turning removal off switches the brush off; its strokes stay stored
+    // Turning removal off switches the brush off (and leaves the mode); its
+    // strokes stay stored
     await page.locator('label[for="touchup-brush"]').click();
     await expect.poll(async () => (await readEditorState(page))?.brush.on).toBe(true);
-    await page.locator('#background-enabled').uncheck();
+    await page.evaluate(() => {
+      const { edits } = window.__TEST_HOOKS__.getEditorState();
+      window.__TEST_HOOKS__.setEditorState({
+        edits: { ...edits, background: { ...edits.background, enabled: false } },
+      });
+    });
     await expect.poll(async () => (await readEditorState(page))?.brush.on).toBe(false);
+    await expect(page.locator('#touchup-section')).toBeHidden();
+    await expect(page.getByRole('tablist', { name: 'Properties' })).toBeVisible();
     expect((await readEditorState(page))?.edits.touchUps).toHaveLength(1);
   });
 });
