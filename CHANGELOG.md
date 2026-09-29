@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/dennougorilla/glinfs/compare/v0.7.0...v0.8.0) (2026-09-29)
+
+
+### Features
+
+* AI cutout for anime characters, fully in the browser ([#138](https://github.com/dennougorilla/glinfs/issues/138)) ([be8830c](https://github.com/dennougorilla/glinfs/commit/be8830cd6b7ed765ab0a2555af358afdd41dc376))
+* **editor:** mask brush to touch up background removal ([#140](https://github.com/dennougorilla/glinfs/issues/140)) ([ff376f5](https://github.com/dennougorilla/glinfs/commit/ff376f5524a0270aff76aa855ceed2a1dbdb986d))
+* **export:** export dialog, unified speed, target size and output scale ([#139](https://github.com/dennougorilla/glinfs/issues/139)) ([c97a6c1](https://github.com/dennougorilla/glinfs/commit/c97a6c146df3960f46d308719de7e49ce8f2f434))
+
 ## [0.7.0](https://github.com/dennougorilla/glinfs/compare/v0.6.0...v0.7.0) (2026-09-25)
 
 
