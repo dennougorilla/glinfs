@@ -34,6 +34,7 @@ import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { registerHotkey } from './shared/hotkeys.js';
 import { announce } from './shared/live-region.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
+import { initTabStatus } from './shared/tab-status.js';
 import {
   getDefaultMockOptions,
   getTestConfig,
@@ -324,6 +325,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // #92 failure contract: tell the user when a codec-worker crash loses a
   // queued clip (never displacing a pending deletion's Undo toast)
   setupClipLossNotice();
+
+  // Recording / exporting state in the tab's icon and title
+  initTabStatus();
 
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');
