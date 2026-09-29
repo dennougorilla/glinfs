@@ -2134,3 +2134,161 @@
   font-size: var(--font-size-xs);
   pointer-events: none;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Touch up (mask brush): Background panel section and the preview cursor
+   Scoped under .editor-screen; every class is prefixed editor-brush-
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.editor-screen .editor-brush-section,
+.editor-screen .editor-brush-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.editor-screen .editor-brush-section {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.editor-screen .editor-brush-controls {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.editor-screen .editor-brush-controls:disabled {
+  opacity: 0.5;
+}
+
+.editor-screen .editor-brush-title {
+  margin: 0;
+}
+
+.editor-screen .editor-brush-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.editor-screen .editor-brush-note,
+.editor-screen .editor-brush-status {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.editor-screen .editor-brush-note[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-brush-note--warning {
+  color: var(--color-warning);
+}
+
+.editor-screen .editor-brush-status {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-brush-status:empty {
+  display: none;
+}
+
+/* Brush toggle: a checkbox styled as a button */
+.editor-screen .editor-brush-toggle {
+  position: relative;
+  cursor: pointer;
+}
+
+.editor-screen .editor-brush-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.editor-screen .editor-brush-toggle span {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-brush-toggle--active span,
+.editor-screen .editor-brush-input:checked + span {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-brush-input:disabled + span {
+  cursor: not-allowed;
+}
+
+.editor-screen .editor-brush-input:focus-visible + span,
+.editor-screen .editor-brush-group input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.editor-screen .editor-brush-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-brush-action {
+  flex: 1 1 auto;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.editor-screen .editor-brush-action:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Preview: the brush owns the pointer; its circle replaces the cursor */
+.editor-screen .editor-brush-painting .editor-canvas-overlay {
+  cursor: none;
+  touch-action: none;
+  outline: 2px dashed var(--color-primary);
+  outline-offset: -2px;
+}
+
+.editor-screen .editor-brush-cursor {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.8);
+  background: rgba(239, 68, 68, 0.15);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.editor-screen .editor-brush-cursor--restore {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.editor-screen .editor-brush-cursor[hidden],
+.editor-screen .editor-canvas-container:not(.editor-brush-painting) .editor-brush-cursor {
+  display: none;
+}

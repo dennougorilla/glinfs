@@ -17,6 +17,7 @@ import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
 import { renderAiCutoutSection, updateAiCutoutSection } from './ai-cutout-panel.js';
+import { renderTouchUpSection, updateTouchUpSection } from './touch-up-panel.js';
 
 /** @typedef {import('../../../shared/edits/model.js').TextLayer} TextLayer */
 
@@ -490,6 +491,10 @@ export function renderBackgroundPanel(handlers) {
   const ai = renderAiCutoutSection(handlers);
   cleanups.push(...ai.cleanups);
 
+  // Mask brush over either method
+  const touchUp = renderTouchUpSection(handlers);
+  cleanups.push(...touchUp.cleanups);
+
   const colorFields = createElement(
     'div',
     { className: 'editor-ai-color-fields', id: 'ai-color-fields' },
@@ -530,6 +535,7 @@ export function renderBackgroundPanel(handlers) {
       ai.methodSwitch,
       colorFields,
       ai.section,
+      touchUp.element,
       createElement('p', { className: 'editor-bg-hint' }, [
         'GIF transparency is on or off per pixel: removed pixels become fully transparent, everything else stays opaque.',
       ]),
@@ -714,4 +720,5 @@ function updateBackgroundPanel(container, state, fps) {
   /** @type {HTMLElement} */ (q(root, '#background-alpha-note')).hidden = !state.clip?.hasAlpha;
 
   updateAiCutoutSection(root, state, fps);
+  updateTouchUpSection(root, state);
 }

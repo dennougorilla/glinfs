@@ -5,7 +5,7 @@
 
 import { ALPHA_THRESHOLD } from '../../shared/edits/color-key.js';
 import { scaleOutputSize } from '../../shared/edits/compose.js';
-import { getActiveTextLayers } from '../../shared/edits/model.js';
+import { getActiveTextLayers, getActiveTouchUps } from '../../shared/edits/model.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { stratifiedPixelIndices } from './pixel-sampling.js';
 
@@ -679,8 +679,8 @@ export function readGifInfo(bytes) {
  * How many GIF frames identical-frame merging will leave, estimated without
  * rendering: consecutive exported frames share pixels when they share a
  * pixel key (imported holds are clones of one decoded frame, see
- * Frame.sharedKey), and a text layer starting or ending between them
- * splits the run. Used for size estimates only (the encoder compares the
+ * Frame.sharedKey), and a text layer or a touch-up stroke starting or
+ * ending between them splits the run. Used for size estimates only (the encoder compares the
  * real output bytes).
  * @param {number[]} frameIndices - Absolute clip indices the export encodes
  * @param {import('../capture/types.js').Frame[]} clipFrames
@@ -698,7 +698,7 @@ export function estimateMergedRuns(frameIndices, clipFrames, edits) {
   for (const index of frameIndices) {
     const frame = clipFrames[index];
     const key = frame ? (frame.sharedKey ?? frame.id ?? frame) : index;
-    const text = getActiveTextLayers(edits, index)
+    const text = [...getActiveTextLayers(edits, index), ...getActiveTouchUps(edits, index)]
       .map((layer) => layer.id)
       .join('|');
     if (representatives.length > 0 && key === previousKey && text === previousText) {
