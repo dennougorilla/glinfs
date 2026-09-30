@@ -157,6 +157,31 @@ export function getModelHint(modelId, availability) {
 }
 
 /**
+ * Fill a model's hint on the switch. Three models share the ~300 px
+ * sidebar, so "Download 90 MB" shows as "↓ 90 MB": the word stays in the
+ * text (screen readers and the radio's name read "Download 90 MB") but is
+ * visually hidden, and the arrow is CSS generated content with empty alt
+ * text (data-state "missing" / "unknown").
+ * @param {HTMLElement} hint
+ * @param {string} modelId
+ * @param {import('../types.js').ModelAvailability | undefined} availability
+ */
+function renderModelHint(hint, modelId, availability) {
+  const state = availability ?? 'unknown';
+  const text = ` ${getModelHint(modelId, availability)}`;
+  if (hint.textContent === text && hint.dataset.state === state) return;
+  hint.dataset.state = state;
+  if (availability === 'ready' || availability === 'cached') {
+    hint.textContent = text;
+    return;
+  }
+  hint.replaceChildren(
+    createElement('span', { className: 'sr-only' }, [' Download ']),
+    getModelSizeLabel(modelId),
+  );
+}
+
+/**
  * Label of the Analyze button
  * @param {number} pending - Frames of the selection still to analyze
  * @returns {string}
@@ -254,11 +279,14 @@ export function renderAiCutoutSection(handlers) {
               createElement('small', { className: 'editor-ai-model-name' }, [
                 ` ${entry.shortModelName}`,
               ]),
-              createElement(
-                'small',
-                { className: 'editor-ai-model-hint', id: `ai-model-hint-${entry.id}` },
-                [` ${getModelHint(entry.id, undefined)}`],
-              ),
+              (() => {
+                const hint = createElement('small', {
+                  className: 'editor-ai-model-hint',
+                  id: `ai-model-hint-${entry.id}`,
+                });
+                renderModelHint(hint, entry.id, undefined);
+                return hint;
+              })(),
             ]),
           ]);
         }),
@@ -618,10 +646,7 @@ export function updateAiCutoutSection(root, state, fps) {
     input.disabled = running;
     const availability = status.models?.[entry.id];
     const hint = /** @type {HTMLElement} */ (q(section, `#ai-model-hint-${entry.id}`));
-    setText(hint, ` ${getModelHint(entry.id, availability)}`);
-    if (hint.dataset.state !== (availability ?? 'unknown')) {
-      hint.dataset.state = availability ?? 'unknown';
-    }
+    renderModelHint(hint, entry.id, availability);
   }
   const model = getModelEntry(modelId);
   setText(

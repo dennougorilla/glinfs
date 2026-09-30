@@ -236,6 +236,7 @@ export function countGifPixelsNear(frame, rect, rgb, maxDistance = 60) {
 export const MODEL_FILES = /** @type {const} */ ({
   anime: 'isnetis-fp16.onnx',
   general: 'isnet-general-fp16.onnx',
+  portrait: 'modnet-portrait-fp16.onnx',
 });
 
 /**
@@ -243,17 +244,23 @@ export const MODEL_FILES = /** @type {const} */ ({
  * Register it before the page loads the app.
  * @param {import('@playwright/test').Page} page
  * @param {Buffer} model - Stub served as the anime model (tests/fixtures/models/stub-seg.onnx)
- * @param {{ general?: Buffer }} [others] - Stub served as the general model
- *   (tests/fixtures/models/stub-seg-general.onnx)
- * @returns {Promise<{ count: number, byModel: { anime: number, general: number } }>}
+ * @param {{ general?: Buffer, portrait?: Buffer }} [others] - Stubs served as
+ *   the general model (tests/fixtures/models/stub-seg-general.onnx) and the
+ *   portrait model (tests/fixtures/models/stub-seg-portrait.onnx)
+ * @returns {Promise<{ count: number, byModel: { anime: number, general: number, portrait: number } }>}
  *   count: requests for any model
  */
 export async function serveStubModel(page, model, others = {}) {
-  const requests = { count: 0, byModel: { anime: 0, general: 0 } };
+  // portrait is counted only when its stub is served (keeps older specs' expectations)
+  const requests = {
+    count: 0,
+    byModel: { anime: 0, general: 0, ...(others.portrait ? { portrait: 0 } : {}) },
+  };
   /** @type {[keyof typeof MODEL_FILES, Buffer | undefined][]} */
   const stubs = [
     ['anime', model],
     ['general', others.general],
+    ['portrait', others.portrait],
   ];
   for (const [modelId, body] of stubs) {
     if (!body) continue;

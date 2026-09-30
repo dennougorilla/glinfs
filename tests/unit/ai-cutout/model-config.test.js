@@ -14,10 +14,12 @@ import {
 } from '../../../scripts/fetch-models.mjs';
 import {
   buildGeneralStubModel,
+  buildPortraitStubModel,
   buildStubModel,
   encodeVarint,
   STUB_GENERAL_MODEL_PATH,
   STUB_MODEL_PATH,
+  STUB_PORTRAIT_MODEL_PATH,
 } from '../../../scripts/generate-stub-seg-model.mjs';
 import {
   DEFAULT_MODEL_ID,
@@ -339,6 +341,9 @@ describe('scripts/generate-stub-seg-model.mjs', () => {
     expect(Buffer.from(buildGeneralStubModel()).equals(readFileSync(STUB_GENERAL_MODEL_PATH))).toBe(
       true,
     );
+    expect(
+      Buffer.from(buildPortraitStubModel()).equals(readFileSync(STUB_PORTRAIT_MODEL_PATH)),
+    ).toBe(true);
   });
 
   it('names the same input/output and op as documented', () => {
@@ -354,6 +359,18 @@ describe('scripts/generate-stub-seg-model.mjs', () => {
     for (const token of [general.inputName, general.outputName, 'side_1', 'ReduceMean', 'Add']) {
       expect(text).toContain(token);
     }
+  });
+
+  it('gives the portrait stub the portrait model’s names and its 512 input side', () => {
+    const portrait = getModelEntry('portrait');
+    const bytes = Buffer.from(buildPortraitStubModel());
+    const text = bytes.toString('latin1');
+    for (const token of [portrait.inputName, portrait.outputName, 'ReduceMean', 'Mul', 'Add']) {
+      expect(text).toContain(token);
+    }
+    // dim_value 512 as a varint (0x80 0x04), not the 1024 of the other stubs
+    expect(bytes.includes(Buffer.from([0x08, 0x80, 0x04]))).toBe(true);
+    expect(bytes.includes(Buffer.from([0x08, 0x80, 0x08]))).toBe(false);
   });
 });
 
