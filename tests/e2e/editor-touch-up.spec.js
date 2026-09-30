@@ -205,7 +205,7 @@ test.describe('Mask brush (touch up)', () => {
     await expect(page.locator('#background-lead')).toBeHidden();
     await expect(page.locator('#ai-color-fields')).toBeVisible();
     await expect(page.locator('#ai-section')).toBeHidden();
-    await expect(page.locator('#background-mode')).toBeHidden(); // under Advanced
+    await expect(page.locator('#background-mode')).toBeVisible(); // Advanced starts open
     await expect(page.locator('#touchup-brush')).toBeEnabled();
     await expect(page.locator('#touchup-needs-removal')).toBeHidden();
     await expect(page.locator('#preview-view')).toBeVisible();
