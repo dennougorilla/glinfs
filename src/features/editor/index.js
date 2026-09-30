@@ -1807,18 +1807,22 @@ function handleAiPick(point) {
 /**
  * Click to select: a click on the preview adds a keep (or remove) point on
  * the frame on screen. The store subscription then tracks again (see
- * startAiCutoutSession): the frame on screen shows its mask first.
+ * startAiCutoutSession): the frame on screen shows its mask first. Until
+ * there is a keep point, a click is one whatever the tool: remove points
+ * alone select nothing.
  * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
- * @param {import('../../shared/edits/model.js').PickMode} mode
+ * @param {import('../../shared/edits/model.js').PickMode} tool
  */
-function handleClickSelectPoint(point, mode) {
+function handleClickSelectPoint(point, tool) {
   if (!store) return;
   const state = store.getState();
   if (state.edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
     announce(`The limit of ${EDIT_LIMITS.aiPicks.max} points is reached`);
     return;
   }
-  const first = state.edits.background.ai.picks.length === 0;
+  const { picks } = state.edits.background.ai;
+  const first = picks.length === 0;
+  const mode = picks.some((p) => p.mode === 'keep') ? tool : 'keep';
   store.setState((s) =>
     setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
   );

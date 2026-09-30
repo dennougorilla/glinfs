@@ -248,11 +248,18 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     await expect(page.locator('#ai-status-text')).toHaveText('Click the thing you want to keep', {
       timeout: 60_000,
     });
+    // A first click with Remove selects (a keep point): remove points alone select nothing
+    await page.locator('label[for="ai-pick-remove"]').click();
     const a = await editorFramePointToViewport(page, discA(0).x, discA(0).y);
     await page.mouse.click(a.x, a.y);
     await expect(page.locator('#ai-status-text')).toHaveText(`Tracked through ${N} frames`, {
       timeout: 60_000,
     });
+    expect(
+      await page.evaluate(() =>
+        window.__TEST_HOOKS__.getEditorState().edits.background.ai.picks.map((p) => p.mode),
+      ),
+    ).toEqual(['keep']);
 
     await page.locator('label[for="ai-pick-remove"]').click();
     const b = await editorFramePointToViewport(page, discB(0).x, discB(0).y);
