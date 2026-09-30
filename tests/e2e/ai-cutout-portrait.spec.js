@@ -62,7 +62,7 @@ function samplePortrait(page, index) {
 test.describe('Portrait AI model (stub model, WASM fallback)', () => {
   test.describe.configure({ mode: 'default', timeout: 240_000 });
 
-  test('the subject cards fit two by two without clipping; Person analyzes through its own 512 file', async ({
+  test('the subject cards fit two per row without clipping; Person analyzes through its own 512 file', async ({
     page,
   }) => {
     const N = 5;
@@ -75,7 +75,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     await pauseEditorPlayback(page);
     await openSidebarTab(page, 'background');
 
-    // Off, then Anime, Person, Anything, Solid color
+    // Off, then Anime, Person, Anything, Something else, Solid color
     const order = await page
       .locator('#background-subject input')
       .evaluateAll((inputs) => inputs.map((i) => i.id));
@@ -84,12 +84,13 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
       'subject-anime',
       'subject-portrait',
       'subject-general',
+      'subject-click',
       'subject-color',
     ]);
     await expect(page.getByRole('radio', { name: /^Person/ })).not.toBeChecked();
     await expect(page.locator('#subject-status-portrait')).toContainText('13 MB');
 
-    // Two rows of two, nothing clipped or wrapped
+    // Rows of two (the last card alone), nothing clipped or wrapped
     const layout = await page.locator('.editor-cutout-cards').evaluate((grid) => {
       const cards = [...grid.querySelectorAll('label')];
       const texts = [
@@ -107,7 +108,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
         gridOverflow: grid.scrollWidth - grid.clientWidth,
       };
     });
-    expect(new Set(layout.tops).size).toBe(2);
+    expect(new Set(layout.tops).size).toBe(3);
     expect(layout.overflow.every((px) => px <= 0)).toBe(true);
     expect(Math.max(...layout.lines)).toBeLessThan(2);
     expect(layout.gridOverflow).toBeLessThanOrEqual(0);
@@ -119,7 +120,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     expect(requests.byModel).toEqual({ anime: 0, general: 0, portrait: 1 });
     expect(await readAiStatus(page)).toMatchObject({ backend: 'wasm' });
     const stats = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getMaskStoreStats());
-    expect(stats.byModel).toEqual({ anime: 0, general: 0, portrait: N });
+    expect(stats.byModel).toEqual({ anime: 0, general: 0, portrait: N, click: 0 });
 
     // ±1 normalization round trip through the stub, stretched to 512² and back
     for (const index of [0, N - 1]) {
@@ -136,7 +137,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     await expect(page.locator('#subject-status-portrait')).toContainText('Ready');
   });
 
-  test('Settings → AI models lists three models, with the note on General', async ({ page }) => {
+  test('Settings → AI models lists four models, with the note on General', async ({ page }) => {
     await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB, portrait: PORTRAIT_STUB });
     await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
     await page.evaluate(() => {
@@ -147,7 +148,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     const ids = await section
       .locator('[data-model-id]')
       .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-model-id')));
-    expect(ids).toEqual(['general', 'portrait', 'anime']);
+    expect(ids).toEqual(['general', 'portrait', 'anime', 'click']);
 
     const portrait = section.locator('[data-model-id="portrait"]');
     await expect(portrait.locator('h3')).toHaveText('PortraitMODNet');
