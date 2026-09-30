@@ -388,8 +388,13 @@ export function renderAiCutoutSection(handlers) {
     Math.round(EDIT_LIMITS.aiThreshold.min * 100),
     Math.round(EDIT_LIMITS.aiThreshold.max * 100),
   );
+  // input: live (per-frame drafts while dragging); change: the release
+  // (the whole-clip build for the value reached)
   cleanups.push(
     on(threshold.input, 'input', () =>
+      handlers.onSetAiParams?.({ threshold: Number(threshold.input.value) / 100 }, { live: true }),
+    ),
+    on(threshold.input, 'change', () =>
       handlers.onSetAiParams?.({ threshold: Number(threshold.input.value) / 100 }),
     ),
   );
@@ -408,7 +413,10 @@ export function renderAiCutoutSection(handlers) {
 
   const edge = slider('ai-edge', 'Edge', EDIT_LIMITS.aiEdge.min, EDIT_LIMITS.aiEdge.max);
   cleanups.push(
-    on(edge.input, 'input', () => handlers.onSetAiParams?.({ edge: Number(edge.input.value) })),
+    on(edge.input, 'input', () =>
+      handlers.onSetAiParams?.({ edge: Number(edge.input.value) }, { live: true }),
+    ),
+    on(edge.input, 'change', () => handlers.onSetAiParams?.({ edge: Number(edge.input.value) })),
   );
 
   const keep = toggleButton('ai-pick-keep', 'Keep');

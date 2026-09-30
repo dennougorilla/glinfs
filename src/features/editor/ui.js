@@ -63,7 +63,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} [onAiAnalyze] - Analyze the selection (also Retry)
  * @property {() => void} [onAiCancel] - Cancel the running analysis
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice
- * @property {(patch: Partial<import('../../shared/edits/model.js').AiCutout>) => void} [onSetAiParams] - Threshold/smoothing/edge
+ * @property {(patch: Partial<import('../../shared/edits/model.js').AiCutout>, options?: { live?: boolean }) => void} [onSetAiParams] - Threshold/smoothing/edge (live: a slider drag in progress)
  * @property {(model: import('../../shared/edits/model.js').AiModel) => void} [onSetAiModel] - Choose the AI model (Anime / General)
  * @property {(tool: import('../../shared/edits/model.js').PickMode | null, options?: { fromKeyboard?: boolean }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks)
  * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)

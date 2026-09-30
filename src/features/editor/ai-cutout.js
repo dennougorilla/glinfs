@@ -15,6 +15,7 @@
 
 import { getAiModel } from '../../shared/edits/model.js';
 import {
+  createDraftMaskSource,
   createFinalMaskCache,
   getFinalMaskParamsKey,
   pickFindsComponent,
@@ -164,6 +165,28 @@ export async function buildClipMaskSourceSettled(options) {
       }
     }
   }
+}
+
+/**
+ * Final masks computed per frame on demand (the preview while an AI slider
+ * is dragged; see createDraftMaskSource)
+ * @param {{ frames: Frame[], ai: AiCutout, maskStore?: MaskStore, base?: MaskSource | null }} options
+ *   base: the last full build (pick selection of the draft)
+ * @returns {MaskSource}
+ */
+export function createClipDraftMaskSource({
+  frames,
+  ai,
+  maskStore = getSharedMaskStore(),
+  base = null,
+}) {
+  return createDraftMaskSource({
+    frameCount: frames.length,
+    getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+    ai,
+    sourceWidth: frames[0]?.width,
+    base,
+  });
 }
 
 /**

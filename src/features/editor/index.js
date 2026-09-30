@@ -245,8 +245,23 @@ let pendingExportDialog = false;
  */
 let brushGesture = null;
 
-/** @type {number | null} requestAnimationFrame of the live stroke preview */
-let brushDrawFrameId = null;
+/**
+ * requestAnimationFrame of the next preview draw: state changes (a slider
+ * dragged, a stroke painted, a new frame) are coalesced into one draw per
+ * animation frame, of the latest state
+ * @type {number | null}
+ */
+let previewDrawFrameId = null;
+
+/**
+ * Ends the interactive mode of an AI slider drag when no `change` event
+ * came (the full mask build then runs for the values reached)
+ * @type {ReturnType<typeof setTimeout> | null}
+ */
+let aiLiveIdleTimer = null;
+
+/** Interactive mode ends this long after the last live slider input */
+const AI_LIVE_IDLE_MS = 800;
 
 /**
  * The right sidebar's last chosen tab: kept for the whole page session, so
@@ -637,7 +652,7 @@ export function initEditor() {
       viewChanged ||
       (cropChanged && editsUseCrop)
     ) {
-      drawPreview(state);
+      schedulePreviewDraw();
     }
     // Sidebar tab, the Background tab's badge, the Touch up mode swap and
     // the preview's view switch
@@ -1518,10 +1533,25 @@ function handleAiAllowWasm() {
   void aiSession.allowWasmAndAnalyze(getSelectionFrames());
 }
 
-/** @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch */
-function handleSetAiParams(patch) {
+/**
+ * @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch
+ * @param {{ live?: boolean }} [options] - live: a slider is being dragged
+ *   (its `input` events): the preview follows with per-frame drafts and the
+ *   whole-clip mask build waits for the release (`change`) or a pause
+ */
+function handleSetAiParams(patch, options = {}) {
   if (!store) return;
+  if (aiLiveIdleTimer !== null) clearTimeout(aiLiveIdleTimer);
+  aiLiveIdleTimer = null;
+  if (options.live) {
+    aiSession?.setInteractive(true);
+    aiLiveIdleTimer = setTimeout(() => {
+      aiLiveIdleTimer = null;
+      aiSession?.setInteractive(false);
+    }, AI_LIVE_IDLE_MS);
+  }
   store.setState((state) => setAiParams(state, patch));
+  if (!options.live) aiSession?.setInteractive(false);
 }
 
 /**
@@ -1717,11 +1747,14 @@ function handleSetBrush(patch) {
   }
 }
 
-/** Draw the live stroke preview on the next animation frame (coalesced) */
-function scheduleBrushDraw() {
-  if (brushDrawFrameId !== null) return;
-  brushDrawFrameId = window.requestAnimationFrame(() => {
-    brushDrawFrameId = null;
+/**
+ * Draw the preview on the next animation frame, once, with the state of
+ * that moment (coalesces slider input, strokes and frame changes)
+ */
+function schedulePreviewDraw() {
+  if (previewDrawFrameId !== null) return;
+  previewDrawFrameId = window.requestAnimationFrame(() => {
+    previewDrawFrameId = null;
     if (store) drawPreview(store.getState());
   });
 }
@@ -1771,11 +1804,11 @@ function finishBrushPiece() {
   gesture.live = null;
 }
 
-/** Stop the scheduled live stroke preview */
-function cancelBrushDraw() {
-  if (brushDrawFrameId !== null) {
-    window.cancelAnimationFrame(brushDrawFrameId);
-    brushDrawFrameId = null;
+/** Stop the scheduled preview draw */
+function cancelPreviewDraw() {
+  if (previewDrawFrameId !== null) {
+    window.cancelAnimationFrame(previewDrawFrameId);
+    previewDrawFrameId = null;
   }
 }
 
@@ -1811,7 +1844,7 @@ function handleBrushStrokeStart(point) {
     path: point ? startStrokePath(point, radius, frame.width, frame.height) : null,
     live: null,
   };
-  if (point) scheduleBrushDraw();
+  if (point) schedulePreviewDraw();
 }
 
 /**
@@ -1839,7 +1872,7 @@ function handleBrushStrokeMove(points) {
       changed = true;
     }
   }
-  if (changed) scheduleBrushDraw();
+  if (changed) schedulePreviewDraw();
 }
 
 /** The gesture ends (pointer released): add its strokes to the edits */
@@ -1847,7 +1880,7 @@ function handleBrushStrokeEnd() {
   finishBrushPiece();
   const gesture = brushGesture;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
   if (!store || !gesture || gesture.pieces.length === 0) return;
   const before = store.getState();
   store.setState((state) => addTouchUps(state, gesture.pieces));
@@ -1867,7 +1900,7 @@ function handleBrushStrokeEnd() {
 function handleBrushStrokeCancel() {
   if (!brushGesture) return false;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
   if (store) drawPreview(store.getState());
   announce('Stroke cancelled');
   return true;
@@ -2419,10 +2452,15 @@ function cleanup() {
   stopPlayback();
   deletedClipOnScreen = null;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();
+
+  if (aiLiveIdleTimer !== null) {
+    clearTimeout(aiLiveIdleTimer);
+    aiLiveIdleTimer = null;
+  }
 
   // Stop this mount's analysis and mask build (finished masks stay in the
   // mask store; the model worker stays up for the export or a later mount)
