@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/dennougorilla/glinfs/compare/v0.9.1...v0.10.0) (2026-09-30)
+
+
+### Features
+
+* **ai-cutout:** add MODNet Portrait model ([#150](https://github.com/dennougorilla/glinfs/issues/150)) ([e6feb80](https://github.com/dennougorilla/glinfs/commit/e6feb80e1982c2b46cb21526fd5b116d7212576b))
+* **ai-cutout:** AI models manager, persistent storage and model preloading ([#149](https://github.com/dennougorilla/glinfs/issues/149)) ([f5cba64](https://github.com/dennougorilla/glinfs/commit/f5cba64b72d630de985791fb00efaee3975d54ad))
+* **editor:** tabbed right sidebar, focused Touch up mode and preview view switch ([#148](https://github.com/dennougorilla/glinfs/issues/148)) ([648a282](https://github.com/dennougorilla/glinfs/commit/648a2821c4cfcd9268c74a340db4514280bc5875))
+
 ## [0.9.1](https://github.com/dennougorilla/glinfs/compare/v0.9.0...v0.9.1) (2026-09-29)
 
 
