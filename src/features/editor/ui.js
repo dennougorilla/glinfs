@@ -170,6 +170,21 @@ export function renderEditorScreen(container, state, handlers, fps) {
   };
 }
 
+/** Input types that take typed text (a shortcut key must not fire there) */
+const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'range', 'button', 'color', 'file']);
+
+/**
+ * Whether a key event target takes typed text
+ * @param {EventTarget | null} target
+ * @returns {boolean}
+ */
+function isTextEntry(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLSelectElement) return true;
+  return target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type);
+}
+
 /**
  * Setup keyboard shortcuts (route scope of the app hotkey dispatcher)
  * @param {EditorUIHandlers} handlers
@@ -266,7 +281,11 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     registerHotkey({
       key: '\\',
       scope: 'route',
+      // Also from a focused toggle, radio or slider (after choosing a
+      // subject focus stays on its card); never while typing text
+      allowInEditable: true,
       handler: (e) => {
+        if (isTextEntry(e.target)) return false;
         if (!getCurrentState().edits?.background?.enabled) return false;
         e.preventDefault();
         if (!e.repeat) handlers.onSetComparing?.(true);

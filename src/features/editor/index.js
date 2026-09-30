@@ -2723,6 +2723,8 @@ function registerTestHooks() {
         brush: state.brush,
         sidebarTab: state.sidebarTab,
         previewView: state.previewView,
+        comparing: state.comparing,
+        downloadPrompt: state.downloadPrompt,
       };
     };
     // Keyed-background cache counters: readbacks must not grow on text-only edits

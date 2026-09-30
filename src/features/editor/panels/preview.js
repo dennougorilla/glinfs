@@ -60,7 +60,7 @@ export function getPreviewToolHint(state) {
       : 'Brush: paint to erase · Esc to finish';
   }
   if (state.aiPickTool === 'keep') return 'Keep: click a character · Esc to cancel';
-  if (state.aiPickTool === 'remove') return 'Remove: click what to drop · Esc to cancel';
+  if (state.aiPickTool === 'remove') return 'Remove: click a character · Esc to cancel';
   if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
   return '';
 }

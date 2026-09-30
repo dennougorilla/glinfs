@@ -19,7 +19,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
-  chooseAiCutout,
   chooseAiModel,
   decodeExportedGif,
   discClip,
@@ -30,6 +29,7 @@ import {
   gotoCaptureWithStubModel,
   injectDiscClip,
   MODEL_FILES,
+  openSidebarTab,
   pauseEditorPlayback,
   readAiStatus,
   serveStubModel,
@@ -75,7 +75,7 @@ function sampleDiscs(page, index, modelId) {
 }
 
 /**
- * Open the editor on a disc clip with both stubs and choose the AI cutout
+ * Open the editor on a disc clip with both stubs (nothing chosen yet)
  * @param {import('@playwright/test').Page} page
  * @param {{ count: number, allowWasm: boolean }} options
  */
@@ -84,8 +84,48 @@ async function openDiscClip(page, { count, allowWasm }) {
   await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm });
   await injectDiscClip(page, { count });
   await pauseEditorPlayback(page);
-  await chooseAiCutout(page);
+  await openSidebarTab(page, 'background');
   return requests;
+}
+
+/**
+ * Use an AI model without choosing its card (like a clip restored with it):
+ * the edits switch, nothing is analyzed or downloaded
+ * @param {import('@playwright/test').Page} page
+ * @param {'anime' | 'general'} model
+ */
+async function setAiModelEdits(page, model) {
+  await page.evaluate((m) => {
+    const { edits } = window.__TEST_HOOKS__.getEditorState();
+    window.__TEST_HOOKS__.setEditorState({
+      edits: {
+        ...edits,
+        background: {
+          ...edits.background,
+          enabled: true,
+          method: 'ai',
+          ai: { ...edits.background.ai, model: m },
+        },
+      },
+    });
+  }, model);
+}
+
+/**
+ * Leave the editor and come back (a fresh mount with the clip's saved edits)
+ * @param {import('@playwright/test').Page} page
+ */
+async function remountEditor(page) {
+  await page.evaluate(() => {
+    location.hash = '#/capture';
+  });
+  await page.waitForSelector('.capture-screen', { state: 'visible' });
+  await page.evaluate(() => {
+    location.hash = '#/editor';
+  });
+  await page.waitForSelector('.editor-canvas', { state: 'visible' });
+  await pauseEditorPlayback(page);
+  await openSidebarTab(page, 'background');
 }
 
 test.describe('General AI model (stub models, WASM fallback)', () => {
@@ -99,20 +139,19 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const N = 6;
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
 
-    // The choice: purpose, network, and each model's download size
-    await expect(
-      page.getByRole('radio', { name: 'Anime ISNet anime Download 88 MB' }),
-    ).toBeChecked();
-    await expect(
-      page.getByRole('radio', { name: 'General ISNet Download 90 MB' }),
-    ).not.toBeChecked();
-    await chooseAiModel(page, 'general');
-    await expect(page.locator('#ai-intro')).toContainText('General model');
-    await expect(page.locator('#ai-intro')).toContainText('downloads 90 MB once');
-    await expect(page.locator('#ai-coverage')).toHaveText(`0 of ${N} frames analyzed`);
-
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
+    // The subjects: what each is for, and each model's download size
+    await expect(page.getByRole('radio', { name: /^Anime/ })).not.toBeChecked();
+    await expect(page.locator('#subject-status-anime')).toContainText('88 MB');
+    await expect(page.locator('#subject-status-general')).toContainText('90 MB');
+    await expect(page.locator('label[for="subject-general"]')).toHaveAttribute(
+      'title',
+      /ISNet \(general-use\)/,
+    );
+    await chooseAiModel(page, 'general', { download: false });
+    await expect(page.locator('#background-download-title')).toHaveText('Download 90 MB?');
+    await expect(page.locator('#background-download-detail')).toContainText('Anything model');
+    await page.locator('#background-download-confirm').click();
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
     // Only the general file was downloaded
@@ -135,22 +174,24 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await expect.poll(() => editorPreviewAlpha(page, 5, 5)).toBe(0);
     expect(await editorPreviewAlpha(page, discA(f).x, discA(f).y)).toBe(255);
 
-    // Anime: its own (empty) analysis; the general masks stay untouched
+    // Anime: its own analysis (after its download question); the general
+    // masks stay untouched
     await chooseAiModel(page, 'anime');
-    await expect(page.locator('#ai-coverage')).toHaveText(`0 of ${N} frames analyzed`);
-    await expect(page.locator('#ai-preview-note')).toHaveText('Not analyzed yet');
-    await expect(page.locator('#ai-analyze')).toHaveText(`Analyze ${N} frames`);
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
+    await expect.poll(() => requests.byModel.anime, { timeout: 60_000 }).toBe(1);
+    await expect.poll(async () => (await readAiStatus(page))?.phase).toBe('idle');
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 1, general: 1 });
     expect((await maskStats(page)).byModel).toEqual({ anime: N, general: N, portrait: 0 });
 
-    // Back to general: its masks are reused — nothing to analyze, no download
-    await chooseAiModel(page, 'general');
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`);
-    await expect(page.locator('#ai-analyze')).toHaveText('Selection analyzed');
+    // Back to general: downloaded now (Ready, no question) and its masks
+    // are reused — nothing to analyze, no download
+    await expect(page.locator('#subject-status-general')).toContainText('Ready');
+    await page.locator('label[for="subject-general"]').click();
+    await expect(page.locator('#background-download')).toBeHidden();
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`);
+    await expect(page.locator('#ai-analyze')).toBeHidden();
     await waitForAiMasks(page);
 
     // The export encodes with the general masks without analyzing again
@@ -176,12 +217,13 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
   }) => {
     const N = 6;
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
-    // Anime analyzes everything; general nothing
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
+    // Anime analyzes everything; general nothing (restored with it chosen)
+    await chooseAiModel(page, 'anime');
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
-    await chooseAiModel(page, 'general');
+    await setAiModelEdits(page, 'general');
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} frames not analyzed`);
     await exportFromEditor(page);
     await expect(page.locator('#export-ai-note')).toHaveText(
       `${N} of ${N} frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).`,
@@ -209,13 +251,11 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await chooseAiModel(page, 'general');
 
     const warning = page.locator('#ai-webgpu-warning');
-    await expect(warning).toContainText('WebGPU is not available');
-    await page.locator('#ai-analyze').click();
-    await expect(warning).toContainText('The analysis needs WebGPU', { timeout: 30_000 });
+    await expect(warning).toContainText('This needs WebGPU', { timeout: 30_000 });
     expect(requests.count).toBe(0);
 
     await page.locator('#ai-run-wasm').click();
-    await expect(page.locator('#ai-coverage')).toHaveText('3 of 3 frames analyzed', {
+    await expect(page.locator('#ai-status-text')).toHaveText('3 of 3 frames analyzed', {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 0, general: 1 });
@@ -240,8 +280,7 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       return { fp32, stale };
     }, MODEL_FILES.general);
     await chooseAiModel(page, 'general');
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText('2 of 2 frames analyzed', {
+    await expect(page.locator('#ai-status-text')).toHaveText('2 of 2 frames analyzed', {
       timeout: 60_000,
     });
 
@@ -299,9 +338,13 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     });
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
     await pauseEditorPlayback(page);
-    await expect(page.locator('#ai-model-general')).toBeChecked();
+    await openSidebarTab(page, 'background');
+    await expect(page.locator('#subject-general')).toBeChecked();
+    await expect(page.locator('#subject-status-general')).toContainText('90 MB');
+    // Analyze says it downloads
+    await expect(page.locator('#ai-analyze')).toHaveText('Analyze (\u2193 90 MB)');
     await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText('2 of 2 frames analyzed', {
+    await expect(page.locator('#ai-status-text')).toHaveText('2 of 2 frames analyzed', {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 0, general: 2 });
@@ -333,19 +376,27 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     );
     expect(keys.filter((url) => url.includes(MODEL_FILES.anime))).toHaveLength(1);
 
-    // The editor prepares the downloaded model (AI is chosen) from the cache
+    // A clip with the AI (Anime) chosen: the editor prepares the downloaded
+    // model from the cache when it opens, and analyzes nothing by itself
     await injectDiscClip(page, { count: 3 });
     await pauseEditorPlayback(page);
-    await chooseAiCutout(page);
-    await expect(page.locator('#ai-model-hint-anime')).toHaveText('Ready', { timeout: 60_000 });
-    await expect(page.locator('#ai-model-hint-general')).toHaveText('Download 90 MB');
-    const state = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState());
-    expect(state.loadedModelIds).toEqual(['anime']);
+    await setAiModelEdits(page, 'anime');
+    await remountEditor(page);
+    await expect(page.locator('#subject-anime')).toBeChecked();
+    await expect(page.locator('#subject-status-anime')).toContainText('Ready');
+    await expect(page.locator('#subject-status-general')).toContainText('90 MB');
+    await expect
+      .poll(() => page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState()), {
+        timeout: 60_000,
+      })
+      .toMatchObject({ loadedModelIds: ['anime'] });
     expect(requests.byModel).toEqual({ anime: 1, general: 0 });
+    await expect(page.locator('#ai-status-text')).toHaveText('3 frames not analyzed');
 
     // Analyze reuses the prepared session: no download
+    await expect(page.locator('#ai-analyze')).toHaveText('Analyze');
     await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText('3 of 3 frames analyzed', {
+    await expect(page.locator('#ai-status-text')).toHaveText('3 of 3 frames analyzed', {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 1, general: 0 });
@@ -362,7 +413,7 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       .toMatchObject({ loadedModelIds: [] });
   });
 
-  test('with preparing turned off, the editor loads nothing until Analyze', async ({ page }) => {
+  test('with preparing turned off, the editor loads nothing by itself', async ({ page }) => {
     const requests = await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB });
     await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
     await page.evaluate(() => {
@@ -380,8 +431,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
 
     await injectDiscClip(page, { count: 2 });
     await pauseEditorPlayback(page);
-    await chooseAiCutout(page);
-    await expect(page.locator('#ai-model-hint-anime')).toHaveText('Downloaded');
+    await setAiModelEdits(page, 'anime');
+    await remountEditor(page);
+    await expect(page.locator('#subject-status-anime')).toContainText('Ready');
     // Give an idle-time preload the chance to (wrongly) start
     await page.waitForTimeout(1500);
     const state = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState());
