@@ -83,6 +83,7 @@ describe('listDownloadedModels', () => {
     });
     expect(models.map((m) => [m.id, m.cached])).toEqual([
       ['general', true],
+      ['portrait', false],
       ['anime', false],
     ]);
     expect(models[0]).toMatchObject({
@@ -90,7 +91,16 @@ describe('listDownloadedModels', () => {
       modelName: 'ISNet (general-use)',
       bytes: 90_448_072,
       license: { name: 'Apache-2.0' },
+      licenseNote: { linkLabel: 'DIS repository', url: 'https://github.com/xuebinqin/DIS' },
       updateAvailable: false,
+    });
+    expect(models[0].licenseNote.text).toMatch(/DIS5K.*non-commercial/);
+    expect(models[1]).toMatchObject({
+      label: 'Portrait',
+      modelName: 'MODNet',
+      bytes: 12_987_022,
+      license: { name: 'Apache-2.0' },
+      licenseNote: null,
     });
     expect(oldFiles).toEqual([]);
     expect(cachedBytes).toBe(GENERAL.bytes);
@@ -110,9 +120,10 @@ describe('listDownloadedModels', () => {
     // A stale pin of the anime file is not the anime model, but an update
     expect(models.map((m) => [m.id, m.cached, m.updateAvailable])).toEqual([
       ['general', true, false],
+      ['portrait', false, false],
       ['anime', false, true],
     ]);
-    expect(models[1].staleUrls).toEqual([stalePin]);
+    expect(models[2].staleUrls).toEqual([stalePin]);
     expect(oldFiles).toEqual([{ url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 }]);
     // Without a Content-Length the body's size (3) is used
     expect(cachedBytes).toBe(GENERAL.bytes + 176_069_933 + 3);

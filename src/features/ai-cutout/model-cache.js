@@ -26,6 +26,8 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
  * @property {number} bytes - Pinned size of the model file
  * @property {{ name: string, url: string }} license
  * @property {string} upstream
+ * @property {import('./model-registry.js').ModelLicenseNote | null} [licenseNote]
+ *   - A caveat about the weights' terms (Settings shows it on the row)
  * @property {boolean | null} cached - Its current file is in Cache Storage (null: unknown)
  * @property {string[]} staleUrls - Keys of its file under earlier pins
  * @property {boolean} updateAvailable - Not cached under its current pin, but
@@ -183,6 +185,7 @@ export async function listDownloadedModels(deps = {}) {
       bytes: entry.bytes,
       license: entry.license,
       upstream: entry.upstream,
+      licenseNote: entry.licenseNote ?? null,
       cached,
       staleUrls,
       updateAvailable: cached === false && staleUrls.length > 0,

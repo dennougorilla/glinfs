@@ -357,7 +357,8 @@ describe('background method and AI cutout', () => {
     expect(ai({ threshold: 0.4 }).model).toBe('anime');
     expect(ai({ model: 'isnetis' }).model).toBe('anime');
     expect(ai({ model: 7 }).model).toBe('anime');
-    expect(AI_MODELS).toEqual(['anime', 'general']);
+    expect(ai({ model: 'portrait' }).model).toBe('portrait');
+    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait']);
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {

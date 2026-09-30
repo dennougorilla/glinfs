@@ -13,6 +13,10 @@ checked against its pinned size and SHA-256. The script then
 - keeps only the graph output the segmentation worker reads (the general
   IS-Net export also returns 11 side outputs the app never fetches) and
   drops the nodes and weights that only fed the others;
+- for models marked `pad_conv_channels` (MODNet), zero-pads the input
+  channels of every Conv whose channel count is not a multiple of 4 (see
+  pad_conv_input_channels: onnxruntime-web's WebGPU backend computes those
+  Convs wrong; the padded graph computes exactly the same values);
 - converts weights and activations to float16 with onnxconverter-common,
   `keep_io_types=True`: the input and the output stay float32, so the
   worker feeds and reads exactly the same tensors as with the fp32 file.
@@ -39,8 +43,10 @@ import urllib.request
 import warnings
 from pathlib import Path
 
+import numpy as np
 import onnx
 import onnxconverter_common
+from onnx import helper, numpy_helper
 from onnxconverter_common import float16
 
 MODELS = [
@@ -63,6 +69,17 @@ MODELS = [
         "upstream_bytes": 178_648_008,
         "upstream_sha256": "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a",
         "keep_outputs": ["output_image"],
+    },
+    {
+        "id": "portrait",
+        "asset": "modnet-portrait-fp16.onnx",
+        "fp32_file": "modnet.onnx",
+        "upstream_url": "https://huggingface.co/Xenova/modnet/resolve/"
+        "fa2fa546052fba4c08921230a26cc69a333fca12/onnx/model.onnx",
+        "upstream_bytes": 25_888_640,
+        "upstream_sha256": "07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9",
+        "keep_outputs": ["output"],
+        "pad_conv_channels": True,
     },
 ]
 
@@ -137,9 +154,70 @@ def keep_only_outputs(model: onnx.ModelProto, names: list[str]) -> int:
     return removed
 
 
+def pad_conv_input_channels(model: onnx.ModelProto, multiple: int = 4) -> list[str]:
+    """Zero-pad the input channels of every Conv whose input channel count
+    is above and not a multiple of `multiple`. Returns "name: before -> after"
+    for each Conv changed.
+
+    onnxruntime-web 1.30's WebGPU backend computes such a Conv wrong (MODNet's
+    Conv_304 has 99 input channels: its output is off by roughly its own
+    magnitude, so the mask is garbage, while WASM and the CPU are right;
+    every node before it matches the CPU to about 1e-6). A Pad node appends
+    zero channels to the Conv's input and the weight gets as many zero input
+    channels, so every output value is the same sum as before (plus zeros).
+    Only plain Convs (group 1, weight stored as an initializer) are changed.
+    """
+    opset = next((o.version for o in model.opset_import if o.domain in ("", "ai.onnx")), 0)
+    if opset < 11:
+        raise ValueError(f"Pad with a pads input needs opset 11 or later, the model has {opset}")
+    graph = model.graph
+    initializers = {t.name: t for t in graph.initializer}
+    nodes = []
+    changed = []
+    for node in graph.node:
+        if node.op_type == "Conv" and node.input[1] in initializers:
+            group = next((a.i for a in node.attribute if a.name == "group"), 1)
+            weight = numpy_helper.to_array(initializers[node.input[1]])
+            channels = weight.shape[1]
+            if group == 1 and channels > multiple and channels % multiple:
+                pad = multiple - channels % multiple
+                zeros = np.zeros((weight.shape[0], pad, *weight.shape[2:]), weight.dtype)
+                weight_name = f"{node.input[1]}_cpad"
+                graph.initializer.append(
+                    numpy_helper.from_array(np.concatenate([weight, zeros], axis=1), weight_name)
+                )
+                pads_name = f"{node.name}_cpad_pads"
+                pads = np.zeros(2 * weight.ndim, np.int64)
+                pads[weight.ndim + 1] = pad  # end of axis 1 (channels)
+                graph.initializer.append(numpy_helper.from_array(pads, pads_name))
+                padded = f"{node.input[0]}_cpad_{node.name}"
+                nodes.append(
+                    helper.make_node(
+                        "Pad",
+                        [node.input[0], pads_name],
+                        [padded],
+                        name=f"{node.name}_cpad",
+                        mode="constant",
+                    )
+                )
+                node.input[0] = padded
+                node.input[1] = weight_name
+                changed.append(f"{node.name}: {channels} -> {channels + pad}")
+        nodes.append(node)
+    del graph.node[:]
+    graph.node.extend(nodes)
+    # Drop the original weights nothing reads any more
+    used = {name for node in graph.node for name in node.input}
+    kept = [t for t in graph.initializer if t.name in used]
+    del graph.initializer[:]
+    graph.initializer.extend(kept)
+    return changed
+
+
 def convert(model_def: dict, src: Path, out: Path) -> dict:
     model = onnx.load(str(src))
     removed = keep_only_outputs(model, model_def["keep_outputs"])
+    padded = pad_conv_input_channels(model) if model_def.get("pad_conv_channels") else []
     with warnings.catch_warnings(record=True) as caught:
         # A warning per tensor holding values of magnitude below 1e-7 (the
         # converter's min_positive_val), which are clamped to ±1e-7; counted
@@ -147,14 +225,16 @@ def convert(model_def: dict, src: Path, out: Path) -> dict:
         model = float16.convert_float_to_float16(model, keep_io_types=True)
     clamped = sum("truncated" in str(w.message) for w in caught)
     del model.metadata_props[:]
+    steps = "; outputs kept: " + ", ".join(model_def["keep_outputs"])
+    if padded:
+        steps += "; Conv input channels zero-padded to a multiple of 4: " + ", ".join(padded)
     for key, value in (
         ("glinfs.converted_from", model_def["upstream_url"]),
         ("glinfs.converted_from_sha256", model_def["upstream_sha256"]),
         (
             "glinfs.conversion",
             f"onnx {onnx.__version__}, onnxconverter-common {onnxconverter_common.__version__}"
-            ": float16.convert_float_to_float16(keep_io_types=True); outputs kept: "
-            + ", ".join(model_def["keep_outputs"]),
+            ": float16.convert_float_to_float16(keep_io_types=True)" + steps,
         ),
     ):
         model.metadata_props.add(key=key, value=value)
@@ -168,6 +248,7 @@ def convert(model_def: dict, src: Path, out: Path) -> dict:
         "bytes": out.stat().st_size,
         "sha256": sha256_of(out),
         "nodesRemoved": removed,
+        "convsPadded": padded,
         "tensorsClamped": clamped,
         "convertedFrom": model_def["upstream_url"],
     }

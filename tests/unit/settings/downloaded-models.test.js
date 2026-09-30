@@ -23,6 +23,11 @@ function modelInfos({ anime = true, general = false, animeStale = false } = {}) 
       bytes: 90_448_072,
       license: APACHE,
       upstream: 'https://github.com/xuebinqin/DIS',
+      licenseNote: {
+        text: 'Its training data (DIS5K) has non-commercial terms, and upstream states no license for the weights.',
+        linkLabel: 'DIS repository',
+        url: 'https://github.com/xuebinqin/DIS',
+      },
       cached: general,
       staleUrls: [],
       updateAvailable: false,
@@ -195,6 +200,17 @@ describe('Settings → AI models', () => {
       'Download the General model (90 MB)',
     );
     expect(btn(section, 'delete', 'general')).toBeNull();
+    // General's training-data caveat: one line ending in a link to DIS
+    const note = general.querySelector('.settings-models-license-note');
+    expect(note?.textContent).toBe(
+      'Its training data (DIS5K) has non-commercial terms, and upstream states no license for the weights. DIS repository',
+    );
+    expect(note?.closest('p')?.className).toBe('settings-item-note');
+    const link = /** @type {HTMLAnchorElement | null | undefined} */ (note?.querySelector('a'));
+    expect(link?.href).toBe('https://github.com/xuebinqin/DIS');
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toBe('noopener noreferrer');
+    expect(anime.querySelector('.settings-models-license-note')).toBeNull();
     expect(section.querySelector('#settings-models-storage')?.textContent).toBe(
       'Storage used: 178 MB · Stored persistently',
     );

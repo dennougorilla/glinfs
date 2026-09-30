@@ -239,9 +239,15 @@ describe('AI cutout in the mounted editor', () => {
     expect(anime.checked).toBe(true);
     expect(anime.labels?.[0]?.textContent).toBe('Anime ISNet anime Download 88 MB');
     expect(general.labels?.[0]?.textContent).toBe('General ISNet Download 90 MB');
-    // General on the left, Anime (the default) on the right
+    expect($('#ai-model-portrait').labels?.[0]?.textContent).toBe('Portrait MODNet Download 13 MB');
+    // Three models share the sidebar: "Download" is read but visually
+    // hidden (the arrow is CSS), so the hint shows "↓ 13 MB"
+    const hint = /** @type {HTMLElement} */ ($('#ai-model-hint-portrait'));
+    expect(hint.querySelector('.sr-only')?.textContent).toBe(' Download ');
+    expect(hint.dataset.state).toMatch(/^(missing|unknown)$/);
+    // General on the left, Portrait, Anime (the default) on the right
     const order = Array.from($('#ai-model').querySelectorAll('input'), (i) => i.id);
-    expect(order).toEqual(['ai-model-general', 'ai-model-anime']);
+    expect(order).toEqual(['ai-model-general', 'ai-model-portrait', 'ai-model-anime']);
     expect($('#ai-model').tagName).toBe('FIELDSET');
 
     // Anime analyzes the clip

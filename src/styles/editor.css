@@ -2769,6 +2769,13 @@
   color: var(--color-success);
 }
 
+/* "↓ 90 MB": the word "Download" is visually hidden (still read), the
+   arrow is decoration with empty alt text */
+.editor-screen .editor-ai-model-hint[data-state="missing"]::before,
+.editor-screen .editor-ai-model-hint[data-state="unknown"]::before {
+  content: "\2193\00a0" / "";
+}
+
 .editor-screen .editor-side-panel .editor-ai-wide {
   white-space: nowrap;
 }

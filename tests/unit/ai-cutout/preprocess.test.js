@@ -137,6 +137,20 @@ describe('rgbaToChw', () => {
     });
   });
 
+  it('maps to [-1, 1] with the portrait model’s mean 0.5 / std 0.5 (MODNet)', () => {
+    const { preprocess } = getModelEntry('portrait');
+    // black, white, mid grey (value 51 in G)
+    const rgba = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255, 128, 51, 128, 255]);
+    const tensor = rgbaToChw(rgba, 3, 1, undefined, preprocess);
+    // Upstream inference_onnx.py: (im - 127.5) / 127.5
+    const expected = [0, 255, 128, 0, 255, 51, 0, 255, 128].map((v) => (v - 127.5) / 127.5);
+    Array.from(tensor).forEach((value, i) => {
+      expect(value).toBeCloseTo(expected[i], 6);
+    });
+    expect(tensor[0]).toBeCloseTo(-1, 6);
+    expect(tensor[1]).toBeCloseTo(1, 6);
+  });
+
   it('divides by a per-channel std', () => {
     const tensor = rgbaToChw(new Uint8Array([255, 255, 255, 255]), 1, 1, undefined, {
       scale: 1 / 255,
@@ -168,6 +182,27 @@ describe('computeInputGeometry', () => {
       padY: 0,
     });
     expect(computeInputGeometry('stretch', 3, 5000, 64)).toMatchObject({ width: 64, height: 64 });
+  });
+
+  it('stretches to the portrait model’s 512 input side', () => {
+    const { preprocess, inputSize } = getModelEntry('portrait');
+    expect(computeInputGeometry(preprocess.resize, 1280, 720, inputSize)).toEqual({
+      size: 512,
+      width: 512,
+      height: 512,
+      padX: 0,
+      padY: 0,
+    });
+    // A 512² probability output becomes a mask at the stored resolution
+    const probability = new Float32Array(512 * 512).fill(1);
+    const mask = probabilityToMask(
+      probability,
+      computeInputGeometry('stretch', 1280, 720, 512),
+      1024,
+      576,
+    );
+    expect(mask).toMatchObject({ width: 1024, height: 576 });
+    expect(mask.data.every((v) => v === 255)).toBe(true);
   });
 
   it('reads the stretched output back from the whole square', () => {

@@ -22,7 +22,7 @@ export {
   MODEL_RELEASE_URL,
 } from './model-registry.js';
 
-/** Default model input side (both models take 1024×1024) */
+/** Default model input side (the IS-Net models; each model has its own `inputSize`) */
 export const MODEL_INPUT_SIZE = 1024;
 
 /** Probability masks are stored at the source size scaled to at most this long side */

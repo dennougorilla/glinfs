@@ -36,7 +36,9 @@ components only.
   (SHA-256 `60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a`,
   byte-identical to rembg's `isnet-general-use.onnx`)
 - Copyright: Xuebin Qin and the DIS authors
-- License: Apache License 2.0
+- License: Apache License 2.0 (the DIS code). The network was trained on
+  DIS5K, whose terms of use are non-commercial, and upstream states no
+  separate license for the weights; Settings → AI models notes this.
 - Modifications: Glinfs ships an fp16 conversion of that file,
   `isnet-general-fp16.onnx` (SHA-256
   `437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b`),
@@ -54,6 +56,32 @@ components only.
   is not stored in this repository. The preprocessing in
   `src/features/ai-cutout/preprocess.js` follows DIS `IS-Net/Inference.py`
   (without its per-image min-max normalization).
+
+## MODNet portrait matting model (`modnet-portrait-fp16.onnx`, converted from MODNet's ONNX export)
+
+- Source: https://github.com/ZHKKKe/MODNet (code and pretrained weights) and
+  the published ONNX export https://huggingface.co/Xenova/modnet, file
+  `onnx/model.onnx` at commit `fa2fa546052fba4c08921230a26cc69a333fca12`
+  (SHA-256 `07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9`)
+- Copyright: Zhanghan Ke and the MODNet authors
+- License: Apache License 2.0
+- Modifications: Glinfs ships an fp16 conversion of that file,
+  `modnet-portrait-fp16.onnx` (SHA-256
+  `e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c`),
+  made by `scripts/convert-models-fp16.py`: the input channels of three
+  convolutions (35, 99 and 35 channels) are zero-padded to a multiple of 4
+  (a Pad node and zero weight columns; the computed values are unchanged),
+  and weights and activations are converted to float16 (onnxconverter-common,
+  input and output kept float32). The conversion is recorded in the file's
+  ONNX metadata (`glinfs.converted_from`, `glinfs.conversion`). The converted
+  file is under the same Apache License 2.0.
+- Use in Glinfs: the converted file is published as an asset of this
+  repository's `models-v1` GitHub Release, downloaded by
+  `npm run models:fetch` / the Pages deploy workflow and served next to the
+  app as `models/modnet-portrait-fp16.onnx`; the browser runs it locally. It
+  is not stored in this repository. The preprocessing (RGB / 255, mean 0.5,
+  std 0.5) follows the export's `preprocessor_config.json` and MODNet's
+  `onnx/inference_onnx.py`.
 
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 

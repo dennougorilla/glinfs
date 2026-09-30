@@ -25,7 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # AI cutout models (fp16, about 88 + 90 MB, too large for the
+      # AI cutout models (fp16, about 88 + 90 + 13 MB, too large for the
       # repository): restored from the cache or downloaded from the
       # models-v1 GitHub Release. The cache key holds every pinned SHA-256
       # (src/features/ai-cutout/model-registry.js, which the fetch script
@@ -36,7 +36,8 @@ jobs:
           path: |
             public/models/isnetis-fp16.onnx
             public/models/isnet-general-fp16.onnx
-          key: ai-models-sha256-f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0-437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b
+            public/models/modnet-portrait-fp16.onnx
+          key: ai-models-sha256-f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0-437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b-e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c
       # Verifies size and SHA-256 of restored copies too; any mismatch
       # re-downloads, and a mismatching download fails the job
       - name: Fetch AI cutout models
@@ -53,6 +54,7 @@ jobs:
           }
           check isnetis-fp16.onnx f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0
           check isnet-general-fp16.onnx 437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b
+          check modnet-portrait-fp16.onnx e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c
       # GitHub Pages rejects artifacts of 1 GB or more
       - name: Check the Pages artifact size
         run: |

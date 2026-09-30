@@ -3,7 +3,8 @@
  * @module features/settings/downloaded-models
  *
  * One row per registered AI cutout model: what it is for (large) and the
- * network behind it (small), a one-line description, its size and license,
+ * network behind it (small), a one-line description, its size and license
+ * (plus a one-line caveat when the registry has one: General's DIS5K note),
  * and its state — Not downloaded, Downloading NN%, Downloaded, Loaded (its
  * session is in memory this visit) or Update available (the cached file is
  * an older pin). Each row downloads the model ahead of use (with progress
@@ -79,6 +80,27 @@ import { getSegmentationManager, resolveModelSpec } from '../ai-cutout/segmentat
  * @property {(message: string) => boolean} [confirm]
  * @property {{ get: () => boolean, set: (value: boolean) => void }} [preloadSetting]
  */
+
+/**
+ * A model's license caveat: one sentence and a link to where it comes from
+ * @param {import('../ai-cutout/model-registry.js').ModelLicenseNote} note
+ * @returns {HTMLElement}
+ */
+function renderLicenseNote(note) {
+  return createElement('span', { className: 'settings-models-license-note' }, [
+    `${note.text} `,
+    createElement(
+      'a',
+      {
+        href: note.url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        className: 'settings-models-link',
+      },
+      [note.linkLabel],
+    ),
+  ]);
+}
 
 /** Row label of a file no registered model loads */
 export const OLD_FILE_LABEL = 'Old model file';
@@ -404,7 +426,11 @@ export function renderAiModelsSection(cleanups, deps = {}) {
         model.label,
         createElement('span', { className: 'settings-models-name' }, [model.modelName]),
       ],
-      notes: [[model.description], [`${formatModelSize(model.bytes)} · License: `, licenseLink]],
+      notes: [
+        [model.description],
+        [`${formatModelSize(model.bytes)} · License: `, licenseLink],
+        ...(model.licenseNote ? [[renderLicenseNote(model.licenseNote)]] : []),
+      ],
       status: state.text,
       statusKind: state.kind,
       progress:

@@ -20,6 +20,13 @@
  * `side_1 = ReduceMean(input_image)`, `output_image = side_1 + 0.5` — the
  * same [0, 1] mean brightness as the anime stub gives.
  *
+ * tests/fixtures/models/stub-seg-portrait.onnx — same interface as the
+ * portrait model (modnet-portrait-fp16.onnx): input `input` float32
+ * [1, 3, 512, 512] (a 1024 feed is rejected, so it checks that the worker
+ * uses the model's own input side), output `output` [1, 1, 512, 512]. Its
+ * input is normalized to [-1, 1] (mean 0.5, std 0.5), so the graph maps it
+ * back: `output = ReduceMean(input) * 0.5 + 0.5`.
+ *
  * The ONNX protobuf is written by hand (proto2 wire format, see
  * https://github.com/onnx/onnx/blob/main/onnx/onnx.proto) so the script needs
  * no dependency; the output is deterministic, which keeps the committed file
@@ -39,6 +46,12 @@ export const STUB_MODEL_PATH = resolve(__dirname, '../tests/fixtures/models/stub
 export const STUB_GENERAL_MODEL_PATH = resolve(
   __dirname,
   '../tests/fixtures/models/stub-seg-general.onnx',
+);
+
+/** Output path of the committed stub of the portrait model */
+export const STUB_PORTRAIT_MODEL_PATH = resolve(
+  __dirname,
+  '../tests/fixtures/models/stub-seg-portrait.onnx',
 );
 
 const WIRE_VARINT = 0;
@@ -160,6 +173,64 @@ export function buildGeneralStubModel({ size = 1024 } = {}) {
 }
 
 /**
+ * Build the portrait stub's bytes (see the file comment).
+ * @param {{ size?: number }} [options] - Spatial size (default 512, like MODNet)
+ * @returns {Uint8Array}
+ */
+export function buildPortraitStubModel({ size = 512 } = {}) {
+  const axesAttr = [...bytesField(1, 'axes'), ...varintField(8, 1), ...varintField(20, ATTR_INTS)];
+  const keepdimsAttr = [
+    ...bytesField(1, 'keepdims'),
+    ...varintField(3, 1),
+    ...varintField(20, ATTR_INT),
+  ];
+  const meanNode = [
+    ...bytesField(1, 'input'),
+    ...bytesField(2, 'mean_pm1'),
+    ...bytesField(3, 'mean_rgb'),
+    ...bytesField(4, 'ReduceMean'),
+    ...bytesField(5, axesAttr),
+    ...bytesField(5, keepdimsAttr),
+  ];
+  const mulNode = [
+    ...bytesField(1, 'mean_pm1'),
+    ...bytesField(1, 'half'),
+    ...bytesField(2, 'mean_half'),
+    ...bytesField(3, 'undo_std'),
+    ...bytesField(4, 'Mul'),
+  ];
+  const addNode = [
+    ...bytesField(1, 'mean_half'),
+    ...bytesField(1, 'half'),
+    ...bytesField(2, 'output'),
+    ...bytesField(3, 'undo_mean'),
+    ...bytesField(4, 'Add'),
+  ];
+  const half = [
+    ...varintField(2, ELEM_FLOAT),
+    ...bytesField(8, 'half'),
+    ...bytesField(9, [0x00, 0x00, 0x00, 0x3f]),
+  ];
+  const graph = [
+    ...bytesField(1, meanNode),
+    ...bytesField(1, mulNode),
+    ...bytesField(1, addNode),
+    ...bytesField(2, 'stub-seg-portrait'),
+    ...bytesField(5, half),
+    ...bytesField(11, floatTensorInfo('input', [1, 3, size, size])),
+    ...bytesField(12, floatTensorInfo('output', [1, 1, size, size])),
+  ];
+  const opset = [...bytesField(1, ''), ...varintField(2, 11)];
+  const model = [
+    ...varintField(1, 6),
+    ...bytesField(2, 'glinfs-stub-seg'),
+    ...bytesField(7, graph),
+    ...bytesField(8, opset),
+  ];
+  return Uint8Array.from(model);
+}
+
+/**
  * Build the stub model's bytes.
  * @param {{ size?: number }} [options] - Spatial size (default 1024, like isnetis)
  * @returns {Uint8Array}
@@ -199,6 +270,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const [path, bytes] of [
     [STUB_MODEL_PATH, buildStubModel()],
     [STUB_GENERAL_MODEL_PATH, buildGeneralStubModel()],
+    [STUB_PORTRAIT_MODEL_PATH, buildPortraitStubModel()],
   ]) {
     writeFileSync(path, bytes);
     console.log(`Wrote ${path} (${bytes.length} bytes)`);

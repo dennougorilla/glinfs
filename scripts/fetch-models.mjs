@@ -8,8 +8,9 @@
  * Both remove files in the output directory that are not registry models.
  *
  * The models (src/features/ai-cutout/model-registry.js: fp16 conversions
- * of the anime and the general IS-Net, Apache-2.0, about 88 and 90 MB) are
- * too large for the repository, so each one is fetched from its asset in
+ * of the anime and the general IS-Net and of MODNet, Apache-2.0, about 88,
+ * 90 and 13 MB) are too large for the repository, so each one is fetched
+ * from its asset in
  * the `models-v1` GitHub Release and checked against a pinned size and
  * SHA-256. Any mismatch deletes the file and exits non-zero, so a deploy
  * can never ship a different model. (scripts/convert-models-fp16.py

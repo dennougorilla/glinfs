@@ -45,7 +45,7 @@ function fakeOrt(script = {}) {
               if (mode === 'run-fails') {
                 throw new Error('Too many storage buffers in shader. Current: 11, Max is 10');
               }
-              const graphOutputs = ['output_image', 'mask', 'side_1'];
+              const graphOutputs = ['output_image', 'mask', 'output', 'side_1'];
               const names = fetches
                 ? fetches.filter((n) => graphOutputs.includes(n))
                 : graphOutputs;
@@ -143,6 +143,29 @@ describe('createModelSession', () => {
     expect(sessions[0].run.mock.calls[0][1]).toEqual(['mask']);
     expect(sessions[0].lastFeeds.img.data).toBe(warmupInput);
     expect(warmupInput.every((v) => v === 0)).toBe(true);
+  });
+
+  it('warms up the portrait model at its own 512 input side, not another model’s buffer', async () => {
+    const { ort, sessions } = fakeOrt();
+    const portrait = getModelSpec('portrait');
+    expect(portrait.inputSize).toBe(512);
+    // A buffer sized for a 1024 model is not reused for a 512 one
+    const otherBuffer = new Float32Array(3 * 1024 * 1024).fill(7);
+    const created = await createModelSession({
+      ort: /** @type {any} */ (ort),
+      bytes,
+      spec: portrait,
+      adapter: {},
+      allowWasm: false,
+      warmupInput: otherBuffer,
+    });
+    expect(created.backend).toBe('webgpu');
+    expect(sessions[0].run.mock.calls[0][1]).toEqual(['output']);
+    const feed = sessions[0].lastFeeds.input;
+    expect(feed.dims).toEqual([1, 3, 512, 512]);
+    expect(feed.data).not.toBe(otherBuffer);
+    expect(feed.data).toHaveLength(3 * 512 * 512);
+    expect(otherBuffer[0]).toBe(7);
   });
 
   it('treats a warm-up failure like a failed WebGPU session: WEBGPU_MODEL_FAILED without WASM', async () => {
