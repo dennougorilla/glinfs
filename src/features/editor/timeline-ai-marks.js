@@ -278,9 +278,15 @@ export function attachTimelineAiMarks(
   const unsubscribeMasks = maskStore.subscribe(schedule);
   /** @type {ResizeObserver | null} */
   const resizeObserver =
-    typeof ResizeObserver === 'function' ? new ResizeObserver(() => schedule()) : null;
+    typeof ResizeObserver === 'function'
+      ? new ResizeObserver(() => {
+          if (!holder.hidden) schedule();
+        })
+      : null;
   resizeObserver?.observe(holder);
-  schedule();
+  // Nothing to draw (and no frame to request) until an AI subject is on
+  const initial = getState();
+  if (initial.clip?.frames?.length && isAiCutoutActive(initial.edits?.background)) schedule();
 
   return () => {
     unsubscribeStore();
