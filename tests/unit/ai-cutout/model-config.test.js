@@ -91,10 +91,54 @@ describe('model registry', () => {
     });
   });
 
+  it('pins the fp16 MODNet portrait model (Conv channels padded) and its upstream file', () => {
+    expect(getModelEntry('portrait')).toMatchObject({
+      label: 'Portrait',
+      modelName: 'MODNet',
+      shortModelName: 'MODNet',
+      fileName: 'modnet-portrait-fp16.onnx',
+      bytes: 12_987_022,
+      sha256: 'e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c',
+      convertedFrom: {
+        repo: 'Xenova/modnet',
+        revision: 'fa2fa546052fba4c08921230a26cc69a333fca12',
+        path: 'onnx/model.onnx',
+        bytes: 25_888_640,
+        sha256: '07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9',
+      },
+      license: { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' },
+      upstream: 'https://github.com/ZHKKKe/MODNet',
+      inputName: 'input',
+      outputName: 'output',
+      inputSize: 512,
+    });
+    expect(getModelEntry('portrait').licenseNote).toBeUndefined();
+    // The spec the worker gets carries the 512 input side
+    expect(getModelSpec('portrait')).toMatchObject({
+      id: 'portrait',
+      url: '/models/modnet-portrait-fp16.onnx',
+      inputSize: 512,
+      inputName: 'input',
+      outputName: 'output',
+    });
+    // Only MODNet needs the WebGPU Conv workaround in the conversion script
+    const script = repoFile('scripts/convert-models-fp16.py');
+    expect(script.match(/"pad_conv_channels": True/g)).toHaveLength(1);
+  });
+
+  it('notes the general model’s training-data terms (DIS5K) for Settings', () => {
+    const note = getModelEntry('general').licenseNote;
+    expect(note).toMatchObject({ url: 'https://github.com/xuebinqin/DIS' });
+    expect(note?.text).toMatch(/DIS5K/);
+    expect(note?.text).toMatch(/non-commercial/);
+    expect(Object.isFrozen(note)).toBe(true);
+    expect(getModelEntry('anime').licenseNote).toBeUndefined();
+  });
+
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
-    // UI order: General left/top, Anime right/bottom
-    expect(ids).toEqual(['general', 'anime']);
+    // UI order: General left/top, Portrait, Anime right/bottom
+    expect(ids).toEqual(['general', 'portrait', 'anime']);
     expect(new Set(MODEL_REGISTRY.map((e) => e.fileName)).size).toBe(ids.length);
     for (const entry of MODEL_REGISTRY) {
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
@@ -121,6 +165,7 @@ describe('model registry', () => {
     expect(formatModelSize(178_648_008)).toBe('179 MB');
     expect(formatModelSize(getModelEntry('anime').bytes)).toBe('88 MB');
     expect(formatModelSize(getModelEntry('general').bytes)).toBe('90 MB');
+    expect(formatModelSize(getModelEntry('portrait').bytes)).toBe('13 MB');
     // One helper for every size: download progress asks for a decimal
     expect(formatModelSize(getModelEntry('anime').bytes, 1)).toBe('88.1 MB');
     expect(formatModelSize(0, 1)).toBe('0.0 MB');
@@ -131,6 +176,7 @@ describe('model registry', () => {
     expect(getAiModel(undefined)).toBe(DEFAULT_MODEL_ID);
     expect(getAiModel({ model: 'bogus' })).toBe(DEFAULT_MODEL_ID);
     expect(getAiModel({ model: 'general' })).toBe('general');
+    expect(getAiModel({ model: 'portrait' })).toBe('portrait');
   });
 
   it('documents each upstream preprocessing contract', () => {
@@ -148,6 +194,16 @@ describe('model registry', () => {
       scale: 1 / 255,
       mean: [0.5, 0.5, 0.5],
       std: [1, 1, 1],
+      output: 'probability',
+    });
+    // MODNet (Xenova/modnet preprocessor_config.json, upstream
+    // inference_onnx.py `(im - 127.5) / 127.5`): stretch to 512², / 255,
+    // mean 0.5, std 0.5 — values in [-1, 1]
+    expect(getModelEntry('portrait').preprocess).toEqual({
+      resize: 'stretch',
+      scale: 1 / 255,
+      mean: [0.5, 0.5, 0.5],
+      std: [0.5, 0.5, 0.5],
       output: 'probability',
     });
   });

@@ -17,7 +17,7 @@
 /**
  * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
  * keeps AI_MODELS equal to the registry's ids)
- * @typedef {'anime'|'general'} AiModel
+ * @typedef {'anime'|'general'|'portrait'} AiModel
  */
 /** @typedef {'keep'|'remove'} PickMode */
 /** @typedef {'erase'|'restore'} TouchUpMode */
@@ -125,7 +125,7 @@ export const BACKGROUND_METHODS = /** @type {const} */ (['color', 'ai']);
 export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 
 /** @type {readonly AiModel[]} */
-export const AI_MODELS = /** @type {const} */ (['anime', 'general']);
+export const AI_MODELS = /** @type {const} */ (['anime', 'general', 'portrait']);
 
 /** @type {readonly TouchUpMode[]} */
 export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);

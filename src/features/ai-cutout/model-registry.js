@@ -50,6 +50,14 @@
  */
 
 /**
+ * One line of UI copy about a model's terms, ending in a link.
+ * @typedef {Object} ModelLicenseNote
+ * @property {string} text - The sentence before the link
+ * @property {string} linkLabel
+ * @property {string} url
+ */
+
+/**
  * @typedef {Object} ModelEntry
  * @property {string} id - Stable id (edits, mask keys, messages)
  * @property {string} label - What it is for, the name the UI leads with
@@ -68,6 +76,8 @@
  * @property {ModelUpstreamFile} convertedFrom
  * @property {{ name: string, url: string }} license
  * @property {string} upstream - Project page of the network
+ * @property {ModelLicenseNote} [licenseNote] - A caveat about the weights'
+ *   terms, shown on the model's Settings row
  * @property {string} inputName - Image input: float32 [1, 3, inputSize, inputSize]
  * @property {string} outputName - Mask output: float32 [1, 1, inputSize, inputSize]
  * @property {number} inputSize
@@ -177,6 +187,14 @@ const GENERAL = {
   },
   license: APACHE_2,
   upstream: 'https://github.com/xuebinqin/DIS',
+  // The DIS code is Apache-2.0, but the network was trained on DIS5K, whose
+  // terms of use are non-commercial, and upstream states no separate
+  // license for the weights. Kept for now; Settings says so.
+  licenseNote: {
+    text: 'Its training data (DIS5K) has non-commercial terms, and upstream states no license for the weights.',
+    linkLabel: 'DIS repository',
+    url: 'https://github.com/xuebinqin/DIS',
+  },
   inputName: 'input_image',
   outputName: 'output_image',
   inputSize: 1024,
@@ -190,12 +208,69 @@ const GENERAL = {
 };
 
 /**
+ * MODNet (ZHKKKe/MODNet, code and pretrained weights Apache-2.0), a small
+ * portrait matting network, converted to fp16 from the ONNX export on
+ * Hugging Face (Xenova/modnet, `onnx/model.onnx`, opset 11). onnxruntime-web
+ * 1.30's WebGPU backend computes Convs whose input channel count is not a
+ * multiple of 4 wrong (MODNet has three: 35, 99 and 35 channels), which
+ * wrecks the mask; the conversion zero-pads those inputs to 36 / 100 / 36
+ * channels (scripts/convert-models-fp16.py `pad_conv_channels`), which
+ * computes exactly the same values. fp16 on WebGPU vs the upstream fp32 on
+ * WASM, same preprocessing: masks agree on 99–100% of pixels after
+ * thresholding at 0.5. About 75 ms per frame at 512×512 on an M3.
+ *
+ * Trained on people (portrait matting): reliable for people, not for pets
+ * or objects.
+ *
+ * Preprocessing, from the export's preprocessor_config.json (Xenova/modnet
+ * at the pinned revision) and the upstream demo
+ * https://github.com/ZHKKKe/MODNet/blob/28165a451e4610c9d77cfdf925a94610bb2810fb/onnx/inference_onnx.py
+ * (`(im - 127.5) / 127.5`, i.e. mean 0.5 / std 0.5 after `/ 255`). Upstream
+ * resizes the short side to 512 keeping the aspect ratio (multiples of 32);
+ * a plain 512×512 stretch gave equivalent masks and keeps the input square
+ * like the other models. The graph ends in a sigmoid: `output` is already
+ * a [0, 1] probability.
+ * @type {ModelEntry}
+ */
+const PORTRAIT = {
+  id: 'portrait',
+  label: 'Portrait',
+  modelName: 'MODNet',
+  shortModelName: 'MODNet',
+  description: 'People in live-action video (fast, small)',
+  finds: 'the people',
+  fileName: 'modnet-portrait-fp16.onnx',
+  bytes: 12_987_022,
+  sha256: 'e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c',
+  convertedFrom: {
+    repo: 'Xenova/modnet',
+    revision: 'fa2fa546052fba4c08921230a26cc69a333fca12',
+    path: 'onnx/model.onnx',
+    bytes: 25_888_640,
+    sha256: '07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9',
+  },
+  license: APACHE_2,
+  upstream: 'https://github.com/ZHKKKe/MODNet',
+  inputName: 'input',
+  outputName: 'output',
+  inputSize: 512,
+  preprocess: {
+    resize: 'stretch',
+    scale: 1 / 255,
+    mean: [0.5, 0.5, 0.5],
+    std: [0.5, 0.5, 0.5],
+    output: 'probability',
+  },
+};
+
+/**
  * Deep-freeze a registry entry (it is shared by every module).
  * @param {ModelEntry} entry
  * @returns {Readonly<ModelEntry>}
  */
 function freezeEntry(entry) {
   Object.freeze(entry.convertedFrom);
+  if (entry.licenseNote) Object.freeze(entry.licenseNote);
   Object.freeze(entry.preprocess.mean);
   Object.freeze(entry.preprocess.std);
   Object.freeze(entry.preprocess);
@@ -207,7 +282,11 @@ function freezeEntry(entry) {
  * right, Settings top to bottom). A new model needs only an entry here (and
  * its file in the `models-v1` release).
  */
-export const MODEL_REGISTRY = Object.freeze([freezeEntry(GENERAL), freezeEntry(ANIME)]);
+export const MODEL_REGISTRY = Object.freeze([
+  freezeEntry(GENERAL),
+  freezeEntry(PORTRAIT),
+  freezeEntry(ANIME),
+]);
 
 /** Model of edits that do not name one (everything saved before the general model) */
 export const DEFAULT_MODEL_ID = ANIME.id;

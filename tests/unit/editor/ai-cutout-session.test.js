@@ -477,7 +477,9 @@ describe('AI cutout session: model availability and preload', () => {
     await expect(session.preload()).resolves.toBe(true);
     expect(scheduleIdle).toHaveBeenCalledTimes(1);
     expect(manager.preloadModel).toHaveBeenCalledWith('anime', { allowWasm: false });
-    await vi.waitFor(() => expect(status.models).toEqual({ general: 'missing', anime: 'ready' }));
+    await vi.waitFor(() =>
+      expect(status.models).toEqual({ general: 'missing', portrait: 'missing', anime: 'ready' }),
+    );
     session.dispose();
   });
 
@@ -502,7 +504,7 @@ describe('AI cutout session: model availability and preload', () => {
   it('reports each model as ready, downloaded or missing', async () => {
     const { session, status } = setup({ cached: { anime: true, general: false } });
     await session.refreshModels();
-    expect(status.models).toEqual({ general: 'missing', anime: 'cached' });
+    expect(status.models).toEqual({ general: 'missing', portrait: 'missing', anime: 'cached' });
     session.dispose();
   });
 });
