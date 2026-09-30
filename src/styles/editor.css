@@ -2747,14 +2747,26 @@
   white-space: nowrap;
 }
 
-.editor-screen .editor-ai-model-size {
-  margin-left: 2px;
+/* Model switch: purpose, the network small under it, and whether the
+   model is ready or still to download */
+.editor-screen .editor-ai-model-purpose {
+  display: block;
+  font-weight: 600;
+}
+
+.editor-screen .editor-ai-model-name,
+.editor-screen .editor-ai-model-hint {
+  display: block;
   font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
 
-.editor-screen .editor-text-segment input:checked + span .editor-ai-model-size {
+.editor-screen .editor-text-segment input:checked + span .editor-ai-model-name {
   color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-ai-model-hint[data-state="ready"] {
+  color: var(--color-success);
 }
 
 .editor-screen .editor-side-panel .editor-ai-wide {

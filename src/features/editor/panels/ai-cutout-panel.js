@@ -5,7 +5,8 @@
  * Built once; updateAiCutoutSection() patches it in place from the editor
  * state (AI parameters and picks in the edits, runtime status in
  * state.aiCutout) and the clip's analysis coverage. What shows, in order:
- * the model choice (Anime / General, each with its download size), a
+ * the model choice (General / Anime, each with the network's name and
+ * whether it is ready or how much it downloads), a
  * WebGPU warning with the explicit slow option, "Analyze selection",
  * progress with Cancel, an error with Retry, and once any frame is
  * analyzed: the Keep/Remove pick tools, the pick list and a collapsed
@@ -141,8 +142,19 @@ function toggleButton(id, label) {
   return { wrapper, input };
 }
 
-/** Order of the model switch's segments (left to right) */
-const MODEL_ORDER = ['general', 'anime'];
+/**
+ * Hint under a model's name on the switch: "Ready" once its session is
+ * loaded (preloaded or used), "Downloaded" when only its file is cached,
+ * else what the first analysis downloads
+ * @param {string} modelId
+ * @param {import('../types.js').ModelAvailability | undefined} availability
+ * @returns {string}
+ */
+export function getModelHint(modelId, availability) {
+  if (availability === 'ready') return 'Ready';
+  if (availability === 'cached') return 'Downloaded';
+  return `Download ${getModelSizeLabel(modelId)}`;
+}
 
 /**
  * Label of the Analyze button
@@ -218,35 +230,38 @@ export function renderAiCutoutSection(handlers) {
       createElement(
         'div',
         { className: 'editor-text-segmented' },
-        // General first (left): the order shown, not the default model
-        [...MODEL_REGISTRY]
-          .sort((a, b) => MODEL_ORDER.indexOf(a.id) - MODEL_ORDER.indexOf(b.id))
-          .map((entry) => {
-            const id = `ai-model-${entry.id}`;
-            const input = /** @type {HTMLInputElement} */ (
-              createElement('input', {
-                type: 'radio',
-                name: 'ai-model',
-                id,
-                value: entry.id,
-                'aria-describedby': 'ai-model-note',
-              })
-            );
-            cleanups.push(
-              on(input, 'change', () => {
-                if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
-              }),
-            );
-            return createElement('label', { className: 'editor-text-segment', for: id }, [
-              input,
-              createElement('span', {}, [
-                entry.label,
-                createElement('small', { className: 'editor-ai-model-size' }, [
-                  ` ${getModelSizeLabel(entry.id)}`,
-                ]),
+        // Registry order (General left): the order shown, not the default model
+        MODEL_REGISTRY.map((entry) => {
+          const id = `ai-model-${entry.id}`;
+          const input = /** @type {HTMLInputElement} */ (
+            createElement('input', {
+              type: 'radio',
+              name: 'ai-model',
+              id,
+              value: entry.id,
+              'aria-describedby': 'ai-model-note',
+            })
+          );
+          cleanups.push(
+            on(input, 'change', () => {
+              if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
+            }),
+          );
+          return createElement('label', { className: 'editor-text-segment', for: id }, [
+            input,
+            createElement('span', {}, [
+              createElement('b', { className: 'editor-ai-model-purpose' }, [entry.label]),
+              createElement('small', { className: 'editor-ai-model-name' }, [
+                ` ${entry.shortModelName}`,
               ]),
-            ]);
-          }),
+              createElement(
+                'small',
+                { className: 'editor-ai-model-hint', id: `ai-model-hint-${entry.id}` },
+                [` ${getModelHint(entry.id, undefined)}`],
+              ),
+            ]),
+          ]);
+        }),
       ),
     ],
   );
@@ -601,6 +616,12 @@ export function updateAiCutoutSection(root, state, fps) {
     const input = /** @type {HTMLInputElement} */ (q(section, `#ai-model-${entry.id}`));
     setChecked(input, entry.id === modelId);
     input.disabled = running;
+    const availability = status.models?.[entry.id];
+    const hint = /** @type {HTMLElement} */ (q(section, `#ai-model-hint-${entry.id}`));
+    setText(hint, ` ${getModelHint(entry.id, availability)}`);
+    if (hint.dataset.state !== (availability ?? 'unknown')) {
+      hint.dataset.state = availability ?? 'unknown';
+    }
   }
   const model = getModelEntry(modelId);
   setText(

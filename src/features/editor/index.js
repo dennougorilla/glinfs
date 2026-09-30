@@ -1478,6 +1478,8 @@ function handleSetBackgroundMethod(method) {
   store.setState((s) => setBackgroundMethod(s, method, detected));
   if (method === 'ai') {
     void aiSession?.checkCapabilities();
+    void aiSession?.refreshModels();
+    void aiSession?.preload();
     announce('AI cutout selected');
   } else if (aiSession?.analyzing) {
     // The AI section (with the progress and Cancel) is hidden now: an
@@ -1547,6 +1549,7 @@ function handleSetAiModel(modelId) {
     });
   });
   announce(`${getModelEntry(modelId).label} model selected`);
+  void aiSession?.preload();
 }
 
 /**
@@ -1683,6 +1686,10 @@ function startAiCutoutSession() {
   session.requestBuild();
   if (sessionStore.getState().edits.background.method === 'ai') {
     void session.checkCapabilities();
+    void session.refreshModels();
+    // A model that is already downloaded gets its session at idle time, so
+    // Analyze starts at once (never a download)
+    void session.preload();
   }
 }
 

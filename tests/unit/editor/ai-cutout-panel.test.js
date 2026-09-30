@@ -8,6 +8,7 @@ import { MODEL_REGISTRY } from '../../../src/features/ai-cutout/model-registry.j
 import {
   formatEdge,
   getAiIntro,
+  getModelHint,
   getWebgpuWarning,
 } from '../../../src/features/editor/panels/ai-cutout-panel.js';
 
@@ -42,5 +43,14 @@ describe('formatEdge', () => {
     expect(formatEdge(0)).toBe('0 px');
     expect(formatEdge(2)).toBe('+2 px');
     expect(formatEdge(-3)).toBe('−3 px');
+  });
+});
+
+describe('getModelHint', () => {
+  it('says Ready, Downloaded, or what the first analysis downloads', () => {
+    expect(getModelHint('anime', 'ready')).toBe('Ready');
+    expect(getModelHint('anime', 'cached')).toBe('Downloaded');
+    expect(getModelHint('anime', 'missing')).toBe('Download 88 MB');
+    expect(getModelHint('general', undefined)).toBe('Download 90 MB');
   });
 });

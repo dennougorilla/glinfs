@@ -85,6 +85,15 @@ describe('user-settings', () => {
       expect(loadSettings().capture.sceneDetection).toBe(false);
     });
 
+    it('prepares downloaded AI models by default, and stores the choice', () => {
+      expect(loadSettings().aiCutout.preloadModels).toBe(true);
+      updateSetting('aiCutout', 'preloadModels', false);
+      expect(loadSettings().aiCutout.preloadModels).toBe(false);
+      // Settings saved before the option existed get the default
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ capture: {}, export: {} }));
+      expect(loadSettings().aiCutout).toEqual({ preloadModels: true });
+    });
+
     it('updates thumbnailQuality with a null key', () => {
       updateSetting('thumbnailQuality', null, 'ultra');
       expect(loadSettings().thumbnailQuality).toBe('ultra');
