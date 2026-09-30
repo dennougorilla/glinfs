@@ -191,18 +191,42 @@ export function getAnalyzeLabel(pending) {
   return `Analyze ${pending} frame${pending === 1 ? '' : 's'}`;
 }
 
+/** localStorage key prefix remembering an "Advanced" disclosure the user closed */
+const ADVANCED_CLOSED_KEY = 'glinfs.editor.advancedClosed.';
+
 /**
- * Collapsed "Advanced" disclosure for settings most clips never need
- * (Background panel: the color key's Remove mode, the AI tuning sliders)
+ * "Advanced" disclosure for the less common settings (Background panel: the
+ * color key's Remove mode, the AI tuning sliders). Open by default so they
+ * are seen; closing it is remembered per disclosure.
  * @param {string} id
  * @param {HTMLElement[]} children
  * @returns {HTMLElement}
  */
 export function advancedDetails(id, children) {
-  return createElement('details', { className: 'editor-bg-advanced', id }, [
+  const details = createElement('details', { className: 'editor-bg-advanced', id }, [
     createElement('summary', { className: 'editor-bg-advanced-summary' }, ['Advanced']),
     createElement('div', { className: 'editor-bg-advanced-body' }, children),
   ]);
+  let closed = false;
+  try {
+    closed = localStorage.getItem(ADVANCED_CLOSED_KEY + id) === '1';
+  } catch {
+    // Storage blocked: fall back to open
+  }
+  if (!closed) details.setAttribute('open', '');
+  // The listener lives and dies with the element, so no cleanup is needed
+  details.addEventListener('toggle', () => {
+    try {
+      if (/** @type {HTMLDetailsElement} */ (details).open) {
+        localStorage.removeItem(ADVANCED_CLOSED_KEY + id);
+      } else {
+        localStorage.setItem(ADVANCED_CLOSED_KEY + id, '1');
+      }
+    } catch {
+      // Storage blocked: the choice just isn't remembered
+    }
+  });
+  return details;
 }
 
 /**

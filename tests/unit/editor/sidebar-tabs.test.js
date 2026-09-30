@@ -230,8 +230,8 @@ describe('sidebar in the mounted editor', () => {
     expect($('#editor-side-tab-badge').hidden).toBe(false);
     expect(tabButton('background').getAttribute('aria-label')).toBe('Background (on)');
     expect($('#preview-view').hidden).toBe(false);
-    // The rarely needed settings are collapsed
-    expect($('#background-mode').closest('details')?.open).toBe(false);
+    // Advanced settings are open by default so they are noticed
+    expect($('#background-mode').closest('details')?.open).toBe(true);
 
     check('ai-method-ai');
     await settle();
@@ -239,6 +239,21 @@ describe('sidebar in the mounted editor', () => {
     expect($('#ai-section').hidden).toBe(false);
     expect($('#ai-intro').closest('details')?.open).toBe(false);
     expect($('#ai-threshold').closest('details')?.id).toBe('ai-advanced');
+    expect($('#ai-advanced').open).toBe(true);
+  });
+
+  it('remembers an Advanced disclosure the user closed', async () => {
+    tabButton('background').click();
+    check('ai-method-color');
+    await settle();
+    const advanced = /** @type {HTMLDetailsElement} */ ($('#background-advanced'));
+    advanced.open = false;
+    advanced.dispatchEvent(new Event('toggle'));
+    expect(localStorage.getItem('glinfs.editor.advancedClosed.background-advanced')).toBe('1');
+
+    advanced.open = true;
+    advanced.dispatchEvent(new Event('toggle'));
+    expect(localStorage.getItem('glinfs.editor.advancedClosed.background-advanced')).toBeNull();
   });
 
   it('leaving the Background tab ends the eyedropper', async () => {

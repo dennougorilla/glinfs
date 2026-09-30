@@ -382,7 +382,8 @@ export async function chooseAiCutout(page) {
 }
 
 /**
- * Open a collapsed "Advanced" disclosure of the Background tab
+ * Make sure an "Advanced" disclosure of the Background tab is open (it opens
+ * by default, but a closed state is remembered)
  * @param {import('@playwright/test').Page} page
  * @param {'background-advanced' | 'ai-advanced'} id
  */
