@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deleteCachedFile,
   deleteDownloadedModel,
+  isModelCached,
   listDownloadedModels,
 } from '../../../src/features/ai-cutout/model-cache.js';
 import {
@@ -10,7 +11,12 @@ import {
 } from '../../../src/features/ai-cutout/model-registry.js';
 
 const BASE = 'https://example.test/glinfs/editor';
-const [ANIME, GENERAL] = MODEL_REGISTRY;
+const ANIME = /** @type {(typeof MODEL_REGISTRY)[number]} */ (
+  MODEL_REGISTRY.find((e) => e.id === 'anime')
+);
+const GENERAL = /** @type {(typeof MODEL_REGISTRY)[number]} */ (
+  MODEL_REGISTRY.find((e) => e.id === 'general')
+);
 const MODELS = 'https://example.test/glinfs/models';
 const ANIME_KEY = `${MODELS}/${ANIME.fileName}?sha256=${ANIME.sha256}`;
 const GENERAL_KEY = `${MODELS}/${GENERAL.fileName}?sha256=${GENERAL.sha256}`;
@@ -71,37 +77,45 @@ function fakeCaches(entries) {
 describe('listDownloadedModels', () => {
   it('lists every model with size and license, and which ones are cached', async () => {
     const { storage } = fakeCaches({ [GENERAL_KEY]: GENERAL.bytes });
-    const { models, oldFiles } = await listDownloadedModels({ cacheStorage: storage, ...DEPS });
+    const { models, oldFiles, cachedBytes } = await listDownloadedModels({
+      cacheStorage: storage,
+      ...DEPS,
+    });
     expect(models.map((m) => [m.id, m.cached])).toEqual([
-      ['anime', false],
       ['general', true],
+      ['anime', false],
     ]);
-    expect(models[1]).toMatchObject({
+    expect(models[0]).toMatchObject({
       label: 'General',
+      modelName: 'ISNet (general-use)',
       bytes: 90_448_072,
       license: { name: 'Apache-2.0' },
+      updateAvailable: false,
     });
     expect(oldFiles).toEqual([]);
+    expect(cachedBytes).toBe(GENERAL.bytes);
   });
 
-  it('lists every other file of the bucket as an old file: stale pins and the fp32 model', async () => {
+  it('marks a model with only an older pin as update available; other files are old files', async () => {
     const stalePin = `${MODELS}/${ANIME.fileName}?sha256=${'0'.repeat(64)}`;
     const { storage } = fakeCaches({
       [FP32_KEY]: 176_069_933,
       [stalePin]: null,
       [GENERAL_KEY]: GENERAL.bytes,
     });
-    const { models, oldFiles } = await listDownloadedModels({ cacheStorage: storage, ...DEPS });
-    // A stale pin of the anime file is not the anime model
-    expect(models.map((m) => [m.id, m.cached])).toEqual([
-      ['anime', false],
-      ['general', true],
+    const { models, oldFiles, cachedBytes } = await listDownloadedModels({
+      cacheStorage: storage,
+      ...DEPS,
+    });
+    // A stale pin of the anime file is not the anime model, but an update
+    expect(models.map((m) => [m.id, m.cached, m.updateAvailable])).toEqual([
+      ['general', true, false],
+      ['anime', false, true],
     ]);
-    expect(oldFiles).toEqual([
-      { url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 },
-      // Without a Content-Length the body's size is used
-      { url: stalePin, fileName: ANIME.fileName, bytes: 3 },
-    ]);
+    expect(models[1].staleUrls).toEqual([stalePin]);
+    expect(oldFiles).toEqual([{ url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 }]);
+    // Without a Content-Length the body's size (3) is used
+    expect(cachedBytes).toBe(GENERAL.bytes + 176_069_933 + 3);
   });
 
   it('matches the pin the loader keys by (a DEV override of the hash)', async () => {
@@ -111,7 +125,7 @@ describe('listDownloadedModels', () => {
       ...DEPS,
       getSha256: (id) => (id === 'anime' ? 'stub' : GENERAL.sha256),
     });
-    expect(models[0].cached).toBe(true);
+    expect(models.find((m) => m.id === 'anime')?.cached).toBe(true);
     expect(oldFiles).toEqual([]);
   });
 
@@ -145,9 +159,10 @@ describe('listDownloadedModels', () => {
 });
 
 describe('deleteDownloadedModel / deleteCachedFile', () => {
-  it('deletes the model’s current file and nothing else', async () => {
+  it('deletes the model’s file (current and older pins) and nothing else', async () => {
     const { storage, buckets } = fakeCaches({
       [GENERAL_KEY]: 1,
+      [`${MODELS}/${GENERAL.fileName}?sha256=${'0'.repeat(64)}`]: 1,
       [ANIME_KEY]: 1,
       [FP32_KEY]: 1,
     });
@@ -182,5 +197,14 @@ describe('deleteDownloadedModel / deleteCachedFile', () => {
     });
     await expect(deleteDownloadedModel('anime', { cacheStorage: throwing })).resolves.toBe(false);
     await expect(deleteCachedFile(FP32_KEY, { cacheStorage: throwing })).resolves.toBe(false);
+  });
+});
+
+describe('isModelCached', () => {
+  it('checks the current key only', async () => {
+    const { storage } = fakeCaches({ [GENERAL_KEY]: 1 });
+    await expect(isModelCached('general', { cacheStorage: storage, ...DEPS })).resolves.toBe(true);
+    await expect(isModelCached('anime', { cacheStorage: storage, ...DEPS })).resolves.toBe(false);
+    await expect(isModelCached('anime', { cacheStorage: undefined })).resolves.toBe(false);
   });
 });

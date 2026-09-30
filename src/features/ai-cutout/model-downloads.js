@@ -14,7 +14,7 @@
 
 import { downloadModelToCache } from './model-loader.js';
 import { requestPersistentStorage } from './model-storage.js';
-import { isAbortError } from './protocol.js';
+
 import { resolveModelSpec } from './segmentation-manager.js';
 
 /** Minimum interval between progress notifications */
@@ -97,7 +97,9 @@ export function createModelDownloads(deps = {}) {
           return /** @type {ModelDownloadResult} */ ({ outcome: 'done', cached });
         } catch (error) {
           return /** @type {ModelDownloadResult} */ (
-            isAbortError(error) ? { outcome: 'cancelled' } : { outcome: 'failed', error }
+            /** @type {any} */ (error)?.name === 'AbortError'
+              ? { outcome: 'cancelled' }
+              : { outcome: 'failed', error }
           );
         } finally {
           running.delete(modelId);

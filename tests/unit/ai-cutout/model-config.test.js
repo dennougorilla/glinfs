@@ -93,7 +93,8 @@ describe('model registry', () => {
 
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
-    expect(ids).toEqual(['anime', 'general']);
+    // UI order: General left/top, Anime right/bottom
+    expect(ids).toEqual(['general', 'anime']);
     expect(new Set(MODEL_REGISTRY.map((e) => e.fileName)).size).toBe(ids.length);
     for (const entry of MODEL_REGISTRY) {
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
@@ -104,6 +105,9 @@ describe('model registry', () => {
       expect(entry.bytes).toBeLessThan(entry.convertedFrom.bytes * 0.55);
       expect(Object.isFrozen(entry.convertedFrom)).toBe(true);
       expect(entry.license.url).toMatch(/^https:\/\//);
+      for (const field of ['label', 'modelName', 'shortModelName', 'description']) {
+        expect(typeof entry[field] === 'string' && entry[field].length > 0).toBe(true);
+      }
       expect(Object.isFrozen(entry)).toBe(true);
       expect(Object.isFrozen(entry.preprocess)).toBe(true);
     }
@@ -123,7 +127,7 @@ describe('model registry', () => {
   });
 
   it('matches the model ids and the default model the edits accept', () => {
-    expect([...AI_MODELS]).toEqual(getModelIds());
+    expect([...AI_MODELS].sort()).toEqual(getModelIds().sort());
     expect(getAiModel(undefined)).toBe(DEFAULT_MODEL_ID);
     expect(getAiModel({ model: 'bogus' })).toBe(DEFAULT_MODEL_ID);
     expect(getAiModel({ model: 'general' })).toBe('general');
