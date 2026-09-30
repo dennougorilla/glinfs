@@ -9,7 +9,11 @@
  * 1. Anchors: every frame with clicks is decoded with its own points, the
  *    frame on screen first (its mask shows within a fraction of a second).
  *    SAM's four answers are narrowed to the whole or a part (the edits'
- *    `clickScope`, see chooseCandidate).
+ *    `clickScope`, see chooseCandidate). Remove points alone say what to
+ *    drop, not what to keep: a frame with only those is prompted with the
+ *    box and an inside point of the mask it has now (the one the user
+ *    corrected), or, without one, of the previous frame's mask once a pass
+ *    reaches it (see refinePrompt).
  * 2. Tracking: from each anchor, forward to the next anchor (or the end of
  *    the selection), then backward to the previous one (or the start):
  *    each frame is prompted with the previous frame's mask box and a point
@@ -25,7 +29,9 @@
  * Masks of a click model depend on the clicks, not only on the frame, so a
  * run first drops the selection's masks it is about to redo (all but the
  * anchors and the frame on screen, which are redone first and would only
- * flash) and at the end drops the ones no pass reached.
+ * flash) and at the end drops the ones no pass reached. A run that stops
+ * early (cancel, failure) drops those it had not redone yet too, unless
+ * another run follows at once (`superseded`), which redoes them first.
  *
  * Frames that share pixels (imported holds, same `keyOf`) share one mask.
  * No ORT, no DOM: `prompt` does the model work, so this is unit-tested.
@@ -33,6 +39,7 @@
 
 import {
   chooseCandidate,
+  interiorPoint,
   isTrackingLost,
   maskStats,
   planAnchors,
@@ -75,9 +82,17 @@ import {
  * @property {(frameIndex: number) => string} keyOf - Pixel identity of a frame
  * @property {(frameIndex: number, mask: ClickMask) => void} store
  * @property {(frameIndex: number) => void} clear - Drop a frame's mask (no-op when none)
+ * @property {(frameIndex: number) => ClickMask | null} [peek] - The mask a frame has
+ *   before this run, to refine a frame that has only remove points
+ * @property {() => boolean} [superseded] - On an early stop: whether another
+ *   run with new clicks starts right away (the masks this run had not redone
+ *   stay until that run redoes them, instead of flashing off)
  * @property {(progress: TrackProgress) => void} [onProgress]
  * @property {AbortSignal} [signal]
  */
+
+/** Closest a mask's inside point may be to a remove point (frame fraction) */
+const REFINE_POINT_CLEARANCE = 0.05;
 
 /**
  * @param {AbortSignal | undefined} signal
@@ -87,10 +102,55 @@ function throwIfAborted(signal) {
 }
 
 /**
+ * @param {SamPoint[]} points
+ * @returns {boolean}
+ */
+function hasKeepPoint(points) {
+  return points.some((p) => p.mode === 'keep');
+}
+
+/**
+ * The prompt that refines a mask with remove points: the mask's box (grown
+ * as tracking grows it), a keep point deep inside the mask unless a remove
+ * point is right there, and the remove points
+ * @param {ClickMask} base
+ * @param {SamPoint[]} removes
+ * @returns {{ points: SamPoint[], box: SamBox } | null} null when `base` is empty
+ */
+export function refinePrompt(base, removes) {
+  const tracked = trackingPrompt(base.data, base.width, base.height);
+  if (!tracked) return null;
+  const inside = interiorPoint(base.data, base.width, base.height);
+  const clear =
+    inside !== null &&
+    removes.every((r) => Math.hypot(r.x - inside.x, r.y - inside.y) > REFINE_POINT_CLEARANCE);
+  return {
+    points: [...(clear ? tracked.points : []), ...removes],
+    box: tracked.box,
+  };
+}
+
+/**
+ * The decoder's most confident non-empty answer (a box with points leaves
+ * little ambiguity, and the answer overlapping the old mask most would be
+ * the one that ignores the remove points)
+ * @param {SamCandidate[]} candidates
+ * @returns {SamCandidate}
+ */
+function bestScoring(candidates) {
+  if (candidates.length === 0) throw new RangeError('No candidate masks');
+  const nonEmpty = candidates.filter((c) => maskStats(c.data, c.width, c.height).area > 0);
+  const pool = nonEmpty.length > 0 ? nonEmpty : candidates;
+  return pool.reduce((a, b) => (b.score > a.score ? b : a));
+}
+
+/**
  * Track the clicked object through the selection.
  * @param {TrackOptions} options
  * @returns {Promise<TrackResult>}
- * @throws {DOMException} AbortError when `signal` aborts (masks stored so far stay)
+ * @throws {DOMException} AbortError when `signal` aborts (masks stored so far
+ *   stay; those from earlier clicks this run had not redone go, unless
+ *   `superseded`)
  */
 export async function trackClicks({
   range,
@@ -101,6 +161,8 @@ export async function trackClicks({
   keyOf,
   store,
   clear,
+  peek,
+  superseded,
   onProgress,
   signal,
 }) {
@@ -109,6 +171,16 @@ export async function trackClicks({
   const anchors = planAnchors(picks, range, currentFrame);
   if (anchors.length === 0) return { tracked: 0, lost: [], anchors: 0 };
   const anchorFrames = new Set(anchors.map((a) => a.frame));
+
+  // A frame with only remove points starts from the mask it has now: read
+  // it before the old masks go
+  /** @type {Map<number, ClickMask>} */
+  const seeds = new Map();
+  for (const anchor of anchors) {
+    if (hasKeepPoint(anchor.points)) continue;
+    const mask = peek?.(anchor.frame);
+    if (mask) seeds.set(anchor.frame, mask);
+  }
 
   // Redone below: drop now what would otherwise stay from the old clicks
   for (let f = range.start; f <= range.end; f++) {
@@ -121,6 +193,12 @@ export async function trackClicks({
   const doneKeys = new Map();
   /** @type {Set<number>} */
   const lost = new Set();
+  /**
+   * Frames with only remove points and no mask to start from: refined from
+   * the previous frame when a pass reaches them
+   * @type {Map<number, SamPoint[]>}
+   */
+  const refineOnPass = new Map();
 
   /**
    * @param {number} frame
@@ -144,13 +222,24 @@ export async function trackClicks({
     height: candidate.height,
   });
 
-  for (const anchor of anchors) {
+  /**
+   * Refine a frame's mask with its remove points
+   * @param {number} frame
+   * @param {ClickMask} base - The mask to start from
+   * @param {SamPoint[]} removes
+   * @returns {Promise<boolean>} false when `base` or the answer is empty
+   */
+  const refine = async (frame, base, removes) => {
+    const next = refinePrompt(base, removes);
+    if (!next) return false;
+    const candidates = await prompt(frame, next);
     throwIfAborted(signal);
-    const candidates = await prompt(anchor.frame, { points: anchor.points, box: null });
-    throwIfAborted(signal);
-    const chosen = chooseCandidate(candidates, { scope });
-    record(anchor.frame, toMask(chosen), maskStats(chosen.data, chosen.width, chosen.height).area);
-  }
+    const chosen = bestScoring(candidates);
+    const { area } = maskStats(chosen.data, chosen.width, chosen.height);
+    if (area <= 0) return false;
+    record(frame, toMask(chosen), area);
+    return true;
+  };
 
   /**
    * Track one frame from its done neighbour; false when the object is lost
@@ -160,6 +249,8 @@ export async function trackClicks({
    */
   const step = async (frame, from) => {
     const previous = /** @type {{ mask: ClickMask, area: number }} */ (done.get(from));
+    const removes = refineOnPass.get(frame);
+    if (removes) return refine(frame, previous.mask, removes);
     const same = doneKeys.get(keyOf(frame));
     if (same !== undefined) {
       const shared = /** @type {{ mask: ClickMask, area: number }} */ (done.get(same));
@@ -179,7 +270,8 @@ export async function trackClicks({
   };
 
   /**
-   * Walk from an anchor while frames are free
+   * Walk from an anchor while frames are free (a frame with only remove
+   * points that had no mask to start from is refined on the way)
    * @param {number} anchor
    * @param {1 | -1} direction
    */
@@ -187,7 +279,7 @@ export async function trackClicks({
     const stop = direction > 0 ? range.end : range.start;
     let from = anchor;
     for (let f = anchor + direction; direction > 0 ? f <= stop : f >= stop; f += direction) {
-      if (anchorFrames.has(f) || done.has(f)) return;
+      if (done.has(f) || (anchorFrames.has(f) && !refineOnPass.has(f))) return;
       throwIfAborted(signal);
       if (!(await step(f, from))) {
         lost.add(f);
@@ -197,9 +289,40 @@ export async function trackClicks({
     }
   };
 
-  for (const anchor of anchors) {
-    await pass(anchor.frame, 1);
-    await pass(anchor.frame, -1);
+  const run = async () => {
+    for (const anchor of anchors) {
+      throwIfAborted(signal);
+      if (!hasKeepPoint(anchor.points)) {
+        const seed = seeds.get(anchor.frame);
+        if (!seed || !(await refine(anchor.frame, seed, anchor.points))) {
+          refineOnPass.set(anchor.frame, anchor.points);
+        }
+        continue;
+      }
+      const candidates = await prompt(anchor.frame, { points: anchor.points, box: null });
+      throwIfAborted(signal);
+      const chosen = chooseCandidate(candidates, { scope });
+      const { area } = maskStats(chosen.data, chosen.width, chosen.height);
+      record(anchor.frame, toMask(chosen), area);
+    }
+    for (const anchor of anchors) {
+      if (!done.has(anchor.frame)) continue;
+      await pass(anchor.frame, 1);
+      await pass(anchor.frame, -1);
+    }
+  };
+
+  try {
+    await run();
+  } catch (error) {
+    // The anchors and the frame on screen still hold masks from the old
+    // clicks where this run did not get to them
+    if (!superseded?.()) {
+      for (const f of [...anchorFrames, currentFrame]) {
+        if (f >= range.start && f <= range.end && !done.has(f)) clear(f);
+      }
+    }
+    throw error;
   }
 
   for (let f = range.start; f <= range.end; f++) {

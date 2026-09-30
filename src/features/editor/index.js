@@ -71,7 +71,7 @@ import {
   previewDependsOnCrop,
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
-import { getSubjectModel } from './panels/background-panel.js';
+import { getLostFramesInSelection, getSubjectModel } from './panels/background-panel.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { isBrushActive, setOverlayPickMode, updatePreviewTools } from './panels/preview.js';
 import { updateSidebarTabs } from './panels/properties.js';
@@ -1832,7 +1832,8 @@ function handleClickSelectPoint(point, mode) {
 /** Click to select: go to the first frame that lost the object, Keep tool on */
 function handleGoToLostFrame() {
   if (!store) return;
-  const [frame] = store.getState().aiCutout.lostFrames ?? [];
+  const state = store.getState();
+  const [frame] = getLostFramesInSelection(state.aiCutout, state.selectedRange);
   if (frame === undefined) return;
   handleFrameChange(frame);
   handleSetAiPickTool('keep');

@@ -105,6 +105,8 @@ import { buildPromptInputs, getEncoderSize } from './sam-prompts.js';
  * @property {boolean} [allowWasm=false]
  * @property {string} [clipId]
  * @property {string} [modelId] - A SAM model (default 'click')
+ * @property {() => boolean} [superseded] - On a cancel: whether a run with
+ *   new clicks follows at once (see trackClicks)
  */
 
 /**
@@ -674,6 +676,8 @@ export class SegmentationManager {
         clear: (f) => {
           this.#maskStore.delete(maskKey(frames[f], modelId));
         },
+        peek: (f) => this.#maskStore.get(maskKey(frames[f], modelId)) ?? null,
+        superseded: options.superseded,
         onProgress: ({ done }) => report(done, lastMs),
         signal,
       });

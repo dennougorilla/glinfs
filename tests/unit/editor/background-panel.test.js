@@ -16,6 +16,7 @@ import {
   FIT_STEPS,
   fitFromAi,
   getDownloadPrompt,
+  getLostFramesInSelection,
   getLostFramesText,
   getModelReadiness,
   getModelTooltip,
@@ -540,5 +541,29 @@ describe('click to select ("Something else")', () => {
     // Part differs from the default: Reset has something to do
     expect(canResetBackground(picked)).toBe(true);
     expect(canResetBackground(clickState({ clickScope: 'part' }))).toBe(true);
+  });
+
+  it('Part left over from click to select does not count for Reset with another model', () => {
+    const general = makeState({
+      enabled: true,
+      method: 'ai',
+      ai: { model: 'general', clickScope: 'part' },
+    });
+    expect(canResetBackground(general)).toBe(false);
+  });
+
+  it('lost frames outside the selection (it changed since tracking) are not shown', () => {
+    const status = { ...createAiCutoutStatus(), lostFrames: [2, 8] };
+    expect(getLostFramesInSelection(status, { start: 0, end: 5 })).toEqual([2]);
+    expect(getLostFramesInSelection(status, { start: 3, end: 5 })).toEqual([]);
+    expect(getLostFramesInSelection(null, { start: 0, end: 5 })).toEqual([]);
+
+    const narrowed = clickState(
+      { picks: [{ frame: 4, x: 0.5, y: 0.5, mode: 'keep' }] },
+      { aiCutout: status, selectedRange: { start: 3, end: 5 } },
+    );
+    updateBackgroundPanel(root, narrowed, 10);
+    expect($('#ai-click-lost').hidden).toBe(true);
+    expect($('#ai-status-text').textContent).not.toMatch(/of 3 frames tracked/);
   });
 });

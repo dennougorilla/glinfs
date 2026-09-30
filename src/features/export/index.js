@@ -42,6 +42,7 @@ import { announce } from '../../shared/live-region.js';
 import { showToast } from '../../shared/toast.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import { on } from '../../shared/utils/dom.js';
+import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -736,12 +737,13 @@ async function prepareAiMasks(indices, signal) {
       });
     };
     if (isSamModelId(modelId)) {
-      // Click to select: track the clicks over the exported span (frames
-      // where tracking loses the object export without the cutout, as the
-      // editor previews them)
-      const start = Math.min(...indices);
-      const end = Math.max(...indices);
-      await getSegmentationManager().analyzeClick(clipFrames, {
+      // Click to select: track the clicks over the whole selection, not
+      // only the exported frames. Frame skip can drop the only frame with a
+      // click, and tracking across the skipped frames follows the object
+      // better than jumping over them.
+      const start = rangeStart;
+      const end = rangeStart + frames.length - 1;
+      const result = await getSegmentationManager().analyzeClick(clipFrames, {
         signal,
         clipId,
         modelId,
@@ -752,6 +754,19 @@ async function prepareAiMasks(indices, signal) {
         scope: ai.clickScope,
         onProgress,
       });
+      // A frame tracking could not reach has no mask: stop here with what
+      // to do, instead of encodeGif's generic missing-mask error
+      const untracked = collectPendingFrames(exported, maskStore, modelId);
+      if (untracked.length > 0) {
+        throw new ClickTrackingError(
+          result.anchors === 0
+            ? 'Nothing is selected yet. Go back to editing and click the thing you want to keep.'
+            : `Tracking lost the selection at ${frameToTimecode(
+                result.lost[0] ?? indices[exported.indexOf(untracked[0])],
+                clipInfo.fps,
+              )}. Go back to editing and click it there, then export again.`,
+        );
+      }
     } else {
       await getSegmentationManager().analyzeFrames(exported, {
         signal,
@@ -865,6 +880,18 @@ function patchSettingsText() {
   body.scrollTop = scrollTop;
   if (activeId && document.activeElement?.id !== activeId) {
     document.getElementById(activeId)?.focus();
+  }
+}
+
+/**
+ * Click to select could not give every exported frame a mask (nothing
+ * clicked, or tracking lost the object): the message says what to do
+ */
+class ClickTrackingError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = 'ClickTrackingError';
   }
 }
 
@@ -1152,7 +1179,11 @@ async function handleExport() {
           modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
         };
       } else {
-        aiPrep = { phase: 'error', message: describeAnalysisError(cause).message };
+        const message =
+          cause instanceof ClickTrackingError
+            ? cause.message
+            : describeAnalysisError(cause).message;
+        aiPrep = { phase: 'error', message };
         emit('export:error', { error: aiPrep.message });
       }
     } else {

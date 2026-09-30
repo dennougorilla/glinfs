@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { trackClicks } from '../../../src/features/ai-cutout/click-tracker.js';
+import { refinePrompt, trackClicks } from '../../../src/features/ai-cutout/click-tracker.js';
 
 const W = 40;
 const H = 20;
@@ -195,5 +195,117 @@ describe('trackClicks', () => {
     });
     await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
     expect([...masks.keys()]).toEqual([0, 1, 2]);
+  });
+  it('drops the old masks of the anchors and the frame on screen when a run fails before redoing them', async () => {
+    /** @type {Map<number, unknown>} */
+    const masks = new Map([
+      [2, 'old'],
+      [5, 'old'],
+      [7, 'old'],
+    ]);
+    const promise = trackClicks({
+      range: { start: 0, end: 9 },
+      currentFrame: 5,
+      picks: [
+        { frame: 2, x: 0.2, y: 0.5, mode: 'keep' },
+        { frame: 5, x: 0.4, y: 0.5, mode: 'keep' },
+      ],
+      prompt: async () => {
+        throw new Error('decoder failed');
+      },
+      keyOf: (f) => `f${f}`,
+      store: (f, m) => masks.set(f, m),
+      clear: (f) => masks.delete(f),
+    });
+    await expect(promise).rejects.toThrow('decoder failed');
+    expect([...masks.keys()]).toEqual([]);
+  });
+
+  it('keeps them when a run with new clicks follows at once (superseded)', async () => {
+    const controller = new AbortController();
+    /** @type {Map<number, unknown>} */
+    const masks = new Map([
+      [2, 'old'],
+      [5, 'old'],
+    ]);
+    const promise = trackClicks({
+      range: { start: 0, end: 9 },
+      currentFrame: 5,
+      picks: [{ frame: 2, x: 0.2, y: 0.5, mode: 'keep' }],
+      prompt: async () => {
+        controller.abort();
+        return fakeSegmenter().prompt(2, {});
+      },
+      keyOf: (f) => `f${f}`,
+      store: (f, m) => masks.set(f, m),
+      clear: (f) => masks.delete(f),
+      superseded: () => true,
+      signal: controller.signal,
+    });
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(masks.get(2)).toBe('old');
+    expect(masks.get(5)).toBe('old');
+  });
+
+  it('refines a frame with only remove points from the mask it has now', async () => {
+    const { promise, masks, calls } = run({
+      currentFrame: 6,
+      picks: [
+        { frame: 3, x: 0.3, y: 0.5, mode: 'keep' },
+        { frame: 6, x: 0.45, y: 0.65, mode: 'remove' },
+      ],
+      peek: (f) => (f === 6 ? { data: rect(11, 6, 21, 14), width: W, height: H } : null),
+    });
+    await promise;
+    // The frame on screen first: the box of its mask, a point inside it and the remove point
+    expect(calls[0].frame).toBe(6);
+    expect(calls[0].prompt.box).toHaveLength(4);
+    expect(calls[0].prompt.points.map((/** @type {any} */ p) => p.mode)).toEqual([
+      'keep',
+      'remove',
+    ]);
+    expect(calls[0].prompt.points[1]).toEqual({ x: 0.45, y: 0.65, mode: 'remove' });
+    // The decoder's most confident answer (the top half), not the one like the old mask
+    expect(masks.get(6)?.data).toEqual(rect(11, 6, 21, 10));
+    expect(calls.filter((c) => c.frame === 6)).toHaveLength(1);
+  });
+
+  it('refines a frame with only remove points from the previous frame when it has no mask yet', async () => {
+    const { promise, masks, calls } = run({
+      picks: [
+        { frame: 3, x: 0.3, y: 0.5, mode: 'keep' },
+        { frame: 6, x: 0.5, y: 0.65, mode: 'remove' },
+      ],
+    });
+    const result = await promise;
+    expect(result.lost).toEqual([]);
+    // Not prompted with the remove point alone: reached by the pass from frame 3
+    expect(calls.map((c) => c.frame)).toEqual([3, 4, 5, 6, 7, 8, 9, 2, 1, 0]);
+    const six = /** @type {{ prompt: any }} */ (calls.find((c) => c.frame === 6));
+    expect(six.prompt.box).toHaveLength(4);
+    expect(six.prompt.points.at(-1)).toEqual({ x: 0.5, y: 0.65, mode: 'remove' });
+    // Tracking goes on from the refined mask
+    expect(masks.get(6)?.data).toEqual(rect(11, 6, 21, 10));
+    expect(masks.get(9)?.data).toEqual(rect(14, 6, 24, 10));
+  });
+});
+
+describe('refinePrompt', () => {
+  const base = { data: rect(10, 4, 30, 16), width: W, height: H };
+
+  it('keeps an inside point away from the remove points', () => {
+    const prompt = refinePrompt(base, [{ x: 0.3, y: 0.3, mode: 'remove' }]);
+    expect(prompt?.points.map((p) => p.mode)).toEqual(['keep', 'remove']);
+    expect(prompt?.box).toHaveLength(4);
+  });
+
+  it('drops the inside point when a remove point is right there', () => {
+    const [inside] = /** @type {any} */ (refinePrompt(base, [])).points;
+    const prompt = refinePrompt(base, [{ x: inside.x + 0.01, y: inside.y, mode: 'remove' }]);
+    expect(prompt?.points.map((p) => p.mode)).toEqual(['remove']);
+  });
+
+  it('is null for an empty mask', () => {
+    expect(refinePrompt({ data: new Uint8Array(W * H), width: W, height: H }, [])).toBeNull();
   });
 });

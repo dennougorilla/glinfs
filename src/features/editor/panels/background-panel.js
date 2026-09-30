@@ -298,6 +298,17 @@ export function describeClickStatus({ running, pending, tracked, selection, clic
 }
 
 /**
+ * Frames where the last tracking lost the object that lie in the selection
+ * (the selection may have changed since that tracking ran)
+ * @param {import('../types.js').AiCutoutStatus | null | undefined} status
+ * @param {{ start: number, end: number }} range
+ * @returns {number[]}
+ */
+export function getLostFramesInSelection(status, range) {
+  return (status?.lostFrames ?? []).filter((f) => f >= range.start && f <= range.end);
+}
+
+/**
  * The note about frames where tracking lost the object
  * @param {number[]} lostFrames
  * @param {number} fps
@@ -1101,7 +1112,8 @@ export function canResetBackground(state) {
     const defaults = createDefaultAiCutout();
     return (
       ai.picks.length > 0 ||
-      ai.clickScope !== defaults.clickScope ||
+      // Whole / Part only shows (and counts) with click to select
+      (getAiModelId(ai) === 'click' && ai.clickScope !== defaults.clickScope) ||
       ai.threshold !== defaults.threshold ||
       ai.edge !== defaults.edge ||
       ai.smoothing !== defaults.smoothing
@@ -1211,7 +1223,7 @@ export function updateBackgroundPanel(container, state, fps) {
   setHidden(scope, !(click && ai.picks.length > 0));
   setChecked(q(root, '#ai-click-scope-whole'), ai.clickScope !== 'part');
   setChecked(q(root, '#ai-click-scope-part'), ai.clickScope === 'part');
-  const lostFrames = click && status ? (status.lostFrames ?? []) : [];
+  const lostFrames = click ? getLostFramesInSelection(status, state.selectedRange) : [];
   const lostText = isAnalysisRunning(status?.phase ?? 'idle')
     ? ''
     : getLostFramesText(lostFrames, fps);
@@ -1250,7 +1262,7 @@ function updateAiSettings(root, state, _fps) {
         tracked: Math.max(0, selection - cover.pendingInSelection),
         selection,
         clicks: background.ai.picks.filter((p) => p.frame >= start && p.frame <= end).length,
-        status,
+        status: { ...status, lostFrames: getLostFramesInSelection(status, state.selectedRange) },
       })
     : describeAiStatus({
         running,

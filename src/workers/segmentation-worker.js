@@ -72,6 +72,7 @@ import {
   toCandidates,
 } from '../features/ai-cutout/sam-session.js';
 import {
+  combineBackends,
   createModelSession,
   loadAndCreateSession,
   runModel,
@@ -396,11 +397,12 @@ async function initialize(entry, allowWasm, cacheOnly) {
     entry.session = /** @type {any} */ (first.created.session);
   }
 
+  const backend = combineBackends(results.map((r) => r.created.backend));
   return {
     type: 'ready',
     modelId,
-    backend: first.created.backend,
-    adapter: first.created.backend === 'webgpu' ? describeAdapter(adapter) : null,
+    backend,
+    adapter: backend === 'webgpu' ? describeAdapter(adapter) : null,
     fromCache: results.every((r) => r.loaded.fromCache),
     cached: results.every((r) => r.loaded.cached),
     timings: {

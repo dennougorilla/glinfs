@@ -197,6 +197,44 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     });
   });
 
+  test('export tracks from a click on a frame that frame skip leaves out', async ({ page }) => {
+    const N = 6;
+    await serveSamStubs(page);
+    await gotoCaptureWithStubModel(page, OVERRIDE);
+    await injectDiscClip(page, { count: N });
+    await pauseEditorPlayback(page);
+    await page.evaluate(() => window.__TEST_HOOKS__.setEditorState({ currentFrame: 5 }));
+    await openSidebarTab(page, 'background');
+    await page.locator('label[for="subject-click"]').click();
+    await page.locator('#background-download-confirm').click();
+    await expect(page.locator('#ai-status-text')).toHaveText('Click the thing you want to keep', {
+      timeout: 60_000,
+    });
+    const a = await editorFramePointToViewport(page, discA(5).x, discA(5).y);
+    await page.mouse.click(a.x, a.y);
+    await expect(page.locator('#ai-status-text')).toHaveText(`Tracked through ${N} frames`, {
+      timeout: 60_000,
+    });
+    // Masks are memory-only (a reload drops them); the click on frame 5 stays
+    await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.clearMasks());
+
+    // Every other frame: 0, 2, 4 — not the clicked frame 5
+    await exportFromEditor(page);
+    const dialog = exportDialog(page);
+    await dialog.locator('#export-frame-skip').selectOption('2');
+    await dialog.locator('#export-start').click();
+    await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 60_000 });
+    const frames = await decodeExportedGif(page);
+    expect(frames).toHaveLength(3);
+    frames.forEach((frame, k) => {
+      const i = k * 2;
+      expect({
+        a: gifPixel(frame, discA(i).x, discA(i).y)[3],
+        bg: gifPixel(frame, 5, 5)[3],
+      }).toEqual({ a: 255, bg: 0 });
+    });
+  });
+
   test('Remove adds a point, removing the last point clears the masks', async ({ page }) => {
     const N = 3;
     await serveSamStubs(page);

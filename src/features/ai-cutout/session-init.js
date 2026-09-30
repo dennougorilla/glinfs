@@ -228,3 +228,15 @@ export async function loadAndCreateSession({
     return { loaded: fresh, created: await create(fresh), reloaded: true };
   }
 }
+
+/**
+ * The backend of a model made of several sessions (SAM's encoder and
+ * decoder). Each file falls back to WASM on its own, so the model runs on
+ * WebGPU only when every session does: the slow one sets the pace.
+ * @template {string} B
+ * @param {B[]} backends - One per session, at least one
+ * @returns {B}
+ */
+export function combineBackends(backends) {
+  return backends.find((b) => b !== 'webgpu') ?? backends[0];
+}

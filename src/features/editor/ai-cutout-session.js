@@ -152,6 +152,8 @@ export function createAiCutoutSession(options) {
   let maskSource = null;
   /** @type {AbortController | null} */
   let analysisController = null;
+  /** The model the running analysis uses @type {string | null} */
+  let analysisModelId = null;
   /** @type {AbortController | null} */
   let buildController = null;
   /** @type {string | null} */
@@ -404,6 +406,7 @@ export function createAiCutoutSession(options) {
     const clipId = getClipId();
     const startState = getState();
     const modelId = getAiModelId(startState?.edits.background.ai);
+    analysisModelId = modelId;
     const click = isSamModelId(modelId);
     if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
@@ -465,6 +468,8 @@ export function createAiCutoutSession(options) {
           currentFrame: startState?.currentFrame ?? 0,
           picks: ai?.picks ?? [],
           scope: ai?.clickScope ?? 'whole',
+          // Stopped for new clicks: the next run redoes the masks at once
+          superseded: () => queuedFrames !== null,
           onProgress,
         });
         report({
@@ -523,7 +528,10 @@ export function createAiCutoutSession(options) {
         report({ phase: 'error', error: describeAnalysisError(error) });
       }
     } finally {
-      if (analysisController === controller) analysisController = null;
+      if (analysisController === controller) {
+        analysisController = null;
+        analysisModelId = null;
+      }
       // Catch up with every mask now, not at the end of the cooldown
       clearCooldown();
       requestBuild();
@@ -560,11 +568,13 @@ export function createAiCutoutSession(options) {
     if (disposed) return;
     if (analysisController) {
       queuedFrames = frames;
-      // Click to select while its model still loads: the load has no click
-      // to track and ends by itself; stopping it would drop the download
+      // Click to select while its own model still loads: the load has no
+      // click to track and ends by itself; stopping it would drop the
+      // download. A load of another model (switched away from) stops.
       const loading = !['analyzing', 'idle', 'error'].includes(getState()?.aiCutout?.phase ?? '');
-      const click = isSamModelId(getAiModelId(getState()?.edits.background.ai));
-      if (!(click && loading)) analysisController.abort();
+      const modelId = getAiModelId(getState()?.edits.background.ai);
+      const sameClickLoad = isSamModelId(modelId) && analysisModelId === modelId;
+      if (!(sameClickLoad && loading)) analysisController.abort();
       return;
     }
     void analyze(frames);
@@ -627,6 +637,7 @@ export function createAiCutoutSession(options) {
       queuedFrames = null;
       analysisController?.abort();
       analysisController = null;
+      analysisModelId = null;
       buildController?.abort();
       buildController = null;
       if (storeTimer !== null) {
