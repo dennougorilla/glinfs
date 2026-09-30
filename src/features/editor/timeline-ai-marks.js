@@ -3,7 +3,7 @@
  * filmstrip that shows which frames the current AI model has analyzed
  * @module features/editor/timeline-ai-marks
  *
- * While an AI subject (Background tab: Anime / Person / Anything) is chosen,
+ * While an AI subject (Background tab: Anime / Person / Anything / Something else) is chosen,
  * each frame of the selection is drawn as analyzed (accent) or not analyzed
  * yet (muted); frames outside the selection stay transparent. The track
  * redraws as the mask store fills, at most once per animation frame.
