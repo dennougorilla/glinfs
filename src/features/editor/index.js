@@ -124,6 +124,7 @@ import {
   updateTextLayer,
 } from './state.js';
 import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './timeline.js';
+import { attachTimelineAiMarks } from './timeline-ai-marks.js';
 import {
   renderEditorScreen,
   showClipsQueueFullBanner,
@@ -1047,7 +1048,7 @@ function renderTimelineComponent(container) {
   const state = store.getState();
   if (!state.clip) return;
 
-  timelineCleanup = renderTimeline(
+  const cleanupTimeline = renderTimeline(
     /** @type {HTMLElement} */ (timelineContainer),
     state.clip,
     state.currentFrame,
@@ -1056,6 +1057,16 @@ function renderTimelineComponent(container) {
       onRangeChange: handleRangeChange,
     },
   );
+  // Which frames the AI subject's model has analyzed, under the filmstrip
+  const editorStore = store;
+  const cleanupAiMarks = attachTimelineAiMarks(/** @type {HTMLElement} */ (timelineContainer), {
+    getState: () => editorStore.getState(),
+    subscribe: (listener) => editorStore.subscribe(listener),
+  });
+  timelineCleanup = () => {
+    cleanupAiMarks();
+    cleanupTimeline();
+  };
 }
 
 /**

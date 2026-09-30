@@ -640,6 +640,33 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   AI ANALYSIS MARKS (timeline-ai-marks.js) - thin track along the bottom of
+   the filmstrip: analyzed frames of the selection in the accent color, the
+   rest of the selection muted. Absolutely positioned, so showing or hiding
+   it never shifts the layout.
+   ───────────────────────────────────────────────────────────────────────────── */
+.editor-timeline-ai-marks {
+  --editor-timeline-ai-analyzed: rgba(34, 211, 238, 0.85);
+  --editor-timeline-ai-pending: rgba(255, 255, 255, 0.22);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  height: 3px;
+  pointer-events: none;
+}
+
+.editor-timeline-ai-marks[hidden] {
+  display: none;
+}
+
+.editor-timeline-ai-marks-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    SELECTION LAYER
    ───────────────────────────────────────────────────────────────────────────── */
 .tl-selection-layer {
