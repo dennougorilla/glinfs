@@ -183,7 +183,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     // masks stay untouched
     await chooseAiModel(page, 'anime');
     await expect.poll(() => requests.byModel.anime, { timeout: 60_000 }).toBe(1);
-    await expect.poll(async () => (await readAiStatus(page))?.phase).toBe('idle');
+    await expect
+      .poll(async () => (await readAiStatus(page))?.phase, { timeout: 60_000 })
+      .toBe('idle');
     await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
