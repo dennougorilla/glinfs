@@ -83,6 +83,26 @@ components only.
   std 0.5) follows the export's `preprocessor_config.json` and MODNet's
   `onnx/inference_onnx.py`.
 
+## MobileSAM (`mobilesam-image-encoder.onnx`, `mobilesam-mask-decoder.onnx`)
+
+- Source: https://github.com/ChaoningZhang/MobileSAM (code and weights) and
+  the ONNX export https://huggingface.co/Acly/MobileSAM at commit
+  `0d3b403339b4674a82493d5e97964dd78089ddc8`: `mobile_sam_image_encoder.onnx`
+  (SHA-256 `580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749`)
+  and `sam_mask_decoder_multi.onnx` (SHA-256
+  `8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe`; the
+  Segment Anything prompt encoder and mask decoder, Meta Platforms, Inc.,
+  Apache-2.0)
+- Copyright: Chaoning Zhang and the MobileSAM authors; Meta Platforms, Inc.
+  (Segment Anything)
+- License: Apache License 2.0 (the export's model card says MIT)
+- Modifications: none; the files are renamed only.
+- Use in Glinfs: published as assets of this repository's `models-v1`
+  GitHub Release, downloaded by `npm run models:fetch` / the Pages deploy
+  workflow and served next to the app as `models/mobilesam-image-encoder.onnx`
+  and `models/mobilesam-mask-decoder.onnx`; the browser runs them locally
+  ("Something else — click it"). They are not stored in this repository.
+
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 
 - Source: https://github.com/microsoft/onnxruntime (npm package `onnxruntime-web`)
