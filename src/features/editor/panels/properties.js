@@ -16,8 +16,8 @@
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { getAnalysisFraction } from '../ai-cutout.js';
 import { SIDEBAR_TABS } from '../state.js';
-import { isAnalysisRunning } from './ai-cutout-panel.js';
-import { renderBackgroundPanel, renderTextPanel } from './edits-panel.js';
+import { isAnalysisRunning, renderBackgroundPanel } from './background-panel.js';
+import { renderTextPanel } from './edits-panel.js';
 import { renderTouchUpSection } from './touch-up-panel.js';
 
 /** @type {Record<import('../types.js').SidebarTab, string>} */

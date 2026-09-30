@@ -1623,8 +1623,7 @@
 }
 
 /* Text panel */
-.editor-screen .editor-text-panel,
-.editor-screen .editor-bg-panel {
+.editor-screen .editor-text-panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -1646,8 +1645,7 @@
 
 .editor-screen .editor-text-list[hidden],
 .editor-screen .editor-text-empty[hidden],
-.editor-screen .editor-text-editor[hidden],
-.editor-screen .editor-bg-note[hidden] {
+.editor-screen .editor-text-editor[hidden] {
   display: none;
 }
 
@@ -1695,22 +1693,11 @@
   color: var(--color-recording);
 }
 
-.editor-screen .editor-text-empty,
-.editor-screen .editor-bg-hint,
-.editor-screen .editor-bg-note,
-.editor-screen .editor-bg-status {
+.editor-screen .editor-text-empty {
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   line-height: 1.4;
-}
-
-.editor-screen .editor-bg-status:empty {
-  display: none;
-}
-
-.editor-screen .editor-bg-status {
-  color: var(--color-primary);
 }
 
 .editor-screen .editor-text-editor {
@@ -1757,8 +1744,7 @@
   font-size: var(--font-size-sm);
 }
 
-.editor-screen .editor-text-select,
-.editor-screen .editor-bg-select {
+.editor-screen .editor-text-select {
   flex: 1;
   min-width: 0;
 }
@@ -1771,8 +1757,7 @@
   color: var(--color-text-secondary);
 }
 
-.editor-screen .editor-text-color,
-.editor-screen .editor-bg-color {
+.editor-screen .editor-text-color {
   width: 40px;
   height: 28px;
   padding: 0;
@@ -1782,8 +1767,7 @@
   cursor: pointer;
 }
 
-.editor-screen .editor-text-check,
-.editor-screen .editor-bg-check {
+.editor-screen .editor-text-check {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1817,8 +1801,7 @@
 }
 
 /* Radios stay in the accessibility tree and keyboard order, visually hidden */
-.editor-screen .editor-text-segment input,
-.editor-screen .editor-bg-pick-input {
+.editor-screen .editor-text-segment input {
   position: absolute;
   opacity: 0;
   width: 1px;
@@ -1843,8 +1826,7 @@
   color: var(--color-text);
 }
 
-.editor-screen .editor-text-segment input:focus-visible + span,
-.editor-screen .editor-bg-pick-input:focus-visible + span {
+.editor-screen .editor-text-segment input:focus-visible + span {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
 }
@@ -1874,239 +1856,22 @@
 }
 
 /* Eyedropper toggle: a checkbox styled as a button */
-.editor-screen .editor-bg-pick {
-  position: relative;
-  flex: 1;
-  cursor: pointer;
-}
-
-.editor-screen .editor-bg-pick span {
-  display: block;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  text-align: center;
-  color: var(--color-text-secondary);
-}
-
-.editor-screen .editor-bg-pick--active span,
-.editor-screen .editor-bg-pick-input:checked + span {
-  border-color: var(--color-primary);
-  background: var(--color-primary-muted);
-  color: var(--color-text);
-}
 
 .editor-screen .editor-text-panel button:focus-visible,
 .editor-screen .editor-text-panel select:focus-visible,
 .editor-screen .editor-text-panel textarea:focus-visible,
-.editor-screen .editor-text-panel input:focus-visible,
-.editor-screen .editor-bg-panel select:focus-visible,
-.editor-screen .editor-bg-panel input:focus-visible {
+.editor-screen .editor-text-panel input:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   AI cutout (Background panel, preview pick tools and status note)
+   AI cutout on the preview (pick tools and the per-frame status note)
    Scoped under .editor-screen; every class is prefixed editor-ai-
    ───────────────────────────────────────────────────────────────────────────── */
 
-.editor-screen .editor-ai-color-fields,
-.editor-screen .editor-ai-section,
-.editor-screen .editor-ai-controls,
-.editor-screen .editor-ai-progress,
-.editor-screen .editor-ai-error,
-.editor-screen .editor-ai-warning {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.editor-screen .editor-ai-color-fields[hidden],
-.editor-screen .editor-ai-section[hidden],
-.editor-screen .editor-ai-controls[hidden],
-.editor-screen .editor-ai-progress[hidden],
-.editor-screen .editor-ai-error[hidden],
-.editor-screen .editor-ai-warning[hidden],
-.editor-screen .editor-ai-note[hidden],
-.editor-screen .editor-ai-pick-list[hidden],
-.editor-screen .editor-ai-section button[hidden],
 .editor-screen .editor-ai-preview-note[hidden] {
   display: none;
-}
-
-.editor-screen .editor-ai-intro,
-.editor-screen .editor-ai-note,
-.editor-screen .editor-ai-status,
-.editor-screen .editor-ai-progress-text,
-.editor-screen .editor-ai-warning-text,
-.editor-screen .editor-ai-error-text {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  line-height: 1.4;
-  color: var(--color-text-muted);
-}
-
-.editor-screen .editor-ai-note:empty,
-.editor-screen .editor-ai-status:empty {
-  display: none;
-}
-
-.editor-screen .editor-ai-status,
-.editor-screen .editor-ai-progress-text {
-  color: var(--color-text);
-}
-
-.editor-screen .editor-ai-wide {
-  width: 100%;
-}
-
-.editor-screen .editor-ai-warning {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-warning);
-  border-radius: var(--radius-sm);
-}
-
-.editor-screen .editor-ai-warning-text {
-  color: var(--color-warning);
-}
-
-.editor-screen .editor-ai-error {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-error);
-  border-radius: var(--radius-sm);
-}
-
-.editor-screen .editor-ai-error-text {
-  color: var(--color-error);
-}
-
-.editor-screen .editor-ai-progress-bar {
-  width: 100%;
-  height: 6px;
-  accent-color: var(--color-primary);
-}
-
-.editor-screen .editor-ai-controls {
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--color-border);
-}
-
-/* Keep / Remove pick tools: checkboxes styled as buttons */
-.editor-screen .editor-ai-tool-row {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.editor-screen .editor-ai-tool {
-  position: relative;
-  flex: 1;
-  cursor: pointer;
-}
-
-.editor-screen .editor-ai-tool-input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  pointer-events: none;
-}
-
-.editor-screen .editor-ai-tool span {
-  display: block;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  text-align: center;
-  color: var(--color-text-secondary);
-}
-
-.editor-screen .editor-ai-tool--active span,
-.editor-screen .editor-ai-tool-input:checked + span {
-  border-color: var(--color-primary);
-  background: var(--color-primary-muted);
-  color: var(--color-text);
-}
-
-.editor-screen .editor-ai-tool-input:disabled + span {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.editor-screen .editor-ai-tool-input:focus-visible + span {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -2px;
-}
-
-/* Pick list */
-.editor-screen .editor-ai-pick-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.editor-screen .editor-ai-pick {
-  display: flex;
-  align-items: stretch;
-  border: 1px solid var(--color-border);
-  border-left-width: 3px;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary);
-  overflow: hidden;
-}
-
-.editor-screen .editor-ai-pick--keep {
-  border-left-color: var(--color-primary);
-}
-
-.editor-screen .editor-ai-pick--remove {
-  border-left-color: var(--color-recording);
-}
-
-.editor-screen .editor-ai-pick-go {
-  flex: 1;
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  background: transparent;
-  color: var(--color-text);
-  font-size: var(--font-size-xs);
-  font-family: var(--font-mono);
-  text-align: left;
-  cursor: pointer;
-}
-
-.editor-screen .editor-ai-pick-delete {
-  flex-shrink: 0;
-  width: 28px;
-  border: 0;
-  border-left: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.editor-screen .editor-ai-pick-delete:hover {
-  color: var(--color-recording);
-}
-
-/* Model choice: disabled while an analysis runs */
-.editor-screen .editor-ai-model input:disabled + span {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.editor-screen .editor-ai-section button:focus-visible,
-.editor-screen .editor-ai-section input:focus-visible,
-.editor-screen .editor-ai-method input:focus-visible + span {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
 }
 
 /* Preview: pick tool active, and the per-frame status note */
@@ -2125,7 +1890,8 @@
 .editor-screen .editor-ai-preview-note {
   position: absolute;
   left: var(--space-3);
-  bottom: var(--space-3);
+  top: var(--space-3);
+  z-index: 3;
   margin: 0;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
@@ -2191,10 +1957,6 @@
   display: none;
 }
 
-.editor-screen .editor-brush-note--warning {
-  color: var(--color-warning);
-}
-
 .editor-screen .editor-brush-status {
   color: var(--color-text);
 }
@@ -2204,41 +1966,7 @@
 }
 
 /* Brush toggle: a checkbox styled as a button */
-.editor-screen .editor-brush-toggle {
-  position: relative;
-  cursor: pointer;
-}
 
-.editor-screen .editor-brush-input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  pointer-events: none;
-}
-
-.editor-screen .editor-brush-toggle span {
-  display: block;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  text-align: center;
-  color: var(--color-text-secondary);
-}
-
-.editor-screen .editor-brush-input:checked + span {
-  border-color: var(--color-primary);
-  background: var(--color-primary-muted);
-  color: var(--color-text);
-}
-
-.editor-screen .editor-brush-input:disabled + span {
-  cursor: not-allowed;
-}
-
-.editor-screen .editor-brush-input:focus-visible + span,
 .editor-screen .editor-brush-group input:focus-visible + span {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
@@ -2415,8 +2143,7 @@
   display: none;
 }
 
-.editor-screen .editor-side-panel .editor-text-panel,
-.editor-screen .editor-side-panel .editor-bg-panel {
+.editor-screen .editor-side-panel .editor-text-panel {
   padding-top: 0;
 }
 
@@ -2427,136 +2154,6 @@
 
 .editor-screen .editor-side-frame .prop-accordion-summary {
   padding: var(--space-3) 0 var(--space-2);
-}
-
-/* Background tab: the Off | Color | AI switch leads the panel */
-.editor-screen .editor-bg-method-legend {
-  padding: 0;
-  margin-bottom: var(--space-2);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.editor-screen .editor-bg-lead {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  line-height: 1.4;
-}
-
-.editor-screen .editor-bg-settings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
-.editor-screen .editor-bg-lead[hidden],
-.editor-screen .editor-bg-settings[hidden] {
-  display: none;
-}
-
-/* Collapsed "Advanced" and "About models" disclosures */
-.editor-screen .editor-bg-advanced,
-.editor-screen .editor-ai-about {
-  border-radius: var(--radius-sm);
-}
-
-.editor-screen .editor-bg-advanced-summary,
-.editor-screen .editor-ai-about-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  list-style: none;
-}
-
-.editor-screen .editor-bg-advanced-summary::-webkit-details-marker,
-.editor-screen .editor-ai-about-summary::-webkit-details-marker {
-  display: none;
-}
-
-.editor-screen .editor-bg-advanced-summary::before {
-  content: "";
-  width: 0;
-  height: 0;
-  border-left: 4px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  transition: transform var(--transition-fast);
-}
-
-.editor-screen .editor-bg-advanced[open] > .editor-bg-advanced-summary::before {
-  transform: rotate(90deg);
-}
-
-.editor-screen .editor-bg-advanced-summary:hover,
-.editor-screen .editor-ai-about-summary:hover {
-  color: var(--color-text);
-}
-
-.editor-screen .editor-bg-advanced-summary:focus-visible,
-.editor-screen .editor-ai-about-summary:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
-}
-
-.editor-screen .editor-bg-advanced-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-2) 0 0 var(--space-3);
-  border-left: 1px solid var(--color-border);
-  margin-left: 2px;
-}
-
-.editor-screen .editor-ai-about-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-style: italic;
-  font-weight: 700;
-}
-
-.editor-screen .editor-ai-about[open] {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-/* Touch up entry (Background tab) */
-.editor-screen .editor-brush-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
-.editor-screen .editor-brush-entry .editor-brush-toggle span {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
-  background: var(--color-bg-tertiary);
-}
-
-.editor-screen .editor-brush-entry .editor-brush-toggle:hover span {
-  border-color: var(--color-primary);
-}
-
-.editor-screen .editor-brush-entry .editor-brush-input:disabled + span {
-  opacity: 0.5;
 }
 
 .editor-screen .editor-brush-note:empty {
@@ -2627,82 +2224,6 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
-/* Preview: Result / Original / Mask switch, top-center over the preview
-   with room around it (clear of the transport bar and the AI status note
-   at the bottom-left) */
-.editor-screen .editor-view-switch {
-  position: absolute;
-  top: var(--space-3);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
-  display: flex;
-  gap: 2px;
-  margin: 0;
-  padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-full);
-  background: rgba(24, 24, 27, 0.88);
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(6px);
-}
-
-.editor-screen .editor-view-switch[hidden] {
-  display: none;
-}
-
-.editor-screen .editor-view-switch-legend {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.editor-screen .editor-view-switch-option {
-  position: relative;
-  cursor: pointer;
-}
-
-.editor-screen .editor-view-switch-option input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  pointer-events: none;
-}
-
-.editor-screen .editor-view-switch-option span {
-  display: block;
-  min-width: 64px;
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  line-height: 1.2;
-  text-align: center;
-  color: var(--color-text-secondary);
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.editor-screen .editor-view-switch-option:hover span {
-  color: var(--color-text);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.editor-screen .editor-view-switch-option input:checked + span {
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.editor-screen .editor-view-switch-option input:focus-visible + span {
-  outline: 2px solid var(--color-primary-hover);
-  outline-offset: 1px;
-}
-
 /* ── Room: a wider sidebar and consistent spacing in its panels ── */
 .editor-screen .editor-sidebar:has(.editor-side-tabs) {
   width: clamp(300px, 24vw, 340px);
@@ -2714,18 +2235,12 @@
 }
 
 .editor-screen .editor-side-panel .editor-text-panel,
-.editor-screen .editor-side-panel .editor-bg-panel,
-.editor-screen .editor-bg-settings,
-.editor-screen .editor-ai-section,
-.editor-screen .editor-ai-color-fields,
-.editor-screen .editor-ai-controls,
 .editor-screen .editor-brush-controls,
 .editor-screen .editor-text-editor {
   gap: var(--space-5);
 }
 
-.editor-screen .editor-side-panel .editor-text-panel,
-.editor-screen .editor-side-panel .editor-bg-panel {
+.editor-screen .editor-side-panel .editor-text-panel {
   padding: 0;
 }
 
@@ -2747,71 +2262,8 @@
   white-space: nowrap;
 }
 
-/* Model switch: purpose, the network small under it, and whether the
-   model is ready or still to download */
-.editor-screen .editor-ai-model-purpose {
-  display: block;
-  font-weight: 600;
-}
-
-.editor-screen .editor-ai-model-name,
-.editor-screen .editor-ai-model-hint {
-  display: block;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-muted);
-}
-
-.editor-screen .editor-text-segment input:checked + span .editor-ai-model-name {
-  color: var(--color-text-secondary);
-}
-
-.editor-screen .editor-ai-model-hint[data-state="ready"] {
-  color: var(--color-success);
-}
-
-/* "↓ 90 MB": the word "Download" is visually hidden (still read), the
-   arrow is decoration with empty alt text */
-.editor-screen .editor-ai-model-hint[data-state="missing"]::before,
-.editor-screen .editor-ai-model-hint[data-state="unknown"]::before {
-  content: "\2193\00a0" / "";
-}
-
-.editor-screen .editor-side-panel .editor-ai-wide {
-  white-space: nowrap;
-}
-
-.editor-screen .editor-bg-lead {
-  margin-top: calc(-1 * var(--space-2));
-}
-
 .editor-screen .editor-side-frame .property-group {
   margin-bottom: var(--space-6);
-}
-
-/* Error, WebGPU warning and progress: compact blocks with even spacing */
-.editor-screen .editor-side-panel .editor-ai-warning,
-.editor-screen .editor-side-panel .editor-ai-error {
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-}
-
-.editor-screen .editor-side-panel .editor-ai-warning {
-  background: rgba(245, 158, 11, 0.08);
-}
-
-.editor-screen .editor-side-panel .editor-ai-error {
-  background: rgba(239, 68, 68, 0.08);
-}
-
-.editor-screen .editor-side-panel .editor-ai-warning .btn,
-.editor-screen .editor-side-panel .editor-ai-error .btn {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--font-size-xs);
-}
-
-.editor-screen .editor-side-panel .editor-ai-progress {
-  gap: var(--space-2);
 }
 
 @media (max-width: 900px) {
@@ -2819,4 +2271,835 @@
     flex-direction: column;
     max-height: 320px;
   }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Background tab: "What do you want to keep?" (background-panel.js)
+   Scoped under .editor-screen; every class is prefixed editor-cutout-
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.editor-screen .editor-cutout-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+.editor-screen .editor-cutout-panel [hidden] {
+  display: none;
+}
+
+.editor-screen .editor-cutout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  position: relative;
+}
+
+.editor-screen .editor-cutout-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+/* (i): a small disclosure whose text opens under the heading */
+.editor-screen .editor-cutout-about-summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  font-family: Georgia, serif;
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.editor-screen .editor-cutout-about-summary::-webkit-details-marker {
+  display: none;
+}
+
+.editor-screen .editor-cutout-about-summary:hover,
+.editor-screen .editor-cutout-about[open] .editor-cutout-about-summary {
+  color: var(--color-text);
+  border-color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-cutout-about-body {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-md);
+}
+
+.editor-screen .editor-cutout-about-body p {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+/* Subject: Off row + 2×2 cards, one radio group */
+.editor-screen .editor-cutout-subject {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.editor-screen .editor-cutout-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-cutout-off,
+.editor-screen .editor-cutout-card {
+  position: relative;
+  display: block;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* Radios stay in the accessibility tree and keyboard order, visually hidden */
+.editor-screen .editor-cutout-radio,
+.editor-screen .editor-cutout-tool-input,
+.editor-screen .editor-cutout-segment input,
+.editor-screen .editor-compare-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.editor-screen .editor-cutout-option-body {
+  display: flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.editor-screen .editor-cutout-off .editor-cutout-option-body {
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 7px var(--space-3);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-off-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-off-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.editor-screen .editor-cutout-card .editor-cutout-option-body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "icon status"
+    "label label"
+    "hint hint";
+  align-items: center;
+  row-gap: 1px;
+  padding: 9px 10px 9px var(--space-3);
+}
+
+.editor-screen .editor-cutout-card-icon {
+  grid-area: icon;
+  display: inline-flex;
+  margin-bottom: 2px;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-cutout-card-status {
+  grid-area: status;
+  justify-self: end;
+  font-size: var(--font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-card-status[data-ready="true"] {
+  color: var(--color-success);
+}
+
+.editor-screen .editor-cutout-card-label {
+  grid-area: label;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-card-hint {
+  grid-area: hint;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-screen .editor-cutout-off:hover .editor-cutout-option-body,
+.editor-screen .editor-cutout-card:hover .editor-cutout-option-body {
+  border-color: var(--color-surface-hover);
+  background: var(--color-bg-tertiary);
+}
+
+.editor-screen .editor-cutout-radio:checked + .editor-cutout-option-body {
+  border-color: var(--color-primary);
+  background: var(--color-primary-muted);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.editor-screen .editor-cutout-radio:checked + .editor-cutout-option-body .editor-cutout-card-icon {
+  color: var(--color-primary-hover);
+}
+
+.editor-screen .editor-cutout-radio:focus-visible + .editor-cutout-option-body {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 2px;
+}
+
+/* Inline download question */
+.editor-screen .editor-cutout-download {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.editor-screen .editor-cutout-download-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-download-detail {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-cutout-download-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.editor-screen .editor-cutout-download-actions .btn {
+  padding: 6px var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+/* Settings of the chosen subject */
+.editor-screen .editor-cutout-settings,
+.editor-screen .editor-cutout-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.editor-screen .editor-cutout-settings {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.editor-screen .editor-cutout-label {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.editor-screen .editor-cutout-note:empty {
+  display: none;
+}
+
+/* AI status: fixed height, content changes but never moves the controls */
+.editor-screen .editor-cutout-status {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+
+.editor-screen .editor-cutout-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.editor-screen .editor-cutout-status-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-disabled);
+}
+
+.editor-screen .editor-cutout-status[data-kind="done"] .editor-cutout-status-dot {
+  background: var(--color-success);
+}
+
+.editor-screen .editor-cutout-status[data-kind="pending"] .editor-cutout-status-dot {
+  background: var(--color-warning);
+}
+
+.editor-screen .editor-cutout-status[data-kind="running"] .editor-cutout-status-dot {
+  background: var(--color-primary);
+  animation: editor-cutout-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes editor-cutout-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.editor-screen .editor-cutout-status-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-screen .editor-cutout-status-btn {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-status-btn:hover {
+  border-color: var(--color-surface-hover);
+  background: var(--color-surface);
+}
+
+.editor-screen .editor-cutout-status-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.editor-screen .editor-cutout-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  border: 0;
+  appearance: none;
+  background: transparent;
+}
+
+.editor-screen .editor-cutout-progress::-webkit-progress-bar {
+  background: transparent;
+}
+
+.editor-screen .editor-cutout-progress::-webkit-progress-value {
+  background: var(--color-primary);
+  transition: width var(--transition-normal);
+}
+
+.editor-screen .editor-cutout-progress::-moz-progress-bar {
+  background: var(--color-primary);
+}
+
+/* Warnings and errors (rare, explicit): compact blocks */
+.editor-screen .editor-cutout-alert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.editor-screen .editor-cutout-alert p {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+.editor-screen .editor-cutout-alert--warn {
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.editor-screen .editor-cutout-alert--error {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.editor-screen .editor-cutout-block-btn {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* Sliders with end labels: Tighter … Looser */
+.editor-screen .editor-cutout-slider {
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-screen .editor-cutout-range {
+  width: 100%;
+  margin: 2px 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.editor-screen .editor-cutout-range:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.editor-screen .editor-cutout-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: calc(-1 * var(--space-2));
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-switch {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-switch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Color: swatch, hex, eyedropper */
+.editor-screen .editor-cutout-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-cutout-swatch {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-swatch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.editor-screen .editor-cutout-hex {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* Segmented: Edges only | Everywhere */
+.editor-screen .editor-cutout-segmented-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.editor-screen .editor-cutout-segmented {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.editor-screen .editor-cutout-segment {
+  position: relative;
+  flex: 1;
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-segment span {
+  display: block;
+  padding: 6px var(--space-2);
+  border-radius: 6px;
+  font-size: var(--font-size-xs);
+  text-align: center;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-segment:hover span {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-segment input:checked + span {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-segment input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* Fix-up tools */
+.editor-screen .editor-cutout-fixes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.editor-screen .editor-cutout-fixes .editor-cutout-label {
+  margin-bottom: 0;
+}
+
+.editor-screen .editor-cutout-tools {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.editor-screen .editor-cutout-tool {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-tool span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 52px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.editor-screen .editor-cutout-tool:hover span {
+  border-color: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-tool.is-active span,
+.editor-screen .editor-cutout-tool-input:checked + span {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.editor-screen .editor-cutout-tool-input:focus-visible + span,
+.editor-screen .editor-cutout-tool--button:focus-visible span {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 2px;
+}
+
+.editor-screen .editor-cutout-tool--button:focus-visible {
+  outline: none;
+}
+
+.editor-screen .editor-cutout-tool-input:disabled + span,
+.editor-screen .editor-cutout-tool--button:disabled span {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.editor-screen .editor-cutout-tool--button:disabled {
+  cursor: not-allowed;
+}
+
+.editor-screen .editor-cutout-tool[data-tool="keep"] svg {
+  color: var(--color-success);
+}
+
+.editor-screen .editor-cutout-tool[data-tool="remove"] svg {
+  color: var(--color-error);
+}
+
+.editor-screen .editor-cutout-tool.is-active svg,
+.editor-screen .editor-cutout-tool-input:checked + span svg {
+  color: #fff;
+}
+
+/* The eyedropper next to the key color: a compact tool */
+.editor-screen .editor-cutout-color-row .editor-cutout-tool {
+  flex: 0 0 auto;
+}
+
+.editor-screen .editor-cutout-color-row .editor-cutout-tool span {
+  flex-direction: row;
+  height: 32px;
+  padding: 0 var(--space-3);
+}
+
+/* Picks: small chips */
+.editor-screen .editor-cutout-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.editor-screen .editor-cutout-pick {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+
+.editor-screen .editor-cutout-pick--keep {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.editor-screen .editor-cutout-pick--remove {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.editor-screen .editor-cutout-pick-go,
+.editor-screen .editor-cutout-pick-delete {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-2xs);
+  cursor: pointer;
+}
+
+.editor-screen .editor-cutout-pick-go {
+  padding: 4px 4px 4px 10px;
+  white-space: nowrap;
+}
+
+.editor-screen .editor-cutout-pick-delete {
+  padding: 4px 8px 4px 4px;
+}
+
+.editor-screen .editor-cutout-pick-go:hover,
+.editor-screen .editor-cutout-pick-delete:hover {
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-pick-go:focus-visible,
+.editor-screen .editor-cutout-pick-delete:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Preview: compare controls (top-right), the AI status note (top-left),
+   the active tool hint (bottom-center) and the tool cursors. The transport
+   bar is above the preview and the timeline below it, so nothing collides.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.editor-screen .editor-compare {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 3;
+  display: flex;
+  gap: var(--space-1);
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-full);
+  background: rgba(24, 24, 27, 0.88);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(6px);
+}
+
+.editor-screen .editor-compare[hidden],
+.editor-screen .editor-tool-hint[hidden] {
+  display: none;
+}
+
+.editor-screen .editor-compare-hold,
+.editor-screen .editor-compare-mask span {
+  display: block;
+  height: 30px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 30px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.editor-screen .editor-compare-mask {
+  position: relative;
+}
+
+.editor-screen .editor-compare-hold:hover,
+.editor-screen .editor-compare-mask:hover span {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.editor-screen .editor-compare-hold.is-active,
+.editor-screen .editor-compare-hold:active {
+  background: #fff;
+  color: #18181b;
+}
+
+.editor-screen .editor-compare-input:checked + span {
+  background: rgba(255, 40, 60, 0.85);
+  color: #fff;
+}
+
+.editor-screen .editor-compare-hold:focus-visible,
+.editor-screen .editor-compare-input:focus-visible + span {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 1px;
+}
+
+.editor-screen .editor-tool-hint {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  max-width: calc(100% - 2 * var(--space-3));
+  margin: 0;
+  padding: 6px var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+/* Tool cursors (pick tools and the eyedropper; the brush draws its own) */
+.editor-screen .editor-canvas-container[data-tool="keep"] .editor-canvas-overlay {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Cg stroke-linecap='round'%3E%3Cpath d='M11 3v16M3 11h16' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M11 3v16M3 11h16' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='21' cy='21' r='6' fill='%2322c55e' stroke='%23000'/%3E%3Cpath d='M21 18v6M18 21h6' stroke='%23fff' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E")
+    11 11,
+    crosshair;
+}
+
+.editor-screen .editor-canvas-container[data-tool="remove"] .editor-canvas-overlay {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Cg stroke-linecap='round'%3E%3Cpath d='M11 3v16M3 11h16' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M11 3v16M3 11h16' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='21' cy='21' r='6' fill='%23ef4444' stroke='%23000'/%3E%3Cpath d='M18 21h6' stroke='%23fff' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E")
+    11 11,
+    crosshair;
+}
+
+.editor-screen .editor-canvas-container[data-tool="eyedropper"] .editor-canvas-overlay {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4'%3E%3Cpath d='M15 4.5a2.1 2.1 0 0 1 3 3L16 9.5l1 1-1.5 1.5-5-5L12 5.5l1 1z'/%3E%3Cpath d='M11 8l-6 6v3H2l1 1'/%3E%3C/g%3E%3Cg stroke='%23fff' stroke-width='1.8'%3E%3Cpath d='M15 4.5a2.1 2.1 0 0 1 3 3L16 9.5l1 1-1.5 1.5-5-5L12 5.5l1 1z'/%3E%3Cpath d='M11 8l-6 6v3H2l1 1'/%3E%3C/g%3E%3C/svg%3E")
+    2 22,
+    crosshair;
 }

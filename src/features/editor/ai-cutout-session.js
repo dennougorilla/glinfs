@@ -167,6 +167,11 @@ export function createAiCutoutSession(options) {
   let fullSource = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let buildingTimer = null;
+  /**
+   * Frames to analyze once the running analysis has stopped (restart)
+   * @type {Frame[] | null}
+   */
+  let queuedFrames = null;
 
   /** @param {Partial<AiCutoutStatus>} patch */
   const report = (patch) => {
@@ -447,10 +452,14 @@ export function createAiCutoutSession(options) {
       });
     } catch (error) {
       if (isAbortError(error)) {
-        report({
-          phase: 'idle',
-          notice: 'Analysis cancelled. Finished frames are kept; Analyze continues with the rest.',
-        });
+        report(
+          queuedFrames
+            ? { phase: 'starting', notice: '' }
+            : {
+                phase: 'idle',
+                notice: 'Analysis cancelled. Finished frames are kept.',
+              },
+        );
       } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
         // No WebGPU at all concerns the page; a model that failed on the
         // adapter concerns that model only (the other one may run there)
@@ -472,11 +481,31 @@ export function createAiCutoutSession(options) {
       requestBuild();
       // The model may have been downloaded (or its session released)
       void refreshModels();
+      const next = queuedFrames;
+      queuedFrames = null;
+      if (next && !disposed) void analyze(next);
     }
+  };
+
+  /**
+   * Analyze these frames now, in this order (the frame on screen first):
+   * a running analysis (e.g. with the model just switched away from) is
+   * stopped first, its finished masks kept
+   * @param {Frame[]} frames
+   */
+  const analyzeNow = (frames) => {
+    if (disposed) return;
+    if (analysisController) {
+      queuedFrames = frames;
+      analysisController.abort();
+      return;
+    }
+    void analyze(frames);
   };
 
   return {
     analyze,
+    analyzeNow,
     checkCapabilities,
     preload,
     refreshModels,
@@ -501,6 +530,7 @@ export function createAiCutoutSession(options) {
 
     /** Stop the running analysis (finished masks stay) */
     cancel() {
+      queuedFrames = null;
       analysisController?.abort();
     },
 
@@ -526,6 +556,7 @@ export function createAiCutoutSession(options) {
 
     /** Abort everything; the session writes nothing afterwards */
     dispose() {
+      queuedFrames = null;
       analysisController?.abort();
       analysisController = null;
       buildController?.abort();

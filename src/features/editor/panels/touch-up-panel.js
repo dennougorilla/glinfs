@@ -3,9 +3,9 @@
  * panel's entry and the sidebar's Touch up mode.
  * @module features/editor/panels/touch-up-panel
  *
- * Two parts: the entry in the Background panel ("Touch up with brush…",
- * a checkbox that turns the brush on) and the Touch up mode panel that the
- * sidebar shows instead of its tabs while the brush is on (see
+ * Two parts: the Brush tool of the Background panel (a checkbox that turns
+ * the brush on, built in background-panel.js) and the Touch up mode panel
+ * that the sidebar shows instead of its tabs while the brush is on (see
  * properties.js). The brush being on IS the mode: Done or Escape turn it
  * off, and the strokes stay (they are applied as they are painted).
  *
@@ -39,7 +39,7 @@ const SCOPE_OPTIONS = [
 
 /** Shown while background removal is off (the section is disabled then) */
 export const TOUCH_UP_NEEDS_REMOVAL =
-  'Touch-ups apply only while background removal is on. Turn on Remove background to use the brush.';
+  'Touch-ups apply only while background removal is on. Choose what to keep in the Background tab first.';
 
 /**
  * Slider value of a brush radius
@@ -136,40 +136,6 @@ function segmented(name, legend, options, onChange, cleanups) {
       }),
     ),
   ]);
-}
-
-/**
- * Render the Touch up entry of the Background panel: a checkbox styled as
- * a button that turns the brush on (which is the Touch up mode), a stroke
- * count, and the reason it is unavailable
- * @param {import('../ui.js').EditorUIHandlers} handlers
- * @returns {{ element: HTMLElement, cleanups: (() => void)[] }}
- */
-export function renderTouchUpEntry(handlers) {
-  /** @type {(() => void)[]} */
-  const cleanups = [];
-  const brush = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'checkbox',
-      id: 'touchup-brush',
-      className: 'editor-brush-input',
-      'aria-describedby': 'touchup-entry-summary',
-    })
-  );
-  cleanups.push(on(brush, 'change', () => handlers.onSetBrush?.({ on: brush.checked })));
-  const element = createElement('div', { className: 'editor-brush-entry', id: 'touchup-entry' }, [
-    createElement('label', { className: 'editor-brush-toggle', for: 'touchup-brush' }, [
-      brush,
-      createElement('span', {}, ['Touch up with brush\u2026']),
-    ]),
-    createElement('p', { className: 'editor-brush-note', id: 'touchup-entry-summary' }),
-    createElement(
-      'p',
-      { className: 'editor-brush-note editor-brush-note--warning', id: 'touchup-needs-removal' },
-      [TOUCH_UP_NEEDS_REMOVAL],
-    ),
-  ]);
-  return { element, cleanups };
 }
 
 /**
@@ -288,7 +254,7 @@ export function renderTouchUpSection(handlers) {
       createElement('div', { className: 'editor-brush-body' }, [
         controls,
         createElement('p', { className: 'editor-brush-note editor-brush-keys' }, [
-          'Tip: switch the preview to Mask to see what is removed.',
+          'Tip: turn on Show mask over the preview to see what is removed.',
         ]),
       ]),
     ],
@@ -343,7 +309,6 @@ export function updateTouchUpSection(root, state) {
     setChecked(brushInput, brush.on);
     brushInput.disabled = !removalOn;
   }
-  root.querySelector('#touchup-needs-removal')?.toggleAttribute('hidden', removalOn);
 
   section.hidden = !active;
   const controls = /** @type {HTMLFieldSetElement} */ (q(section, '#touchup-controls'));

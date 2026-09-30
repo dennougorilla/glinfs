@@ -47,64 +47,161 @@ export function isBrushActive(state) {
   return Boolean(state?.brush?.on && state.edits?.background?.enabled);
 }
 
-/** @type {{ value: import('../types.js').PreviewView, label: string }[]} */
-const VIEW_OPTIONS = [
-  { value: 'result', label: 'Result' },
-  { value: 'original', label: 'Original' },
-  { value: 'mask', label: 'Mask' },
-];
+/**
+ * One-line hint over the preview naming the active preview tool and how to
+ * leave it ('' when no tool is on)
+ * @param {import('../types.js').EditorState} state
+ * @returns {string}
+ */
+export function getPreviewToolHint(state) {
+  if (isBrushActive(state)) {
+    return state.brush.mode === 'restore'
+      ? 'Brush: paint to bring back · Esc to finish'
+      : 'Brush: paint to erase · Esc to finish';
+  }
+  if (state.aiPickTool === 'keep') return 'Keep: click a character · Esc to cancel';
+  if (state.aiPickTool === 'remove') return 'Remove: click what to drop · Esc to cancel';
+  if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
+  return '';
+}
 
 /**
- * Result / Original / Mask switch over the preview, shown while background
- * removal is on. Radios (not buttons): arrow keys move between the views
- * and the hotkey dispatcher leaves them alone.
+ * The active preview tool, for the canvas cursor (data-tool on the canvas
+ * container)
+ * @param {import('../types.js').EditorState} state
+ * @returns {'keep' | 'remove' | 'eyedropper' | 'brush' | ''}
+ */
+export function getPreviewTool(state) {
+  if (isBrushActive(state)) return 'brush';
+  if (state.aiPickTool) return state.aiPickTool;
+  if (state.pickingKeyColor) return 'eyedropper';
+  return '';
+}
+
+/**
+ * Compare controls over the preview, shown while background removal is
+ * on: "Hold to compare" (the original while pressed; also hold the
+ * backslash key) and a Show mask toggle (removed areas tinted red).
+ * Top-right, clear of the AI status note (top-left), the tool hint
+ * (bottom-center), the transport bar above and the timeline below.
  * @param {import('../ui.js').EditorUIHandlers} handlers
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
  */
-function renderViewSwitch(handlers, cleanups) {
+function renderCompareControls(handlers, cleanups) {
+  const compare = /** @type {HTMLButtonElement} */ (
+    createElement(
+      'button',
+      {
+        type: 'button',
+        id: 'preview-compare',
+        className: 'editor-compare-hold',
+        'aria-describedby': 'preview-compare-keys',
+      },
+      ['Hold to compare'],
+    )
+  );
+  const keys = createElement('span', { className: 'sr-only', id: 'preview-compare-keys' }, [
+    'Shows the original frame while pressed. Shortcut: hold the backslash key.',
+  ]);
+  /** @param {boolean} held */
+  const set = (held) => handlers.onSetComparing?.(held);
+  /** @param {Event} event */
+  const onDown = (event) => {
+    const e = /** @type {PointerEvent} */ (event);
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try {
+      compare.setPointerCapture(e.pointerId);
+    } catch {
+      // Synthetic pointer: the release still arrives on the button
+    }
+    set(true);
+  };
+  const onUp = () => set(false);
+  /** @param {Event} event */
+  const onKeyDown = (event) => {
+    const e = /** @type {KeyboardEvent} */ (event);
+    if (e.key !== ' ' && e.key !== 'Enter') return;
+    // Claimed: Space must not also toggle playback
+    e.preventDefault();
+    if (!e.repeat) set(true);
+  };
+  /** @param {Event} event */
+  const onKeyUp = (event) => {
+    const e = /** @type {KeyboardEvent} */ (event);
+    if (e.key === ' ' || e.key === 'Enter') set(false);
+  };
+  cleanups.push(
+    on(compare, 'pointerdown', onDown),
+    on(compare, 'pointerup', onUp),
+    on(compare, 'pointercancel', onUp),
+    on(compare, 'lostpointercapture', onUp),
+    on(compare, 'keydown', onKeyDown),
+    on(compare, 'keyup', onKeyUp),
+    on(compare, 'blur', onUp),
+  );
+
+  const mask = /** @type {HTMLInputElement} */ (
+    createElement('input', {
+      type: 'checkbox',
+      id: 'preview-show-mask',
+      className: 'editor-compare-input',
+    })
+  );
+  cleanups.push(
+    on(mask, 'change', () => handlers.onSetPreviewView?.(mask.checked ? 'mask' : 'result')),
+  );
+  const maskToggle = createElement(
+    'label',
+    { className: 'editor-compare-mask', for: 'preview-show-mask' },
+    [mask, createElement('span', {}, ['Show mask'])],
+  );
+
   return createElement(
-    'fieldset',
-    { className: 'editor-view-switch', id: 'preview-view', hidden: 'true' },
-    [
-      createElement('legend', { className: 'editor-view-switch-legend' }, ['Preview']),
-      ...VIEW_OPTIONS.map(({ value, label }) => {
-        const id = `preview-view-${value}`;
-        const input = /** @type {HTMLInputElement} */ (
-          createElement('input', { type: 'radio', name: 'preview-view', id, value })
-        );
-        cleanups.push(
-          on(input, 'change', () => {
-            if (input.checked) handlers.onSetPreviewView?.(value);
-          }),
-        );
-        return createElement('label', { className: 'editor-view-switch-option', for: id }, [
-          input,
-          createElement('span', {}, [label]),
-        ]);
-      }),
-    ],
+    'div',
+    {
+      className: 'editor-compare',
+      id: 'preview-compare-controls',
+      role: 'group',
+      'aria-label': 'Compare',
+      hidden: 'true',
+    },
+    [compare, keys, maskToggle],
   );
 }
 
 /**
- * Apply the state to the preview's view switch
+ * Apply the state to the preview's compare controls, tool hint and tool
+ * cursor
  * @param {ParentNode} container
  * @param {import('../types.js').EditorState} state
  */
-export function updatePreviewViewSwitch(container, state) {
-  const root = container.querySelector('#preview-view');
-  if (!(root instanceof HTMLElement)) return;
+export function updatePreviewTools(container, state) {
   const removalOn = state.edits?.background?.enabled === true;
-  root.hidden = !removalOn;
-  const view = getEffectivePreviewView(state);
-  for (const { value } of VIEW_OPTIONS) {
-    const input = /** @type {HTMLInputElement | null} */ (
-      root.querySelector(`#preview-view-${value}`)
-    );
-    if (input && input.checked !== (view === value)) input.checked = view === value;
+  const controls = container.querySelector('#preview-compare-controls');
+  if (controls instanceof HTMLElement && controls.hidden === removalOn) {
+    controls.hidden = !removalOn;
   }
-  container.querySelector('.editor-canvas-container')?.setAttribute('data-preview-view', view);
+  const view = getEffectivePreviewView(state);
+  const mask = container.querySelector('#preview-show-mask');
+  if (mask instanceof HTMLInputElement) {
+    const checked = removalOn && state.previewView === 'mask';
+    if (mask.checked !== checked) mask.checked = checked;
+  }
+  container.querySelector('#preview-compare')?.classList.toggle('is-active', view === 'original');
+  const canvasContainer = container.querySelector('.editor-canvas-container');
+  canvasContainer?.setAttribute('data-preview-view', view);
+  const tool = getPreviewTool(state);
+  if (canvasContainer && canvasContainer.getAttribute('data-tool') !== tool) {
+    canvasContainer.setAttribute('data-tool', tool);
+  }
+  const hint = container.querySelector('#preview-tool-hint');
+  if (hint instanceof HTMLElement) {
+    const text = getPreviewToolHint(state);
+    if (hint.textContent !== text) hint.textContent = text;
+    hint.hidden = text === '';
+  }
 }
 
 /** Marker step per arrow key press, as a fraction of the frame (Shift: big) */
@@ -238,7 +335,15 @@ export function renderEditorPreview(state, handlers, frame) {
   canvasContainer.appendChild(overlayCanvas);
   canvasContainer.appendChild(brushCursor);
   canvasContainer.appendChild(aiNote);
-  canvasContainer.appendChild(renderViewSwitch(handlers, cleanups));
+  canvasContainer.appendChild(
+    createElement('p', {
+      className: 'editor-tool-hint',
+      id: 'preview-tool-hint',
+      role: 'status',
+      hidden: 'true',
+    }),
+  );
+  canvasContainer.appendChild(renderCompareControls(handlers, cleanups));
   previewWrapper.appendChild(canvasContainer);
   previewPanel.appendChild(previewWrapper);
 
@@ -652,7 +757,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
       const overEdit = picking || hitTestText(coords) !== null;
       let newHoveredHandle = null;
       if (overEdit) {
-        overlayCanvas.style.cursor = picking ? 'crosshair' : 'move';
+        // Pick tools and the eyedropper: the tool's cursor comes from the
+        // CSS (data-tool on the canvas container)
+        overlayCanvas.style.cursor = picking ? '' : 'move';
       } else if (state?.cropArea) {
         const handle = hitTestCropHandle(coords.x, coords.y, state.cropArea, 15);
         newHoveredHandle = handle;

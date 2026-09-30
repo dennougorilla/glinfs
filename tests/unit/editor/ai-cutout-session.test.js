@@ -318,6 +318,33 @@ describe('AI cutout session', () => {
     expect(status.building).toBe(false);
   });
 
+  it('analyzeNow stops a running analysis and then analyzes the new frames', async () => {
+    manager.hold = true;
+    session.analyzeNow(state.clip.frames.slice(0, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.analyzing).toBe(true);
+    const first = manager.calls[0];
+    manager.hold = false;
+    session.analyzeNow(state.clip.frames.slice(2, 4));
+    expect(first.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(manager.calls).toHaveLength(2));
+    await vi.waitFor(() => expect(session.analyzing).toBe(false));
+    // The restart is not reported as a cancellation
+    expect(status.notice).not.toContain('cancelled');
+    expect(maskStore.has('anime:f3')).toBe(true);
+
+    // cancel() drops a queued restart
+    maskStore.clear();
+    manager.hold = true;
+    session.analyzeNow(state.clip.frames);
+    await vi.advanceTimersByTimeAsync(0);
+    session.analyzeNow(state.clip.frames);
+    session.cancel();
+    await vi.waitFor(() => expect(session.analyzing).toBe(false));
+    expect(manager.calls).toHaveLength(3);
+    expect(status.notice).toContain('cancelled');
+  });
+
   describe('no status flicker, live drafts while dragging', () => {
     /** A cache whose builds stay pending until resolved by the test */
     function createPendingCache() {

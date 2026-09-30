@@ -1,5 +1,6 @@
 /**
- * Editor "Text" and "Background" property panels.
+ * Editor "Text" property panel (the Background panel is
+ * background-panel.js; updateEditsPanel() updates both).
  *
  * Built once per editor render; state changes are applied with
  * updateEditsPanel(), which patches control values and the layer list in
@@ -16,12 +17,8 @@
 import { EDIT_LIMITS } from '../../../shared/edits/model.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
-import {
-  advancedDetails,
-  renderAiCutoutSection,
-  updateAiCutoutSection,
-} from './ai-cutout-panel.js';
-import { renderTouchUpEntry, updateTouchUpSection } from './touch-up-panel.js';
+import { updateBackgroundPanel } from './background-panel.js';
+import { updateTouchUpSection } from './touch-up-panel.js';
 
 /** @typedef {import('../../../shared/edits/model.js').TextLayer} TextLayer */
 
@@ -38,12 +35,6 @@ const ALIGN_OPTIONS = [
   { value: 'left', label: 'Left' },
   { value: 'center', label: 'Center' },
   { value: 'right', label: 'Right' },
-];
-
-/** @type {{ value: import('../../../shared/edits/model.js').BackgroundMode, label: string }[]} */
-const MODE_OPTIONS = [
-  { value: 'connected', label: 'Edges only' },
-  { value: 'global', label: 'All matching' },
 ];
 
 /** Color used for a new box when the layer has none */
@@ -417,145 +408,6 @@ export function renderTextPanel(handlers) {
 }
 
 /**
- * Render the Background panel (the sidebar's Background tab): one
- * "Remove background" switch Off | Color | AI. Off, it is only that and one
- * line; with a method, ONLY that method's settings, then the Touch up entry.
- * @param {import('../ui.js').EditorUIHandlers} handlers
- * @returns {{ element: HTMLElement, cleanups: (() => void)[] }}
- */
-export function renderBackgroundPanel(handlers) {
-  /** @type {(() => void)[]} */
-  const cleanups = [];
-
-  const lead = createElement('p', { className: 'editor-bg-lead', id: 'background-lead' }, [
-    'Choose Color or AI to make the background transparent in the GIF.',
-  ]);
-
-  const colorInput = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'color',
-      id: 'background-color',
-      className: 'editor-bg-color',
-    })
-  );
-  cleanups.push(
-    on(colorInput, 'input', () => handlers.onSetBackground?.({ color: colorInput.value })),
-  );
-
-  // Eyedropper toggle: a checkbox styled as a button (see module doc)
-  const pick = /** @type {HTMLInputElement} */ (
-    createElement('input', {
-      type: 'checkbox',
-      id: 'background-pick',
-      className: 'editor-bg-pick-input',
-    })
-  );
-  const pickLabel = createElement(
-    'label',
-    { className: 'editor-bg-pick', for: 'background-pick' },
-    [pick, createElement('span', {}, ['Pick from preview'])],
-  );
-  cleanups.push(on(pick, 'change', () => handlers.onSetPickingKeyColor?.(pick.checked)));
-
-  const tolerance = range(
-    'background-tolerance',
-    EDIT_LIMITS.tolerance.min,
-    EDIT_LIMITS.tolerance.max,
-  );
-  cleanups.push(
-    on(tolerance.input, 'input', () =>
-      handlers.onSetBackground?.({ tolerance: Number(tolerance.input.value) }),
-    ),
-  );
-
-  const mode = /** @type {HTMLSelectElement} */ (
-    createElement(
-      'select',
-      { id: 'background-mode', className: 'editor-bg-select' },
-      MODE_OPTIONS.map((opt) => createElement('option', { value: opt.value }, [opt.label])),
-    )
-  );
-  cleanups.push(
-    on(mode, 'change', () =>
-      handlers.onSetBackground?.({
-        mode: /** @type {import('../../../shared/edits/model.js').BackgroundMode} */ (mode.value),
-      }),
-    ),
-  );
-
-  const pickStatus = createElement('p', {
-    className: 'editor-bg-status',
-    id: 'background-pick-status',
-    role: 'status',
-  });
-
-  const alphaNote = createElement(
-    'p',
-    { className: 'editor-bg-note', id: 'background-alpha-note', hidden: 'true' },
-    ['This clip already has transparent areas. They stay transparent in the exported GIF.'],
-  );
-
-  // Method switch + AI cutout section; the color-key controls below are
-  // the Color method's and hide while the AI method is chosen
-  const ai = renderAiCutoutSection(handlers);
-  cleanups.push(...ai.cleanups);
-
-  // Entry into the Touch up mode (the mask brush over either method)
-  const touchUp = renderTouchUpEntry(handlers);
-  cleanups.push(...touchUp.cleanups);
-
-  const colorFields = createElement(
-    'div',
-    { className: 'editor-ai-color-fields', id: 'ai-color-fields' },
-    [
-      createElement('div', { className: 'editor-text-field' }, [
-        createElement('label', { className: 'editor-text-field-label', for: 'background-color' }, [
-          'Key color',
-        ]),
-        createElement('div', { className: 'editor-text-field-control' }, [colorInput, pickLabel]),
-      ]),
-      pickStatus,
-      createElement('div', { className: 'editor-text-field' }, [
-        createElement(
-          'label',
-          { className: 'editor-text-field-label', for: 'background-tolerance' },
-          ['Tolerance'],
-        ),
-        createElement('div', { className: 'editor-text-field-control' }, [
-          tolerance.input,
-          tolerance.output,
-        ]),
-      ]),
-      advancedDetails('background-advanced', [
-        createElement('div', { className: 'editor-text-field' }, [
-          createElement('label', { className: 'editor-text-field-label', for: 'background-mode' }, [
-            'Remove',
-          ]),
-          createElement('div', { className: 'editor-text-field-control' }, [mode]),
-        ]),
-        createElement('p', { className: 'editor-bg-hint' }, [
-          'Edges only removes the key color connected to the frame edges.',
-        ]),
-      ]),
-    ],
-  );
-
-  const settings = createElement(
-    'div',
-    { className: 'editor-bg-settings', id: 'background-settings', hidden: 'true' },
-    [colorFields, ai.section, touchUp.element],
-  );
-
-  const element = createElement(
-    'div',
-    { className: 'property-group editor-bg-panel', 'data-edits-panel': 'background' },
-    [ai.methodSwitch, lead, settings, alphaNote],
-  );
-
-  return { element, cleanups };
-}
-
-/**
  * Query a required element inside the panel root
  * @template {Element} T
  * @param {ParentNode} root
@@ -636,6 +488,9 @@ function updateLayerList(list, layers, selectedId, fallbackFocus = null) {
 export function updateEditsPanel(container, state, fps) {
   updateTextPanel(container, state, fps);
   updateBackgroundPanel(container, state, fps);
+  // The Touch up mode panel lives outside the Background panel (it
+  // replaces the tabs)
+  updateTouchUpSection(container, state);
 }
 
 /**
@@ -699,38 +554,4 @@ function updateTextPanel(container, state, fps) {
   startOut.dataset.frame = String(layer.start);
   endOut.textContent = frameToTimecode(layer.end, fps);
   endOut.dataset.frame = String(layer.end);
-}
-
-/**
- * @param {ParentNode} container
- * @param {import('../types.js').EditorState} state
- * @param {number} fps
- */
-function updateBackgroundPanel(container, state, fps) {
-  const root = q(container, '[data-edits-panel="background"]');
-  if (!root || !state.edits) return;
-  const { background } = state.edits;
-
-  // Off: the method switch and its line only (settings hidden, not greyed)
-  /** @type {HTMLElement} */ (q(root, '#background-settings')).hidden = !background.enabled;
-  /** @type {HTMLElement} */ (q(root, '#background-lead')).hidden = background.enabled;
-  setValue(/** @type {HTMLInputElement} */ (q(root, '#background-color')), background.color);
-  setChecked(/** @type {HTMLInputElement} */ (q(root, '#background-pick')), state.pickingKeyColor);
-  q(root, '.editor-bg-pick')?.classList.toggle('editor-bg-pick--active', state.pickingKeyColor);
-  const tolerance = String(Math.round(background.tolerance));
-  setValue(/** @type {HTMLInputElement} */ (q(root, '#background-tolerance')), tolerance);
-  /** @type {HTMLElement} */ (q(root, '#background-tolerance-value')).textContent = tolerance;
-  setValue(/** @type {HTMLSelectElement} */ (q(root, '#background-mode')), background.mode);
-
-  const status = /** @type {HTMLElement} */ (q(root, '#background-pick-status'));
-  const message = state.pickingKeyColor
-    ? 'Click the background in the preview. Press Escape to cancel.'
-    : '';
-  if (status.textContent !== message) status.textContent = message;
-
-  /** @type {HTMLElement} */ (q(root, '#background-alpha-note')).hidden = !state.clip?.hasAlpha;
-
-  updateAiCutoutSection(root, state, fps);
-  // The Touch up mode panel lives outside this panel (it replaces the tabs)
-  updateTouchUpSection(container, state);
 }

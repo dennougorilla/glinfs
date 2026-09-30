@@ -123,13 +123,15 @@ describe('Mask brush in the mounted editor', () => {
   it('the section is disabled until background removal is on', async () => {
     const controls = /** @type {HTMLFieldSetElement} */ ($('#touchup-controls'));
     expect(controls.disabled).toBe(true);
-    expect($('#touchup-needs-removal').hidden).toBe(false);
+    // The Brush tool lives in the settings, shown once removal is on
+    expect($('#background-settings').hidden).toBe(true);
     expect($('#touchup-summary').textContent).toBe('No touch-ups yet.');
 
-    check('ai-method-color');
+    check('subject-color');
     await settle();
     expect(controls.disabled).toBe(false);
-    expect($('#touchup-needs-removal').hidden).toBe(true);
+    expect($('#background-settings').hidden).toBe(false);
+    expect(/** @type {HTMLInputElement} */ ($('#touchup-brush')).disabled).toBe(false);
     expect(/** @type {HTMLInputElement} */ ($('#touchup-mode-erase')).checked).toBe(true);
     expect(/** @type {HTMLInputElement} */ ($('#touchup-scope-frame')).checked).toBe(true);
     expect($('#touchup-size-value').textContent).toBe('1 px');
@@ -137,7 +139,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('paints strokes with the pointer (not a crop), pausing playback, over the chosen scope', async () => {
-    check('ai-method-color');
+    check('subject-color');
     await settle();
     check('touchup-brush');
     await settle();
@@ -212,7 +214,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('a pointer that leaves the preview breaks the stroke instead of painting along the edge', async () => {
-    check('ai-method-color');
+    check('subject-color');
     check('touchup-brush');
     await settle();
     // Inside, out past the right edge (the preview is 200x100), down, and back in
@@ -260,7 +262,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('Escape during a stroke cancels that stroke; the next Escape leaves the brush', async () => {
-    check('ai-method-color');
+    check('subject-color');
     check('touchup-brush');
     await settle();
     pointer('pointerdown', 20, 50);
@@ -290,7 +292,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('a played frame updates the Touch up section only, not the whole edits panel', async () => {
-    check('ai-method-color');
+    check('subject-color');
     check('touchup-brush');
     await settle();
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
@@ -308,7 +310,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('Selection scope on a frame outside IN..OUT paints that frame only and says so', async () => {
-    check('ai-method-color');
+    check('subject-color');
     check('touchup-brush');
     check('touchup-scope-selection');
     window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 1, end: 3 }, currentFrame: 2 });
@@ -335,7 +337,7 @@ describe('Mask brush in the mounted editor', () => {
   });
 
   it('Escape leaves the brush first, then the crop; removal off switches the brush off', async () => {
-    check('ai-method-color');
+    check('subject-color');
     window.__TEST_HOOKS__.setEditorState({
       cropArea: { x: 2, y: 1, width: 10, height: 6, aspectRatio: 'free' },
     });
@@ -371,7 +373,7 @@ describe('Mask brush in the mounted editor', () => {
 
     check('touchup-brush');
     await settle();
-    check('background-method-off');
+    check('subject-none');
     await settle();
     expect(getEditorState()?.brush.on).toBe(false);
     expect(/** @type {HTMLFieldSetElement} */ ($('#touchup-controls')).disabled).toBe(true);

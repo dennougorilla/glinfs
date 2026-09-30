@@ -101,9 +101,9 @@ describe('Editor edits session', () => {
     expect(state?.edits.background.enabled).toBe(true);
     // The Text/Background panels show them
     expect(document.querySelector('#text-layer-list')?.textContent).toContain('Saved');
-    expect(
-      /** @type {HTMLInputElement} */ (document.querySelector('#ai-method-color')).checked,
-    ).toBe(true);
+    expect(/** @type {HTMLInputElement} */ (document.querySelector('#subject-color')).checked).toBe(
+      true,
+    );
   });
 
   it('unmounting stores the session (with edits) on the active clip', () => {
@@ -238,7 +238,7 @@ describe('Editor edits session', () => {
     cleanup?.();
     cleanup = /** @type {() => void} */ (initEditor());
 
-    const toggle = /** @type {HTMLInputElement} */ (document.querySelector('#ai-method-color'));
+    const toggle = /** @type {HTMLInputElement} */ (document.querySelector('#subject-color'));
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change', { bubbles: true }));
     expect(getEditorState()?.edits.background).toMatchObject({ enabled: true, color: '#abcdef' });

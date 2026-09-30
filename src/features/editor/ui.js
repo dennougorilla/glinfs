@@ -23,7 +23,7 @@ import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } f
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { createFrameGridLauncher } from './panels/frame-grid-launcher.js';
 import { renderEditorLeftSidebar, renderScenesSidebar } from './panels/left-sidebar.js';
-import { renderEditorPreview, updatePreviewViewSwitch } from './panels/preview.js';
+import { renderEditorPreview, updatePreviewTools } from './panels/preview.js';
 import {
   createClearCropButton,
   renderEditorPropertiesPanel,
@@ -59,12 +59,15 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
  * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
- * @property {(method: import('../../shared/edits/model.js').BackgroundMethod | 'off') => void} [onSetBackgroundMethod] - Off | Color | AI switch: off turns removal off, a method turns it on with that method
+ * @property {(subject: import('./panels/background-panel.js').Subject) => void} [onChooseSubject] - "What do you want to keep?": Off, an AI subject (its model) or Solid color
+ * @property {() => void} [onConfirmModelDownload] - Download the model the panel asked about, and start
+ * @property {() => void} [onCancelModelDownload] - Keep the previous choice instead of downloading
+ * @property {() => void} [onResetBackground] - Reset the current method's adjustments, the picks and the brush strokes
+ * @property {(comparing: boolean) => void} [onSetComparing] - Hold to compare pressed/released
  * @property {() => void} [onAiAnalyze] - Analyze the selection (also Retry)
  * @property {() => void} [onAiCancel] - Cancel the running analysis
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice
  * @property {(patch: Partial<import('../../shared/edits/model.js').AiCutout>, options?: { live?: boolean }) => void} [onSetAiParams] - Threshold/smoothing/edge (live: a slider drag in progress)
- * @property {(model: import('../../shared/edits/model.js').AiModel) => void} [onSetAiModel] - Choose the AI model (Anime / General)
  * @property {(tool: import('../../shared/edits/model.js').PickMode | null, options?: { fromKeyboard?: boolean }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks)
  * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)
  * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
@@ -78,7 +81,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} [onClearTouchUpsOnFrame] - Take the current frame out of every stroke
  * @property {() => void} [onClearAllTouchUps] - Remove every stroke
  * @property {(tab: import('./types.js').SidebarTab) => void} [onSelectSidebarTab] - Right sidebar tab chosen
- * @property {(view: import('./types.js').PreviewView) => void} [onSetPreviewView] - Result / Original / Mask view of the preview
+ * @property {(view: import('./types.js').PreviewView) => void} [onSetPreviewView] - Show mask on ('mask') / off ('result')
  */
 
 /**
@@ -142,7 +145,7 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // on later changes by editor/index.js)
   updateEditsPanel(screen, state, fps);
   updateSidebarTabs(screen, state);
-  updatePreviewViewSwitch(screen, state);
+  updatePreviewTools(screen, state);
 
   // Populate scenes sidebar with thumbnails
   cleanups.push(...renderScenesSidebar(leftSidebar.scenesContainer, state, handlers));
@@ -245,7 +248,30 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     }
   };
 
+  // Hold \ to compare with the original (released on keyup, or when the
+  // window loses focus mid-hold)
+  /** @param {KeyboardEvent} e */
+  const onCompareKeyUp = (e) => {
+    if (e.key === '\\') handlers.onSetComparing?.(false);
+  };
+  const onCompareBlur = () => handlers.onSetComparing?.(false);
+  window.addEventListener('keyup', onCompareKeyUp);
+  window.addEventListener('blur', onCompareBlur);
+
   const unsubscribers = [
+    () => {
+      window.removeEventListener('keyup', onCompareKeyUp);
+      window.removeEventListener('blur', onCompareBlur);
+    },
+    registerHotkey({
+      key: '\\',
+      scope: 'route',
+      handler: (e) => {
+        if (!getCurrentState().edits?.background?.enabled) return false;
+        e.preventDefault();
+        if (!e.repeat) handlers.onSetComparing?.(true);
+      },
+    }),
     ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(clipPosition),
     plain(' ', () => handlers.onTogglePlay()),
     plain('ArrowLeft', () => handlers.onFrameChange(getCurrentState().currentFrame - 1)),

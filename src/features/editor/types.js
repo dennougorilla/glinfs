@@ -116,7 +116,12 @@
  *   edits.touchUps). While it is on the sidebar shows the Touch up mode.
  * @property {SidebarTab} sidebarTab - Tab shown in the right sidebar
  * @property {PreviewView} previewView - What the preview shows while background
- *   removal is on (view only; never affects the export)
+ *   removal is on (view only; never affects the export): 'mask' is the
+ *   Show mask toggle
+ * @property {boolean} comparing - "Hold to compare" is held: the preview shows
+ *   the original frame while removal is on (view only)
+ * @property {string | null} downloadPrompt - An AI subject whose model is not
+ *   downloaded was chosen: its id, while the panel asks before downloading
  */
 
 /**
