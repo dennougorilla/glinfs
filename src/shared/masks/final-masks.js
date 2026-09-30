@@ -334,15 +334,131 @@ export async function buildFinalMasks(options) {
 }
 
 /**
+ * A fresh MaskSource version (shared by builds and drafts, so a renderer
+ * cache keyed on it never mixes the two)
+ * @returns {number}
+ */
+export function nextMaskVersion() {
+  buildCounter += 1;
+  return buildCounter;
+}
+
+/**
  * Wrap built masks as a MaskSource with a fresh version
  * @param {(PackedMask | null)[]} masks
  * @returns {MaskSource}
  */
 function createMaskSource(masks) {
-  buildCounter += 1;
   return {
-    version: buildCounter,
+    version: nextMaskVersion(),
     getFinalMask: (frameIndex) => masks[frameIndex] ?? null,
+  };
+}
+
+/** Frames a draft keeps computed (the current one, plus a few while playing) */
+export const DRAFT_CACHE_FRAMES = 8;
+
+/**
+ * Keep only the components of `binary` that overlap `previous` (the last
+ * full build's final mask of the same frame, which already follows the
+ * picks)
+ * @param {Uint8Array} binary - 0/1, width * height
+ * @param {number} width
+ * @param {number} height
+ * @param {PackedMask} previous - Same size as the binary mask
+ * @param {Int32Array} labels - Scratch
+ * @param {Uint8Array} out
+ * @returns {Uint8Array}
+ */
+function keepOverlappingComponents(binary, width, height, previous, labels, out) {
+  const comps = labelComponents(binary, width, height, labels);
+  const size = width * height;
+  const keep = new Uint8Array(comps.count + 1);
+  const { bits } = previous;
+  for (let i = 0; i < size; i++) {
+    const label = comps.labels[i];
+    if (label && (bits[i >> 3] >> (7 - (i & 7))) & 1) keep[label] = 1;
+  }
+  for (let i = 0; i < size; i++) out[i] = keep[comps.labels[i]];
+  return out;
+}
+
+/**
+ * A MaskSource that computes each frame's final mask on demand, for the
+ * preview while an AI slider is being dragged: a full build walks the whole
+ * clip (and restarts on every change), so the preview would stay frozen on
+ * the old masks until the drag ends. A draft computes only the frames that
+ * are drawn, synchronously and in a few milliseconds each.
+ *
+ * Without picks the result is exact: each frame of a build only depends on
+ * its own (and, with smoothing, its neighbours') probability masks. Pick
+ * tracking needs the whole clip, so with picks a draft approximates it by
+ * keeping the components that overlap `base`'s mask of the frame (the last
+ * full build, which followed the picks); frames `base` has no mask for keep
+ * every component. The full build replaces the draft once the drag ends.
+ *
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, sourceWidth?: number, base?: MaskSource | null, cacheFrames?: number }} options
+ * @returns {MaskSource & { draft: true }}
+ */
+export function createDraftMaskSource({
+  frameCount,
+  getProb,
+  ai,
+  sourceWidth,
+  base = null,
+  cacheFrames = DRAFT_CACHE_FRAMES,
+}) {
+  const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
+  const picks = ai.picks ?? [];
+  /** @type {Map<number, PackedMask | null>} */
+  const computed = new Map();
+  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array } | null} */
+  let scratch = null;
+
+  /**
+   * @param {number} frameIndex
+   * @returns {PackedMask | null}
+   */
+  const compute = (frameIndex) => {
+    if (!frameBinary || frameIndex < 0 || frameIndex >= frameCount) return null;
+    const { width, height } = frameBinary;
+    const bin = frameBinary.binaryAt(frameIndex);
+    if (!bin) return null;
+    const size = width * height;
+    scratch ??= {
+      labels: new Int32Array(size),
+      selected: new Uint8Array(size),
+      morphed: new Uint8Array(size),
+    };
+    let mask = bin;
+    const previous = picks.length > 0 ? (base?.getFinalMask(frameIndex) ?? null) : null;
+    if (previous && previous.width === width && previous.height === height) {
+      mask = keepOverlappingComponents(
+        bin,
+        width,
+        height,
+        previous,
+        scratch.labels,
+        scratch.selected,
+      );
+    }
+    const radius = edgeRadiusInMaskPixels(ai.edge, width, sourceWidth ?? width);
+    if (radius !== 0) mask = morphMask(mask, width, height, radius, scratch.morphed);
+    return packMask(mask, width, height);
+  };
+
+  return {
+    draft: true,
+    version: nextMaskVersion(),
+    getFinalMask(frameIndex) {
+      if (computed.has(frameIndex)) return computed.get(frameIndex) ?? null;
+      const mask = compute(frameIndex);
+      if (computed.size >= cacheFrames) {
+        computed.delete(/** @type {number} */ (computed.keys().next().value));
+      }
+      computed.set(frameIndex, mask);
+      return mask;
+    },
   };
 }
 

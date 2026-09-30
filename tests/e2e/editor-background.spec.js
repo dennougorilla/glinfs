@@ -19,7 +19,6 @@ import {
   gifPixel,
   gotoCapture,
   gotoEditorWithClip,
-  openAdvanced,
   openSidebarTab,
   pauseEditorPlayback,
 } from './helpers/app.js';
@@ -52,7 +51,7 @@ async function previewAlpha(page, x, y) {
 /** @param {import('@playwright/test').Page} page */
 async function openBackgroundPanel(page) {
   await openSidebarTab(page, 'background');
-  await expect(page.locator('#background-method-off')).toBeVisible();
+  await expect(page.locator('label[for="subject-none"]')).toBeVisible();
 }
 
 /**
@@ -62,7 +61,7 @@ async function openBackgroundPanel(page) {
  */
 async function enableWithOtherColor(page) {
   await openBackgroundPanel(page);
-  await page.locator('label[for="ai-method-color"]').click();
+  await page.locator('label[for="subject-color"]').click();
   await page.locator('#background-color').fill('#ff00ff');
   await expect
     .poll(async () => (await readEditorState(page))?.edits.background)
@@ -106,10 +105,15 @@ test.describe('Editor background removal', () => {
     // Eyedropper: pick the background from the preview (its controls show
     // once removal is on)
     await enableWithOtherColor(page);
-    await page.locator('.editor-bg-pick').click();
+    await page.locator('label[for="background-pick"]').click();
     await expect.poll(async () => (await readEditorState(page))?.pickingKeyColor).toBe(true);
-    await expect(page.locator('#background-pick-status')).toContainText('Click the background');
+    // The active tool is obvious: its button, the cursor and a hint on the preview
     await expect(page.locator('#background-pick')).toBeChecked();
+    await expect(page.locator('#preview-tool-hint')).toHaveText(/Click the color to remove/);
+    await expect(page.locator('.editor-canvas-container')).toHaveAttribute(
+      'data-tool',
+      'eyedropper',
+    );
 
     const corner = await editorFramePointToViewport(page, 8, 8);
     await page.mouse.click(corner.x, corner.y);
@@ -121,8 +125,9 @@ test.describe('Editor background removal', () => {
     expect(state?.pickingKeyColor).toBe(false);
     // The pick selected nothing else: the caption keeps its position, no crop
     expect(state?.cropArea).toBeNull();
-    await expect(page.locator('#ai-method-color')).toBeChecked();
+    await expect(page.locator('#subject-color')).toBeChecked();
     await expect(page.locator('#background-color')).toHaveValue('#00ff00');
+    await expect(page.locator('#preview-tool-hint')).toBeHidden();
 
     // The preview shows the removal (checkerboard shows through)
     await expect.poll(() => previewAlpha(page, 2, 2)).toBe(0);
@@ -188,7 +193,7 @@ test.describe('Editor background removal', () => {
 
   test('a crop drag does not re-key the frame on every pointer move', async ({ page }) => {
     await openBackgroundPanel(page);
-    await page.locator('label[for="ai-method-color"]').click();
+    await page.locator('label[for="subject-color"]').click();
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(0);
     await page.waitForTimeout(100);
     const before = await page.evaluate(() => window.__TEST_HOOKS__.getEditorPreviewStats());
@@ -220,9 +225,58 @@ test.describe('Editor background removal', () => {
     expect(after?.readbacks).toBe((before?.readbacks ?? 0) + 1);
   });
 
+  test('dragging Similar colors never flickers: no unkeyed frame, no layout shift', async ({
+    page,
+  }) => {
+    await openBackgroundPanel(page);
+    await page.locator('label[for="subject-color"]').click();
+    await expect.poll(() => previewAlpha(page, 2, 2)).toBe(0);
+    const slider = page.locator('#background-tolerance');
+    await slider.scrollIntoViewIfNeeded();
+
+    // Every animation frame: the preview's background pixel, and where the
+    // slider is (a status line popping in above it would move it)
+    await page.evaluate(() => {
+      const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector('.editor-canvas'));
+      const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
+      const input = /** @type {HTMLElement} */ (document.querySelector('#background-tolerance'));
+      const w = /** @type {any} */ (window);
+      w.__samples = [];
+      w.__probe = true;
+      const tick = () => {
+        w.__samples.push({
+          alpha: ctx.getImageData(2, 2, 1, 1).data[3],
+          top: Math.round(input.getBoundingClientRect().top),
+        });
+        if (w.__probe) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    const box = await slider.boundingBox();
+    if (!box) throw new Error('slider not visible');
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.15, y);
+    await page.mouse.down();
+    for (let i = 0; i <= 30; i++) {
+      await page.mouse.move(box.x + box.width * (0.15 + (0.35 * i) / 30), y);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const samples = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__probe = false;
+      return /** @type {{ alpha: number, top: number }[]} */ (w.__samples);
+    });
+    expect(samples.length).toBeGreaterThan(10);
+    expect(samples.filter((s) => s.alpha !== 0)).toEqual([]);
+    expect(new Set(samples.map((s) => s.top)).size).toBe(1);
+    expect((await readEditorState(page))?.edits.background.tolerance).toBeGreaterThan(20);
+  });
+
   test('Escape leaves the eyedropper without changing the background', async ({ page }) => {
     await enableWithOtherColor(page);
-    await page.locator('.editor-bg-pick').click();
+    await page.locator('label[for="background-pick"]').click();
     await expect.poll(async () => (await readEditorState(page))?.pickingKeyColor).toBe(true);
     await expect(page.locator('.editor-canvas-container')).toHaveClass(/editor-bg-picking/);
 
@@ -239,24 +293,30 @@ test.describe('Editor background removal', () => {
 
   test('enabling removal without a picked color keys out the edge color', async ({ page }) => {
     await openBackgroundPanel(page);
-    await page.locator('label[for="ai-method-color"]').click();
+    await page.locator('label[for="subject-color"]').click();
 
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ enabled: true, color: '#00ff00' });
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(0);
 
-    // Tolerance and mode (under Advanced) drive the edits
+    // Similar colors and Edges only / Everywhere (always visible) drive the edits
+    await expect(page.locator('#background-tolerance')).toBeVisible();
     await page.locator('#background-tolerance').fill('35');
-    await openAdvanced(page, 'background-advanced');
-    await page.locator('#background-mode').selectOption('global');
+    await page.locator('label[for="background-mode-global"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background)
       .toMatchObject({ tolerance: 35, mode: 'global' });
-    await expect(page.locator('#background-tolerance-value')).toHaveText('35');
+    await expect(page.locator('#background-tolerance')).toHaveAttribute('aria-valuetext', '35');
+
+    // Reset: defaults back, the edge color detected again
+    await page.locator('#background-reset').click();
+    await expect
+      .poll(async () => (await readEditorState(page))?.edits.background)
+      .toMatchObject({ tolerance: 20, mode: 'connected', color: '#00ff00', colorChosen: false });
 
     // Turning it off restores the frame
-    await page.locator('label[for="background-method-off"]').click();
+    await page.locator('label[for="subject-none"]').click();
     await expect.poll(() => previewAlpha(page, WIDTH / 2, HEIGHT / 2)).toBe(255);
   });
 });
@@ -307,7 +367,7 @@ test.describe('Background removal on an already transparent clip', () => {
   });
 
   test('enabling removal does not key out black and keeps the dark outline', async ({ page }) => {
-    await page.locator('label[for="ai-method-color"]').click();
+    await page.locator('label[for="subject-color"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background.enabled)
       .toBe(true);
@@ -323,7 +383,7 @@ test.describe('Background removal on an already transparent clip', () => {
   });
 
   test('the eyedropper on a transparent area picks nothing and stays on', async ({ page }) => {
-    await page.locator('label[for="ai-method-color"]').click();
+    await page.locator('label[for="subject-color"]').click();
     await expect
       .poll(async () => (await readEditorState(page))?.edits.background.enabled)
       .toBe(true);
@@ -332,7 +392,7 @@ test.describe('Background removal on an already transparent clip', () => {
       const live = document.getElementById('live-region');
       if (live) live.textContent = '';
     });
-    await page.locator('.editor-bg-pick').click();
+    await page.locator('label[for="background-pick"]').click();
     await expect.poll(async () => (await readEditorState(page))?.pickingKeyColor).toBe(true);
     const corner = await editorFramePointToViewport(page, 4, 4);
     await page.mouse.click(corner.x, corner.y);

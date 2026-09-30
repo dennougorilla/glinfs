@@ -15,6 +15,14 @@
  *   ANALYSIS_REBUILD_INTERVAL_MS, and once more when it ends.
  * - The previous final masks stay in use until a new build lands (dropping
  *   them would flash every frame unkeyed while the build runs).
+ * - Interactive mode (an AI slider is being dragged, see setInteractive):
+ *   a parameter change publishes a draft MaskSource at once, which computes
+ *   only the frames the preview draws (createClipDraftMaskSource), instead
+ *   of restarting a whole-clip build on every input event (the preview
+ *   would stay frozen until the drag ends, then jump). Leaving the mode
+ *   runs the full build; the draft stays on screen until it lands.
+ * - `building` is reported only for builds that run longer than
+ *   BUILDING_STATUS_DELAY_MS, so fast rebuilds never flash a status.
  * - Everything reports through `setStatus` (editor store) and
  *   `onMaskSource`; after dispose() nothing is written anywhere.
  * - preload() prepares the clip's model at idle time when it is already
@@ -35,6 +43,7 @@ import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
+  createClipDraftMaskSource,
   describeAnalysisError,
   estimateRemainingMs,
   getAiModelId,
@@ -60,6 +69,13 @@ export const STORE_REBUILD_DELAY_MS = 200;
  * frame
  */
 export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
+
+/**
+ * A final-mask build reports `building` (the UI's "updating" indicator)
+ * only once it has run this long: most rebuilds finish sooner, and a status
+ * that flashes on and off with every change reads as flicker
+ */
+export const BUILDING_STATUS_DELAY_MS = 300;
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -142,6 +158,20 @@ export function createAiCutoutSession(options) {
    */
   let cooldownTimer = null;
   let buildAfterCooldown = false;
+  /** An AI slider is being dragged: publish drafts, no full builds */
+  let interactive = false;
+  /**
+   * The last full build published (a draft's pick selection follows it)
+   * @type {MaskSource | null}
+   */
+  let fullSource = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let buildingTimer = null;
+  /**
+   * Frames to analyze once the running analysis has stopped (restart)
+   * @type {Frame[] | null}
+   */
+  let queuedFrames = null;
 
   /** @param {Partial<AiCutoutStatus>} patch */
   const report = (patch) => {
@@ -152,8 +182,24 @@ export function createAiCutoutSession(options) {
   const publish = (source) => {
     if (disposed || source === maskSource) return;
     maskSource = source;
+    if (!(/** @type {any} */ (source).draft)) fullSource = source;
     report({ maskVersion: source.version });
     onMaskSource?.(source);
+  };
+
+  /** Report `building` only if the build is still running after a moment */
+  const startBuildingStatus = () => {
+    if (buildingTimer !== null) return;
+    buildingTimer = setTimeout(() => {
+      buildingTimer = null;
+      if (buildController) report({ building: true });
+    }, BUILDING_STATUS_DELAY_MS);
+  };
+
+  const endBuildingStatus = () => {
+    if (buildingTimer !== null) clearTimeout(buildingTimer);
+    buildingTimer = null;
+    report({ building: false });
   };
 
   const abortBuild = () => {
@@ -161,7 +207,7 @@ export function createAiCutoutSession(options) {
     buildController = null;
     buildKey = null;
     rebuildAfterBuild = false;
-    report({ building: false });
+    endBuildingStatus();
   };
 
   const clearCooldown = () => {
@@ -214,6 +260,12 @@ export function createAiCutoutSession(options) {
       publish(memo);
       return;
     }
+    if (interactive) {
+      // Dragging: only the frames on screen, now (see createClipDraftMaskSource)
+      abortBuild();
+      publish(createClipDraftMaskSource({ frames, ai, maskStore, base: fullSource }));
+      return;
+    }
     const key = getBuildParamsKey(frames, ai, clipId);
     if (buildController && key === buildKey) {
       // Same parameters, more masks: rerun once this build is done
@@ -226,14 +278,14 @@ export function createAiCutoutSession(options) {
     buildController = controller;
     buildKey = key;
     rebuildAfterBuild = false;
-    report({ building: true });
+    startBuildingStatus();
     if (analysisController) startCooldown();
     buildClipMaskSource({ frames, ai, maskStore, clipId, cache, signal: controller.signal }).then(
       (source) => {
         if (buildController !== controller) return;
         buildController = null;
         buildKey = null;
-        report({ building: false });
+        endBuildingStatus();
         publish(source);
         if (rebuildAfterBuild) {
           rebuildAfterBuild = false;
@@ -244,7 +296,7 @@ export function createAiCutoutSession(options) {
         if (buildController !== controller) return;
         buildController = null;
         buildKey = null;
-        report({ building: false });
+        endBuildingStatus();
         if (!isAbortError(error)) {
           console.error('[AI cutout] Building the final masks failed:', error);
         } else if (!controller.signal.aborted) {
@@ -400,10 +452,14 @@ export function createAiCutoutSession(options) {
       });
     } catch (error) {
       if (isAbortError(error)) {
-        report({
-          phase: 'idle',
-          notice: 'Analysis cancelled. Finished frames are kept; Analyze continues with the rest.',
-        });
+        report(
+          queuedFrames
+            ? { phase: 'starting', notice: '' }
+            : {
+                phase: 'idle',
+                notice: 'Analysis cancelled. Finished frames are kept.',
+              },
+        );
       } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
         // No WebGPU at all concerns the page; a model that failed on the
         // adapter concerns that model only (the other one may run there)
@@ -425,18 +481,56 @@ export function createAiCutoutSession(options) {
       requestBuild();
       // The model may have been downloaded (or its session released)
       void refreshModels();
+      const next = queuedFrames;
+      queuedFrames = null;
+      if (next && !disposed) void analyze(next);
     }
+  };
+
+  /**
+   * Analyze these frames now, in this order (the frame on screen first):
+   * a running analysis (e.g. with the model just switched away from) is
+   * stopped first, its finished masks kept
+   * @param {Frame[]} frames
+   */
+  const analyzeNow = (frames) => {
+    if (disposed) return;
+    if (analysisController) {
+      queuedFrames = frames;
+      analysisController.abort();
+      return;
+    }
+    void analyze(frames);
   };
 
   return {
     analyze,
+    analyzeNow,
     checkCapabilities,
     preload,
     refreshModels,
     requestBuild,
 
+    /**
+     * Enter/leave interactive mode (an AI slider is being dragged): while
+     * on, parameter changes publish per-frame drafts instead of full
+     * builds; turning it off runs the full build for the final values
+     * @param {boolean} on
+     */
+    setInteractive(on) {
+      if (disposed || interactive === on) return;
+      interactive = on;
+      if (!on) requestBuild();
+    },
+
+    /** @returns {boolean} Interactive mode is on */
+    get interactive() {
+      return interactive;
+    },
+
     /** Stop the running analysis (finished masks stay) */
     cancel() {
+      queuedFrames = null;
       analysisController?.abort();
     },
 
@@ -462,6 +556,7 @@ export function createAiCutoutSession(options) {
 
     /** Abort everything; the session writes nothing afterwards */
     dispose() {
+      queuedFrames = null;
       analysisController?.abort();
       analysisController = null;
       buildController?.abort();
@@ -471,10 +566,13 @@ export function createAiCutoutSession(options) {
         storeTimer = null;
       }
       clearCooldown();
+      if (buildingTimer !== null) clearTimeout(buildingTimer);
+      buildingTimer = null;
       unsubscribeStore();
       unsubscribeModels();
       disposed = true;
       maskSource = null;
+      fullSource = null;
     },
   };
 }

@@ -3,7 +3,9 @@ import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
 import {
   BUILD_SLICE_MS,
   buildFinalMasks,
+  createDraftMaskSource,
   createFinalMaskCache,
+  DRAFT_CACHE_FRAMES,
   edgeRadiusInMaskPixels,
   getAiParamsKey,
   getFinalMaskParamsKey,
@@ -400,6 +402,77 @@ describe('buildFinalMasks', () => {
       buildFinalMasks({ frameCount: 5, getProb, ai: aiOf(), signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(getProb).not.toHaveBeenCalled();
+  });
+});
+
+describe('createDraftMaskSource', () => {
+  const W = 40;
+  const H = 20;
+  /** @param {number} f @returns {Rect} */
+  const a = (f) => [2 + 2 * f, 4, 8, 8];
+  /** @type {Rect} */
+  const b = [28, 4, 8, 8];
+  const getProb = (/** @type {number} */ f) => (f === 4 ? null : probOf(W, H, [a(f), b]));
+
+  it('matches a full build frame for frame without picks (threshold, smoothing, edge)', async () => {
+    for (const ai of [
+      aiOf(),
+      aiOf({ smoothing: true, edge: 3 }),
+      aiOf({ edge: -2, threshold: 0.2 }),
+    ]) {
+      const full = await buildFinalMasks({
+        frameCount: 6,
+        getProb,
+        ai,
+        sourceWidth: 80,
+        ...noYield,
+      });
+      const draft = createDraftMaskSource({ frameCount: 6, getProb, ai, sourceWidth: 80 });
+      for (let f = 0; f < 6; f++) {
+        expect(draft.getFinalMask(f), `frame ${f}`).toEqual(full.masks[f]);
+      }
+    }
+  });
+
+  it('computes only the frames asked for, and keeps the last few', () => {
+    const reads = vi.fn(getProb);
+    const draft = createDraftMaskSource({ frameCount: 6, getProb: reads, ai: aiOf() });
+    // Every probability mask is read once up front (a snapshot), nothing is built yet
+    expect(reads).toHaveBeenCalledTimes(6);
+    const first = draft.getFinalMask(2);
+    expect(draft.getFinalMask(2)).toBe(first);
+    for (let f = 0; f < DRAFT_CACHE_FRAMES + 1; f++) draft.getFinalMask(f % 6);
+    expect(draft.getFinalMask(4)).toBeNull();
+    expect(draft.getFinalMask(-1)).toBeNull();
+    expect(draft.getFinalMask(6)).toBeNull();
+  });
+
+  it('with picks, keeps the components the last full build kept', async () => {
+    const ai = aiOf({ picks: [{ frame: 3, x: (a(3)[0] + 4) / W, y: 0.4, mode: 'keep' }] });
+    const full = await buildFinalMasks({ frameCount: 6, getProb, ai, ...noYield });
+    const base = { version: 1, getFinalMask: (/** @type {number} */ f) => full.masks[f] ?? null };
+    // A looser edge while dragging: still only character A
+    const draft = createDraftMaskSource({ frameCount: 6, getProb, ai: { ...ai, edge: 1 }, base });
+    expect(draft.getFinalMask(1)).toEqual(
+      packMask(morphMask(binaryOf(W, H, [a(1)]), W, H, 1), W, H),
+    );
+    // Without a base mask for the frame, every component stays
+    const bare = createDraftMaskSource({ frameCount: 6, getProb, ai });
+    expect(bare.getFinalMask(1)).toEqual(packMask(binaryOf(W, H, [a(1), b]), W, H));
+  });
+
+  it('has a version no build or other draft shares', async () => {
+    const draft1 = createDraftMaskSource({ frameCount: 6, getProb, ai: aiOf() });
+    const cache = createFinalMaskCache();
+    const built = await cache.build({
+      frameCount: 6,
+      getProb,
+      ai: aiOf(),
+      storeVersion: 1,
+      ...noYield,
+    });
+    const draft2 = createDraftMaskSource({ frameCount: 6, getProb, ai: aiOf() });
+    expect(new Set([draft1.version, built.version, draft2.version]).size).toBe(3);
   });
 });
 

@@ -1,7 +1,9 @@
 /**
  * The AI cutout wired into a mounted editor (segmentation manager faked):
- * method switch, analysis UI, pick tools on the preview, Escape order,
- * parameter controls, and mask cleanup when clips are released.
+ * subject cards with the download question, the instant analysis (frame on
+ * screen first), the status slot, pick tools on the preview, Escape order,
+ * Fit / Reset, Hold to compare / Show mask, and mask cleanup when clips are
+ * released.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +12,7 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
   const actual = /** @type {Record<string, unknown>} */ (await importOriginal());
   const fake = {
     getCapabilities: vi.fn(async () => ({ webgpu: false })),
+    getReadyInfo: vi.fn(() => null),
     analyzeFrames: vi.fn(),
     dispose: vi.fn(),
     forgetClip: vi.fn(),
@@ -99,6 +102,8 @@ describe('AI cutout in the mounted editor', () => {
     fake.dispose.mockClear();
     fake.forgetClip.mockClear();
     fake.analyzeFrames.mockReset();
+    fake.getReadyInfo.mockReset();
+    fake.getReadyInfo.mockReturnValue(null);
     fake.analyzeFrames.mockImplementation(async (frames, options) => {
       const store = getSharedMaskStore();
       const pending = segmentation.collectPendingFrames(frames, store, options.modelId);
@@ -145,82 +150,90 @@ describe('AI cutout in the mounted editor', () => {
       id: 'clip-a',
     });
     cleanup = /** @type {() => void} */ (initEditor());
-    // Keep the playhead still
-    window.__TEST_HOOKS__.setEditorState({ isPlaying: false });
+    // Keep the playhead still (the toggle also stops the playback loop)
+    if (getEditorState()?.isPlaying) $('.btn-play').click();
   }
 
-  async function chooseAi() {
-    check('ai-method-ai');
+  /**
+   * Choose an AI subject card; a model that still has to download is
+   * confirmed in the inline question
+   * @param {'anime' | 'portrait' | 'general'} [subject]
+   */
+  async function chooseAi(subject = 'anime') {
+    check(`subject-${subject}`);
+    await settle();
+    await settle();
+    if (!$('#background-download').hidden) {
+      $('#background-download-confirm').click();
+      await settle();
+    }
     await settle();
   }
 
-  it('switches the method: AI section instead of the color key, removal on, no key color', async () => {
+  /** A pending analysis that ends only when aborted; returns its signal holder */
+  function holdNextAnalysis() {
+    /** @type {{ signal: AbortSignal | null }} */
+    const held = { signal: null };
+    fake.analyzeFrames.mockImplementationOnce(
+      (/** @type {any} */ _frames, /** @type {any} */ options) =>
+        new Promise((_resolve, reject) => {
+          held.signal = options.signal;
+          options.signal.addEventListener('abort', () =>
+            reject(new DOMException('cancelled', 'AbortError')),
+          );
+        }),
+    );
+    return held;
+  }
+
+  it('asks before downloading a model, then starts with the frame on screen', async () => {
     mount();
-    // Removal starts Off; the stored method is the color key
-    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(true);
-    expect(/** @type {HTMLInputElement} */ ($('#ai-method-color')).checked).toBe(false);
-    expect($('#ai-section').hidden).toBe(true);
-    expect($('#background-settings').hidden).toBe(true);
-
-    await chooseAi();
-    const bg = getEditorState()?.edits.background;
-    expect(bg).toMatchObject({ method: 'ai', enabled: true, colorChosen: false });
-    expect($('#ai-section').hidden).toBe(false);
-    expect($('#ai-color-fields').hidden).toBe(true);
-    expect(/** @type {HTMLInputElement} */ ($('#ai-method-ai')).checked).toBe(true);
-    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(false);
-    expect($('#ai-intro').textContent).toContain('88 MB');
-
-    // No adapter: the warning with the explicit slow option
-    expect(fake.getCapabilities).toHaveBeenCalled();
-    expect($('#ai-webgpu-warning').hidden).toBe(false);
-    expect($('#ai-run-wasm').textContent).toBe('Run without WebGPU (very slow)');
-
-    // Off and AI again never picks a key color for the AI
-    check('background-method-off');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 3, selectedRange: { start: 1, end: 4 } });
     await settle();
-    expect(getEditorState()?.edits.background).toMatchObject({ enabled: false, method: 'ai' });
-    check('ai-method-ai');
+    expect(/** @type {HTMLInputElement} */ ($('#subject-none')).checked).toBe(true);
+    expect($('#background-settings').hidden).toBe(true);
+    // Not downloaded: the card says what it downloads
+    await settle();
+    expect($('#subject-status-anime').textContent).toContain('88 MB');
+
+    check('subject-anime');
+    await settle();
+    await settle();
+    // Asked inline; nothing changed, nothing downloaded
+    expect($('#background-download').hidden).toBe(false);
+    expect($('#background-download-title').textContent).toBe('Download 88 MB?');
+    expect(/** @type {HTMLInputElement} */ ($('#subject-anime')).checked).toBe(true);
+    expect(getEditorState()?.edits.background.enabled).toBe(false);
+    expect(fake.analyzeFrames).not.toHaveBeenCalled();
+
+    // Cancel: back to Off
+    $('#background-download-cancel').click();
+    await settle();
+    expect($('#background-download').hidden).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#subject-none')).checked).toBe(true);
+    expect(fake.analyzeFrames).not.toHaveBeenCalled();
+
+    // Download: AI on with that model, the current frame first, then the selection
+    check('subject-anime');
+    await settle();
+    await settle();
+    $('#background-download-confirm').click();
+    await settle();
     await settle();
     expect(getEditorState()?.edits.background).toMatchObject({
       enabled: true,
-      color: '#00ff00',
+      method: 'ai',
       colorChosen: false,
+      ai: { model: 'anime' },
     });
-
-    check('ai-method-color');
-    await settle();
-    expect(getEditorState()?.edits.background.method).toBe('color');
-    expect($('#ai-section').hidden).toBe(true);
-    expect($('#ai-color-fields').hidden).toBe(false);
-  });
-
-  it('analyzes the selection and shows the controls; the preview note follows', async () => {
-    mount();
-    await chooseAi();
-    expect($('#ai-preview-note').hidden).toBe(false);
-    expect($('#ai-preview-note').textContent).toBe('Not analyzed yet');
-    expect($('#ai-controls').hidden).toBe(true);
-
-    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 3 } });
-    await settle();
-    expect($('#ai-analyze').textContent).toBe('Analyze 4 frames');
-
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
     expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
-    expect(fake.analyzeFrames.mock.calls[0][0]).toHaveLength(4);
-    expect(fake.analyzeFrames.mock.calls[0][1]).toMatchObject({
-      clipId: 'clip-a',
-      allowWasm: false,
-    });
-    expect($('#ai-coverage').textContent).toBe('4 of 6 frames analyzed');
-    expect($('#ai-analyze').textContent).toBe('Selection analyzed');
-    expect(/** @type {HTMLButtonElement} */ ($('#ai-analyze')).disabled).toBe(true);
-    expect($('#ai-notice').textContent).toBe('Analyzed 4 frames.');
-    expect($('#ai-controls').hidden).toBe(false);
-    expect(getSharedMaskStore().keysForClip('clip-a')).toHaveLength(4);
+    const [frames, options] = fake.analyzeFrames.mock.calls[0];
+    expect(frames.map((/** @type {any} */ f) => f.id)).toEqual(['a3', 'a1', 'a2', 'a4']);
+    expect(options).toMatchObject({ clipId: 'clip-a', modelId: 'anime', allowWasm: false });
+    expect($('#ai-section').hidden).toBe(false);
+    expect($('#color-section').hidden).toBe(true);
+    expect($('#ai-status').dataset.kind).toBe('done');
+    expect($('#ai-status-text').textContent).toBe('4 of 6 frames analyzed');
 
     // Final masks built: the analyzed frame has no note
     await vi.waitFor(async () => {
@@ -231,32 +244,27 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-preview-note').hidden).toBe(true);
   });
 
-  it('switching the model shows that model’s analysis and reuses each model’s masks', async () => {
-    mount(4);
-    await chooseAi();
-    const anime = /** @type {HTMLInputElement} */ ($('#ai-model-anime'));
-    const general = /** @type {HTMLInputElement} */ ($('#ai-model-general'));
-    expect(anime.checked).toBe(true);
-    expect(anime.labels?.[0]?.textContent).toBe('Anime ISNet anime Download 88 MB');
-    expect(general.labels?.[0]?.textContent).toBe('General ISNet Download 90 MB');
-    expect($('#ai-model-portrait').labels?.[0]?.textContent).toBe('Portrait MODNet Download 13 MB');
-    // Three models share the sidebar: "Download" is read but visually
-    // hidden (the arrow is CSS), so the hint shows "↓ 13 MB"
-    const hint = /** @type {HTMLElement} */ ($('#ai-model-hint-portrait'));
-    expect(hint.querySelector('.sr-only')?.textContent).toBe(' Download ');
-    expect(hint.dataset.state).toMatch(/^(missing|unknown)$/);
-    // General on the left, Portrait, Anime (the default) on the right
-    const order = Array.from($('#ai-model').querySelectorAll('input'), (i) => i.id);
-    expect(order).toEqual(['ai-model-general', 'ai-model-portrait', 'ai-model-anime']);
-    expect($('#ai-model').tagName).toBe('FIELDSET');
+  it('a ready model starts at once, without asking', async () => {
+    fake.getReadyInfo.mockImplementation((/** @type {string} */ id) =>
+      id === 'portrait' ? { backend: 'webgpu' } : null,
+    );
+    mount(3);
+    await settle();
+    await settle();
+    expect($('#subject-status-portrait').textContent).toContain('Ready');
+    check('subject-portrait');
+    await settle();
+    await settle();
+    expect($('#background-download').hidden).toBe(true);
+    expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
+    expect(fake.analyzeFrames.mock.calls[0][1]).toMatchObject({ modelId: 'portrait' });
+    expect(getEditorState()?.edits.background.ai.model).toBe('portrait');
+  });
 
-    // Anime analyzes the clip
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
-    expect(fake.analyzeFrames.mock.calls[0][1]).toMatchObject({ modelId: 'anime' });
-    expect($('#ai-coverage').textContent).toBe('4 of 4 frames analyzed');
-    expect($('#ai-notice').textContent).toBe('Analyzed 4 frames.');
+  it('switching subjects restarts the analysis with the new model; each model keeps its masks', async () => {
+    mount(4);
+    await chooseAi('anime');
+    expect($('#ai-status-text').textContent).toBe('4 of 4 frames analyzed');
     window.__TEST_HOOKS__.setEditorState({
       edits: {
         ...getEditorState()?.edits,
@@ -268,79 +276,93 @@ describe('AI cutout in the mounted editor', () => {
     });
     await settle();
 
-    // General: nothing analyzed with it yet; the last outcome is gone
-    check('ai-model-general');
-    await settle();
+    // Anything: a running analysis with it, then Person mid-run
+    const held = holdNextAnalysis();
+    await chooseAi('general');
     expect(getEditorState()?.edits.background.ai).toMatchObject({
       model: 'general',
       threshold: 0.3,
     });
-    expect($('#ai-coverage').textContent).toBe('0 of 4 frames analyzed');
-    expect($('#ai-analyze').textContent).toBe('Analyze 4 frames');
-    expect($('#ai-notice').textContent).toBe('');
-    expect($('#ai-intro').textContent).toContain('General model');
-    expect($('#ai-intro').textContent).toContain('90 MB');
-    expect($('#ai-model-note').textContent).toContain('People, pets and objects');
-    expect($('#ai-preview-note').textContent).toBe('Not analyzed yet');
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'general' });
+    expect($('#ai-status').dataset.kind).toBe('running');
+    expect($('#ai-cancel').hidden).toBe(false);
 
-    // The model choice is disabled while an analysis runs
-    fake.analyzeFrames.mockImplementationOnce(
-      (/** @type {any} */ _frames, /** @type {any} */ options) =>
-        new Promise((_resolve, reject) => {
-          options.signal.addEventListener('abort', () =>
-            reject(new DOMException('cancelled', 'AbortError')),
-          );
-        }),
-    );
-    $('#ai-analyze').click();
-    await settle();
-    expect(fake.analyzeFrames.mock.calls[1][1]).toMatchObject({ modelId: 'general' });
-    expect(anime.disabled).toBe(true);
-    expect(general.disabled).toBe(true);
-    expect($('#ai-model-note').textContent).toContain('when the analysis ends');
-    // A change event that slips through is ignored
-    check('ai-model-anime');
-    await settle();
-    expect(getEditorState()?.edits.background.ai.model).toBe('general');
-    $('#ai-cancel').click();
+    await chooseAi('portrait');
+    expect(held.signal?.aborted).toBe(true);
     await settle();
     await settle();
-    expect(anime.disabled).toBe(false);
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'portrait' });
+    expect(getEditorState()?.edits.background.ai.model).toBe('portrait');
+    expect($('#ai-status-text').textContent).toBe('4 of 4 frames analyzed');
 
-    // Back to anime: its masks are reused, nothing to analyze
-    check('ai-model-anime');
-    await settle();
-    expect($('#ai-coverage').textContent).toBe('4 of 4 frames analyzed');
-    expect($('#ai-analyze').textContent).toBe('Selection analyzed');
-    expect(fake.analyzeFrames).toHaveBeenCalledTimes(2);
+    // Back to anime: its masks are reused, nothing new to analyze
+    const calls = fake.analyzeFrames.mock.calls.length;
+    await chooseAi('anime');
+    expect($('#ai-status').dataset.kind).toBe('done');
+    expect(
+      getSharedMaskStore()
+        .keysForClip('clip-a')
+        .filter((k) => k.startsWith('anime:')),
+    ).toHaveLength(4);
+    // A call may happen, but it analyzes nothing
+    for (const call of fake.analyzeFrames.mock.calls.slice(calls)) {
+      expect(call[1].modelId).toBe('anime');
+    }
   });
 
-  it('the explicit WASM choice runs the analysis with WASM allowed', async () => {
+  it('Solid color detects the key color; Off stops a running analysis', async () => {
     mount(2);
+    const held = holdNextAnalysis();
+    await chooseAi('anime');
+    expect(held.signal).not.toBeNull();
+    expect($('#ai-status').dataset.kind).toBe('running');
+
+    check('subject-color');
+    await settle();
+    expect(held.signal?.aborted).toBe(true);
+    expect(getEditorState()?.edits.background.method).toBe('color');
+    expect($('#ai-section').hidden).toBe(true);
+    expect($('#color-section').hidden).toBe(false);
+    expect(getEditorState()?.aiCutout.phase).toBe('idle');
+
+    check('subject-none');
+    await settle();
+    expect(getEditorState()?.edits.background.enabled).toBe(false);
+    expect($('#background-settings').hidden).toBe(true);
+    // AI again never picks a key color for the AI
+    await chooseAi('anime');
+    expect(getEditorState()?.edits.background).toMatchObject({
+      enabled: true,
+      method: 'ai',
+    });
+  });
+
+  it('without WebGPU: the explicit CPU choice runs the analysis with WASM allowed', async () => {
+    mount(2);
+    fake.analyzeFrames.mockRejectedValueOnce(
+      Object.assign(new Error('x'), { code: 'webgpu-unavailable' }),
+    );
     await chooseAi();
+    expect(fake.getCapabilities).toHaveBeenCalled();
+    expect($('#ai-webgpu-warning').hidden).toBe(false);
+    expect($('#ai-run-wasm').textContent).toBe('Run on the CPU (very slow)');
     $('#ai-run-wasm').click();
     await settle();
     await settle();
-    expect(fake.analyzeFrames.mock.calls[0][1].allowWasm).toBe(true);
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1].allowWasm).toBe(true);
     expect($('#ai-webgpu-warning').hidden).toBe(true);
     expect($('#ai-wasm-note').hidden).toBe(false);
   });
 
   it('a model that fails on WebGPU asks for the slow choice for that model only', async () => {
-    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
+    fake.getCapabilities.mockResolvedValue({ webgpu: true });
     mount(2);
-    await chooseAi();
-    expect($('#ai-webgpu-warning').hidden).toBe(true);
-    check('ai-model-general');
-    await settle();
     fake.analyzeFrames.mockRejectedValueOnce(
       Object.assign(new Error('The model could not run on WebGPU: shader limits'), {
         code: 'webgpu-model-failed',
       }),
     );
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
+    await chooseAi('general');
     // The browser has WebGPU: the copy names the model, not a missing WebGPU
     expect(getEditorState()?.aiCutout).toMatchObject({
       webgpu: true,
@@ -353,69 +375,51 @@ describe('AI cutout in the mounted editor', () => {
     expect(text).toContain('The General model could not run on WebGPU in this browser');
     expect(text).not.toContain('does not provide');
 
-    // The anime model is not affected: switching clears the choice
-    check('ai-model-anime');
-    await settle();
+    // The anime model is not affected: switching clears the choice and runs it
+    await chooseAi('anime');
     expect(getEditorState()?.aiCutout).toMatchObject({
       needsWasmChoice: false,
       webgpuModelFailed: false,
     });
     expect($('#ai-webgpu-warning').hidden).toBe(true);
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
     expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({
       modelId: 'anime',
       allowWasm: false,
     });
-    expect($('#ai-coverage').textContent).toBe('2 of 2 frames analyzed');
+    expect($('#ai-status-text').textContent).toBe('2 of 2 frames analyzed');
+    fake.getCapabilities.mockResolvedValue({ webgpu: false });
   });
 
-  it('the slow choice after a model failed on WebGPU keeps the WASM note for that model', async () => {
-    fake.getCapabilities.mockResolvedValueOnce({ webgpu: true });
-    mount(2);
-    await chooseAi();
-    fake.analyzeFrames.mockRejectedValueOnce(
-      Object.assign(new Error('x'), { code: 'webgpu-model-failed' }),
-    );
-    $('#ai-analyze').click();
+  it('shows errors with Try again; Analyze picks up frames added to the selection', async () => {
+    mount(4);
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
     await settle();
-    await settle();
-    expect($('#ai-webgpu-warning-text').textContent).toContain(
-      'The Anime model could not run on WebGPU',
-    );
-    $('#ai-run-wasm').click();
-    await settle();
-    await settle();
-    expect(fake.analyzeFrames.mock.calls.at(-1)[1].allowWasm).toBe(true);
-    expect($('#ai-webgpu-warning').hidden).toBe(true);
-    expect($('#ai-wasm-note').hidden).toBe(false);
-  });
-
-  it('shows errors with Retry', async () => {
-    mount(2);
-    await chooseAi();
     fake.analyzeFrames.mockRejectedValueOnce(
       Object.assign(new Error('x'), { code: 'download-failed' }),
     );
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
+    await chooseAi();
     expect($('#ai-error').hidden).toBe(false);
     expect($('#ai-error-text').textContent).toContain('could not be downloaded');
     $('#ai-retry').click();
     await settle();
     await settle();
     expect($('#ai-error').hidden).toBe(true);
-    expect($('#ai-coverage').textContent).toBe('2 of 2 frames analyzed');
+    expect($('#ai-status-text').textContent).toBe('2 of 4 frames analyzed');
+
+    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 3 } });
+    await settle();
+    expect($('#ai-status').dataset.kind).toBe('pending');
+    expect($('#ai-status-text').textContent).toBe('2 frames not analyzed');
+    expect($('#ai-analyze').hidden).toBe(false);
+    $('#ai-analyze').click();
+    await settle();
+    await settle();
+    expect($('#ai-status-text').textContent).toBe('4 of 4 frames analyzed');
   });
 
   it('pick tools: a preview click adds a pick on the current frame; Escape leaves the tool first', async () => {
     mount();
     await chooseAi();
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
 
     const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
     base.getBoundingClientRect = () =>
@@ -426,7 +430,11 @@ describe('AI cutout in the mounted editor', () => {
     check('ai-pick-keep');
     await settle();
     expect(getEditorState()?.aiPickTool).toBe('keep');
-    expect($('#ai-pick-status').textContent).toContain('Click a character');
+    // The active tool is obvious: button, cursor (data-tool) and a hint on the preview
+    expect($('label[for="ai-pick-keep"]').classList.contains('is-active')).toBe(true);
+    expect($('.editor-canvas-container').dataset.tool).toBe('keep');
+    expect($('#preview-tool-hint').hidden).toBe(false);
+    expect($('#preview-tool-hint').textContent).toContain('click a character');
     expect($('.editor-canvas-container').classList.contains('editor-ai-picking')).toBe(true);
 
     overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 30, clientY: 70, bubbles: true }));
@@ -434,12 +442,14 @@ describe('AI cutout in the mounted editor', () => {
     let state = getEditorState();
     expect(state?.edits.background.ai.picks).toEqual([{ frame: 2, x: 0.3, y: 0.7, mode: 'keep' }]);
     expect(state?.aiPickTool).toBeNull();
+    expect($('#preview-tool-hint').hidden).toBe(true);
+    expect($('.editor-canvas-container').dataset.tool).toBe('');
     // The crop was not touched by the pick
     expect(state?.cropArea).toBeNull();
     expect($('#ai-pick-list').children).toHaveLength(1);
     expect($('#ai-pick-list').textContent).toContain('Keep at');
 
-    // Escape: pick tool first, then (next press) the rest of the chain
+    // Escape: pick tool first
     check('ai-pick-remove');
     await settle();
     expect(getEditorState()?.aiPickTool).toBe('remove');
@@ -455,92 +465,23 @@ describe('AI cutout in the mounted editor', () => {
     state = getEditorState();
     expect(state?.edits.background.ai.picks).toHaveLength(1);
     expect(state?.aiCutout.notice).toContain('not analyzed yet');
-
-    // The eyedropper and a pick tool exclude each other
-    check('background-pick');
-    await settle();
-    expect(getEditorState()).toMatchObject({ pickingKeyColor: true, aiPickTool: null });
+    expect($('#ai-notice').textContent).toContain('not analyzed yet');
     press('Escape');
-    expect(getEditorState()?.pickingKeyColor).toBe(false);
+    await settle();
+    expect($('#ai-notice').textContent).toBe('');
 
-    // List: go to the pick's frame, remove it, clear
-    /** @type {HTMLElement} */ ($('.editor-ai-pick-go')).click();
+    // List: go to the pick's frame, remove it
+    /** @type {HTMLElement} */ ($('.editor-cutout-pick-go')).click();
     expect(getEditorState()?.currentFrame).toBe(2);
-    /** @type {HTMLElement} */ ($('.editor-ai-pick-delete')).click();
+    /** @type {HTMLElement} */ ($('.editor-cutout-pick-delete')).click();
     await settle();
     expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
     expect($('#ai-pick-list').hidden).toBe(true);
   });
 
-  it('switching to Color stops a running analysis (its progress and Cancel would be hidden)', async () => {
-    mount(2);
-    await chooseAi();
-    /** @type {AbortSignal | null} */
-    let signal = null;
-    fake.analyzeFrames.mockImplementationOnce(
-      (/** @type {any} */ _frames, /** @type {any} */ options) =>
-        new Promise((_resolve, reject) => {
-          signal = options.signal;
-          options.signal.addEventListener('abort', () =>
-            reject(new DOMException('cancelled', 'AbortError')),
-          );
-        }),
-    );
-    $('#ai-analyze').click();
-    await settle();
-    expect(signal).not.toBeNull();
-    expect($('#ai-progress').hidden).toBe(false);
-
-    check('ai-method-color');
-    await settle();
-    expect(/** @type {AbortSignal} */ (/** @type {unknown} */ (signal)).aborted).toBe(true);
-    expect($('#ai-section').hidden).toBe(true);
-    expect(getEditorState()?.aiCutout.phase).toBe('idle');
-  });
-
-  it('a pick that works clears the earlier "not analyzed yet" pick notice', async () => {
-    mount(3);
-    await chooseAi();
-    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
-    await settle();
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
-    expect($('#ai-notice').textContent).toBe('Analyzed 2 frames.');
-
-    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
-    base.getBoundingClientRect = () =>
-      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
-    const overlay = $('.editor-canvas-overlay');
-
-    // Frame 2 has no analysis: refused with a notice
-    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
-    check('ai-pick-keep');
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
-    await settle();
-    expect($('#ai-notice').textContent).toContain('not analyzed yet');
-
-    // Frame 1 is analyzed: the pick is added and the notice goes
-    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
-    await settle();
-    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
-    expect($('#ai-notice').textContent).toBe('');
-
-    // Leaving the tool clears it too, but other notices stay
-    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
-    check('ai-pick-remove');
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
-    await settle();
-    expect($('#ai-notice').textContent).toContain('not analyzed yet');
-    press('Escape');
-    await settle();
-    expect(getEditorState()?.aiPickTool).toBeNull();
-    expect($('#ai-notice').textContent).toBe('');
-  });
-
   it('refuses a pick on the background with a notice and keeps the tool on', async () => {
     mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
     await chooseAi();
     // Frame 1 analyzed: a character on the left half, background on the right
     const data = new Uint8Array(100);
@@ -568,14 +509,19 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-notice').textContent).toBe('');
   });
 
-  it('keeps keyboard focus in the AI section when the focused control hides or disables itself', async () => {
+  it('keeps keyboard focus in the panel when the focused control hides itself', async () => {
     mount(2);
+    const held = holdNextAnalysis();
     await chooseAi();
-    $('#ai-analyze').click();
+    expect(held.signal).not.toBeNull();
+    $('#ai-cancel').focus();
+    $('#ai-cancel').click();
     await settle();
     await settle();
+    expect($('#ai-cancel').hidden).toBe(true);
+    expect(document.activeElement?.id).toBe('ai-fit');
 
-    // Clear picks hides itself: focus moves to the Keep tool
+    // A pick's × removes it: focus stays in the panel
     window.__TEST_HOOKS__.setEditorState({
       edits: {
         ...getEditorState()?.edits,
@@ -586,44 +532,15 @@ describe('AI cutout in the mounted editor', () => {
       },
     });
     await settle();
-    $('#ai-picks-clear').focus();
-    $('#ai-picks-clear').click();
+    /** @type {HTMLElement} */ ($('.editor-cutout-pick-delete')).focus();
+    /** @type {HTMLElement} */ ($('.editor-cutout-pick-delete')).click();
     await settle();
-    expect($('#ai-picks-clear').hidden).toBe(true);
     expect(document.activeElement?.id).toBe('ai-pick-keep');
-
-    // Analyze disables itself while running: focus moves to Cancel, and back
-    // to Analyze when Cancel hides
-    fake.analyzeFrames.mockImplementationOnce(
-      (/** @type {any} */ _frames, /** @type {any} */ options) =>
-        new Promise((_resolve, reject) => {
-          options.signal.addEventListener('abort', () =>
-            reject(new DOMException('cancelled', 'AbortError')),
-          );
-        }),
-    );
-    window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 1 } });
-    getSharedMaskStore().delete('anime:a1');
-    getSharedMaskStore().delete('anime:a0');
-    await settle();
-    $('#ai-analyze').focus();
-    $('#ai-analyze').click();
-    await settle();
-    expect(/** @type {HTMLButtonElement} */ ($('#ai-analyze')).disabled).toBe(true);
-    expect(document.activeElement?.id).toBe('ai-cancel');
-    $('#ai-cancel').click();
-    await settle();
-    await settle();
-    expect($('#ai-progress').hidden).toBe(true);
-    expect(document.activeElement?.id).toBe('ai-analyze');
   });
 
   it('keyboard picks: the focused preview moves a marker with the arrows and picks on Enter', async () => {
     mount();
     await chooseAi();
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
     await settle();
 
@@ -640,7 +557,6 @@ describe('AI cutout in the mounted editor', () => {
     expect(overlay.tabIndex).toBe(0);
     expect(overlay.getAttribute('aria-label')).toContain('Arrow keys move the marker');
     expect(document.activeElement).toBe(overlay);
-    expect($('#ai-pick-status').textContent).toContain('arrow keys');
 
     /** @param {string} key @param {boolean} [shiftKey] */
     const key = (key, shiftKey = false) => {
@@ -679,31 +595,32 @@ describe('AI cutout in the mounted editor', () => {
     expect(document.activeElement?.id).toBe('ai-pick-remove');
   });
 
-  it('parameter controls patch the AI edits', async () => {
+  it('Fit and Reduce flicker patch the AI edits; dragging previews drafts, release builds', async () => {
     mount(2);
     await chooseAi();
-    $('#ai-analyze').click();
-    await settle();
-    await settle();
+    await vi.waitFor(async () => {
+      await settle();
+      expect(getEditorState()?.aiCutout.maskVersion).toBeGreaterThan(0);
+    });
 
-    const threshold = /** @type {HTMLInputElement} */ ($('#ai-threshold'));
-    threshold.value = '70';
-    threshold.dispatchEvent(new Event('input', { bubbles: true }));
-    const edge = /** @type {HTMLInputElement} */ ($('#ai-edge'));
-    edge.value = '-3';
-    edge.dispatchEvent(new Event('input', { bubbles: true }));
+    const fit = /** @type {HTMLInputElement} */ ($('#ai-fit'));
+    fit.value = '-4';
+    fit.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+    expect(getEditorState()?.edits.background.ai).toMatchObject({ threshold: 0.66, edge: -2 });
+    // Live: no "building" flashed while dragging
+    expect(getEditorState()?.aiCutout.building).toBe(false);
+    fit.dispatchEvent(new Event('change', { bubbles: true }));
     check('ai-smoothing', false);
     await settle();
-
     expect(getEditorState()?.edits.background.ai).toMatchObject({
-      threshold: 0.7,
-      edge: -3,
+      threshold: 0.66,
+      edge: -2,
       smoothing: false,
     });
-    expect($('#ai-threshold-value').textContent).toBe('70%');
-    expect($('#ai-edge-value').textContent).toBe('−3 px');
+    expect(fit.getAttribute('aria-valuetext')).toContain('Tighter 4');
 
-    // Clear picks
+    // Reset: defaults back, picks and strokes gone
     window.__TEST_HOOKS__.setEditorState({
       edits: {
         ...getEditorState()?.edits,
@@ -714,10 +631,70 @@ describe('AI cutout in the mounted editor', () => {
       },
     });
     await settle();
-    expect($('#ai-picks-clear').hidden).toBe(false);
-    $('#ai-picks-clear').click();
+    expect(/** @type {HTMLButtonElement} */ ($('#background-reset')).disabled).toBe(false);
+    $('#background-reset').click();
     await settle();
-    expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
+    expect(getEditorState()?.edits.background.ai).toMatchObject({
+      model: 'anime',
+      threshold: 0.5,
+      edge: 0,
+      smoothing: true,
+      picks: [],
+    });
+    expect(/** @type {HTMLButtonElement} */ ($('#background-reset')).disabled).toBe(true);
+  });
+
+  it('Hold to compare shows the original while held; Show mask tints what is removed', async () => {
+    mount(2);
+    expect($('#preview-compare-controls').hidden).toBe(true);
+    check('subject-color');
+    await settle();
+    expect($('#preview-compare-controls').hidden).toBe(false);
+
+    const hold = $('#preview-compare');
+    hold.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true }));
+    await settle();
+    expect(getEditorState()?.comparing).toBe(true);
+    expect($('.editor-canvas-container').dataset.previewView).toBe('original');
+    hold.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    await settle();
+    expect(getEditorState()?.comparing).toBe(false);
+    expect($('.editor-canvas-container').dataset.previewView).toBe('result');
+
+    // Hold backslash
+    press('\\');
+    await settle();
+    expect(getEditorState()?.comparing).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: '\\' }));
+    await settle();
+    expect(getEditorState()?.comparing).toBe(false);
+
+    // Space/Enter on the focused button hold too, without toggling playback
+    hold.focus();
+    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    hold.dispatchEvent(space);
+    await settle();
+    expect(getEditorState()?.comparing).toBe(true);
+    expect(getEditorState()?.isPlaying).toBe(false);
+    hold.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    await settle();
+    expect(getEditorState()?.comparing).toBe(false);
+
+    check('preview-show-mask');
+    await settle();
+    expect(getEditorState()?.previewView).toBe('mask');
+    expect($('.editor-canvas-container').dataset.previewView).toBe('mask');
+    check('preview-show-mask', false);
+    await settle();
+    expect(getEditorState()?.previewView).toBe('result');
+
+    // Removal off: nothing to compare, the backslash does nothing
+    check('subject-none');
+    await settle();
+    expect($('#preview-compare-controls').hidden).toBe(true);
+    press('\\');
+    await settle();
+    expect(getEditorState()?.comparing).toBe(false);
   });
 
   it('keeps analyzing the deleted clip on screen under its own id while the successor decodes', async () => {
@@ -742,10 +719,11 @@ describe('AI cutout in the mounted editor', () => {
       expect(deleteActiveClipFromAnywhere()).toBe(true);
       await settle();
       expect($('#ai-analyze')).not.toBeNull();
+      getSharedMaskStore().clear();
+      await settle();
       $('#ai-analyze').click();
       await settle();
-      expect(fake.analyzeFrames).toHaveBeenCalledTimes(1);
-      expect(fake.analyzeFrames.mock.calls[0][1].clipId).toBe('clip-a');
+      expect(fake.analyzeFrames.mock.calls.at(-1)[1].clipId).toBe('clip-a');
       expect(getSharedMaskStore().keysForClip('clip-a').length).toBeGreaterThan(0);
 
       // Once the deletion is final, those masks go with the clip

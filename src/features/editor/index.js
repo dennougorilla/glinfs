@@ -22,6 +22,8 @@ import {
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
 import {
+  createDefaultAiCutout,
+  createDefaultEdits,
   createLayerId,
   EDIT_LIMITS,
   isAiCutoutActive,
@@ -49,6 +51,7 @@ import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
   getAiModelId,
+  getModelSizeLabel,
   getSharedFinalMaskCache,
   isFrameAnalyzed,
   pickFindsCharacter,
@@ -68,8 +71,9 @@ import {
   previewDependsOnCrop,
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
+import { getSubjectModel } from './panels/background-panel.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
-import { isBrushActive, setOverlayPickMode, updatePreviewViewSwitch } from './panels/preview.js';
+import { isBrushActive, setOverlayPickMode, updatePreviewTools } from './panels/preview.js';
 import { updateSidebarTabs } from './panels/properties.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import { TOUCH_UP_NEEDS_REMOVAL, updateTouchUpSection } from './panels/touch-up-panel.js';
@@ -99,6 +103,8 @@ import {
   setBackground,
   setBackgroundMethod,
   setBrush,
+  setComparing,
+  setDownloadPrompt,
   setEdits,
   setPickingKeyColor,
   setPlaybackSpeed,
@@ -245,8 +251,23 @@ let pendingExportDialog = false;
  */
 let brushGesture = null;
 
-/** @type {number | null} requestAnimationFrame of the live stroke preview */
-let brushDrawFrameId = null;
+/**
+ * requestAnimationFrame of the next preview draw: state changes (a slider
+ * dragged, a stroke painted, a new frame) are coalesced into one draw per
+ * animation frame, of the latest state
+ * @type {number | null}
+ */
+let previewDrawFrameId = null;
+
+/**
+ * Ends the interactive mode of an AI slider drag when no `change` event
+ * came (the full mask build then runs for the values reached)
+ * @type {ReturnType<typeof setTimeout> | null}
+ */
+let aiLiveIdleTimer = null;
+
+/** Interactive mode ends this long after the last live slider input */
+const AI_LIVE_IDLE_MS = 800;
 
 /**
  * The right sidebar's last chosen tab: kept for the whole page session, so
@@ -566,6 +587,8 @@ export function initEditor() {
     brush: initialState.brush,
     sidebarTab: initialState.sidebarTab,
     previewView: initialState.previewView,
+    comparing: initialState.comparing,
+    downloadPrompt: initialState.downloadPrompt,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -617,7 +640,9 @@ export function initEditor() {
     const brushChanged = state.brush !== lastRendered.brush;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
     const tabChanged = state.sidebarTab !== lastRendered.sidebarTab;
-    const viewChanged = state.previewView !== lastRendered.previewView;
+    const viewChanged =
+      state.previewView !== lastRendered.previewView || state.comparing !== lastRendered.comparing;
+    const promptChanged = state.downloadPrompt !== lastRendered.downloadPrompt;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
     // The analysis coverage shown in the panel depends on the selection
     const selectionChanged =
@@ -637,7 +662,7 @@ export function initEditor() {
       viewChanged ||
       (cropChanged && editsUseCrop)
     ) {
-      drawPreview(state);
+      schedulePreviewDraw();
     }
     // Sidebar tab, the Background tab's badge, the Touch up mode swap and
     // the preview's view switch
@@ -645,9 +670,11 @@ export function initEditor() {
       updateSidebarTabs(container, state);
       lastRendered.sidebarTab = state.sidebarTab;
     }
-    if (viewChanged || editsChanged) {
-      updatePreviewViewSwitch(container, state);
+    // Compare controls, the tool hint and the tool cursor over the preview
+    if (viewChanged || editsChanged || pickingChanged || pickToolChanged || brushChanged) {
+      updatePreviewTools(container, state);
       lastRendered.previewView = state.previewView;
+      lastRendered.comparing = state.comparing;
     }
     if (frameChanged || editsChanged || aiChanged) {
       updateAiPreviewNote(container, state);
@@ -677,6 +704,7 @@ export function initEditor() {
       pickToolChanged ||
       aiChanged ||
       brushChanged ||
+      promptChanged ||
       (selectionChanged && state.edits.background.method === 'ai')
     ) {
       updateEditsPanel(container, state, fps);
@@ -705,6 +733,7 @@ export function initEditor() {
       lastRendered.aiPickTool = state.aiPickTool;
       lastRendered.aiCutout = state.aiCutout;
       lastRendered.brush = state.brush;
+      lastRendered.downloadPrompt = state.downloadPrompt;
     } else if (touchUpSectionStale) {
       updateTouchUpSection(container, state);
     }
@@ -896,12 +925,15 @@ function render(container) {
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
       onPickTransparentArea: handlePickTransparentArea,
-      onSetBackgroundMethod: handleSetBackgroundChoice,
+      onChooseSubject: handleChooseSubject,
+      onConfirmModelDownload: handleConfirmModelDownload,
+      onCancelModelDownload: handleCancelModelDownload,
+      onResetBackground: handleResetBackground,
+      onSetComparing: handleSetComparing,
       onAiAnalyze: handleAiAnalyze,
       onAiCancel: handleAiCancel,
       onAiAllowWasm: handleAiAllowWasm,
       onSetAiParams: handleSetAiParams,
-      onSetAiModel: handleSetAiModel,
       onSetAiPickTool: handleSetAiPickTool,
       onAiPick: handleAiPick,
       onRemoveAiPick: handleRemoveAiPick,
@@ -1492,19 +1524,22 @@ function handleSetBackgroundMethod(method) {
 }
 
 /**
- * Frames of the current selection (what "Analyze selection" analyzes)
+ * Frames to analyze: the frame on screen first (so the preview shows a
+ * cutout within about a second), then the rest of the selection
  * @returns {import('../capture/types.js').Frame[]}
  */
 function getSelectionFrames() {
   const state = store?.getState();
   if (!state?.clip) return [];
-  return state.clip.frames.slice(state.selectedRange.start, state.selectedRange.end + 1);
+  const current = state.clip.frames[state.currentFrame];
+  const selection = state.clip.frames.slice(state.selectedRange.start, state.selectedRange.end + 1);
+  return current ? [current, ...selection.filter((frame) => frame !== current)] : selection;
 }
 
-/** Analyze the selection's frames that have no mask yet (also Retry) */
+/** Analyze the selection's frames that have no mask yet (also Try again) */
 function handleAiAnalyze() {
   if (!store || !aiSession) return;
-  void aiSession.analyze(getSelectionFrames());
+  aiSession.analyzeNow(getSelectionFrames());
 }
 
 /** Cancel the running analysis; finished masks are kept */
@@ -1518,38 +1553,158 @@ function handleAiAllowWasm() {
   void aiSession.allowWasmAndAnalyze(getSelectionFrames());
 }
 
-/** @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch */
-function handleSetAiParams(patch) {
+/**
+ * @param {Partial<import('../../shared/edits/model.js').AiCutout>} patch
+ * @param {{ live?: boolean }} [options] - live: a slider is being dragged
+ *   (its `input` events): the preview follows with per-frame drafts and the
+ *   whole-clip mask build waits for the release (`change`) or a pause
+ */
+function handleSetAiParams(patch, options = {}) {
   if (!store) return;
+  if (aiLiveIdleTimer !== null) clearTimeout(aiLiveIdleTimer);
+  aiLiveIdleTimer = null;
+  if (options.live) {
+    aiSession?.setInteractive(true);
+    aiLiveIdleTimer = setTimeout(() => {
+      aiLiveIdleTimer = null;
+      aiSession?.setInteractive(false);
+    }, AI_LIVE_IDLE_MS);
+  }
   store.setState((state) => setAiParams(state, patch));
+  if (!options.live) aiSession?.setInteractive(false);
 }
 
 /**
- * Choose the AI model. Each model keeps its own masks, so the section now
- * shows that model's analysis (switching back reuses the earlier masks);
- * threshold, smoothing, edge and picks stay as they are. Not while an
- * analysis runs (the choice is disabled then): it analyzes with the model
- * it started with.
- * @param {import('../../shared/edits/model.js').AiModel} modelId
+ * "What do you want to keep?" in the Background tab: Off, Solid color, or
+ * an AI subject (its model). A ready AI model starts at once with the frame
+ * on screen, then the rest of the selection in the background; a model
+ * that still has to download asks first (the panel's inline question),
+ * unless the frame on screen is already analyzed with it (then the result
+ * shows and the remaining frames wait for an explicit Analyze).
+ * @param {import('./panels/background-panel.js').Subject} subject
  */
-function handleSetAiModel(modelId) {
+async function handleChooseSubject(subject) {
+  if (!store) return;
+  store.setState((s) => setDownloadPrompt(s, null));
+  if (subject === 'none' || subject === 'color') {
+    handleSetBackgroundChoice(subject === 'none' ? 'off' : 'color');
+    return;
+  }
+  const modelId = getSubjectModel(subject);
+  if (!modelId) return;
+  const current = store;
+  let availability = current.getState().aiCutout.models?.[modelId];
+  if (availability === undefined && aiSession) {
+    // Not checked yet (the cards fill in right after mount)
+    await aiSession.refreshModels();
+    if (store !== current) return;
+    availability = current.getState().aiCutout.models?.[modelId];
+  }
+  const ready = availability === 'ready' || availability === 'cached';
+  const state = current.getState();
+  const frame = state.clip?.frames[state.currentFrame];
+  if (!ready && !isFrameAnalyzed(frame, { modelId })) {
+    current.setState((s) => setDownloadPrompt(s, modelId));
+    const entry = getModelEntry(modelId);
+    announce(
+      `The ${entry.label} model needs a ${getModelSizeLabel(modelId)} download. Download or Cancel.`,
+    );
+    return;
+  }
+  applyAiSubject(/** @type {import('../../shared/edits/model.js').AiModel} */ (modelId), ready);
+}
+
+/**
+ * Use an AI model: removal on with the AI cutout and that model (each model
+ * keeps its own masks; Fit, smoothing and picks stay), and, when `analyze`,
+ * start with the frame on screen. A running analysis with another model is
+ * stopped first (its finished frames are kept).
+ * @param {import('../../shared/edits/model.js').AiModel} modelId
+ * @param {boolean} analyze
+ */
+function applyAiSubject(modelId, analyze) {
+  if (!store) return;
+  const before = store.getState();
+  const sameModel = getAiModelId(before.edits.background.ai) === modelId;
+  if (!sameModel) {
+    store.setState((s) => {
+      const next = setAiParams(s, { model: modelId });
+      // The last analysis' outcome (and a model's failure on WebGPU)
+      // belonged to the other model
+      return updateAiCutoutStatus(next, {
+        notice: '',
+        error: null,
+        needsWasmChoice: false,
+        webgpuModelFailed: false,
+        phase: s.aiCutout.phase === 'error' ? 'idle' : s.aiCutout.phase,
+      });
+    });
+  }
+  handleSetBackgroundChoice('ai');
+  announce(`${getModelEntry(modelId).label} selected`);
+  if (!analyze || !aiSession) {
+    void aiSession?.preload();
+    return;
+  }
+  // Already analyzing with this model: it goes on
+  if (aiSession.analyzing && sameModel) return;
+  aiSession.analyzeNow(getSelectionFrames());
+}
+
+/** The inline "Download 88 MB?" question: Download */
+function handleConfirmModelDownload() {
+  if (!store) return;
+  const modelId = store.getState().downloadPrompt;
+  if (!modelId) return;
+  store.setState((s) => setDownloadPrompt(s, null));
+  applyAiSubject(/** @type {import('../../shared/edits/model.js').AiModel} */ (modelId), true);
+}
+
+/** The inline "Download 88 MB?" question: Cancel (the previous choice stays) */
+function handleCancelModelDownload() {
+  if (!store) return;
+  store.setState((s) => setDownloadPrompt(s, null));
+  announce('Download cancelled');
+  // Back to the card of the choice that stays (the panel re-checks it)
+  const subject = document.querySelector('#background-subject input:checked');
+  if (subject instanceof HTMLElement) subject.focus();
+}
+
+/**
+ * Reset: the current method's adjustments back to their defaults, the
+ * picks and the brush strokes removed; the color key detects the key color
+ * from the frame edges again
+ */
+function handleResetBackground() {
   if (!store) return;
   const state = store.getState();
-  if (getAiModelId(state.edits.background.ai) === modelId || aiSession?.analyzing) return;
-  store.setState((s) => {
-    const next = setAiParams(s, { model: modelId });
-    // The last analysis' outcome (and a model's failure on WebGPU)
-    // belonged to the other model
-    return updateAiCutoutStatus(next, {
-      notice: '',
-      error: null,
-      needsWasmChoice: false,
-      webgpuModelFailed: false,
-      phase: s.aiCutout.phase === 'error' ? 'idle' : s.aiCutout.phase,
-    });
-  });
-  announce(`${getModelEntry(modelId).label} model selected`);
-  void aiSession?.preload();
+  const defaults = createDefaultEdits().background;
+  const background = state.edits.background;
+  /** @type {import('../../shared/edits/model.js').BackgroundRemoval} */
+  let next;
+  if (background.method === 'ai') {
+    next = {
+      ...background,
+      ai: { ...createDefaultAiCutout(), model: background.ai.model },
+    };
+  } else {
+    const frame = state.clip?.frames[state.currentFrame];
+    const detected = frame ? detectOutputEdgeColor(frame, state.cropArea) : null;
+    next = {
+      ...background,
+      tolerance: defaults.tolerance,
+      mode: defaults.mode,
+      color: detected ?? background.color,
+      colorChosen: false,
+    };
+  }
+  store.setState((s) =>
+    setPickingKeyColor(
+      setAiPickTool(setEdits(s, { ...s.edits, background: next, touchUps: [] }), null),
+      false,
+    ),
+  );
+  announce('Background settings reset');
 }
 
 /**
@@ -1684,9 +1839,10 @@ function startAiCutoutSession() {
 
   // Masks from an earlier visit are memoized: the first draw is keyed
   session.requestBuild();
+  // The subject cards say which models are ready or still to download
+  void session.refreshModels();
   if (sessionStore.getState().edits.background.method === 'ai') {
     void session.checkCapabilities();
-    void session.refreshModels();
     // A model that is already downloaded gets its session at idle time, so
     // Analyze starts at once (never a download)
     void session.preload();
@@ -1717,11 +1873,14 @@ function handleSetBrush(patch) {
   }
 }
 
-/** Draw the live stroke preview on the next animation frame (coalesced) */
-function scheduleBrushDraw() {
-  if (brushDrawFrameId !== null) return;
-  brushDrawFrameId = window.requestAnimationFrame(() => {
-    brushDrawFrameId = null;
+/**
+ * Draw the preview on the next animation frame, once, with the state of
+ * that moment (coalesces slider input, strokes and frame changes)
+ */
+function schedulePreviewDraw() {
+  if (previewDrawFrameId !== null) return;
+  previewDrawFrameId = window.requestAnimationFrame(() => {
+    previewDrawFrameId = null;
     if (store) drawPreview(store.getState());
   });
 }
@@ -1771,11 +1930,11 @@ function finishBrushPiece() {
   gesture.live = null;
 }
 
-/** Stop the scheduled live stroke preview */
-function cancelBrushDraw() {
-  if (brushDrawFrameId !== null) {
-    window.cancelAnimationFrame(brushDrawFrameId);
-    brushDrawFrameId = null;
+/** Stop the scheduled preview draw */
+function cancelPreviewDraw() {
+  if (previewDrawFrameId !== null) {
+    window.cancelAnimationFrame(previewDrawFrameId);
+    previewDrawFrameId = null;
   }
 }
 
@@ -1811,7 +1970,7 @@ function handleBrushStrokeStart(point) {
     path: point ? startStrokePath(point, radius, frame.width, frame.height) : null,
     live: null,
   };
-  if (point) scheduleBrushDraw();
+  if (point) schedulePreviewDraw();
 }
 
 /**
@@ -1839,7 +1998,7 @@ function handleBrushStrokeMove(points) {
       changed = true;
     }
   }
-  if (changed) scheduleBrushDraw();
+  if (changed) schedulePreviewDraw();
 }
 
 /** The gesture ends (pointer released): add its strokes to the edits */
@@ -1847,7 +2006,7 @@ function handleBrushStrokeEnd() {
   finishBrushPiece();
   const gesture = brushGesture;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
   if (!store || !gesture || gesture.pieces.length === 0) return;
   const before = store.getState();
   store.setState((state) => addTouchUps(state, gesture.pieces));
@@ -1867,7 +2026,7 @@ function handleBrushStrokeEnd() {
 function handleBrushStrokeCancel() {
   if (!brushGesture) return false;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
   if (store) drawPreview(store.getState());
   announce('Stroke cancelled');
   return true;
@@ -1944,12 +2103,22 @@ function handleSelectSidebarTab(tab) {
 }
 
 /**
- * Result / Original / Mask view of the preview (view only)
+ * Show mask on ('mask') or off ('result'); view only
  * @param {import('./types.js').PreviewView} view
  */
 function handleSetPreviewView(view) {
   if (!store) return;
   store.setState((state) => setPreviewView(state, view));
+}
+
+/**
+ * Hold to compare (the button or the backslash key): the original frame
+ * while held; view only
+ * @param {boolean} comparing
+ */
+function handleSetComparing(comparing) {
+  if (!store) return;
+  store.setState((state) => setComparing(state, comparing));
 }
 
 /** @param {boolean} picking */
@@ -2419,10 +2588,15 @@ function cleanup() {
   stopPlayback();
   deletedClipOnScreen = null;
   brushGesture = null;
-  cancelBrushDraw();
+  cancelPreviewDraw();
 
   // Before anything is torn down: keep this session's work on the clip
   saveEditorStateToClip();
+
+  if (aiLiveIdleTimer !== null) {
+    clearTimeout(aiLiveIdleTimer);
+    aiLiveIdleTimer = null;
+  }
 
   // Stop this mount's analysis and mask build (finished masks stay in the
   // mask store; the model worker stays up for the export or a later mount)
@@ -2549,6 +2723,8 @@ function registerTestHooks() {
         brush: state.brush,
         sidebarTab: state.sidebarTab,
         previewView: state.previewView,
+        comparing: state.comparing,
+        downloadPrompt: state.downloadPrompt,
       };
     };
     // Keyed-background cache counters: readbacks must not grow on text-only edits

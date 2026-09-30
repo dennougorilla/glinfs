@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
-  chooseAiCutout,
+  chooseAiModel,
   decodeExportedGif,
   discClip,
   editorPreviewAlpha,
@@ -25,7 +25,6 @@ import {
   gotoCaptureWithStubModel,
   injectDiscClip,
   maskCount,
-  openAdvanced,
   pauseEditorPlayback,
   readAiStatus,
   serveStubModel,
@@ -85,12 +84,15 @@ async function releaseFrames(page, { drop }) {
 }
 
 /**
- * Open the editor on a disc clip with the stub model and choose the AI cutout
+ * Open the editor on a disc clip with the stub model and choose the Anime
+ * subject, confirming its download (which starts the analysis)
  * @param {import('@playwright/test').Page} page
- * @param {{ count: number, allowWasm: boolean }} options
+ * @param {{ count: number, allowWasm: boolean, holdAfter?: number, selection?: { start: number, end: number } }} options
+ *   holdAfter: let only that many frames reach the worker (the analysis
+ *   then waits mid-way); selection: IN..OUT (and the playhead at IN) first
  * @returns {Promise<{ count: number }>} Model requests
  */
-async function openDiscClip(page, { count, allowWasm }) {
+async function openDiscClip(page, { count, allowWasm, holdAfter, selection }) {
   const requests = await serveStubModel(page, STUB_MODEL);
   await gotoCaptureWithStubModel(page, {
     sha256: STUB_SHA256,
@@ -99,7 +101,14 @@ async function openDiscClip(page, { count, allowWasm }) {
   });
   await injectDiscClip(page, { count });
   await pauseEditorPlayback(page);
-  await chooseAiCutout(page);
+  const range = selection ?? { start: 0, end: count - 1 };
+  await page.evaluate(
+    (r) => window.__TEST_HOOKS__.setEditorState({ selectedRange: r, currentFrame: r.start }),
+    range,
+  );
+  await chooseAiModel(page, 'anime', { download: false });
+  if (holdAfter !== undefined) await holdFramesAfter(page, holdAfter);
+  await page.locator('#background-download-confirm').click();
   return requests;
 }
 
@@ -111,33 +120,39 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     page,
   }) => {
     const N = 12;
-    await openDiscClip(page, { count: N, allowWasm: true });
+    await openDiscClip(page, { count: N, allowWasm: true, holdAfter: 3 });
 
-    await holdFramesAfter(page, 3);
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-progress')).toBeVisible();
-    await expect(page.locator('#ai-progress-text')).toHaveText(
-      /^Analyzed 3 of 12 frames · .* left$/,
-      { timeout: 60_000 },
-    );
+    // Started by itself: progress in the status slot, with Cancel
+    await expect(page.locator('#ai-status')).toHaveAttribute('data-kind', 'running');
+    await expect(page.locator('#ai-status-text')).toHaveText('Analyzing 3 of 12 frames', {
+      timeout: 60_000,
+    });
     await expect(page.locator('#ai-progress-bar')).toHaveJSProperty('value', 0.25);
+    await expect(page.locator('#ai-cancel')).toBeVisible();
+    // The tab badge shows it from the other tabs too
+    await expect(page.locator('#editor-side-tab-badge')).toHaveText('25%');
 
     // Editing stays possible while the analysis runs
-    await openAdvanced(page, 'ai-advanced');
-    await page.locator('#ai-threshold').fill('40');
-    await expect(page.locator('#ai-threshold-value')).toHaveText('40%');
+    await page.locator('#ai-fit').fill('3');
+    await expect
+      .poll(
+        async () =>
+          (await page.evaluate(() => window.__TEST_HOOKS__.getEditorState()))?.edits.background.ai,
+      )
+      .toMatchObject({ threshold: 0.38, edge: 2 });
 
     await page.locator('#ai-cancel').click();
     await expect(page.locator('#ai-notice')).toContainText('Analysis cancelled');
-    await expect(page.locator('#ai-progress')).toBeHidden();
+    await expect(page.locator('#ai-cancel')).toBeHidden();
     await releaseFrames(page, { drop: true });
     expect(await maskCount(page)).toBe(3);
-    await expect(page.locator('#ai-coverage')).toHaveText(`3 of ${N} frames analyzed`);
+    await expect(page.locator('#ai-status')).toHaveAttribute('data-kind', 'pending');
+    await expect(page.locator('#ai-status-text')).toHaveText('9 frames not analyzed');
 
-    // A second Analyze only does the 9 frames still missing
-    await expect(page.locator('#ai-analyze')).toHaveText('Analyze 9 frames');
+    // Analyze only does the 9 frames still missing
+    await expect(page.locator('#ai-analyze')).toHaveText('Analyze');
     await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
     expect((await readAiStatus(page))?.framesTotal).toBe(9);
@@ -154,9 +169,9 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     });
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
     await pauseEditorPlayback(page);
-    await expect(page.locator('#ai-method-ai')).toBeChecked();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`);
-    await expect(page.locator('#ai-threshold')).toHaveValue('40');
+    await expect(page.locator('#subject-anime')).toBeChecked();
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`);
+    await expect(page.locator('#ai-fit')).toHaveValue('3');
     expect(await maskCount(page)).toBe(N);
     await waitForAiMasks(page);
     const f = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().currentFrame);
@@ -168,15 +183,9 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     page,
   }) => {
     const N = 12;
-    await openDiscClip(page, { count: N, allowWasm: true });
-
-    // Analyze only the first half
-    await page.evaluate(() =>
-      window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 5 } }),
-    );
-    await expect(page.locator('#ai-analyze')).toHaveText('Analyze 6 frames');
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`6 of ${N} frames analyzed`, {
+    // Only the first half is selected: only it is analyzed
+    await openDiscClip(page, { count: N, allowWasm: true, selection: { start: 0, end: 5 } });
+    await expect(page.locator('#ai-status-text')).toHaveText(`6 of ${N} frames analyzed`, {
       timeout: 60_000,
     });
 
@@ -226,22 +235,19 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     });
     const requests = await openDiscClip(page, { count: 4, allowWasm: false });
 
+    // Choosing the subject does not run the slow fallback, and downloads nothing
     const warning = page.locator('#ai-webgpu-warning');
     await expect(warning).toBeVisible();
-    await expect(warning).toContainText('WebGPU is not available');
-    await expect(page.locator('#ai-run-wasm')).toHaveText('Run without WebGPU (very slow)');
-
-    // Analyze alone does not run the slow fallback, and downloads nothing
-    await page.locator('#ai-analyze').click();
-    await expect(warning).toContainText('The analysis needs WebGPU', { timeout: 30_000 });
+    await expect(warning).toContainText('This needs WebGPU', { timeout: 30_000 });
+    await expect(page.locator('#ai-run-wasm')).toHaveText('Run on the CPU (very slow)');
     expect((await readAiStatus(page))?.needsWasmChoice).toBe(true);
     expect(await maskCount(page)).toBe(0);
     expect(requests.count).toBe(0);
-    await expect(page.locator('#ai-coverage')).toHaveText('0 of 4 frames analyzed');
+    await expect(page.locator('#ai-status-text')).toHaveText('4 frames not analyzed');
 
     // The explicit choice runs it
     await page.locator('#ai-run-wasm').click();
-    await expect(page.locator('#ai-coverage')).toHaveText('4 of 4 frames analyzed', {
+    await expect(page.locator('#ai-status-text')).toHaveText('4 of 4 frames analyzed', {
       timeout: 60_000,
     });
     expect(requests.count).toBe(1);

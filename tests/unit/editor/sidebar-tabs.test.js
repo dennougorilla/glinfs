@@ -3,7 +3,7 @@
  * tab badge, and in the mounted editor the ARIA tabs (roving tabindex,
  * arrow keys that never reach the editor's shortcuts), the remembered tab,
  * the Background panel showing only what applies, the Touch up mode taking
- * the tabs' place, and the preview's Result / Original / Mask switch.
+ * the tabs' place, and the preview's Show mask toggle.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +14,8 @@ import {
   createEditorStore,
   getEffectivePreviewView,
   setBackground,
+  setComparing,
+  setDownloadPrompt,
   setPreviewView,
   setSidebarTab,
 } from '../../../src/features/editor/state.js';
@@ -54,6 +56,26 @@ describe('sidebar tab and preview view reducers', () => {
     const masked = setPreviewView(makeState(), 'mask');
     expect(getEffectivePreviewView(masked)).toBe('result');
     expect(getEffectivePreviewView(setBackground(masked, { enabled: true }))).toBe('mask');
+  });
+
+  it('Hold to compare shows the original over any view while removal is on', () => {
+    const on = setBackground(setPreviewView(makeState(), 'mask'), { enabled: true });
+    expect(on.comparing).toBe(false);
+    const held = setComparing(on, true);
+    expect(getEffectivePreviewView(held)).toBe('original');
+    expect(setComparing(held, true)).toBe(held);
+    expect(getEffectivePreviewView(setComparing(held, false))).toBe('mask');
+    // Nothing to compare without a removal
+    expect(getEffectivePreviewView(setComparing(makeState(), true))).toBe('result');
+  });
+
+  it('the download question holds one model id at a time', () => {
+    const state = makeState();
+    expect(state.downloadPrompt).toBeNull();
+    const asked = setDownloadPrompt(state, 'general');
+    expect(asked.downloadPrompt).toBe('general');
+    expect(setDownloadPrompt(asked, 'general')).toBe(asked);
+    expect(setDownloadPrompt(asked, null).downloadPrompt).toBeNull();
   });
 
   it('the Background tab badge: nothing off, a dot on, the progress while analyzing', () => {
@@ -212,38 +234,33 @@ describe('sidebar in the mounted editor', () => {
     expect($('#editor-side-panel-background').hidden).toBe(false);
   });
 
-  it('Background: Off shows only the switch; Color/AI show one method, a badge and the view switch', async () => {
+  it('Background: Off shows only the subjects; a subject shows its settings, a badge and the compare controls', async () => {
     tabButton('background').click();
     await settle();
-    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#subject-none')).checked).toBe(true);
     expect($('#background-settings').hidden).toBe(true);
-    expect($('#background-lead').hidden).toBe(false);
     expect($('#editor-side-tab-badge').hidden).toBe(true);
-    expect($('#preview-view').hidden).toBe(true);
+    expect($('#preview-compare-controls').hidden).toBe(true);
 
-    check('ai-method-color');
+    check('subject-color');
     await settle();
     expect($('#background-settings').hidden).toBe(false);
-    expect($('#background-lead').hidden).toBe(true);
-    expect($('#ai-color-fields').hidden).toBe(false);
+    expect($('#color-section').hidden).toBe(false);
     expect($('#ai-section').hidden).toBe(true);
     expect($('#editor-side-tab-badge').hidden).toBe(false);
     expect(tabButton('background').getAttribute('aria-label')).toBe('Background (on)');
-    expect($('#preview-view').hidden).toBe(false);
-    // The rarely needed settings are collapsed
-    expect($('#background-mode').closest('details')?.open).toBe(false);
-
-    check('ai-method-ai');
-    await settle();
-    expect($('#ai-color-fields').hidden).toBe(true);
-    expect($('#ai-section').hidden).toBe(false);
-    expect($('#ai-intro').closest('details')?.open).toBe(false);
-    expect($('#ai-threshold').closest('details')?.id).toBe('ai-advanced');
+    expect($('#preview-compare-controls').hidden).toBe(false);
+    // Every adjustment is visible: nothing is collapsed
+    expect(
+      $('#editor-side-panel-background').querySelector('details:not(#background-about)'),
+    ).toBeNull();
+    expect($('#background-mode-connected').closest('details')).toBeNull();
+    expect($('#background-tolerance').closest('[hidden]')).toBeNull();
   });
 
   it('leaving the Background tab ends the eyedropper', async () => {
     tabButton('background').click();
-    check('ai-method-color');
+    check('subject-color');
     await settle();
     check('background-pick');
     await settle();
@@ -255,7 +272,7 @@ describe('sidebar in the mounted editor', () => {
 
   it('Touch up mode replaces the tabs; Done leaves it and focus returns to its entry', async () => {
     tabButton('background').click();
-    check('ai-method-color');
+    check('subject-color');
     await settle();
     $('#touchup-brush').focus();
     check('touchup-brush');
@@ -275,17 +292,17 @@ describe('sidebar in the mounted editor', () => {
     expect(document.activeElement).toBe($('#touchup-brush'));
   });
 
-  it('the view switch sets the preview view; removal off shows the result again', async () => {
+  it('Show mask sets the preview view; removal off shows the result again', async () => {
     tabButton('background').click();
-    check('ai-method-color');
+    check('subject-color');
     await settle();
-    check('preview-view-mask');
+    check('preview-show-mask');
     await settle();
     expect(getEditorState()?.previewView).toBe('mask');
     expect($('.editor-canvas-container').dataset.previewView).toBe('mask');
-    check('background-method-off');
+    check('subject-none');
     await settle();
     expect($('.editor-canvas-container').dataset.previewView).toBe('result');
-    expect(/** @type {HTMLInputElement} */ ($('#preview-view-result')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#preview-show-mask')).checked).toBe(false);
   });
 });

@@ -100,7 +100,7 @@ function readEditorState(page) {
  */
 async function enableColorKey(page) {
   await openSidebarTab(page, 'background');
-  await page.locator('label[for="ai-method-color"]').click();
+  await page.locator('label[for="subject-color"]').click();
   await expect
     .poll(async () => (await readEditorState(page))?.edits.background)
     .toMatchObject({ enabled: true, color: '#00ff00' });
@@ -191,33 +191,37 @@ test.describe('Mask brush (touch up)', () => {
     await openSquareClip(page);
   });
 
-  test('Background tab: off shows only the switch; on shows one method and the Touch up entry', async ({
+  test('Background tab: Off shows only the subjects; a subject shows its settings and the Brush tool', async ({
     page,
   }) => {
     await openSidebarTab(page, 'background');
-    await expect(page.locator('#background-lead')).toBeVisible();
+    await expect(page.locator('#subject-none')).toBeChecked();
     await expect(page.locator('#background-settings')).toBeHidden();
     await expect(page.locator('label[for="touchup-brush"]')).toBeHidden();
-    await expect(page.locator('#preview-view')).toBeHidden();
+    await expect(page.locator('#preview-compare-controls')).toBeHidden();
     await expect(page.locator('#editor-side-tab-badge')).toBeHidden();
 
-    await page.locator('label[for="ai-method-color"]').click();
-    await expect(page.locator('#background-lead')).toBeHidden();
-    await expect(page.locator('#ai-color-fields')).toBeVisible();
+    await page.locator('label[for="subject-color"]').click();
+    await expect(page.locator('#color-section')).toBeVisible();
     await expect(page.locator('#ai-section')).toBeHidden();
-    await expect(page.locator('#background-mode')).toBeHidden(); // under Advanced
+    // Everything is visible, nothing under a disclosure
+    await expect(page.locator('label[for="background-mode-global"]')).toBeVisible();
+    await expect(page.locator('#background-tolerance')).toBeVisible();
     await expect(page.locator('#touchup-brush')).toBeEnabled();
-    await expect(page.locator('#touchup-needs-removal')).toBeHidden();
-    await expect(page.locator('#preview-view')).toBeVisible();
+    await expect(page.locator('label[for="touchup-brush"]')).toBeVisible();
+    await expect(page.locator('#preview-compare-controls')).toBeVisible();
+    // Keep / Remove belong to the AI subjects
+    await expect(page.locator('label[for="ai-pick-keep"]')).toBeHidden();
     // The Background tab shows removal is on from the other tabs
     await expect(page.locator('#editor-side-tab-badge')).toBeVisible();
 
-    // The AI method replaces the color settings and offers the same entry
-    await page.locator('label[for="ai-method-ai"]').click();
-    await expect(page.locator('#ai-section')).toBeVisible();
-    await expect(page.locator('#ai-color-fields')).toBeHidden();
-    await expect(page.locator('#ai-intro')).toBeHidden(); // under About models
-    await expect(page.locator('#touchup-brush')).toBeEnabled();
+    // An AI subject asks before its download; while asked, its settings wait
+    await page.locator('label[for="subject-anime"]').click();
+    await expect(page.locator('#background-download')).toBeVisible();
+    await expect(page.locator('#background-settings')).toBeHidden();
+    await page.locator('#background-download-cancel').click();
+    await expect(page.locator('#subject-color')).toBeChecked();
+    await expect(page.locator('#color-section')).toBeVisible();
   });
 
   test('Touch up mode: the tools replace the tabs; Done and Escape leave it and keep the strokes', async ({
@@ -254,18 +258,33 @@ test.describe('Mask brush (touch up)', () => {
     expect((await readEditorState(page))?.edits.touchUps).toHaveLength(1);
   });
 
-  test('preview view switch: Original shows the frame, Mask tints the removed area; export unchanged', async ({
+  test('Hold to compare shows the frame, Show mask tints the removed area; export unchanged', async ({
     page,
   }) => {
     await enableColorKey(page);
     const result = await previewPixel(page, 10, 10);
     expect(result[3]).toBe(0);
 
-    await page.locator('label[for="preview-view-original"]').click();
-    await expect.poll(async () => (await readEditorState(page))?.previewView).toBe('original');
+    // Press and hold: the original while held, the result on release
+    const hold = page.locator('#preview-compare');
+    const box = await hold.boundingBox();
+    if (!box) throw new Error('Hold to compare is not visible');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await expect.poll(async () => (await readEditorState(page))?.comparing).toBe(true);
     await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
+    await page.mouse.up();
+    await expect.poll(async () => (await previewPixel(page, 10, 10))[3]).toBe(0);
 
-    await page.locator('label[for="preview-view-mask"]').click();
+    // Holding the backslash key does the same
+    await page.locator('.editor-canvas-overlay').hover();
+    await page.keyboard.down('Backslash');
+    await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
+    await page.keyboard.up('Backslash');
+    await expect.poll(async () => (await previewPixel(page, 10, 10))[3]).toBe(0);
+
+    await page.locator('label[for="preview-show-mask"]').click();
+    await expect.poll(async () => (await readEditorState(page))?.previewView).toBe('mask');
     await expect.poll(async () => (await previewPixel(page, 10, 10))[3]).toBe(255);
     const removed = await previewPixel(page, 10, 10);
     // Removed green reads red; the kept square keeps its own red untouched
@@ -278,10 +297,10 @@ test.describe('Mask brush (touch up)', () => {
     expect(gifPixel(frames[0], 10, 10)[3]).toBe(0);
     await closeExportDialog(page);
 
-    // Removal off hides the switch and shows the plain frame
+    // Removal off hides the compare controls and shows the plain frame
     await openSidebarTab(page, 'background');
-    await page.locator('label[for="background-method-off"]').click();
-    await expect(page.locator('#preview-view')).toBeHidden();
+    await page.locator('label[for="subject-none"]').click();
+    await expect(page.locator('#preview-compare-controls')).toBeHidden();
     await expect.poll(() => previewPixel(page, 10, 10)).toEqual([0, 255, 0, 255]);
   });
 
@@ -490,10 +509,10 @@ test.describe('Mask brush over the AI cutout (stub model, WASM fallback)', () =>
     await injectDiscClip(page, { count });
     await pauseEditorPlayback(page);
     await chooseAiCutout(page);
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${count} of ${count} frames analyzed`, {
-      timeout: 60_000,
-    });
+    await expect(page.locator('#ai-status-text')).toHaveText(
+      `${count} of ${count} frames analyzed`,
+      { timeout: 60_000 },
+    );
     await waitForAiMasks(page);
 
     // Touch-ups work over the AI method like over the color key

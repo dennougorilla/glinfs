@@ -1,13 +1,13 @@
 /**
- * Text and Background property panels: controls call the handlers, and
- * updateEditsPanel applies state in place without disturbing the control
- * the user is typing in.
+ * Text property panel: controls call the handlers, and updateEditsPanel
+ * applies state in place without disturbing the control the user is typing
+ * in. (The Background panel: background-panel.test.js.)
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderBackgroundPanel } from '../../../src/features/editor/panels/background-panel.js';
 import {
   getTextLayerLabel,
-  renderBackgroundPanel,
   renderTextPanel,
   updateEditsPanel,
 } from '../../../src/features/editor/panels/edits-panel.js';
@@ -58,7 +58,6 @@ beforeEach(() => {
     onRemoveText: vi.fn(),
     onSetBackground: vi.fn(),
     onToggleBackground: vi.fn(),
-    onSetBackgroundMethod: vi.fn(),
     onSetPickingKeyColor: vi.fn(),
   };
   document.body.innerHTML = '';
@@ -256,60 +255,7 @@ describe('Text panel', () => {
   });
 });
 
-describe('Background panel', () => {
-  it('reflects the background settings and eyedropper mode', () => {
-    const background = { enabled: true, color: '#abcdef', tolerance: 33.4, mode: 'global' };
-    updateEditsPanel(
-      root,
-      makeState({
-        edits: { ...createDefaultEdits(), background },
-        pickingKeyColor: true,
-        clip: { frames: [], hasAlpha: true },
-      }),
-      10,
-    );
-    expect($('#ai-method-color').checked).toBe(true);
-    expect($('#background-method-off').checked).toBe(false);
-    expect($('#background-settings').hidden).toBe(false);
-    expect($('#background-color').value).toBe('#abcdef');
-    expect($('#background-pick').checked).toBe(true);
-    expect($('.editor-bg-pick').classList.contains('editor-bg-pick--active')).toBe(true);
-    expect($('#background-tolerance').value).toBe('33');
-    expect($('#background-tolerance-value').textContent).toBe('33');
-    expect($('#background-mode').value).toBe('global');
-    expect($('#background-pick-status').textContent).toContain('Click the background');
-    expect($('#background-alpha-note').hidden).toBe(false);
-
-    updateEditsPanel(root, makeState(), 10);
-    expect($('#background-pick-status').textContent).toBe('');
-    expect($('#background-alpha-note').hidden).toBe(true);
-  });
-
-  it('controls call the background handlers', () => {
-    $('#ai-method-color').checked = true;
-    fire($('#ai-method-color'), 'change');
-    expect(handlers.onSetBackgroundMethod).toHaveBeenLastCalledWith('color');
-    $('#background-method-off').checked = true;
-    fire($('#background-method-off'), 'change');
-    expect(handlers.onSetBackgroundMethod).toHaveBeenLastCalledWith('off');
-
-    $('#background-color').value = '#ff00ff';
-    fire($('#background-color'), 'input');
-    expect(handlers.onSetBackground).toHaveBeenLastCalledWith({ color: '#ff00ff' });
-
-    $('#background-pick').checked = true;
-    fire($('#background-pick'), 'change');
-    expect(handlers.onSetPickingKeyColor).toHaveBeenCalledWith(true);
-
-    $('#background-tolerance').value = '70';
-    fire($('#background-tolerance'), 'input');
-    expect(handlers.onSetBackground).toHaveBeenLastCalledWith({ tolerance: 70 });
-
-    $('#background-mode').value = 'global';
-    fire($('#background-mode'), 'change');
-    expect(handlers.onSetBackground).toHaveBeenLastCalledWith({ mode: 'global' });
-  });
-
+describe('updateEditsPanel', () => {
   it('tolerates a container without the panels', () => {
     expect(() => updateEditsPanel(document.createElement('div'), state, 10)).not.toThrow();
   });

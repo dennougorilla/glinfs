@@ -13,6 +13,7 @@ import {
 import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
 import {
   ANALYSIS_REBUILD_INTERVAL_MS,
+  BUILDING_STATUS_DELAY_MS,
   createAiCutoutSession,
   STORE_REBUILD_DELAY_MS,
 } from '../../../src/features/editor/ai-cutout-session.js';
@@ -281,7 +282,8 @@ describe('AI cutout session', () => {
     });
     session.requestBuild();
     const firstSignal = build.mock.calls[0][0].signal;
-    expect(status.building).toBe(true);
+    // Reported only once a build runs longer than BUILDING_STATUS_DELAY_MS
+    expect(status.building).not.toBe(true);
 
     // Same parameters: no restart, only a queued rerun
     session.requestBuild();
@@ -297,11 +299,138 @@ describe('AI cutout session', () => {
 
   it('drops the build when the AI method is off', () => {
     for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob());
+    const cache = createFinalMaskCache();
+    const build = vi.spyOn(cache, 'build');
+    session.dispose();
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      getClipId: () => undefined,
+      manager: /** @type {any} */ (manager),
+      maskStore,
+      cache,
+    });
     session.requestBuild();
-    expect(status.building).toBe(true);
+    const signal = build.mock.calls[0][0].signal;
     setBackground({ method: 'color' });
     session.requestBuild();
+    expect(signal?.aborted).toBe(true);
     expect(status.building).toBe(false);
+  });
+
+  it('analyzeNow stops a running analysis and then analyzes the new frames', async () => {
+    manager.hold = true;
+    session.analyzeNow(state.clip.frames.slice(0, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.analyzing).toBe(true);
+    const first = manager.calls[0];
+    manager.hold = false;
+    session.analyzeNow(state.clip.frames.slice(2, 4));
+    expect(first.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(manager.calls).toHaveLength(2));
+    await vi.waitFor(() => expect(session.analyzing).toBe(false));
+    // The restart is not reported as a cancellation
+    expect(status.notice).not.toContain('cancelled');
+    expect(maskStore.has('anime:f3')).toBe(true);
+
+    // cancel() drops a queued restart
+    maskStore.clear();
+    manager.hold = true;
+    session.analyzeNow(state.clip.frames);
+    await vi.advanceTimersByTimeAsync(0);
+    session.analyzeNow(state.clip.frames);
+    session.cancel();
+    await vi.waitFor(() => expect(session.analyzing).toBe(false));
+    expect(manager.calls).toHaveLength(3);
+    expect(status.notice).toContain('cancelled');
+  });
+
+  describe('no status flicker, live drafts while dragging', () => {
+    /** A cache whose builds stay pending until resolved by the test */
+    function createPendingCache() {
+      /** @type {{ resolve: (source: any) => void, signal: AbortSignal | undefined }[]} */
+      const builds = [];
+      const cache = {
+        build: vi.fn(
+          (/** @type {any} */ options) =>
+            new Promise((resolve) => builds.push({ resolve, signal: options.signal })),
+        ),
+        peek: vi.fn(() => null),
+      };
+      return { cache, builds };
+    }
+
+    /** @param {any} cache */
+    function sessionWith(cache) {
+      session.dispose();
+      session = createAiCutoutSession({
+        getState: () => state,
+        setStatus: (patch) => Object.assign(status, patch),
+        getClipId: () => undefined,
+        manager: /** @type {any} */ (manager),
+        maskStore,
+        cache,
+      });
+    }
+
+    it('reports building only for builds slower than the delay', async () => {
+      for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob());
+      const { cache, builds } = createPendingCache();
+      sessionWith(cache);
+
+      // A fast build: never reported
+      session.requestBuild();
+      builds[0].resolve({ version: 1, getFinalMask: () => null });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(BUILDING_STATUS_DELAY_MS * 2);
+      expect(status.building).not.toBe(true);
+
+      // A slow one: reported after the delay, cleared when it lands
+      setBackground({ ai: { threshold: 0.7 } });
+      session.requestBuild();
+      await vi.advanceTimersByTimeAsync(BUILDING_STATUS_DELAY_MS - 1);
+      expect(status.building).not.toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(status.building).toBe(true);
+      builds[1].resolve({ version: 2, getFinalMask: () => null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(status.building).toBe(false);
+    });
+
+    it('publishes per-frame drafts while interactive, the full build after', async () => {
+      // Frame 0 is sure (255), frame 1 unsure (150)
+      maskStore.set('anime:f0', prob(255));
+      maskStore.set('anime:f1', prob(150));
+      setBackground({ ai: { smoothing: false, threshold: 0.5 } });
+      const { cache, builds } = createPendingCache();
+      sessionWith(cache);
+
+      session.setInteractive(true);
+      expect(session.interactive).toBe(true);
+      for (const threshold of [0.7, 0.4, 0.8]) {
+        setBackground({ ai: { smoothing: false, threshold } });
+        session.requestBuild();
+      }
+      // No whole-clip build while dragging, and nothing to report
+      expect(cache.build).not.toHaveBeenCalled();
+      expect(status.building).not.toBe(true);
+      const draft = /** @type {any} */ (session.maskSource);
+      expect(draft?.draft).toBe(true);
+      expect(status.maskVersion).toBe(draft.version);
+      // The draft already follows the latest threshold (0.8 drops frame 1)
+      expect(draft.getFinalMask(0)?.bits[0]).toBe(0xff);
+      expect(draft.getFinalMask(1)?.bits[0]).toBe(0);
+      expect(draft.getFinalMask(2)).toBeNull();
+
+      // Release: the full build runs; the draft stays until it lands
+      session.setInteractive(false);
+      expect(cache.build).toHaveBeenCalledTimes(1);
+      expect(session.maskSource).toBe(draft);
+      const full = { version: 99, getFinalMask: () => null };
+      builds[0].resolve(full);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.maskSource).toBe(full);
+    });
   });
 
   it('rebuilds (debounced) when masks arrive from elsewhere', async () => {

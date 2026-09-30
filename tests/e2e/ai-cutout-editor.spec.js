@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
-  chooseAiCutout,
+  chooseAiModel,
   closeExportDialog,
   decodeExportedGif,
   discClip,
@@ -24,7 +24,6 @@ import {
   gifPixel,
   gotoCaptureWithStubModel,
   injectDiscClip,
-  openAdvanced,
   pauseEditorPlayback,
   serveStubModel,
   waitForAiMasks,
@@ -37,7 +36,8 @@ const { discA, discB, radius } = discClip;
 
 /**
  * Open the editor on the disc clip with the stub model (WASM allowed by the
- * DEV hook, no confirmation step), choose the AI cutout and analyze
+ * DEV hook), choose the Anime subject and confirm its download: the
+ * analysis starts by itself, the frame on screen first
  * @param {import('@playwright/test').Page} page
  */
 async function analyzeDiscClip(page) {
@@ -49,22 +49,26 @@ async function analyzeDiscClip(page) {
   });
   await injectDiscClip(page, { count: FRAME_COUNT });
   await pauseEditorPlayback(page);
-  await chooseAiCutout(page);
+  await chooseAiModel(page, 'anime', { download: false });
 
-  // Nothing analyzed yet: the preview is unkeyed and says so
-  await expect(page.locator('#ai-preview-note')).toHaveText('Not analyzed yet');
-  await expect(page.locator('#ai-analyze')).toHaveText(`Analyze ${FRAME_COUNT} frames`);
-  await expect(page.locator('#ai-intro')).toContainText('downloads 88 MB once');
-  await expect(page.locator('#ai-intro')).toContainText('never leave this device');
+  // Not downloaded: asked inline first, nothing changed or downloaded yet
+  await expect(page.locator('#subject-status-anime')).toContainText('88 MB');
+  await expect(page.locator('#background-download-title')).toHaveText('Download 88 MB?');
+  await expect(page.locator('#background-download-detail')).toContainText(
+    'your frames never leave it',
+  );
+  expect(
+    await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits.background.enabled),
+  ).toBe(false);
 
-  await page.locator('#ai-analyze').click();
-  await expect(page.locator('#ai-coverage')).toHaveText(
+  await page.locator('#background-download-confirm').click();
+  await expect(page.locator('#ai-status-text')).toHaveText(
     `${FRAME_COUNT} of ${FRAME_COUNT} frames analyzed`,
     { timeout: 60_000 },
   );
-  await expect(page.locator('#ai-analyze')).toHaveText('Selection analyzed');
-  await expect(page.locator('#ai-analyze')).toBeDisabled();
-  await expect(page.locator('#ai-controls')).toBeVisible();
+  await expect(page.locator('#ai-analyze')).toBeHidden();
+  await expect(page.locator('#ai-fit')).toBeVisible();
+  await expect(page.locator('#subject-status-anime')).toContainText('Ready');
   await waitForAiMasks(page);
   await expect(page.locator('#ai-preview-note')).toBeHidden();
 }
@@ -107,7 +111,7 @@ async function pickDiscA(page, mode) {
   await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
   await page.locator(`label[for="ai-pick-${mode}"]`).click();
   await expect(page.locator(`#ai-pick-${mode}`)).toBeChecked();
-  await expect(page.locator('#ai-pick-status')).toContainText('Click a character');
+  await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
   const point = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
   await page.mouse.click(point.x, point.y);
   // One pick, the tool is left afterwards
@@ -147,7 +151,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     }
 
     // Remove pick instead: disc A disappears, disc B stays
-    await page.locator('#ai-picks-clear').click();
+    await page.locator('.editor-cutout-pick-delete').click();
     await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
     await pickDiscA(page, 'remove');
     const removed = await exportAndSample(page);
@@ -177,7 +181,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     const overlay = page.locator('.editor-canvas-overlay');
     await expect(overlay).toBeFocused();
     await expect(overlay).toHaveAttribute('aria-label', /Arrow keys move the marker/);
-    await expect(page.locator('#ai-pick-status')).toContainText('arrow keys');
+    await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
 
     // Marker from the centre (0.5, 0.5) to disc A (≈ 0.27, 0.31)
     for (const key of ['Shift+ArrowLeft', 'Shift+ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {
@@ -200,11 +204,10 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     await expect.poll(() => editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(0);
     expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
 
-    // Clear picks hides itself: focus moves to the Keep tool, not <body>
-    await page.locator('#ai-picks-clear').focus();
+    // The pick's × removes it: focus moves to the Keep tool, not <body>
+    await page.locator('.editor-cutout-pick-delete').focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
-    await expect(page.locator('#ai-picks-clear')).toBeHidden();
     await expect(page.locator('#ai-pick-keep')).toBeFocused();
   });
 
@@ -240,9 +243,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
   });
 
-  test('threshold and edge change the exported coverage in the expected direction', async ({
-    page,
-  }) => {
+  test('Fit changes the exported coverage in the expected direction', async ({ page }) => {
     await analyzeDiscClip(page);
     // Just outside and just inside disc A (vertically: the discs move
     // horizontally, so smoothing between frames does not move these edges)
@@ -256,33 +257,112 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
       expect(frame).toMatchObject({ a: 255, b: 255, bg: 0, extra: [0, 255] });
     }
 
-    // Threshold 70 %: grey disc B (63 %) falls below it, white disc A stays
-    await openAdvanced(page, 'ai-advanced');
-    await page.locator('#ai-threshold').fill('70');
-    await expect(page.locator('#ai-threshold-value')).toHaveText('70%');
+    // Tighter 5 (threshold 70 %, edge −3 px): grey disc B (63 %) falls
+    // below it, white disc A stays
+    await page.locator('#ai-fit').fill('-5');
+    await expect(page.locator('#ai-fit')).toHaveAttribute('aria-valuetext', /Tighter 5/);
+    await expect
+      .poll(() => page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits.background.ai))
+      .toMatchObject({ threshold: 0.7, edge: -3 });
     await waitForAiMasks(page);
     const strict = await exportAndSample(page, probes);
     for (const frame of strict) {
       expect(frame).toMatchObject({ a: 255, b: 0, bg: 0 });
     }
 
-    // Back to 50 %, edge +5 px: the cutout grows past the disc's edge
-    await page.locator('#ai-threshold').fill('50');
-    await page.locator('#ai-edge').fill('5');
-    await expect(page.locator('#ai-edge-value')).toHaveText('+5 px');
+    // Looser 10 (threshold 10 %, edge +5 px): the cutout grows past the
+    // disc's edge; the black background (0 %) stays out
+    await page.locator('#ai-fit').fill('10');
     await waitForAiMasks(page);
     const grown = await exportAndSample(page, probes);
     for (const frame of grown) {
       expect(frame).toMatchObject({ a: 255, b: 255, bg: 0, extra: [255, 255] });
     }
 
-    // Edge −5 px: the cutout shrinks inside the disc's edge
-    await page.locator('#ai-edge').fill('-5');
-    await expect(page.locator('#ai-edge-value')).toHaveText('−5 px');
+    // Tighter 10 (threshold 90 %, edge −5 px): the cutout shrinks inside
+    // disc A's edge, disc B is gone
+    await page.locator('#ai-fit').fill('-10');
     await waitForAiMasks(page);
     const shrunk = await exportAndSample(page, probes);
     for (const frame of shrunk) {
-      expect(frame).toMatchObject({ a: 255, b: 255, bg: 0, extra: [0, 0] });
+      expect(frame).toMatchObject({ a: 255, b: 0, bg: 0, extra: [0, 0] });
     }
+  });
+
+  test('dragging Fit updates the preview live without flicker or layout shift', async ({
+    page,
+  }) => {
+    await analyzeDiscClip(page);
+    const f = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().currentFrame);
+    await expect.poll(() => editorPreviewAlpha(page, discB(f).x, discB(f).y)).toBe(255);
+    const slider = page.locator('#ai-fit');
+    await slider.scrollIntoViewIfNeeded();
+
+    // Every animation frame: the background and disc B on the preview, where
+    // the slider is (a status line popping in above it would move it) and
+    // whether the pointer was released yet
+    await page.evaluate(
+      ({ bx, by }) => {
+        const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector('.editor-canvas'));
+        const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
+        const input = /** @type {HTMLElement} */ (document.querySelector('#ai-fit'));
+        const w = /** @type {any} */ (window);
+        w.__samples = [];
+        w.__probe = true;
+        w.__released = false;
+        const tick = () => {
+          w.__samples.push({
+            bg: ctx.getImageData(5, 5, 1, 1).data[3],
+            b: ctx.getImageData(bx, by, 1, 1).data[3],
+            top: Math.round(input.getBoundingClientRect().top),
+            status: document.querySelector('#ai-status')?.getBoundingClientRect().height,
+            released: w.__released,
+          });
+          if (w.__probe) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      },
+      { bx: discB(f).x, by: discB(f).y },
+    );
+
+    // From the middle (0) towards Tighter: past −4 the threshold passes disc
+    // B's 63 %
+    const box = await slider.boundingBox();
+    if (!box) throw new Error('Fit slider not visible');
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 24; i++) {
+      await page.mouse.move(box.x + box.width * (0.5 - (0.45 * i) / 24), y);
+      await page.waitForTimeout(16);
+    }
+    await page.waitForTimeout(200);
+    await page.evaluate(() => {
+      /** @type {any} */ (window).__released = true;
+    });
+    await page.mouse.up();
+    await waitForAiMasks(page);
+    await page.waitForTimeout(100);
+    const samples = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__probe = false;
+      return /** @type {{ bg: number, b: number, top: number, status: number, released: boolean }[]} */ (
+        w.__samples
+      );
+    });
+
+    expect(samples.length).toBeGreaterThan(20);
+    // Never an unkeyed (or blank-then-redrawn) background
+    expect(samples.filter((s) => s.bg !== 0)).toEqual([]);
+    // Nothing moved in the panel: same slider position, same status height
+    expect(new Set(samples.map((s) => s.top)).size).toBe(1);
+    expect(new Set(samples.map((s) => s.status)).size).toBe(1);
+    // Live: disc B went away while the pointer was still down
+    expect(samples.some((s) => !s.released && s.b === 0)).toBe(true);
+    // And stays away once the full build landed
+    expect(samples.at(-1)?.b).toBe(0);
+    expect(
+      await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits.background.ai),
+    ).toMatchObject({ threshold: expect.any(Number) });
   });
 });

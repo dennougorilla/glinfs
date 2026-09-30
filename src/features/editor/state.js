@@ -45,6 +45,8 @@ export function initEditorState(clip) {
     brush: createBrushState(),
     sidebarTab: 'frame',
     previewView: 'result',
+    comparing: false,
+    downloadPrompt: null,
   };
 }
 
@@ -91,7 +93,30 @@ export function setPreviewView(state, view) {
  */
 export function getEffectivePreviewView(state) {
   if (!areTouchUpsActive(state.edits?.background)) return 'result';
+  if (state.comparing) return 'original';
   return PREVIEW_VIEWS.includes(state.previewView) ? state.previewView : 'result';
+}
+
+/**
+ * Hold to compare: show the original frame while held (view only)
+ * @param {import('./types.js').EditorState} state
+ * @param {boolean} comparing
+ * @returns {import('./types.js').EditorState}
+ */
+export function setComparing(state, comparing) {
+  if (Boolean(state.comparing) === comparing) return state;
+  return { ...state, comparing };
+}
+
+/**
+ * Ask before downloading the model of an AI subject (null: no question)
+ * @param {import('./types.js').EditorState} state
+ * @param {string | null} modelId
+ * @returns {import('./types.js').EditorState}
+ */
+export function setDownloadPrompt(state, modelId) {
+  if ((state.downloadPrompt ?? null) === modelId) return state;
+  return { ...state, downloadPrompt: modelId };
 }
 
 /** @type {readonly import('./types.js').BrushScope[]} */

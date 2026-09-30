@@ -1,6 +1,6 @@
 /**
- * E2E: the Portrait model (MODNet) — the third segment of the editor's
- * model switch, an analysis through its own 512×512 file with the ±1
+ * E2E: the Portrait model (MODNet) — the Person card of the editor's
+ * subject grid, an analysis through its own 512×512 file with the ±1
  * normalization, and its row in Settings → "AI models" (with General's
  * training-data note).
  *
@@ -18,12 +18,12 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
-  chooseAiCutout,
   chooseAiModel,
   discClip,
   editorPreviewAlpha,
   gotoCaptureWithStubModel,
   injectDiscClip,
+  openSidebarTab,
   pauseEditorPlayback,
   readAiStatus,
   serveStubModel,
@@ -62,7 +62,7 @@ function samplePortrait(page, index) {
 test.describe('Portrait AI model (stub model, WASM fallback)', () => {
   test.describe.configure({ mode: 'default', timeout: 240_000 });
 
-  test('the switch fits three models on one row; Portrait analyzes through its own 512 file', async ({
+  test('the subject cards fit two by two without clipping; Person analyzes through its own 512 file', async ({
     page,
   }) => {
     const N = 5;
@@ -73,41 +73,47 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
     await injectDiscClip(page, { count: N });
     await pauseEditorPlayback(page);
-    await chooseAiCutout(page);
+    await openSidebarTab(page, 'background');
 
-    // General, Portrait, Anime (still the default)
+    // Off, then Anime, Person, Anything, Solid color
     const order = await page
-      .locator('#ai-model input')
+      .locator('#background-subject input')
       .evaluateAll((inputs) => inputs.map((i) => i.id));
-    expect(order).toEqual(['ai-model-general', 'ai-model-portrait', 'ai-model-anime']);
-    await expect(
-      page.getByRole('radio', { name: 'Anime ISNet anime Download 88 MB' }),
-    ).toBeChecked();
-    await expect(
-      page.getByRole('radio', { name: 'Portrait MODNet Download 13 MB' }),
-    ).not.toBeChecked();
+    expect(order).toEqual([
+      'subject-none',
+      'subject-anime',
+      'subject-portrait',
+      'subject-general',
+      'subject-color',
+    ]);
+    await expect(page.getByRole('radio', { name: /^Person/ })).not.toBeChecked();
+    await expect(page.locator('#subject-status-portrait')).toContainText('13 MB');
 
-    // One row in the sidebar: same top for every segment, nothing clipped
-    const layout = await page.locator('#ai-model .editor-text-segmented').evaluate((row) => {
-      const labels = [...row.querySelectorAll('label')];
+    // Two rows of two, nothing clipped or wrapped
+    const layout = await page.locator('.editor-cutout-cards').evaluate((grid) => {
+      const cards = [...grid.querySelectorAll('label')];
+      const texts = [
+        ...grid.querySelectorAll(
+          '.editor-cutout-card-label, .editor-cutout-card-hint, .editor-cutout-card-status',
+        ),
+      ];
       return {
-        tops: labels.map((l) => Math.round(l.getBoundingClientRect().top)),
-        overflow: labels.map((l) => {
-          const span = /** @type {HTMLElement} */ (l.querySelector('span'));
-          return span.scrollWidth - span.clientWidth;
-        }),
-        rowOverflow: row.scrollWidth - row.clientWidth,
+        tops: cards.map((c) => Math.round(c.getBoundingClientRect().top)),
+        overflow: texts.map((t) => t.scrollWidth - t.clientWidth),
+        // Height in font sizes: one line is well under 2
+        lines: texts.map(
+          (t) => t.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(t).fontSize),
+        ),
+        gridOverflow: grid.scrollWidth - grid.clientWidth,
       };
     });
-    expect(new Set(layout.tops).size).toBe(1);
+    expect(new Set(layout.tops).size).toBe(2);
     expect(layout.overflow.every((px) => px <= 0)).toBe(true);
-    expect(layout.rowOverflow).toBeLessThanOrEqual(0);
+    expect(Math.max(...layout.lines)).toBeLessThan(2);
+    expect(layout.gridOverflow).toBeLessThanOrEqual(0);
 
     await chooseAiModel(page, 'portrait');
-    await expect(page.locator('#ai-intro')).toContainText('Portrait model');
-    await expect(page.locator('#ai-intro')).toContainText('downloads 13 MB once');
-    await page.locator('#ai-analyze').click();
-    await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 0, general: 0, portrait: 1 });
@@ -127,7 +133,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     const f = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().currentFrame);
     await expect.poll(() => editorPreviewAlpha(page, 5, 5)).toBe(0);
     expect(await editorPreviewAlpha(page, discA(f).x, discA(f).y)).toBe(255);
-    await expect(page.locator('#ai-model-hint-portrait')).toHaveText(/Ready/);
+    await expect(page.locator('#subject-status-portrait')).toContainText('Ready');
   });
 
   test('Settings → AI models lists three models, with the note on General', async ({ page }) => {

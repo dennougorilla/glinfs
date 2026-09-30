@@ -361,46 +361,81 @@ export async function openSidebarTab(page, tab) {
 
 /**
  * Open the Background tab and turn background removal on with the color
- * key (the settings only show while a method is chosen)
+ * key (the "Solid color" subject; its settings show once it is chosen)
  * @param {import('@playwright/test').Page} page
  */
 export async function enableBackgroundRemoval(page) {
   await openSidebarTab(page, 'background');
-  await page.locator('label[for="ai-method-color"]').click();
+  await page.locator('label[for="subject-color"]').click();
   await expect(page.locator('#background-settings')).toBeVisible();
 }
 
+/** Subject card of each AI model in the Background tab */
+export const MODEL_SUBJECTS = /** @type {const} */ ({
+  anime: 'anime',
+  portrait: 'portrait',
+  general: 'general',
+});
+
 /**
- * Open the editor's Background tab and choose the AI cutout
+ * Choose an AI subject card in the Background tab ("What do you want to
+ * keep?"). A model that is not downloaded yet asks first: `download`
+ * (default) confirms, which starts the analysis with the frame on screen;
+ * false leaves the question open. A ready model starts at once.
+ * @param {import('@playwright/test').Page} page
+ * @param {keyof typeof MODEL_SUBJECTS} [modelId]
+ * @param {{ download?: boolean }} [options]
+ */
+export async function chooseAiModel(page, modelId = 'anime', { download = true } = {}) {
+  await openSidebarTab(page, 'background');
+  await page.locator(`label[for="subject-${MODEL_SUBJECTS[modelId]}"]`).click();
+  await expect(page.locator(`#subject-${MODEL_SUBJECTS[modelId]}`)).toBeChecked();
+  const confirm = page.locator('#background-download-confirm');
+  // The question shows when the model still has to download
+  await expect
+    .poll(async () => {
+      if (await confirm.isVisible()) return 'asked';
+      const state = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState());
+      return state?.edits.background.method === 'ai' &&
+        state.edits.background.ai.model === modelId &&
+        state.edits.background.enabled
+        ? 'chosen'
+        : 'waiting';
+    })
+    .not.toBe('waiting');
+  if (download && (await confirm.isVisible())) {
+    await confirm.click();
+  }
+  if (download) {
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const { background } = window.__TEST_HOOKS__.getEditorState().edits;
+          return background.enabled && background.method === 'ai' ? background.ai.model : null;
+        }),
+      )
+      .toBe(modelId);
+    await expect(page.locator('#ai-section')).toBeVisible();
+  }
+}
+
+/**
+ * Open the editor's Background tab and choose the AI cutout (the Anime
+ * subject), confirming its download: the analysis starts by itself
  * @param {import('@playwright/test').Page} page
  */
 export async function chooseAiCutout(page) {
-  await openSidebarTab(page, 'background');
-  await page.locator('label[for="ai-method-ai"]').click();
-  await expect(page.locator('#ai-method-ai')).toBeChecked();
-  await expect(page.locator('#ai-section')).toBeVisible();
+  await chooseAiModel(page, 'anime');
 }
 
 /**
- * Open a collapsed "Advanced" disclosure of the Background tab
+ * Wait until no analysis runs (the AI status slot is not "running")
  * @param {import('@playwright/test').Page} page
- * @param {'background-advanced' | 'ai-advanced'} id
  */
-export async function openAdvanced(page, id) {
-  const details = page.locator(`#${id}`);
-  if ((await details.getAttribute('open')) === null) await details.locator('summary').click();
-  await expect(details).toHaveAttribute('open', '');
-}
-
-/**
- * Choose the AI model in the editor's AI section
- * @param {import('@playwright/test').Page} page
- * @param {'anime' | 'general'} modelId
- */
-export async function chooseAiModel(page, modelId) {
-  await expect(page.locator('#ai-model')).toBeVisible();
-  await page.locator(`label[for="ai-model-${modelId}"]`).click();
-  await expect(page.locator(`#ai-model-${modelId}`)).toBeChecked();
+export async function waitForAnalysisIdle(page) {
+  await expect
+    .poll(async () => (await readAiStatus(page))?.phase, { timeout: 60_000 })
+    .toMatch(/^(idle|error)$/);
 }
 
 /**
