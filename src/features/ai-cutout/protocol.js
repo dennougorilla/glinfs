@@ -13,7 +13,12 @@
  *   { type: 'unload', modelId }  - stop loading a model / release its session
  *   { type: 'segment', requestId, jobId, modelId, bitmap (transferred),
  *     sourceWidth, sourceHeight, maskWidth, maskHeight }
- *   { type: 'cancel', jobId }  - drop that job's queued frames
+ *   { type: 'prompt', requestId, jobId, modelId, frameKey, bitmap (transferred),
+ *     encoderWidth, encoderHeight, maskWidth, maskHeight, coords, labels,
+ *     maskInput?, wantLowRes? }  - click-to-select (SAM) model: encode the
+ *     frame unless its embedding is cached (the bitmap is then only closed),
+ *     decode the prompt (coords/labels: see sam-prompts.js buildPromptInputs)
+ *   { type: 'cancel', jobId }  - drop that job's queued frames and prompts
  *
  * Worker -> manager:
  *   { type: 'status', modelId, phase: 'downloading' | 'verifying' |
@@ -22,7 +27,10 @@
  *   { type: 'init-error', modelId, error: ErrorPayload }  - never for an unloaded model
  *   { type: 'mask', requestId, width, height, data (ArrayBuffer, transferred),
  *     inferenceMs, totalMs }
- *   { type: 'segment-error', requestId, error: ErrorPayload }
+ *   { type: 'prompt-result', requestId, width, height, masks (4 ArrayBuffers of
+ *     0..255 probabilities, transferred), scores (4 predicted IoUs),
+ *     lowRes (ArrayBuffer | null), cached, encodeMs, decodeMs, totalMs }
+ *   { type: 'segment-error', requestId, error: ErrorPayload }  - also for a prompt
  *   { type: 'dropped', requestIds }  - frames removed by 'cancel' (bitmaps closed)
  */
 
