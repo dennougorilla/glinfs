@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/dennougorilla/glinfs/compare/v0.10.0...v0.11.0) (2026-09-30)
+
+
+### Features
+
+* **editor:** Background tab around "What do you want to keep?" + fix slider flicker ([#153](https://github.com/dennougorilla/glinfs/issues/153)) ([ac252a9](https://github.com/dennougorilla/glinfs/commit/ac252a9c8001e5627c8a7007a3d7e6e773b78eca))
+
 ## [0.10.0](https://github.com/dennougorilla/glinfs/compare/v0.9.1...v0.10.0) (2026-09-30)
 
 
