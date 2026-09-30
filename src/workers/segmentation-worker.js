@@ -33,10 +33,20 @@
  * model: drawing either into the input rectangle needs no further loss of
  * detail); this worker owns them and closes each exactly once. It never
  * sees a VideoFrame. Protocol: see features/ai-cutout/protocol.js.
+ *
+ * A click-to-select (SAM) model has two sessions: its image encoder runs
+ * once per frame ('prompt' with a frame not seen yet) and its embedding is
+ * kept per frame in a byte-bounded LRU (EMBEDDING_CACHE_BYTES), so a new
+ * click, Whole / Part or tracking again after a change only runs the small
+ * prompt decoder on frames seen before. The decoder answers four masks at
+ * the requested mask size; they go back as 0..255 probabilities and the
+ * manager chooses (see click-tracker.js).
  */
 
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import * as ort from 'onnxruntime-web/webgpu';
+import { createByteLru } from '../features/ai-cutout/byte-lru.js';
+import { getSpecFiles } from '../features/ai-cutout/model-config.js';
 import {
   evictCachedModel,
   isModelIntact,
@@ -54,6 +64,15 @@ import {
   toErrorPayload,
 } from '../features/ai-cutout/protocol.js';
 import {
+  rgbaToHwc,
+  runSamDecoder,
+  runSamEncoder,
+  samDecoderWarmup,
+  samEncoderWarmup,
+  toCandidates,
+} from '../features/ai-cutout/sam-session.js';
+import {
+  combineBackends,
   createModelSession,
   loadAndCreateSession,
   runModel,
@@ -62,7 +81,28 @@ import {
 /** @typedef {import('../features/ai-cutout/model-config.js').ModelSpec} ModelSpec */
 
 /**
+ * A click-to-select prompt on one frame.
+ * @typedef {Object} PromptRequest
+ * @property {'prompt'} kind
+ * @property {number} requestId
+ * @property {number} jobId
+ * @property {string} modelId
+ * @property {string} frameKey - Embedding cache key (pixel identity of the frame)
+ * @property {ImageBitmap | null} bitmap - The frame at encoderWidth × encoderHeight
+ *   (closed here; unused when the embedding is cached)
+ * @property {number} encoderWidth
+ * @property {number} encoderHeight
+ * @property {number} maskWidth
+ * @property {number} maskHeight
+ * @property {Float32Array} coords
+ * @property {Float32Array} labels
+ * @property {Float32Array | null} maskInput
+ * @property {boolean} wantLowRes
+ */
+
+/**
  * @typedef {Object} SegmentRequest
+ * @property {'segment'} [kind]
  * @property {number} requestId
  * @property {number} jobId
  * @property {string} modelId
@@ -100,8 +140,27 @@ let adapterPromise = null;
 /** Tail of the ORT call queue @type {Promise<unknown>} */
 let ortTail = Promise.resolve();
 
-/** @type {SegmentRequest[]} */
+/** @type {(SegmentRequest | PromptRequest)[]} */
 const queue = [];
+
+/**
+ * Click-to-select image embeddings per model and frame (4 MB each): 24
+ * frames. Tracking walks the clip in order, so a clip longer than that is
+ * encoded again on a second pass; refining a click stays cheap.
+ */
+export const EMBEDDING_CACHE_BYTES = 96 * 1024 * 1024;
+
+/** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
+const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
+  onEvict: (key) => embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key),
+});
+
+/** @type {OffscreenCanvas | null} */
+let samCanvas = null;
+/** @type {OffscreenCanvasRenderingContext2D | null} */
+let samCtx = null;
+/** @type {Float32Array | null} */
+let samHwc = null;
 let processing = false;
 
 /** @type {OffscreenCanvas | null} */
@@ -163,36 +222,37 @@ function describeAdapter(adapter) {
 }
 
 /**
- * Load a model and create its session (a damaged cached copy is replaced
- * once: see loadAndCreateSession).
- * @param {LoadedModel} entry
- * @param {boolean} allowWasm
- * @param {boolean} cacheOnly - Preloading: never download
- * @returns {Promise<Object>} The 'ready' message
+ * Load one model file and create its session (a damaged cached copy is
+ * replaced once: see loadAndCreateSession).
+ * @param {Object} options
+ * @param {LoadedModel} options.entry
+ * @param {import('../features/ai-cutout/model-config.js').ModelFileSpec} options.file
+ * @param {number} options.offset - Bytes of the model's files before this one (progress)
+ * @param {boolean} options.allowWasm
+ * @param {boolean} options.cacheOnly
+ * @param {GPUAdapter | null} options.adapter
+ * @param {((session: any) => Promise<unknown>) | undefined} options.warmup - SAM graphs
+ * @param {{ loadMs: number, createStart: number, lastProgressAt: number }} options.clock
  */
-async function initialize(entry, allowWasm, cacheOnly) {
+async function loadFileSession({
+  entry,
+  file,
+  offset,
+  allowWasm,
+  cacheOnly,
+  adapter,
+  warmup,
+  clock,
+}) {
   const { spec } = entry;
   const { signal } = entry.controller;
   const modelId = spec.id;
-  const adapter = await getAdapter();
-  if (!adapter && !allowWasm) {
-    // Fail before downloading a model (about 90 MB) the user cannot run
-    throw new SegmentationError(
-      SegmentationErrorCode.WEBGPU_UNAVAILABLE,
-      'WebGPU is not available in this browser',
-    );
-  }
-
-  const loadStart = performance.now();
-  let loadMs = 0;
-  let createStart = loadStart;
-  let lastProgressAt = 0;
-  const { loaded, created, reloaded } = await loadAndCreateSession({
+  const result = await loadAndCreateSession({
     signal,
     cacheOnly,
     async load({ skipCache }) {
       const start = performance.now();
-      const result = await loadModelBytes(spec, {
+      const loaded = await loadModelBytes(file, {
         signal,
         cacheOnly,
         skipCache,
@@ -202,38 +262,45 @@ async function initialize(entry, allowWasm, cacheOnly) {
           if (
             progress.phase === 'downloading' &&
             !final &&
-            now - lastProgressAt < PROGRESS_INTERVAL_MS
+            now - clock.lastProgressAt < PROGRESS_INTERVAL_MS
           ) {
             return;
           }
-          lastProgressAt = now;
-          post({ type: 'status', modelId, ...progress });
+          clock.lastProgressAt = now;
+          post({
+            type: 'status',
+            modelId,
+            ...progress,
+            loadedBytes: offset + progress.loadedBytes,
+            totalBytes: spec.bytes,
+          });
         },
       });
-      loadMs += performance.now() - start;
-      return result;
+      clock.loadMs += performance.now() - start;
+      return loaded;
     },
     async create(model) {
       post({
         type: 'status',
         modelId,
         phase: 'initializing',
-        loadedBytes: model.bytes.byteLength,
+        loadedBytes: offset + model.bytes.byteLength,
         totalBytes: spec.bytes,
         fromCache: model.fromCache,
       });
-      createStart = performance.now();
+      clock.createStart = performance.now();
       const session = await withOrt(async () => {
         if (signal.aborted) throw createAbortError('Model unloaded');
         // Allocated here so the warm-up reuses the buffer every frame fills later
-        getInputContext(spec.inputSize);
+        if (!warmup) getInputContext(spec.inputSize);
         return createModelSession({
           ort: /** @type {any} */ (ort),
           bytes: model.bytes,
           spec,
           adapter,
           allowWasm,
-          warmupInput: /** @type {Float32Array} */ (inputTensorData),
+          warmupInput: warmup ? undefined : /** @type {Float32Array} */ (inputTensorData),
+          warmup,
         });
       });
       if (signal.aborted) {
@@ -250,32 +317,98 @@ async function initialize(entry, allowWasm, cacheOnly) {
         type: 'status',
         modelId,
         phase: 'verifying',
-        loadedBytes: spec.bytes,
+        loadedBytes: offset + file.bytes,
         totalBytes: spec.bytes,
         fromCache: true,
       });
     },
-    isIntact: (bytes) => isModelIntact(bytes, spec),
-    evict: () => evictCachedModel(spec),
+    isIntact: (bytes) => isModelIntact(bytes, /** @type {any} */ (file)),
+    evict: () => evictCachedModel(/** @type {any} */ (file)),
   });
-  if (reloaded)
+  if (result.reloaded) {
     console.warn('[segmentation] The cached model was damaged; it was downloaded again');
-  entry.session = /** @type {any} */ (created.session);
-  if (created.webgpuError) {
-    console.warn(`[segmentation] ${created.webgpuError}; running on WASM`);
+  }
+  if (result.created.webgpuError) {
+    console.warn(`[segmentation] ${result.created.webgpuError}; running on WASM`);
+  }
+  return result;
+}
+
+/**
+ * Load a model (every file of it) and create its session(s). A SAM model
+ * gets an encoder and a decoder session.
+ * @param {LoadedModel} entry
+ * @param {boolean} allowWasm
+ * @param {boolean} cacheOnly - Preloading: never download
+ * @returns {Promise<Object>} The 'ready' message
+ */
+async function initialize(entry, allowWasm, cacheOnly) {
+  const { spec } = entry;
+  const modelId = spec.id;
+  const adapter = await getAdapter();
+  if (!adapter && !allowWasm) {
+    // Fail before downloading a model (about 90 MB) the user cannot run
+    throw new SegmentationError(
+      SegmentationErrorCode.WEBGPU_UNAVAILABLE,
+      'WebGPU is not available in this browser',
+    );
   }
 
+  const sam = spec.kind === 'sam';
+  const files = getSpecFiles(spec);
+  const clock = { loadMs: 0, createStart: performance.now(), lastProgressAt: 0 };
+  /** @type {Awaited<ReturnType<typeof loadFileSession>>[]} */
+  const results = [];
+  let offset = 0;
+  try {
+    for (const file of files) {
+      const warmup = sam
+        ? file.role === 'encoder'
+          ? samEncoderWarmup(/** @type {any} */ (ort))
+          : samDecoderWarmup(/** @type {any} */ (ort))
+        : undefined;
+      results.push(
+        await loadFileSession({
+          entry,
+          file,
+          offset,
+          allowWasm,
+          cacheOnly,
+          adapter,
+          warmup,
+          clock,
+        }),
+      );
+      offset += file.bytes;
+    }
+  } catch (error) {
+    // A SAM model whose decoder failed: release the encoder session
+    for (const { created } of results) {
+      void withOrt(() => created.session.release?.() ?? Promise.resolve()).catch(() => undefined);
+    }
+    throw error;
+  }
+  const [first] = results;
+  if (sam) {
+    const byRole = (/** @type {string} */ role) =>
+      /** @type {any} */ (results[files.findIndex((f) => f.role === role)]).created.session;
+    entry.session = /** @type {any} */ ({ encoder: byRole('encoder'), decoder: byRole('decoder') });
+  } else {
+    entry.session = /** @type {any} */ (first.created.session);
+  }
+
+  const backend = combineBackends(results.map((r) => r.created.backend));
   return {
     type: 'ready',
     modelId,
-    backend: created.backend,
-    adapter: created.backend === 'webgpu' ? describeAdapter(adapter) : null,
-    fromCache: loaded.fromCache,
-    cached: loaded.cached,
+    backend,
+    adapter: backend === 'webgpu' ? describeAdapter(adapter) : null,
+    fromCache: results.every((r) => r.loaded.fromCache),
+    cached: results.every((r) => r.loaded.cached),
     timings: {
-      loadMs,
-      createMs: performance.now() - createStart,
-      warmupMs: created.warmupMs,
+      loadMs: clock.loadMs,
+      createMs: performance.now() - clock.createStart,
+      warmupMs: results.reduce((sum, r) => sum + (r.created.warmupMs ?? 0), 0) || null,
     },
   };
 }
@@ -332,10 +465,16 @@ function unloadModel(modelId) {
   if (!entry) return;
   models.delete(modelId);
   entry.controller.abort();
-  const session = entry.session;
+  const session = /** @type {any} */ (entry.session);
   entry.session = null;
+  if (entry.spec.kind === 'sam') {
+    for (const key of [...embeddingKeys(modelId)]) embeddings.delete(key);
+  }
   // A session still being created is released by initialize()
-  if (session) void withOrt(() => session.release?.() ?? Promise.resolve()).catch(() => undefined);
+  const sessions = session?.encoder ? [session.encoder, session.decoder] : session ? [session] : [];
+  for (const one of sessions) {
+    void withOrt(() => one.release?.() ?? Promise.resolve()).catch(() => undefined);
+  }
 }
 
 /**
@@ -415,15 +554,128 @@ async function segment(request) {
   );
 }
 
+/** Keys of the embeddings of a model @type {Map<string, Set<string>>} */
+const embeddingKeysByModel = new Map();
+
+/**
+ * @param {string} modelId
+ * @returns {Set<string>}
+ */
+function embeddingKeys(modelId) {
+  let keys = embeddingKeysByModel.get(modelId);
+  if (!keys) {
+    keys = new Set();
+    embeddingKeysByModel.set(modelId, keys);
+  }
+  return keys;
+}
+
+/**
+ * The reused encoder input canvas and HWC buffer for a size
+ * @param {number} width
+ * @param {number} height
+ */
+function getSamInput(width, height) {
+  if (!samCanvas || samCanvas.width !== width || samCanvas.height !== height) {
+    samCanvas = new OffscreenCanvas(width, height);
+    samCtx = samCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (!samHwc || samHwc.length < width * height * 3) samHwc = new Float32Array(width * height * 3);
+  if (!samCtx) throw new Error('OffscreenCanvas 2D context unavailable');
+  return { ctx: samCtx, hwc: samHwc };
+}
+
+/**
+ * Run a click-to-select prompt on one frame (encoding it first unless its
+ * embedding is cached) and post the four candidate masks.
+ * @param {PromptRequest} request
+ */
+async function prompt(request) {
+  const entry = models.get(request.modelId);
+  if (!entry) throw new Error(`The model "${request.modelId}" is not loaded`);
+  await entry.ready;
+  const start = performance.now();
+  const key = `${request.modelId}\u0000${request.frameKey}\u0000${request.encoderWidth}x${request.encoderHeight}`;
+  let embedding = embeddings.get(key);
+  const cached = embedding !== undefined;
+  let encodeMs = 0;
+  if (!embedding) {
+    embedding = await withOrt(async () => {
+      const session = /** @type {any} */ (entry.session);
+      if (!session?.encoder) throw new Error(`The model "${request.modelId}" was unloaded`);
+      if (!request.bitmap) throw new Error('Frame bitmap missing');
+      const { encoderWidth: w, encoderHeight: h } = request;
+      const { ctx, hwc } = getSamInput(w, h);
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(request.bitmap, 0, 0, w, h);
+      request.bitmap.close();
+      request.bitmap = null;
+      const rgba = ctx.getImageData(0, 0, w, h).data;
+      const encodeStart = performance.now();
+      const result = await runSamEncoder(
+        /** @type {any} */ (ort),
+        session.encoder,
+        rgbaToHwc(rgba, w, h, hwc),
+        w,
+        h,
+      );
+      encodeMs = performance.now() - encodeStart;
+      return result;
+    });
+    if (embeddings.set(key, embedding, embedding.byteLength))
+      embeddingKeys(request.modelId).add(key);
+  }
+  request.bitmap?.close();
+  request.bitmap = null;
+
+  const decodeStart = performance.now();
+  const result = await withOrt(async () => {
+    const session = /** @type {any} */ (entry.session);
+    if (!session?.decoder) throw new Error(`The model "${request.modelId}" was unloaded`);
+    return runSamDecoder(/** @type {any} */ (ort), session.decoder, {
+      embedding: /** @type {Float32Array} */ (embedding),
+      coords: request.coords,
+      labels: request.labels,
+      maskWidth: request.maskWidth,
+      maskHeight: request.maskHeight,
+      maskInput: request.maskInput,
+      wantLowRes: request.wantLowRes,
+    });
+  });
+  const decodeMs = performance.now() - decodeStart;
+  const candidates = toCandidates(result, request.maskWidth, request.maskHeight);
+  const buffers = candidates.map((c) => c.data.buffer);
+  post(
+    {
+      type: 'prompt-result',
+      requestId: request.requestId,
+      width: request.maskWidth,
+      height: request.maskHeight,
+      masks: buffers,
+      scores: candidates.map((c) => c.score),
+      lowRes: result.lowRes?.buffer ?? null,
+      cached,
+      encodeMs,
+      decodeMs,
+      totalMs: performance.now() - start,
+    },
+    result.lowRes ? [...buffers, result.lowRes.buffer] : buffers,
+  );
+}
+
 /** Run queued frames one at a time. */
 async function drainQueue() {
   if (processing) return;
   processing = true;
   try {
     while (queue.length > 0) {
-      const request = /** @type {SegmentRequest} */ (queue.shift());
+      const request = /** @type {SegmentRequest | PromptRequest} */ (queue.shift());
       try {
-        await segment(request);
+        if (request.kind === 'prompt') {
+          await prompt(request);
+        } else {
+          await segment(/** @type {SegmentRequest} */ (request));
+        }
       } catch (error) {
         post({
           type: 'segment-error',
@@ -476,6 +728,25 @@ self.onmessage = (event) => {
         sourceHeight: message.sourceHeight,
         maskWidth: message.maskWidth,
         maskHeight: message.maskHeight,
+      });
+      void drainQueue();
+      break;
+    case 'prompt':
+      queue.push({
+        kind: 'prompt',
+        requestId: message.requestId,
+        jobId: message.jobId,
+        modelId: message.modelId,
+        frameKey: message.frameKey,
+        bitmap: message.bitmap ?? null,
+        encoderWidth: message.encoderWidth,
+        encoderHeight: message.encoderHeight,
+        maskWidth: message.maskWidth,
+        maskHeight: message.maskHeight,
+        coords: message.coords,
+        labels: message.labels,
+        maskInput: message.maskInput ?? null,
+        wantLowRes: Boolean(message.wantLowRes),
       });
       void drainQueue();
       break;

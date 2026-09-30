@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { getModelSpec } from '../../../src/features/ai-cutout/model-config.js';
 import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.js';
 import {
+  combineBackends,
   createModelSession,
   getFetches,
   loadAndCreateSession,
@@ -355,5 +356,14 @@ describe('loadAndCreateSession', () => {
     ).rejects.toBe(failure);
     expect(evict).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('combineBackends', () => {
+  it('is WebGPU only when every session runs there', () => {
+    expect(combineBackends(['webgpu'])).toBe('webgpu');
+    expect(combineBackends(['webgpu', 'webgpu'])).toBe('webgpu');
+    expect(combineBackends(['webgpu', 'wasm'])).toBe('wasm');
+    expect(combineBackends(['wasm', 'webgpu'])).toBe('wasm');
   });
 });

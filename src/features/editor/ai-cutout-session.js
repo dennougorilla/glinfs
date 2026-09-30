@@ -33,14 +33,22 @@
  * - `models` in the status says per model whether it is ready, downloaded
  *   or still to download (refreshed when a session loads or goes away and
  *   after each analysis).
+ * - Click to select (a SAM model): "analyze" means tracking the clicks
+ *   (the edits' picks) through the selection, the frame on screen first
+ *   (manager.analyzeClick); without a click it only loads the model. The
+ *   frames where tracking lost the object are reported as `lostFrames`.
+ *   The editor calls analyzeNow again whenever the clicks or Whole / Part
+ *   change (a running tracking stops and starts over; embeddings the
+ *   worker already has make that cheap), and clearClickMasks when the
+ *   last click goes.
  */
 
 import { isAiCutoutActive } from '../../shared/edits/model.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
-import { getModelIds } from '../ai-cutout/model-registry.js';
+import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
+import { maskKey, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
   createClipDraftMaskSource,
@@ -134,7 +142,7 @@ export function createAiCutoutSession(options) {
     cache = getSharedFinalMaskCache(),
     now = () => performance.now(),
     isModelCached = (modelId) =>
-      isModelCachedDefault(modelId, { getSha256: (id) => resolveModelSpec(id).sha256 }),
+      isModelCachedDefault(modelId, { getFiles: (id) => resolveModelSpec(id).files }),
     shouldPreload = shouldPreloadDefault,
     scheduleIdle = scheduleIdleDefault,
   } = options;
@@ -144,6 +152,8 @@ export function createAiCutoutSession(options) {
   let maskSource = null;
   /** @type {AbortController | null} */
   let analysisController = null;
+  /** The model the running analysis uses @type {string | null} */
+  let analysisModelId = null;
   /** @type {AbortController | null} */
   let buildController = null;
   /** @type {string | null} */
@@ -394,7 +404,10 @@ export function createAiCutoutSession(options) {
     const controller = new AbortController();
     analysisController = controller;
     const clipId = getClipId();
-    const modelId = getAiModelId(getState()?.edits.background.ai);
+    const startState = getState();
+    const modelId = getAiModelId(startState?.edits.background.ai);
+    analysisModelId = modelId;
+    const click = isSamModelId(modelId);
     if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
@@ -408,37 +421,75 @@ export function createAiCutoutSession(options) {
       loadedBytes: 0,
       totalBytes: 0,
       remainingMs: null,
+      ...(click ? { lostFrames: [] } : {}),
     });
+    /** @param {import('../ai-cutout/segmentation-manager.js').AnalysisProgress} progress */
+    let firstMaskShown = false;
+    const onProgress = (progress) => {
+      if (disposed || analysisController !== controller) return;
+      if (progress.phase === 'analyzing' && analyzingSince === null) {
+        analyzingSince = now();
+      }
+      if (click && !firstMaskShown && progress.framesDone > 0) {
+        // The clicked frame's mask: show it now, not after the store debounce
+        // and the rebuild cooldown of a running analysis
+        firstMaskShown = true;
+        clearCooldown();
+        requestBuild();
+      }
+      report({
+        phase: progress.phase,
+        backend: progress.backend,
+        loadedBytes: progress.loadedBytes,
+        totalBytes: progress.totalBytes,
+        fromCache: progress.fromCache,
+        framesDone: progress.framesDone,
+        framesTotal: progress.framesTotal,
+        remainingMs:
+          progress.phase === 'analyzing'
+            ? estimateRemainingMs({
+                framesDone: progress.framesDone,
+                framesTotal: progress.framesTotal,
+                elapsedMs: now() - /** @type {number} */ (analyzingSince),
+                backend: progress.backend,
+              })
+            : null,
+      });
+    };
     try {
+      if (click) {
+        const ai = startState?.edits.background.ai;
+        const result = await manager.analyzeClick(startState?.clip?.frames ?? [], {
+          signal: controller.signal,
+          clipId,
+          modelId,
+          allowWasm: isWasmAllowed(),
+          range: startState?.selectedRange ?? { start: 0, end: -1 },
+          currentFrame: startState?.currentFrame ?? 0,
+          picks: ai?.picks ?? [],
+          scope: ai?.clickScope ?? 'whole',
+          // Stopped for new clicks: the next run redoes the masks at once
+          superseded: () => queuedFrames !== null,
+          onProgress,
+        });
+        report({
+          phase: 'idle',
+          backend: result.backend,
+          ...(result.backend === 'webgpu' ? { webgpuModelFailed: false } : {}),
+          lostFrames: result.lost,
+          notice:
+            result.anchors === 0
+              ? ''
+              : `Tracked ${result.tracked} frame${result.tracked === 1 ? '' : 's'}.`,
+        });
+        return;
+      }
       const result = await manager.analyzeFrames(frames, {
         signal: controller.signal,
         clipId,
         modelId,
         allowWasm: isWasmAllowed(),
-        onProgress(progress) {
-          if (disposed || analysisController !== controller) return;
-          if (progress.phase === 'analyzing' && analyzingSince === null) {
-            analyzingSince = now();
-          }
-          report({
-            phase: progress.phase,
-            backend: progress.backend,
-            loadedBytes: progress.loadedBytes,
-            totalBytes: progress.totalBytes,
-            fromCache: progress.fromCache,
-            framesDone: progress.framesDone,
-            framesTotal: progress.framesTotal,
-            remainingMs:
-              progress.phase === 'analyzing'
-                ? estimateRemainingMs({
-                    framesDone: progress.framesDone,
-                    framesTotal: progress.framesTotal,
-                    elapsedMs: now() - /** @type {number} */ (analyzingSince),
-                    backend: progress.backend,
-                  })
-                : null,
-          });
-        },
+        onProgress,
       });
       report({
         phase: 'idle',
@@ -457,7 +508,9 @@ export function createAiCutoutSession(options) {
             ? { phase: 'starting', notice: '' }
             : {
                 phase: 'idle',
-                notice: 'Analysis cancelled. Finished frames are kept.',
+                notice: click
+                  ? 'Tracking stopped. Finished frames are kept.'
+                  : 'Analysis cancelled. Finished frames are kept.',
               },
         );
       } else if (isWasmChoiceError(error) && !isWasmAllowed()) {
@@ -475,7 +528,10 @@ export function createAiCutoutSession(options) {
         report({ phase: 'error', error: describeAnalysisError(error) });
       }
     } finally {
-      if (analysisController === controller) analysisController = null;
+      if (analysisController === controller) {
+        analysisController = null;
+        analysisModelId = null;
+      }
       // Catch up with every mask now, not at the end of the cooldown
       clearCooldown();
       requestBuild();
@@ -488,6 +544,21 @@ export function createAiCutoutSession(options) {
   };
 
   /**
+   * Click to select: drop the clip's click masks (the last click went) and
+   * the lost-frame notes; a running tracking stops
+   */
+  const clearClickMasks = () => {
+    if (disposed) return;
+    const state = getState();
+    const modelId = getAiModelId(state?.edits.background.ai);
+    if (!isSamModelId(modelId)) return;
+    queuedFrames = null;
+    analysisController?.abort();
+    for (const frame of state?.clip?.frames ?? []) maskStore.delete(maskKey(frame, modelId));
+    report({ lostFrames: [], notice: '' });
+  };
+
+  /**
    * Analyze these frames now, in this order (the frame on screen first):
    * a running analysis (e.g. with the model just switched away from) is
    * stopped first, its finished masks kept
@@ -497,7 +568,13 @@ export function createAiCutoutSession(options) {
     if (disposed) return;
     if (analysisController) {
       queuedFrames = frames;
-      analysisController.abort();
+      // Click to select while its own model still loads: the load has no
+      // click to track and ends by itself; stopping it would drop the
+      // download. A load of another model (switched away from) stops.
+      const loading = !['analyzing', 'idle', 'error'].includes(getState()?.aiCutout?.phase ?? '');
+      const modelId = getAiModelId(getState()?.edits.background.ai);
+      const sameClickLoad = isSamModelId(modelId) && analysisModelId === modelId;
+      if (!(sameClickLoad && loading)) analysisController.abort();
       return;
     }
     void analyze(frames);
@@ -507,6 +584,7 @@ export function createAiCutoutSession(options) {
     analyze,
     analyzeNow,
     checkCapabilities,
+    clearClickMasks,
     preload,
     refreshModels,
     requestBuild,
@@ -559,6 +637,7 @@ export function createAiCutoutSession(options) {
       queuedFrames = null;
       analysisController?.abort();
       analysisController = null;
+      analysisModelId = null;
       buildController?.abort();
       buildController = null;
       if (storeTimer !== null) {

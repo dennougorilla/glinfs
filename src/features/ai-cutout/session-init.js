@@ -105,6 +105,9 @@ function messageOf(error) {
  * @param {unknown} options.adapter - The GPUAdapter, or null
  * @param {boolean} options.allowWasm
  * @param {Float32Array} [options.warmupInput] - Reused buffer for the blank input (zeroed here)
+ * @param {(session: SessionLike) => Promise<unknown>} [options.warmup] - The
+ *   warm-up run of a graph that does not take one image tensor (the
+ *   click-to-select encoder and decoder); replaces the blank-image run
  * @param {() => number} [options.now]
  * @returns {Promise<CreatedSession>}
  * @throws {SegmentationError} WEBGPU_UNAVAILABLE (no adapter, WASM not
@@ -118,6 +121,7 @@ export async function createModelSession({
   adapter,
   allowWasm,
   warmupInput,
+  warmup,
   now = () => performance.now(),
 }) {
   /** @type {string | null} */
@@ -133,13 +137,17 @@ export async function createModelSession({
         graphOptimizationLevel: 'all',
       });
       stage = 'run';
-      const size = spec.inputSize;
-      const input =
-        warmupInput?.length === 3 * size * size
-          ? warmupInput.fill(0)
-          : new Float32Array(3 * size * size);
       const warmupStart = now();
-      await runModel(ort, session, spec, input);
+      if (warmup) {
+        await warmup(session);
+      } else {
+        const size = spec.inputSize;
+        const input =
+          warmupInput?.length === 3 * size * size
+            ? warmupInput.fill(0)
+            : new Float32Array(3 * size * size);
+        await runModel(ort, session, spec, input);
+      }
       return { session, backend: 'webgpu', warmupMs: now() - warmupStart, webgpuError: null };
     } catch (error) {
       webgpuError = `The model could not ${stage} on WebGPU: ${messageOf(error)}`;
@@ -219,4 +227,16 @@ export async function loadAndCreateSession({
     const fresh = await load({ skipCache: true });
     return { loaded: fresh, created: await create(fresh), reloaded: true };
   }
+}
+
+/**
+ * The backend of a model made of several sessions (SAM's encoder and
+ * decoder). Each file falls back to WASM on its own, so the model runs on
+ * WebGPU only when every session does: the slow one sets the pace.
+ * @template {string} B
+ * @param {B[]} backends - One per session, at least one
+ * @returns {B}
+ */
+export function combineBackends(backends) {
+  return backends.find((b) => b !== 'webgpu') ?? backends[0];
 }

@@ -157,7 +157,12 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     // Only the general file was downloaded
     expect(requests.byModel).toEqual({ anime: 0, general: 1 });
     expect((await readAiStatus(page))?.backend).toBe('wasm');
-    expect((await maskStats(page)).byModel).toEqual({ anime: 0, general: N, portrait: 0 });
+    expect((await maskStats(page)).byModel).toEqual({
+      anime: 0,
+      general: N,
+      portrait: 0,
+      click: 0,
+    });
 
     // Stretch preprocessing and the stub's mean-0.5 round trip land every
     // disc where it is (the stretched ellipse maps back onto the circle)
@@ -178,12 +183,19 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     // masks stay untouched
     await chooseAiModel(page, 'anime');
     await expect.poll(() => requests.byModel.anime, { timeout: 60_000 }).toBe(1);
-    await expect.poll(async () => (await readAiStatus(page))?.phase).toBe('idle');
+    await expect
+      .poll(async () => (await readAiStatus(page))?.phase, { timeout: 60_000 })
+      .toBe('idle');
     await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 1, general: 1 });
-    expect((await maskStats(page)).byModel).toEqual({ anime: N, general: N, portrait: 0 });
+    expect((await maskStats(page)).byModel).toEqual({
+      anime: N,
+      general: N,
+      portrait: 0,
+      click: 0,
+    });
 
     // Back to general: downloaded now (Ready, no question) and its masks
     // are reused — nothing to analyze, no download
@@ -232,7 +244,12 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await dialog.locator('#export-start').click();
     await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 60_000 });
     expect(requests.byModel).toEqual({ anime: 1, general: 1 });
-    expect((await maskStats(page)).byModel).toEqual({ anime: N, general: N, portrait: 0 });
+    expect((await maskStats(page)).byModel).toEqual({
+      anime: N,
+      general: N,
+      portrait: 0,
+      click: 0,
+    });
     const frames = await decodeExportedGif(page);
     expect(gifPixel(frames[0], 5, 5)[3]).toBe(0);
     expect(gifPixel(frames[0], discA(0).x, discA(0).y)[3]).toBe(255);

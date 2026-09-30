@@ -17,9 +17,14 @@
 /**
  * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
  * keeps AI_MODELS equal to the registry's ids)
- * @typedef {'anime'|'general'|'portrait'} AiModel
+ * @typedef {'anime'|'general'|'portrait'|'click'} AiModel
  */
 /** @typedef {'keep'|'remove'} PickMode */
+/**
+ * Click to select: how much of what was clicked to keep — the whole thing
+ * (the person whose face was clicked) or the part under the click
+ * @typedef {'whole'|'part'} ClickScope
+ */
 /** @typedef {'erase'|'restore'} TouchUpMode */
 
 /**
@@ -43,7 +48,10 @@
 
 /**
  * A click on the preview that selects the character (connected region of
- * the AI mask) under it; the selection is followed through the clip.
+ * the AI mask) under it; the selection is followed through the clip. With
+ * the click-to-select model ('click') the picks are its prompts instead:
+ * keep / remove points on the frames they were made on, followed through
+ * the clip by the model itself (the mask build then ignores them).
  * @typedef {Object} CutoutPick
  * @property {number} frame  - absolute clip frame index the pick was made on
  * @property {number} x      - fraction of the SOURCE frame width, 0..1
@@ -65,6 +73,8 @@
  * @property {number} edge       - integer SOURCE pixels, -8..8: positive grows
  *   the cutout, negative shrinks it
  * @property {CutoutPick[]} picks - at most 16, in the order they were made
+ * @property {ClickScope} clickScope - click to select only: keep the whole
+ *   clicked thing or the part under the click
  */
 
 /**
@@ -124,8 +134,11 @@ export const BACKGROUND_METHODS = /** @type {const} */ (['color', 'ai']);
 /** @type {readonly PickMode[]} */
 export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 
+/** @type {readonly ClickScope[]} */
+export const CLICK_SCOPES = /** @type {const} */ (['whole', 'part']);
+
 /** @type {readonly AiModel[]} */
-export const AI_MODELS = /** @type {const} */ (['anime', 'general', 'portrait']);
+export const AI_MODELS = /** @type {const} */ (['anime', 'general', 'portrait', 'click']);
 
 /** @type {readonly TouchUpMode[]} */
 export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);
@@ -170,6 +183,7 @@ const AI_DEFAULTS = /** @type {const} */ ({
   threshold: 0.5,
   smoothing: true,
   edge: 0,
+  clickScope: 'whole',
 });
 
 /**
@@ -182,6 +196,26 @@ const AI_DEFAULTS = /** @type {const} */ ({
 export function getAiModel(ai) {
   const model = /** @type {AiModel} */ (ai?.model);
   return AI_MODELS.includes(model) ? model : AI_DEFAULTS.model;
+}
+
+/**
+ * Whether an AiCutout uses the click-to-select model (its picks are the
+ * model's prompts, not selections of mask regions)
+ * @param {{ model?: unknown } | null | undefined} ai
+ * @returns {boolean}
+ */
+export function isClickModel(ai) {
+  return getAiModel(ai) === 'click';
+}
+
+/**
+ * The picks the final-mask build follows: none for the click-to-select
+ * model (its masks already are what was clicked), else the picks
+ * @param {{ model?: unknown, picks?: CutoutPick[] } | null | undefined} ai
+ * @returns {CutoutPick[]}
+ */
+export function getRegionPicks(ai) {
+  return isClickModel(ai) ? [] : (ai?.picks ?? []);
 }
 
 /** Defaults for background removal (the `ai` object is added per call) */
@@ -382,6 +416,7 @@ function normalizeAiCutout(ai, frameCount) {
       .map((pick) => normalizePick(pick, frameCount))
       .filter((pick) => pick !== null)
       .slice(0, aiPicks.max),
+    clickScope: normalizeEnum(a.clickScope, CLICK_SCOPES, AI_DEFAULTS.clickScope),
   };
 }
 

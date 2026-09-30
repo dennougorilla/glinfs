@@ -19,7 +19,7 @@
  * @module shared/masks/final-masks
  */
 
-import { getAiModel } from '../edits/model.js';
+import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
   createPickTracker,
   findPickedComponent,
@@ -116,10 +116,15 @@ export function edgeRadiusInMaskPixels(edge, maskWidth, sourceWidth) {
  * @returns {string}
  */
 export function getAiParamsKey(ai) {
-  const picks = (ai.picks ?? []).map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`).join(',');
+  const picks = getRegionPicks(ai)
+    .map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`)
+    .join(',');
   // The model is part of the key: the shared cache must never hand one
-  // model's cutout to the other (the same model the masks are read with)
-  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}`;
+  // model's cutout to the other (the same model the masks are read with).
+  // The click model's picks and scope change its probability masks (the
+  // store version), not the build.
+  const click = isClickModel(ai) ? '|click' : '';
+  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}`;
 }
 
 /**
@@ -279,7 +284,7 @@ export async function buildFinalMasks(options) {
 
   const size = width * height;
   const radius = edgeRadiusInMaskPixels(ai.edge, width, options.sourceWidth ?? width);
-  const picks = ai.picks ?? [];
+  const picks = getRegionPicks(ai);
   const tracker = picks.length > 0 ? createPickTracker({ picks, width, height }) : null;
   const backwardStart = tracker ? Math.min(tracker.backwardStart, frameCount - 1) : -1;
   const total = frameCount + (backwardStart + 1);
@@ -409,7 +414,7 @@ export function createDraftMaskSource({
   cacheFrames = DRAFT_CACHE_FRAMES,
 }) {
   const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
-  const picks = ai.picks ?? [];
+  const picks = getRegionPicks(ai);
   /** @type {Map<number, PackedMask | null>} */
   const computed = new Map();
   /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array } | null} */

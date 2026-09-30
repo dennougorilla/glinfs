@@ -42,10 +42,11 @@ import { announce } from '../../shared/live-region.js';
 import { showToast } from '../../shared/toast.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import { on } from '../../shared/utils/dom.js';
+import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import { getModelEntry } from '../ai-cutout/model-registry.js';
+import { getModelEntry, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
@@ -667,12 +668,9 @@ function updateMissingMasksNote() {
   if (!store || !session || !clipInfo.aiCutout) return;
   const { frameSkip } = store.getState().settings;
   const exported = framesAt(getExportedFrameIndices(frames.length, frameSkip, rangeStart));
-  const missing = collectPendingFrames(
-    exported,
-    getSharedMaskStore(),
-    getAiModelId(edits?.background.ai),
-  ).length;
-  updateExportAiNote(session.body, missing, exported.length);
+  const modelId = getAiModelId(edits?.background.ai);
+  const missing = collectPendingFrames(exported, getSharedMaskStore(), modelId).length;
+  updateExportAiNote(session.body, missing, exported.length, isSamModelId(modelId));
 }
 
 /**
@@ -714,35 +712,70 @@ async function prepareAiMasks(indices, signal) {
     if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
-    await getSegmentationManager().analyzeFrames(exported, {
-      signal,
-      clipId,
-      modelId,
-      allowWasm: isWasmAllowed(),
-      onProgress(progress) {
-        if (signal.aborted) return;
-        if (progress.phase === 'analyzing' && analyzingSince === null) {
-          analyzingSince = performance.now();
-        }
-        showAiPrep({
-          phase: progress.phase,
-          loadedBytes: progress.loadedBytes,
-          totalBytes: progress.totalBytes,
-          fromCache: progress.fromCache,
-          framesDone: progress.framesDone,
-          framesTotal: progress.framesTotal,
-          remainingMs:
-            analyzingSince === null
-              ? null
-              : estimateRemainingMs({
-                  framesDone: progress.framesDone,
-                  framesTotal: progress.framesTotal,
-                  elapsedMs: performance.now() - analyzingSince,
-                  backend: progress.backend,
-                }),
-        });
-      },
-    });
+    /** @param {import('../ai-cutout/segmentation-manager.js').AnalysisProgress} progress */
+    const onProgress = (progress) => {
+      if (signal.aborted) return;
+      if (progress.phase === 'analyzing' && analyzingSince === null) {
+        analyzingSince = performance.now();
+      }
+      showAiPrep({
+        phase: progress.phase,
+        loadedBytes: progress.loadedBytes,
+        totalBytes: progress.totalBytes,
+        fromCache: progress.fromCache,
+        framesDone: progress.framesDone,
+        framesTotal: progress.framesTotal,
+        remainingMs:
+          analyzingSince === null
+            ? null
+            : estimateRemainingMs({
+                framesDone: progress.framesDone,
+                framesTotal: progress.framesTotal,
+                elapsedMs: performance.now() - analyzingSince,
+                backend: progress.backend,
+              }),
+      });
+    };
+    if (isSamModelId(modelId)) {
+      // Click to select: track the clicks over the whole selection, not
+      // only the exported frames. Frame skip can drop the only frame with a
+      // click, and tracking across the skipped frames follows the object
+      // better than jumping over them.
+      const start = rangeStart;
+      const end = rangeStart + frames.length - 1;
+      const result = await getSegmentationManager().analyzeClick(clipFrames, {
+        signal,
+        clipId,
+        modelId,
+        allowWasm: isWasmAllowed(),
+        range: { start, end },
+        currentFrame: ai.picks.find((p) => p.frame >= start && p.frame <= end)?.frame ?? start,
+        picks: ai.picks,
+        scope: ai.clickScope,
+        onProgress,
+      });
+      // A frame tracking could not reach has no mask: stop here with what
+      // to do, instead of encodeGif's generic missing-mask error
+      const untracked = collectPendingFrames(exported, maskStore, modelId);
+      if (untracked.length > 0) {
+        throw new ClickTrackingError(
+          result.anchors === 0
+            ? 'Nothing is selected yet. Go back to editing and click the thing you want to keep.'
+            : `Tracking lost the selection at ${frameToTimecode(
+                result.lost[0] ?? indices[exported.indexOf(untracked[0])],
+                clipInfo.fps,
+              )}. Go back to editing and click it there, then export again.`,
+        );
+      }
+    } else {
+      await getSegmentationManager().analyzeFrames(exported, {
+        signal,
+        clipId,
+        modelId,
+        allowWasm: isWasmAllowed(),
+        onProgress,
+      });
+    }
   }
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;
@@ -847,6 +880,18 @@ function patchSettingsText() {
   body.scrollTop = scrollTop;
   if (activeId && document.activeElement?.id !== activeId) {
     document.getElementById(activeId)?.focus();
+  }
+}
+
+/**
+ * Click to select could not give every exported frame a mask (nothing
+ * clicked, or tracking lost the object): the message says what to do
+ */
+class ClickTrackingError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = 'ClickTrackingError';
   }
 }
 
@@ -1134,7 +1179,11 @@ async function handleExport() {
           modelLabel: getModelEntry(getAiModelId(edits?.background.ai)).label,
         };
       } else {
-        aiPrep = { phase: 'error', message: describeAnalysisError(cause).message };
+        const message =
+          cause instanceof ClickTrackingError
+            ? cause.message
+            : describeAnalysisError(cause).message;
+        aiPrep = { phase: 'error', message };
         emit('export:error', { error: aiPrep.message });
       }
     } else {

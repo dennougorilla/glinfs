@@ -175,6 +175,8 @@
  * @property {number} storeVersion - Probability mask store version last seen
  * @property {Record<string, ModelAvailability>} models - Per model id: whether its
  *   session is loaded or its file downloaded (the model switch's hints)
+ * @property {number[]} lostFrames - Click to select: frames where the last
+ *   tracking lost the object (they need a click), sorted
  */
 
 /**

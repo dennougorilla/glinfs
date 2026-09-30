@@ -6,8 +6,8 @@
  * compositing experts, so the panel asks one question and shows the answer
  * right away:
  *
- * 1. Subject: a radio group of cards (Anime, Person, Anything, Solid color)
- *    plus Off. An AI card says whether its model is ready or how much it
+ * 1. Subject: a radio group of cards (Anime, Person, Anything, Something
+ *    else, Solid color) plus Off. An AI card says whether its model is ready or how much it
  *    downloads; choosing one that still has to download asks first, inline
  *    (never a silent download). Choosing a ready one starts at once with
  *    the frame on screen (see handleChooseSubject in index.js).
@@ -18,6 +18,13 @@
  *    Everywhere.
  * 3. Fix-ups as tools on the preview: Keep / Remove (AI picks), Brush (the
  *    Touch up mode) and Reset.
+ *
+ * "Something else — click it" (click to select, MobileSAM) works by
+ * clicking: the preview asks for a click on the thing to keep, the frame on
+ * screen shows its mask right away, a Whole / Part choice picks how much of
+ * it, Keep / Remove add points that fix the selection, and the selection
+ * is tracked through the clip in the background. Frames where tracking lost
+ * it are listed with a way to go there and click it again.
  *
  * Status never moves the controls: the AI status sits in a slot of fixed
  * height (progress, "N frames not analyzed", done), so nothing pops in or
@@ -48,12 +55,13 @@ import {
 
 /** @typedef {import('../../../shared/edits/model.js').CutoutPick} CutoutPick */
 /** @typedef {import('../../../shared/edits/model.js').AiCutout} AiCutout */
-/** @typedef {'none' | 'anime' | 'portrait' | 'general' | 'color'} Subject */
+/** @typedef {'none' | 'anime' | 'portrait' | 'general' | 'click' | 'color'} Subject */
 
 /**
  * The subject cards, in the order shown (two columns). `model` is the AI
- * model a card uses; the color card uses the color key.
- * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, icon: string }[]}
+ * model a card uses; the color card uses the color key. `name` is how the
+ * download question names the model.
+ * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, name?: string, icon: string }[]}
  */
 export const SUBJECT_CARDS = Object.freeze([
   {
@@ -76,6 +84,14 @@ export const SUBJECT_CARDS = Object.freeze([
     hint: 'People, pets, objects',
     model: 'general',
     icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="3.5"/>',
+  },
+  {
+    value: 'click',
+    label: 'Something else',
+    hint: 'Click it to select',
+    model: 'click',
+    name: 'Click to select',
+    icon: '<circle cx="11" cy="11" r="7"/><path d="M11 2v3M11 17v3M2 11h3M17 11h3"/><path d="M13.5 13.5l6.5 2.5-2.7 1.3-1.3 2.7z" fill="currentColor"/>',
   },
   {
     value: 'color',
@@ -221,7 +237,7 @@ export function getDownloadPrompt(modelId) {
   const entry = getModelEntry(modelId);
   return {
     title: `Download ${getModelSizeLabel(modelId)}?`,
-    detail: `The ${CARD_BY_MODEL[modelId]?.label ?? entry.label} model (${entry.shortModelName}) runs in this browser. It downloads once and stays on this device; your frames never leave it.`,
+    detail: `The ${CARD_BY_MODEL[modelId]?.name ?? CARD_BY_MODEL[modelId]?.label ?? entry.label} model (${entry.shortModelName}) runs in this browser. It downloads once and stays on this device; your frames never leave it.`,
   };
 }
 
@@ -254,6 +270,58 @@ export function getPickLabel(pick, fps) {
 }
 
 /**
+ * The AI status line of click to select (the fixed slot above the adjustments)
+ * @param {{ running: boolean, pending: number, tracked: number, selection: number, clicks: number, status: import('../types.js').AiCutoutStatus }} info
+ *   pending: selection frames without a mask; tracked: selection frames with one;
+ *   clicks: picks inside the selection
+ * @returns {{ kind: 'running' | 'pending' | 'done' | 'empty' | 'hint', text: string }}
+ */
+export function describeClickStatus({ running, pending, tracked, selection, clicks, status }) {
+  if (running) {
+    if (status.phase === 'analyzing') {
+      return {
+        kind: 'running',
+        text: `Tracking ${status.framesDone} of ${status.framesTotal} frames`,
+      };
+    }
+    return { kind: 'running', text: describeAnalysisProgress(status) };
+  }
+  if (clicks === 0) return { kind: 'hint', text: 'Click the thing you want to keep' };
+  const lost = status.lostFrames?.length ?? 0;
+  if (lost > 0) {
+    return { kind: 'pending', text: `${tracked} of ${selection} frames tracked` };
+  }
+  if (pending > 0) {
+    return { kind: 'pending', text: `${pending} frame${pending === 1 ? '' : 's'} not tracked` };
+  }
+  return { kind: 'done', text: `Tracked through ${selection} frame${selection === 1 ? '' : 's'}` };
+}
+
+/**
+ * Frames where the last tracking lost the object that lie in the selection
+ * (the selection may have changed since that tracking ran)
+ * @param {import('../types.js').AiCutoutStatus | null | undefined} status
+ * @param {{ start: number, end: number }} range
+ * @returns {number[]}
+ */
+export function getLostFramesInSelection(status, range) {
+  return (status?.lostFrames ?? []).filter((f) => f >= range.start && f <= range.end);
+}
+
+/**
+ * The note about frames where tracking lost the object
+ * @param {number[]} lostFrames
+ * @param {number} fps
+ * @returns {string} '' when none
+ */
+export function getLostFramesText(lostFrames, fps) {
+  if (lostFrames.length === 0) return '';
+  const first = frameToTimecode(lostFrames[0], fps);
+  if (lostFrames.length === 1) return `Lost track at ${first}. Click it there to keep going.`;
+  return `Lost track at ${lostFrames.length} places, first at ${first}. Click it there to keep going.`;
+}
+
+/**
  * The AI status line (the fixed slot above the adjustments)
  * @param {{ running: boolean, pending: number, analyzed: number, total: number, status: import('../types.js').AiCutoutStatus }} info
  * @returns {{ kind: 'running' | 'pending' | 'done' | 'empty', text: string }}
@@ -283,7 +351,8 @@ export function describeAiStatus({ running, pending, analyzed, total, status }) 
 /** What the About (i) disclosure says */
 const ABOUT_TEXT = [
   'Pick what to keep and the rest turns transparent in the GIF.',
-  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, Anything is ISNet, all Apache-2.0. Manage them in Settings.`,
+  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, Anything is ISNet, Something else is MobileSAM, all Apache-2.0. Manage them in Settings.`,
+  'Something else: click the thing you want to keep. It is followed through the clip; Keep and Remove add points to fix it.',
   'Solid color removes one backdrop color, such as a green screen.',
   'Hold \\ (or Hold to compare) to see the original; Show mask tints what is removed.',
 ];
@@ -672,10 +741,62 @@ export function renderBackgroundPanel(handlers) {
     [smoothing, createElement('span', {}, ['Reduce flicker between frames'])],
   );
 
+  // --- Click to select: Whole / Part and the frames that need a click ---
+  const scopes = /** @type {const} */ ([
+    { value: 'whole', label: 'Whole', title: 'The whole thing you clicked' },
+    { value: 'part', label: 'Part', title: 'Only the part under the click' },
+  ]);
+  const clickScope = createElement(
+    'fieldset',
+    {
+      className: 'editor-cutout-segmented-group click-select-scope',
+      id: 'ai-click-scope',
+      hidden: 'true',
+    },
+    [
+      createElement('legend', { className: 'editor-cutout-label' }, ['Select']),
+      createElement(
+        'div',
+        { className: 'editor-cutout-segmented' },
+        scopes.map(({ value, label, title }) => {
+          const id = `ai-click-scope-${value}`;
+          const input = /** @type {HTMLInputElement} */ (
+            createElement('input', { type: 'radio', name: 'ai-click-scope', id, value })
+          );
+          cleanups.push(
+            on(input, 'change', () => {
+              if (input.checked) handlers.onSetAiParams?.({ clickScope: value });
+            }),
+          );
+          return createElement('label', { className: 'editor-cutout-segment', for: id, title }, [
+            input,
+            createElement('span', {}, [label]),
+          ]);
+        }),
+      ),
+    ],
+  );
+  const lostGo = createElement(
+    'button',
+    { type: 'button', id: 'ai-click-lost-go', className: 'editor-cutout-status-btn' },
+    ['Go there'],
+  );
+  cleanups.push(on(lostGo, 'click', () => handlers.onGoToLostFrame?.()));
+  const clickLost = createElement(
+    'div',
+    {
+      className: 'editor-cutout-alert editor-cutout-alert--warn click-select-lost',
+      id: 'ai-click-lost',
+      role: 'status',
+      hidden: 'true',
+    },
+    [createElement('p', { id: 'ai-click-lost-text' }), lostGo],
+  );
+
   const aiSection = createElement(
     'div',
     { className: 'editor-cutout-section', id: 'ai-section', hidden: 'true' },
-    [statusSlot, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
+    [statusSlot, clickScope, clickLost, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
   );
 
   // --- Color settings ---
@@ -991,6 +1112,8 @@ export function canResetBackground(state) {
     const defaults = createDefaultAiCutout();
     return (
       ai.picks.length > 0 ||
+      // Whole / Part only shows (and counts) with click to select
+      (getAiModelId(ai) === 'click' && ai.clickScope !== defaults.clickScope) ||
       ai.threshold !== defaults.threshold ||
       ai.edge !== defaults.edge ||
       ai.smoothing !== defaults.smoothing
@@ -1082,13 +1205,30 @@ export function updateBackgroundPanel(container, state, fps) {
   /** @type {HTMLButtonElement} */ (q(root, '#background-reset')).disabled =
     !canResetBackground(state);
 
+  const click = isAi && getAiModelId(ai) === 'click';
   let toolsHint = '';
   if (isAi && full) {
     toolsHint = `The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached. Remove one to add another.`;
+  } else if (click && ai.picks.length === 0) {
+    toolsHint = 'Click the thing you want to keep in the preview.';
+  } else if (click) {
+    toolsHint = 'Keep or Remove adds a point to fix the selection.';
   } else if (isAi && ai.picks.length === 0 && state.aiPickTool === null) {
     toolsHint = 'Keep or Remove, then click a character in the preview.';
   }
   setText(q(root, '#background-tools-hint'), toolsHint);
+
+  // Click to select: Whole / Part once something is selected, lost frames
+  const scope = q(root, '#ai-click-scope');
+  setHidden(scope, !(click && ai.picks.length > 0));
+  setChecked(q(root, '#ai-click-scope-whole'), ai.clickScope !== 'part');
+  setChecked(q(root, '#ai-click-scope-part'), ai.clickScope === 'part');
+  const lostFrames = click ? getLostFramesInSelection(status, state.selectedRange) : [];
+  const lostText = isAnalysisRunning(status?.phase ?? 'idle')
+    ? ''
+    : getLostFramesText(lostFrames, fps);
+  setHidden(q(root, '#ai-click-lost'), lostText === '');
+  setText(q(root, '#ai-click-lost-text'), lostText);
 
   const list = /** @type {HTMLElement} */ (q(root, '#ai-pick-list'));
   updatePickList(list, isAi ? ai.picks : [], fps, q(root, '#ai-pick-keep'));
@@ -1111,14 +1251,26 @@ function updateAiSettings(root, state, _fps) {
   const running = isAnalysisRunning(status.phase);
   const frames = state.clip?.frames ?? [];
   const modelId = getAiModelId(background.ai);
+  const click = modelId === 'click';
   const cover = getAnalysisCoverage(frames, state.selectedRange, { modelId });
-  const line = describeAiStatus({
-    running,
-    pending: cover.pendingInSelection,
-    analyzed: cover.analyzedInClip,
-    total: cover.clipFrames,
-    status,
-  });
+  const { start, end } = state.selectedRange;
+  const selection = cover.selectionFrames.length;
+  const line = click
+    ? describeClickStatus({
+        running,
+        pending: cover.pendingInSelection,
+        tracked: Math.max(0, selection - cover.pendingInSelection),
+        selection,
+        clicks: background.ai.picks.filter((p) => p.frame >= start && p.frame <= end).length,
+        status: { ...status, lostFrames: getLostFramesInSelection(status, state.selectedRange) },
+      })
+    : describeAiStatus({
+        running,
+        pending: cover.pendingInSelection,
+        analyzed: cover.analyzedInClip,
+        total: cover.clipFrames,
+        status,
+      });
   const slot = q(root, '#ai-status');
   if (slot.getAttribute('data-kind') !== line.kind) slot.setAttribute('data-kind', line.kind);
   setText(q(root, '#ai-status-text'), line.text);
@@ -1134,12 +1286,14 @@ function updateAiSettings(root, state, _fps) {
   setHidden(q(root, '#ai-cancel'), !running);
   const analyzeBtn = /** @type {HTMLButtonElement} */ (q(root, '#ai-analyze'));
   const pending = cover.pendingInSelection;
-  setHidden(analyzeBtn, running || pending === 0);
+  // Click to select tracks only once something was clicked
+  setHidden(analyzeBtn, running || pending === 0 || (click && line.kind === 'hint'));
   const ready = getModelReadiness(modelId, status.models?.[modelId]).ready;
-  setText(analyzeBtn, ready ? 'Analyze' : `Analyze (↓ ${getModelSizeLabel(modelId)})`);
+  const verb = click ? 'Track' : 'Analyze';
+  setText(analyzeBtn, ready ? verb : `${verb} (↓ ${getModelSizeLabel(modelId)})`);
   analyzeBtn.setAttribute(
     'aria-label',
-    `Analyze ${pending} frame${pending === 1 ? '' : 's'}${ready ? '' : ` (downloads ${getModelSizeLabel(modelId)})`}`,
+    `${click ? 'Track through' : 'Analyze'} ${pending} frame${pending === 1 ? '' : 's'}${ready ? '' : ` (downloads ${getModelSizeLabel(modelId)})`}`,
   );
 
   // WebGPU warning: known missing adapter, an analysis stopped on it, or
@@ -1159,7 +1313,9 @@ function updateAiSettings(root, state, _fps) {
   // Only refused picks and cancellations: the outcome of an analysis is the
   // status line
   const notice =
-    running || error || /^Analyzed \d|already analyzed/.test(status.notice) ? '' : status.notice;
+    running || error || /^Analyzed \d|^Tracked \d|already analyzed/.test(status.notice)
+      ? ''
+      : status.notice;
   setText(q(root, '#ai-notice'), notice);
 
   const fit = /** @type {HTMLInputElement} */ (q(root, '#ai-fit'));

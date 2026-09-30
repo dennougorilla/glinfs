@@ -19,7 +19,7 @@ Trim your clip by selecting start and end frames. Crop and zoom to focus on spec
 ### Text and transparent backgrounds
 Add captions in the editor's **Text** panel: type the text, pick the font, size, fill and outline colors, an optional background box and the alignment, then drag the caption into place on the preview. **Start** / **End** (with "Set to playhead") choose which frames show it; **Whole clip** resets that. Captions are burned into the exported GIF.
 
-The **Background** tab asks **What do you want to keep?** and makes the rest transparent in the GIF. Pick a card: **Anime** (characters and illustrations), **Person** (real people, fast), **Anything** (people, pets and objects) or **Solid color** (a green screen or flat backdrop); **Off** keeps the whole frame. The preview shows the result right away. **Hold to compare** over the preview (or hold the `\` key) shows the original while held, and **Show mask** tints what is removed in red. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
+The **Background** tab asks **What do you want to keep?** and makes the rest transparent in the GIF. Pick a card: **Anime** (characters and illustrations), **Person** (real people, fast), **Anything** (people, pets and objects), **Something else** (click the thing you want to keep) or **Solid color** (a green screen or flat backdrop); **Off** keeps the whole frame. The preview shows the result right away. **Hold to compare** over the preview (or hold the `\` key) shows the original while held, and **Show mask** tints what is removed in red. GIF transparency is on or off per pixel, so soft edges are not preserved. Transparent GIFs are written with the JavaScript encoder.
 
 **Solid color** picks the most common edge color of the frame; the eyedropper (**Pick**) takes another one from the preview. **Similar colors** (Fewer … More) sets how close a color must be to go, and **Edges only** / **Everywhere** chooses between the backdrop connected to the frame border and every matching pixel.
 
@@ -33,6 +33,9 @@ The analysis needs WebGPU to be fast (under a second per frame on a recent GPU).
 **Fit** (Tighter … Looser) makes the cutout smaller or bigger: it sets the model's threshold and grows or shrinks the outline together. **Reduce flicker between frames** averages each frame with its neighbours. Both update the preview live while you drag. **Fix-ups**: **Keep** and **Remove** are tools on the preview; click a character to keep only the picked characters, or to remove them; each pick is followed through the whole clip, including the frames before it, and is listed with its time. **Brush** opens the Touch up mode (below) and **Reset** returns the adjustments, picks and brush strokes to the start. The active tool shows on its button, as the cursor over the preview and as a one-line hint on the preview. Frames that are not analyzed yet preview without the cutout; Export analyzes the exported frames that are still missing (with progress) before it encodes.
 
 **Settings → AI models** lists each model by what it is for (General, Anime) with the network behind it, its size, license and state: Not downloaded, Downloading, Downloaded, Loaded (ready in this visit) or Update available (the cached file is an older version). **Download** fetches a model ahead of time (with progress and Cancel; **Download all** fetches every missing one), verified exactly like a download started by an analysis; **Delete** removes it from the browser's cache after a confirmation (not while an analysis uses it). After a download glinfs asks the browser for persistent storage so the models are not cleared when space runs low; the section shows whether it was granted and how much storage the site uses. Files left in that cache by earlier versions (such as the fp32 anime model of the first AI cutout release) are listed as **Old model file** and can be deleted the same way.
+
+### Click to select
+**Something else** cuts out whatever you click, with MobileSAM (45 MB, Apache-2.0, asked before it downloads like the other cards). After choosing it, click the thing you want to keep on the preview: the frame on screen shows its mask within about half a second, then it is followed through the selection in the background (**Tracking 12 of 36 frames**, with **Cancel**). **Whole** / **Part** chooses between the whole thing and the part under the click (a click on a face gives the person, or just the face). **Keep** and **Remove** add points that fix the selection on the frame on screen; each change tracks again, reusing the frames already seen. When the object is lost (its outline suddenly changes size a lot), tracking stops there and says **Lost track at 0:02**; **Go there**, click it again and tracking continues from that frame in both directions. Fit, Reduce flicker, the brush, Hold to compare, Show mask and the export work as with the other cards.
 
 With **Prepare downloaded models when the editor opens** (on by default), opening the editor on a clip that uses an AI card prepares its model in the background when it is already downloaded, so **Analyze** starts at once; it never downloads anything by itself. A cached model is verified when it is downloaded, not on every load; a cached copy that fails to load is checked, and replaced by a fresh, verified download if it is damaged.
 
@@ -94,7 +97,7 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs one of three segmentation models in the browser with
+The AI cutout runs one of four models in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
@@ -106,8 +109,18 @@ The AI cutout runs one of three segmentation models in the browser with
   input, about 75 ms per frame on an M3 with WebGPU
 - **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
   model (`isnetis-fp16.onnx`, Apache-2.0, 88 MB; the default)
+- **Click to select**: [MobileSAM](https://github.com/ChaoningZhang/MobileSAM)
+  (Apache-2.0), two files shipped unchanged from the
+  [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) ONNX export:
+  `mobilesam-image-encoder.onnx` (28 MB, once per frame, about 250 ms on an
+  M3 with WebGPU) and `mobilesam-mask-decoder.onnx` (16.5 MB, per click or
+  tracked frame, about 35 ms). The worker keeps the image embeddings of the
+  last 24 frames it encoded, so a new click or Whole / Part on those frames
+  only reruns the decoder.
+  fp16 is not used: an fp16 encoder computes wrong embeddings on the WebGPU
+  backend.
 
-All three are fp16 conversions of the upstream fp32 files (176, 179 and 26 MB):
+The first three are fp16 conversions of the upstream fp32 files (176, 179 and 26 MB):
 half the download, and faster on WebGPU, with the same masks for practical
 purposes (see below). They are described once in
 `src/features/ai-cutout/model-registry.js` (the shipped file's size and

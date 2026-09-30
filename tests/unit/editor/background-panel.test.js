@@ -11,10 +11,13 @@ import {
   aiFromFit,
   canResetBackground,
   describeAiStatus,
+  describeClickStatus,
   describeFit,
   FIT_STEPS,
   fitFromAi,
   getDownloadPrompt,
+  getLostFramesInSelection,
+  getLostFramesText,
   getModelReadiness,
   getModelTooltip,
   getSubject,
@@ -81,6 +84,7 @@ beforeEach(() => {
     onAiAllowWasm: vi.fn(),
     onRemoveAiPick: vi.fn(),
     onFrameChange: vi.fn(),
+    onGoToLostFrame: vi.fn(),
   };
   document.body.innerHTML = '';
   root = document.createElement('div');
@@ -112,12 +116,19 @@ describe('subjects', () => {
     expect(cardModels.sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
   });
 
-  it('is one labelled radio group: Off and the four cards', () => {
+  it('is one labelled radio group: Off and the five cards', () => {
     const group = $('#background-subject');
     expect(group.getAttribute('aria-labelledby')).toBe('background-subject-title');
     expect($('#background-subject-title').textContent).toBe('What do you want to keep?');
     const radios = [...group.querySelectorAll('input[type="radio"]')];
-    expect(radios.map((r) => r.value)).toEqual(['none', 'anime', 'portrait', 'general', 'color']);
+    expect(radios.map((r) => r.value)).toEqual([
+      'none',
+      'anime',
+      'portrait',
+      'general',
+      'click',
+      'color',
+    ]);
     expect(new Set(radios.map((r) => r.name)).size).toBe(1);
     for (const radio of radios) {
       expect(root.querySelector(`label[for="${radio.id}"]`)?.contains(radio)).toBe(true);
@@ -439,5 +450,120 @@ describe('fix-up tools', () => {
         control.textContent?.trim();
       expect(named, id || control.outerHTML).toBeTruthy();
     }
+  });
+});
+
+describe('click to select ("Something else")', () => {
+  const clickState = (/** @type {Record<string, unknown>} */ ai = {}, over = {}) =>
+    makeState({ enabled: true, method: 'ai', ai: { model: 'click', ...ai } }, over);
+
+  it('has its own card with a download question naming the model', () => {
+    const card = SUBJECT_CARDS.find((c) => c.value === 'click');
+    expect(card).toMatchObject({
+      label: 'Something else',
+      hint: 'Click it to select',
+      model: 'click',
+    });
+    expect(getSubject(clickState().edits.background)).toBe('click');
+    expect(getSubjectModel('click')).toBe('click');
+    expect(getDownloadPrompt('click')).toEqual({
+      title: 'Download 45 MB?',
+      detail:
+        'The Click to select model (MobileSAM) runs in this browser. It downloads once and stays on this device; your frames never leave it.',
+    });
+  });
+
+  it('describes the status: a click first, then tracking, lost frames and done', () => {
+    const status = createAiCutoutStatus();
+    const base = { running: false, pending: 5, tracked: 0, selection: 5, clicks: 0, status };
+    expect(describeClickStatus(base)).toEqual({
+      kind: 'hint',
+      text: 'Click the thing you want to keep',
+    });
+    expect(
+      describeClickStatus({
+        ...base,
+        running: true,
+        status: { ...status, phase: 'analyzing', framesDone: 2, framesTotal: 5 },
+      }),
+    ).toEqual({ kind: 'running', text: 'Tracking 2 of 5 frames' });
+    expect(describeClickStatus({ ...base, clicks: 1, pending: 2, tracked: 3 })).toEqual({
+      kind: 'pending',
+      text: '2 frames not tracked',
+    });
+    expect(
+      describeClickStatus({
+        ...base,
+        clicks: 1,
+        pending: 2,
+        tracked: 3,
+        status: { ...status, lostFrames: [3] },
+      }),
+    ).toEqual({ kind: 'pending', text: '3 of 5 frames tracked' });
+    expect(describeClickStatus({ ...base, clicks: 1, pending: 0, tracked: 5 })).toEqual({
+      kind: 'done',
+      text: 'Tracked through 5 frames',
+    });
+  });
+
+  it('says where tracking lost the object', () => {
+    expect(getLostFramesText([], 10)).toBe('');
+    expect(getLostFramesText([20], 10)).toMatch(
+      /^Lost track at .+\. Click it there to keep going\.$/,
+    );
+    expect(getLostFramesText([20, 31], 10)).toMatch(/^Lost track at 2 places, first at /);
+  });
+
+  it('shows Whole / Part once something is clicked, and the lost note with Go there', () => {
+    updateBackgroundPanel(root, clickState(), 10);
+    expect($('#ai-click-scope').hidden).toBe(true);
+    expect($('#ai-status-text').textContent).toBe('Click the thing you want to keep');
+    expect($('#ai-analyze').hidden).toBe(true);
+    expect($('#background-tools-hint').textContent).toBe(
+      'Click the thing you want to keep in the preview.',
+    );
+
+    const picked = clickState(
+      { picks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }], clickScope: 'part' },
+      { aiCutout: { ...createAiCutoutStatus(), lostFrames: [0] } },
+    );
+    updateBackgroundPanel(root, picked, 10);
+    expect($('#ai-click-scope').hidden).toBe(false);
+    expect($('#ai-click-scope-part').checked).toBe(true);
+    expect($('#ai-click-scope-whole').checked).toBe(false);
+    expect($('#ai-click-lost').hidden).toBe(false);
+    expect($('#ai-click-lost-text').textContent).toMatch(/^Lost track at /);
+    fire($('#ai-click-lost-go'), 'click');
+    expect(handlers.onGoToLostFrame).toHaveBeenCalled();
+    $('#ai-click-scope-whole').checked = true;
+    fire($('#ai-click-scope-whole'), 'change');
+    expect(handlers.onSetAiParams).toHaveBeenLastCalledWith({ clickScope: 'whole' });
+    // Part differs from the default: Reset has something to do
+    expect(canResetBackground(picked)).toBe(true);
+    expect(canResetBackground(clickState({ clickScope: 'part' }))).toBe(true);
+  });
+
+  it('Part left over from click to select does not count for Reset with another model', () => {
+    const general = makeState({
+      enabled: true,
+      method: 'ai',
+      ai: { model: 'general', clickScope: 'part' },
+    });
+    expect(canResetBackground(general)).toBe(false);
+  });
+
+  it('lost frames outside the selection (it changed since tracking) are not shown', () => {
+    const status = { ...createAiCutoutStatus(), lostFrames: [2, 8] };
+    expect(getLostFramesInSelection(status, { start: 0, end: 5 })).toEqual([2]);
+    expect(getLostFramesInSelection(status, { start: 3, end: 5 })).toEqual([]);
+    expect(getLostFramesInSelection(null, { start: 0, end: 5 })).toEqual([]);
+
+    const narrowed = clickState(
+      { picks: [{ frame: 4, x: 0.5, y: 0.5, mode: 'keep' }] },
+      { aiCutout: status, selectedRange: { start: 3, end: 5 } },
+    );
+    updateBackgroundPanel(root, narrowed, 10);
+    expect($('#ai-click-lost').hidden).toBe(true);
+    expect($('#ai-status-text').textContent).not.toMatch(/of 3 frames tracked/);
   });
 });
