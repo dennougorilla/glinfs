@@ -1,5 +1,5 @@
 /**
- * Downloaded models in Cache Storage (main thread, Settings)
+ * AI models in Cache Storage (main thread, Settings)
  * @module features/ai-cutout/model-cache
  *
  * The segmentation worker keeps each verified model in Cache Storage under

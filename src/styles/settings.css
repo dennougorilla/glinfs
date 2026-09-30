@@ -190,7 +190,7 @@
   color: var(--color-text-secondary);
 }
 
-/* Downloaded models (AI cutout): rows reuse .settings-item */
+/* AI models (AI cutout): rows reuse .settings-item */
 .settings-screen .settings-models-intro,
 .settings-screen .settings-models-status {
   margin: 0;
