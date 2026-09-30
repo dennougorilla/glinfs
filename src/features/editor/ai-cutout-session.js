@@ -421,10 +421,18 @@ export function createAiCutoutSession(options) {
       ...(click ? { lostFrames: [] } : {}),
     });
     /** @param {import('../ai-cutout/segmentation-manager.js').AnalysisProgress} progress */
+    let firstMaskShown = false;
     const onProgress = (progress) => {
       if (disposed || analysisController !== controller) return;
       if (progress.phase === 'analyzing' && analyzingSince === null) {
         analyzingSince = now();
+      }
+      if (click && !firstMaskShown && progress.framesDone > 0) {
+        // The clicked frame's mask: show it now, not after the store debounce
+        // and the rebuild cooldown of a running analysis
+        firstMaskShown = true;
+        clearCooldown();
+        requestBuild();
       }
       report({
         phase: progress.phase,

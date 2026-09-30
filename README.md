@@ -114,8 +114,9 @@ The AI cutout runs one of four models in the browser with
   [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) ONNX export:
   `mobilesam-image-encoder.onnx` (28 MB, once per frame, about 250 ms on an
   M3 with WebGPU) and `mobilesam-mask-decoder.onnx` (16.5 MB, per click or
-  tracked frame, about 35 ms). The worker keeps the last 24 frames' image
-  embeddings, so a new click or Whole / Part only reruns the decoder there.
+  tracked frame, about 35 ms). The worker keeps the image embeddings of the
+  last 24 frames it encoded, so a new click or Whole / Part on those frames
+  only reruns the decoder.
   fp16 is not used: an fp16 encoder computes wrong embeddings on the WebGPU
   backend.
 
