@@ -768,3 +768,40 @@ describe('createFinalMaskCache', () => {
     expect(cache.peek({ ...base, storeVersion: 42 })).toBe(next);
   });
 });
+
+describe('click to select (the picks are the model prompts)', () => {
+  it('ignores the picks in the build and the key: the masks already are what was clicked', async () => {
+    const w = 20;
+    const h = 10;
+    // Two separate blobs; a region pick on the left one would drop the right one
+    const prob = probOf(w, h, [
+      [1, 1, 4, 4],
+      [12, 1, 4, 4],
+    ]);
+    const picks = [{ frame: 0, x: 0.1, y: 0.2, mode: /** @type {const} */ ('keep') }];
+    const region = await buildFinalMasks({
+      frameCount: 1,
+      getProb: () => prob,
+      ai: aiOf({ model: 'general', picks }),
+      ...noYield,
+    });
+    const click = await buildFinalMasks({
+      frameCount: 1,
+      getProb: () => prob,
+      ai: aiOf({ model: 'click', picks }),
+      ...noYield,
+    });
+    const bit = (/** @type {any} */ m, /** @type {number} */ x, /** @type {number} */ y) => {
+      const i = y * w + x;
+      return (m.bits[i >> 3] >> (7 - (i & 7))) & 1;
+    };
+    expect(bit(region.masks[0], 13, 2)).toBe(0);
+    expect(bit(click.masks[0], 13, 2)).toBe(1);
+    expect(getAiParamsKey(aiOf({ model: 'click', picks }))).toBe(
+      getAiParamsKey(aiOf({ model: 'click', picks: [] })),
+    );
+    expect(getAiParamsKey(aiOf({ model: 'click' }))).not.toBe(
+      getAiParamsKey(aiOf({ model: 'general' })),
+    );
+  });
+});

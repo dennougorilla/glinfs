@@ -15,11 +15,15 @@ import {
 import {
   buildGeneralStubModel,
   buildPortraitStubModel,
+  buildSamDecoderStubModel,
+  buildSamEncoderStubModel,
   buildStubModel,
   encodeVarint,
   STUB_GENERAL_MODEL_PATH,
   STUB_MODEL_PATH,
   STUB_PORTRAIT_MODEL_PATH,
+  STUB_SAM_DECODER_PATH,
+  STUB_SAM_ENCODER_PATH,
 } from '../../../scripts/generate-stub-seg-model.mjs';
 import {
   DEFAULT_MODEL_ID,
@@ -36,7 +40,12 @@ import {
   MODEL_REGISTRY,
   MODEL_RELEASE_URL,
 } from '../../../src/features/ai-cutout/model-config.js';
-import { formatModelSize } from '../../../src/features/ai-cutout/model-registry.js';
+import {
+  formatModelSize,
+  getModelFiles,
+  isSamEntry,
+  isSamModelId,
+} from '../../../src/features/ai-cutout/model-registry.js';
 import {
   createAbortError,
   fromErrorPayload,
@@ -137,12 +146,80 @@ describe('model registry', () => {
     expect(getModelEntry('anime').licenseNote).toBeUndefined();
   });
 
+  it('pins MobileSAM (Click to select) as one model of two files shipped unchanged', () => {
+    const entry = getModelEntry('click');
+    expect(entry).toMatchObject({
+      kind: 'sam',
+      label: 'Click to select',
+      modelName: 'MobileSAM',
+      bytes: 28_157_093 + 16_496_559,
+      license: { name: 'Apache-2.0' },
+      upstream: 'https://github.com/ChaoningZhang/MobileSAM',
+      inputSize: 1024,
+    });
+    expect(isSamEntry(entry)).toBe(true);
+    expect(isSamModelId('click')).toBe(true);
+    expect(isSamModelId('anime')).toBe(false);
+    expect(formatModelSize(entry.bytes)).toBe('45 MB');
+    const files = getModelFiles(entry);
+    expect(files.map((f) => [f.role, f.fileName, f.bytes, f.sha256])).toEqual([
+      [
+        'encoder',
+        'mobilesam-image-encoder.onnx',
+        28_157_093,
+        '580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749',
+      ],
+      [
+        'decoder',
+        'mobilesam-mask-decoder.onnx',
+        16_496_559,
+        '8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe',
+      ],
+    ]);
+    for (const file of files) {
+      // Shipped unchanged: the upstream pin is the shipped file
+      expect(file.convertedFrom).toMatchObject({
+        repo: 'Acly/MobileSAM',
+        revision: '0d3b403339b4674a82493d5e97964dd78089ddc8',
+        bytes: file.bytes,
+        sha256: file.sha256,
+      });
+      expect(Object.isFrozen(file)).toBe(true);
+    }
+    expect(getUpstreamModelUrl(files[1])).toBe(
+      'https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/sam_mask_decoder_multi.onnx',
+    );
+    expect(getModelSpec('click', '/glinfs/')).toEqual({
+      id: 'click',
+      kind: 'sam',
+      bytes: 44_653_652,
+      files: [
+        {
+          role: 'encoder',
+          url: '/glinfs/models/mobilesam-image-encoder.onnx',
+          bytes: 28_157_093,
+          sha256: files[0].sha256,
+        },
+        {
+          role: 'decoder',
+          url: '/glinfs/models/mobilesam-mask-decoder.onnx',
+          bytes: 16_496_559,
+          sha256: files[1].sha256,
+        },
+      ],
+      inputSize: 1024,
+      maxPoints: 32,
+    });
+    expect(getModelUrl('click', '/')).toBe('/models/mobilesam-image-encoder.onnx');
+  });
+
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
-    // UI order: General left/top, Portrait, Anime right/bottom
-    expect(ids).toEqual(['general', 'portrait', 'anime']);
-    expect(new Set(MODEL_REGISTRY.map((e) => e.fileName)).size).toBe(ids.length);
-    for (const entry of MODEL_REGISTRY) {
+    // UI order: General left/top, Portrait, Anime, then Click to select
+    expect(ids).toEqual(['general', 'portrait', 'anime', 'click']);
+    const fileNames = MODEL_REGISTRY.flatMap((e) => getModelFiles(e).map((f) => f.fileName));
+    expect(new Set(fileNames).size).toBe(fileNames.length);
+    for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
       expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(entry.convertedFrom.sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -212,18 +289,20 @@ describe('model registry', () => {
 });
 
 describe('model-config', () => {
-  it('feeds scripts/fetch-models.mjs from the registry (one release asset per model)', () => {
-    expect(MODELS).toHaveLength(MODEL_REGISTRY.length);
-    for (const entry of MODEL_REGISTRY) {
-      const pin = MODELS.find((m) => m.fileName === entry.fileName);
+  it('feeds scripts/fetch-models.mjs from the registry (one release asset per model file)', () => {
+    const files = MODEL_REGISTRY.flatMap((entry) => getModelFiles(entry));
+    expect(MODELS).toHaveLength(files.length);
+    expect(MODELS).toHaveLength(MODEL_REGISTRY.length + 1); // MobileSAM has two files
+    for (const file of files) {
+      const pin = MODELS.find((m) => m.fileName === file.fileName);
       expect(pin).toEqual({
-        fileName: entry.fileName,
-        url: getModelDownloadUrl(entry),
-        bytes: entry.bytes,
-        sha256: entry.sha256,
+        fileName: file.fileName,
+        url: getModelDownloadUrl(file),
+        bytes: file.bytes,
+        sha256: file.sha256,
       });
       // The asset name is the local file name
-      expect(getModelDownloadUrl(entry)).toBe(`${MODEL_RELEASE_URL}/${entry.fileName}`);
+      expect(getModelDownloadUrl(file)).toBe(`${MODEL_RELEASE_URL}/${file.fileName}`);
     }
     expect(MODEL_RELEASE_URL).toBe(
       'https://github.com/dennougorilla/glinfs/releases/download/models-v1',
@@ -239,7 +318,9 @@ describe('model-config', () => {
   it('converts from the same upstream files to the same asset names as scripts/convert-models-fp16.py', () => {
     const script = repoFile('scripts/convert-models-fp16.py');
     const flat = script.replace(/"\s*\n\s*"/g, ''); // join Python's implicit string concatenation
-    for (const entry of MODEL_REGISTRY) {
+    // MobileSAM ships unchanged: not in the conversion script
+    expect(flat).not.toContain('"id": "click"');
+    for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
       const { bytes, sha256 } = entry.convertedFrom;
       expect(flat).toContain(`"id": "${entry.id}"`);
       expect(flat).toContain(`"asset": "${entry.fileName}"`);
@@ -257,11 +338,12 @@ describe('model-config', () => {
     const workflow = repoFile('.github/workflows/deploy.yml');
     const hashes = workflow.match(/[0-9a-f]{64}/g) ?? [];
     // Each hash appears in the cache key and in the final check
-    expect(hashes.length).toBeGreaterThanOrEqual(2 * MODEL_REGISTRY.length);
-    expect(new Set(hashes)).toEqual(new Set(MODEL_REGISTRY.map((e) => e.sha256)));
-    for (const entry of MODEL_REGISTRY) {
-      expect(workflow).toContain(`public/models/${entry.fileName}`);
-      expect(workflow).toContain(`check ${entry.fileName} ${entry.sha256}`);
+    const files = MODEL_REGISTRY.flatMap((entry) => getModelFiles(entry));
+    expect(hashes.length).toBeGreaterThanOrEqual(2 * files.length);
+    expect(new Set(hashes)).toEqual(new Set(files.map((f) => f.sha256)));
+    for (const file of files) {
+      expect(workflow).toContain(`public/models/${file.fileName}`);
+      expect(workflow).toContain(`check ${file.fileName} ${file.sha256}`);
     }
     expect(workflow.indexOf('npm run models:fetch')).toBeLessThan(
       workflow.indexOf('npm run build'),
@@ -269,7 +351,7 @@ describe('model-config', () => {
     // The Pages artifact must stay under 1 GB
     expect(workflow).toContain('-ge 1000000000');
     const total = MODEL_REGISTRY.reduce((sum, e) => sum + e.bytes, 0);
-    expect(total).toBeLessThan(200_000_000);
+    expect(total).toBeLessThan(250_000_000);
   });
 
   it('serves each model same-origin under the base path', () => {
@@ -285,6 +367,14 @@ describe('model-config', () => {
       url: '/glinfs/models/isnetis-fp16.onnx',
       bytes: 88_070_957,
       sha256: ANIME_SHA256,
+      files: [
+        {
+          role: 'model',
+          url: '/glinfs/models/isnetis-fp16.onnx',
+          bytes: 88_070_957,
+          sha256: ANIME_SHA256,
+        },
+      ],
       inputName: 'img',
       outputName: 'mask',
       inputSize: 1024,
@@ -344,6 +434,29 @@ describe('scripts/generate-stub-seg-model.mjs', () => {
     expect(
       Buffer.from(buildPortraitStubModel()).equals(readFileSync(STUB_PORTRAIT_MODEL_PATH)),
     ).toBe(true);
+  });
+
+  it('reproduces the click-to-select stubs and gives them MobileSAM’s names', () => {
+    const encoder = Buffer.from(buildSamEncoderStubModel());
+    const decoder = Buffer.from(buildSamDecoderStubModel());
+    expect(encoder.equals(readFileSync(STUB_SAM_ENCODER_PATH))).toBe(true);
+    expect(decoder.equals(readFileSync(STUB_SAM_DECODER_PATH))).toBe(true);
+    for (const token of ['input_image', 'image_embeddings', 'Resize', 'Expand']) {
+      expect(encoder.toString('latin1')).toContain(token);
+    }
+    for (const token of [
+      'image_embeddings',
+      'point_coords',
+      'point_labels',
+      'mask_input',
+      'has_mask_input',
+      'orig_im_size',
+      'masks',
+      'iou_predictions',
+      'low_res_masks',
+    ]) {
+      expect(decoder.toString('latin1')).toContain(token);
+    }
   });
 
   it('names the same input/output and op as documented', () => {

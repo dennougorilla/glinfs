@@ -23,6 +23,15 @@
  * Unloading a model waits for its frames still in the worker — a cancelled
  * job's finished frames are valid masks that the manager keeps.
  *
+ * A click-to-select (SAM) model is driven by analyzeClick() instead: the
+ * clicks (the edits' picks) are turned into a mask on every frame of the
+ * selection by click-tracker.js, one prompt at a time; each prompt sends
+ * the frame resized for the encoder (the worker skips encoding a frame
+ * whose embedding it still has) and gets SAM's four candidate masks back.
+ * The chosen masks go into the same mask store under (model 'click',
+ * frame), so the rest of the pipeline (Fit, smoothing, touch-ups, export)
+ * reads them like any model's.
+ *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
  * resolution for a letterbox model, to the square model input for a stretch
@@ -32,8 +41,9 @@
  */
 
 import { getDrawableSource } from '../../shared/utils/canvas.js';
+import { trackClicks } from './click-tracker.js';
 import { getSharedMaskStore } from './mask-store.js';
-import { DEFAULT_MODEL_ID, getModelSpec } from './model-config.js';
+import { DEFAULT_MODEL_ID, getModelSpec, getSpecFiles } from './model-config.js';
 import { requestPersistentStorage } from './model-storage.js';
 import { computeMaskSize } from './preprocess.js';
 import {
@@ -42,6 +52,7 @@ import {
   SegmentationError,
   SegmentationErrorCode,
 } from './protocol.js';
+import { buildPromptInputs, getEncoderSize } from './sam-prompts.js';
 
 /**
  * @typedef {import('../capture/types.js').Frame} Frame
@@ -84,6 +95,36 @@ import {
  */
 
 /**
+ * @typedef {Object} ClickAnalyzeOptions
+ * @property {{ start: number, end: number }} range - Selection (inclusive clip indices)
+ * @property {number} currentFrame - Frame on screen (worked on first)
+ * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} picks
+ * @property {'whole' | 'part'} [scope]
+ * @property {(progress: AnalysisProgress) => void} [onProgress]
+ * @property {AbortSignal} [signal]
+ * @property {boolean} [allowWasm=false]
+ * @property {string} [clipId]
+ * @property {string} [modelId] - A SAM model (default 'click')
+ * @property {() => boolean} [superseded] - On a cancel: whether a run with
+ *   new clicks follows at once (see trackClicks)
+ */
+
+/**
+ * @typedef {Object} ClickAnalyzeResult
+ * @property {number} tracked - Frames that got a mask
+ * @property {number[]} lost - Frames where the object was lost (need a click)
+ * @property {number} anchors - Clicked frames inside the selection
+ * @property {SegmentationBackend | null} backend
+ */
+
+/**
+ * @typedef {Object} PromptResult
+ * @property {{ data: Uint8Array, width: number, height: number, score: number, index: number }[]} candidates
+ * @property {number} totalMs
+ * @property {boolean} cached - The frame's embedding was reused
+ */
+
+/**
  * @typedef {Object} Capabilities
  * @property {boolean} webgpu - A WebGPU adapter is available
  */
@@ -95,7 +136,8 @@ import {
  * @property {{ vendor: string, architecture: string, description: string } | null} adapter
  * @property {boolean} fromCache
  * @property {number} modelBytes - Size of the loaded model
- * @property {'letterbox' | 'stretch'} resize - How frames become the model input
+ * @property {'letterbox' | 'stretch' | 'sam'} resize - How frames become the model
+ *   input ('sam': long side resized to inputSize, click-to-select)
  * @property {number} inputSize - Side of the square model input
  * @property {{ loadMs: number, createMs: number, warmupMs?: number | null }} timings
  */
@@ -116,13 +158,14 @@ export const MAX_FRAMES_IN_FLIGHT = 2;
 
 /**
  * DEV/E2E override of the model specs: `sha256`/`bytes` apply to every
- * model unless `models[id]` names that model's own (the stubs), `allowWasm`
+ * single-file model unless `models[id]` names that model's own (the stubs;
+ * a multi-file model names each file's in `models[id].files`), `allowWasm`
  * runs the WASM fallback without asking, `fetchAllOutputs` makes the
  * worker fetch every graph output (to measure what side outputs cost).
  * @typedef {Object} DevModelOverride
  * @property {string} [sha256]
  * @property {number} [bytes]
- * @property {Record<string, { sha256?: string, bytes?: number }>} [models]
+ * @property {Record<string, { sha256?: string, bytes?: number, files?: { sha256?: string, bytes?: number }[] }>} [models]
  * @property {boolean} [allowWasm]
  * @property {boolean} [fetchAllOutputs]
  */
@@ -148,6 +191,40 @@ export function setDevModelOverride(override) {
 }
 
 /**
+ * `spec` with the DEV override applied (the stubs' sizes and hashes).
+ * @param {ModelSpec} spec
+ * @param {DevModelOverride} override
+ * @returns {ModelSpec}
+ */
+export function applyModelOverride(spec, override) {
+  const own = override.models?.[spec.id];
+  const fetchAllOutputs = Boolean(override.fetchAllOutputs);
+  const specFiles = getSpecFiles(spec);
+  if (specFiles.length > 1) {
+    const files = specFiles.map((file, i) => ({
+      ...file,
+      sha256: own?.files?.[i]?.sha256 ?? file.sha256,
+      bytes: own?.files?.[i]?.bytes ?? file.bytes,
+    }));
+    return {
+      ...spec,
+      files,
+      bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+      fetchAllOutputs,
+    };
+  }
+  const sha256 = own?.sha256 ?? override.sha256 ?? spec.sha256;
+  const bytes = own?.bytes ?? override.bytes ?? spec.bytes;
+  return {
+    ...spec,
+    sha256,
+    bytes,
+    files: specFiles.map((file) => ({ ...file, sha256: sha256 ?? file.sha256, bytes })),
+    fetchAllOutputs,
+  };
+}
+
+/**
  * The spec a model loads with: `spec` itself, or in DEV the E2E override
  * applied to it (the stubs' size and hash).
  * @param {ModelSpec} spec
@@ -156,14 +233,8 @@ export function setDevModelOverride(override) {
  */
 function applyDevOverride(spec, allowWasm = false) {
   if (!import.meta.env.DEV || !devModelOverride) return { spec, allowWasm };
-  const own = devModelOverride.models?.[spec.id];
   return {
-    spec: {
-      ...spec,
-      sha256: own?.sha256 ?? devModelOverride.sha256 ?? spec.sha256,
-      bytes: own?.bytes ?? devModelOverride.bytes ?? spec.bytes,
-      fetchAllOutputs: Boolean(devModelOverride.fetchAllOutputs),
-    },
+    spec: applyModelOverride(spec, devModelOverride),
     allowWasm: allowWasm || Boolean(devModelOverride.allowWasm),
   };
 }
@@ -268,9 +339,10 @@ function createScaledBitmap(source, width, height) {
 
 /**
  * @typedef {Object} PendingRequest
- * @property {(result: { totalMs: number, inferenceMs: number }) => void} resolve
+ * @property {(result: any) => void} resolve - { totalMs, inferenceMs } for a
+ *   frame, PromptResult for a prompt
  * @property {(error: unknown) => void} reject
- * @property {string} key
+ * @property {string} key - Mask store key ('' for a prompt: the tracker stores)
  * @property {string | undefined} clipId
  * @property {string} modelId
  * @property {Promise<unknown>} [done] - Settles with the request
@@ -530,6 +602,175 @@ export class SegmentationManager {
   }
 
   /**
+   * Click-to-select: turn the clicks into a mask on every frame of the
+   * selection (see click-tracker.js), storing them under (model, frame).
+   * Queued with analyzeFrames calls (one at a time). Without a click in
+   * the selection it only loads the model (downloading it if needed), so
+   * the first click answers at once.
+   * @param {Frame[]} frames - The whole clip
+   * @param {ClickAnalyzeOptions} options
+   * @returns {Promise<ClickAnalyzeResult>}
+   */
+  analyzeClick(frames, options) {
+    const modelId = options.modelId ?? 'click';
+    this.#markBusy(modelId, 1);
+    const previous = this.#tail;
+    const run = raceAbort(previous, options.signal).then(() =>
+      this.#analyzeClick(frames, { ...options, modelId }),
+    );
+    this.#tail = Promise.allSettled([previous, run]);
+    const settle = () => this.#markBusy(modelId, -1);
+    run.then(settle, settle);
+    return run;
+  }
+
+  /**
+   * @param {Frame[]} frames
+   * @param {ClickAnalyzeOptions & { modelId: string }} options
+   * @returns {Promise<ClickAnalyzeResult>}
+   */
+  async #analyzeClick(frames, options) {
+    const { onProgress, signal, allowWasm = false, clipId, modelId, range } = options;
+    if (signal?.aborted) throw createAbortError();
+    const start = Math.max(0, range.start);
+    const end = Math.min(frames.length - 1, range.end);
+    const total = Math.max(0, end - start + 1);
+    const ready = await this.#ensureReady(modelId, allowWasm, onProgress, signal, total);
+    this.#lastReady = ready;
+    const spec = /** @type {ModelSlot} */ (this.#slots.get(modelId)).spec;
+    const jobId = ++this.#jobSeq;
+    /** @type {Promise<unknown>[]} */
+    const submitted = [];
+    const released = () => clipId !== undefined && this.#releasedClips.has(clipId);
+    /** @param {number} framesDone @param {number | null} frameMs */
+    const report = (framesDone, frameMs) =>
+      onProgress?.({
+        phase: 'analyzing',
+        loadedBytes: ready.modelBytes,
+        totalBytes: ready.modelBytes,
+        fromCache: ready.fromCache,
+        framesDone,
+        framesTotal: total,
+        backend: ready.backend,
+        frameMs,
+      });
+    let lastMs = /** @type {number | null} */ (null);
+    try {
+      const result = await trackClicks({
+        range: { start, end },
+        currentFrame: options.currentFrame,
+        picks: options.picks,
+        scope: options.scope,
+        keyOf: (f) => frameKey(frames[f]),
+        prompt: async (f, prompt) => {
+          const request = this.#submitPrompt(jobId, frames[f], prompt, spec);
+          submitted.push(request);
+          const answer = await raceAbort(request, signal);
+          lastMs = answer.totalMs;
+          return answer.candidates;
+        },
+        store: (f, mask) => {
+          if (released()) return;
+          this.#maskStore.set(maskKey(frames[f], modelId), mask, clipId, modelId);
+        },
+        clear: (f) => {
+          this.#maskStore.delete(maskKey(frames[f], modelId));
+        },
+        peek: (f) => this.#maskStore.get(maskKey(frames[f], modelId)) ?? null,
+        superseded: options.superseded,
+        onProgress: ({ done }) => report(done, lastMs),
+        signal,
+      });
+      return { ...result, backend: ready.backend };
+    } catch (error) {
+      this.#cancelJob(jobId, submitted);
+      if (
+        error instanceof SegmentationError &&
+        error.code === SegmentationErrorCode.INFERENCE_FAILED
+      ) {
+        this.#teardown(error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Send one click-to-select prompt: the frame resized for the encoder
+   * (unused by the worker when it still has the frame's embedding) and
+   * the prompt as decoder inputs.
+   * @param {number} jobId
+   * @param {Frame} frame
+   * @param {{ points: import('./sam-prompts.js').SamPoint[], box: import('./sam-prompts.js').SamBox | null }} prompt
+   * @param {ModelSpec} spec
+   * @returns {Promise<PromptResult>}
+   */
+  async #submitPrompt(jobId, frame, prompt, spec) {
+    const source = getDrawableSource(frame);
+    if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
+      throw new SegmentationError(
+        SegmentationErrorCode.FRAME_UNAVAILABLE,
+        `Frame ${frame.id} has no pixels (its VideoFrame is closed)`,
+      );
+    }
+    const encoderSize = getEncoderSize(frame.width, frame.height, spec.inputSize);
+    const mask = computeMaskSize(frame.width, frame.height);
+    const { coords, labels } = buildPromptInputs({
+      points: prompt.points,
+      box: prompt.box,
+      encoderSize,
+      maxPoints: spec.maxPoints,
+    });
+    let bitmap;
+    try {
+      bitmap = await this.#createBitmap(source, encoderSize.width, encoderSize.height);
+    } catch (error) {
+      throw new SegmentationError(
+        SegmentationErrorCode.FRAME_UNAVAILABLE,
+        `Frame ${frame.id} could not be read: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const worker = this.#worker;
+    if (!worker || this.#cancelledJobs.has(jobId)) {
+      bitmap.close();
+      throw createAbortError();
+    }
+    const requestId = ++this.#requestSeq;
+    const modelId = spec.id;
+    /** @type {PendingRequest | undefined} */
+    let request;
+    /** @type {Promise<PromptResult>} */
+    const done = new Promise((resolve, reject) => {
+      request = { resolve, reject, key: '', clipId: undefined, modelId };
+      this.#requests.set(requestId, request);
+      try {
+        worker.postMessage(
+          {
+            type: 'prompt',
+            requestId,
+            jobId,
+            modelId,
+            frameKey: frameKey(frame),
+            bitmap,
+            encoderWidth: encoderSize.width,
+            encoderHeight: encoderSize.height,
+            maskWidth: mask.width,
+            maskHeight: mask.height,
+            coords,
+            labels,
+          },
+          [bitmap],
+        );
+      } catch (error) {
+        this.#requests.delete(requestId);
+        bitmap.close();
+        reject(error);
+      }
+    });
+    if (request) request.done = done.catch(() => undefined);
+    return done;
+  }
+
+  /**
    * @param {Frame[]} frames
    * @param {AnalyzeOptions} options
    * @returns {Promise<AnalyzeResult>}
@@ -717,7 +958,7 @@ export class SegmentationManager {
             adapter: data.adapter ?? null,
             fromCache: Boolean(data.fromCache),
             modelBytes: slot.spec.bytes,
-            resize: slot.spec.preprocess.resize,
+            resize: slot.spec.preprocess?.resize ?? 'sam',
             inputSize: slot.spec.inputSize,
             timings: data.timings,
           };
@@ -735,6 +976,23 @@ export class SegmentationManager {
         }
         case 'mask':
           this.#onMask(data);
+          break;
+        case 'prompt-result':
+          this.#settleRequest(data.requestId, (request) =>
+            request.resolve({
+              candidates: (data.masks ?? []).map(
+                (/** @type {ArrayBuffer} */ buffer, /** @type {number} */ index) => ({
+                  data: new Uint8Array(buffer),
+                  width: data.width,
+                  height: data.height,
+                  score: data.scores?.[index] ?? 0,
+                  index,
+                }),
+              ),
+              totalMs: data.totalMs,
+              cached: Boolean(data.cached),
+            }),
+          );
           break;
         case 'segment-error':
           this.#settleRequest(data.requestId, (request) =>

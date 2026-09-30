@@ -8,10 +8,10 @@
  * Both remove files in the output directory that are not registry models.
  *
  * The models (src/features/ai-cutout/model-registry.js: fp16 conversions
- * of the anime and the general IS-Net and of MODNet, Apache-2.0, about 88,
- * 90 and 13 MB) are too large for the repository, so each one is fetched
- * from its asset in
- * the `models-v1` GitHub Release and checked against a pinned size and
+ * of the anime and the general IS-Net and of MODNet, about 88, 90 and
+ * 13 MB, and MobileSAM's encoder and decoder, 28 + 16.5 MB, all Apache-2.0)
+ * are too large for the repository, so each file is fetched from its asset
+ * in the `models-v1` GitHub Release and checked against a pinned size and
  * SHA-256. Any mismatch deletes the file and exits non-zero, so a deploy
  * can never ship a different model. (scripts/convert-models-fp16.py
  * rebuilds the same bytes from the upstream Hugging Face files.)
@@ -33,7 +33,11 @@ import { dirname, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { getModelDownloadUrl, MODEL_REGISTRY } from '../src/features/ai-cutout/model-registry.js';
+import {
+  getModelDownloadUrl,
+  getModelFiles,
+  MODEL_REGISTRY,
+} from '../src/features/ai-cutout/model-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -45,13 +49,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @property {string} sha256 - Lowercase hex SHA-256
  */
 
-/** @type {ModelPin[]} */
-export const MODELS = MODEL_REGISTRY.map((entry) => ({
-  fileName: entry.fileName,
-  url: getModelDownloadUrl(entry),
-  bytes: entry.bytes,
-  sha256: entry.sha256,
-}));
+/** Every model file (a model of two files has two pins) @type {ModelPin[]} */
+export const MODELS = MODEL_REGISTRY.flatMap((entry) =>
+  getModelFiles(entry).map((file) => ({
+    fileName: file.fileName,
+    url: getModelDownloadUrl(file),
+    bytes: file.bytes,
+    sha256: file.sha256,
+  })),
+);
 
 /** Default output directory, served by Vite from publicDir */
 export const DEFAULT_OUT_DIR = resolve(__dirname, '../public/models');

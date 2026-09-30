@@ -185,7 +185,7 @@ export function describeDownloadResult(label, result) {
 export function renderAiModelsSection(cleanups, deps = {}) {
   // The key a model is cached under carries the hash its load verifies
   // (the DEV/E2E stub override included)
-  const cacheDeps = { getSha256: (/** @type {string} */ id) => resolveModelSpec(id).sha256 };
+  const cacheDeps = { getFiles: (/** @type {string} */ id) => resolveModelSpec(id).files };
   const list = deps.list ?? (() => listDownloadedModels(cacheDeps));
   const remove = deps.remove ?? ((id) => deleteDownloadedModel(id, cacheDeps));
   const removeFile = deps.removeFile ?? ((url) => deleteCachedFile(url));

@@ -772,13 +772,15 @@ function lastTargetSuggestion(state) {
  * @param {ParentNode} container
  * @param {number} missing - Exported frames without a mask
  * @param {number} total - Exported frames
+ * @param {boolean} [click] - Click to select (frames are tracked, not analyzed)
  */
-export function updateExportAiNote(container, missing, total) {
+export function updateExportAiNote(container, missing, total, click = false) {
   const note = container.querySelector('#export-ai-note');
   if (!(note instanceof HTMLElement)) return;
+  const [state, action] = click ? ['tracked', 'tracks'] : ['analyzed', 'analyzes'];
   const text =
     missing > 0
-      ? `${missing} of ${total} frames are not analyzed yet. Export analyzes them first (the editor previews them without the cutout).`
+      ? `${missing} of ${total} frames are not ${state} yet. Export ${action} them first (the editor previews them without the cutout).`
       : '';
   if (note.textContent !== text) note.textContent = text;
   note.hidden = text === '';

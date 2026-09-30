@@ -386,6 +386,26 @@ export async function evictCachedModel(spec, deps = {}) {
 }
 
 /**
+ * Whether a verified copy of a model file is in Cache Storage (under its
+ * current key). Never reads the bytes.
+ * @param {ModelSpec | import('./model-config.js').ModelFileSpec} spec
+ * @param {ModelLoaderDeps} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function hasCachedModel(spec, deps = {}) {
+  const { cacheStorage, cacheName, baseHref } = resolveDeps(deps);
+  const cache = await openCache(cacheStorage, cacheName);
+  if (!cache) return false;
+  try {
+    return (
+      (await cache.match(modelCacheKey(/** @type {ModelSpec} */ (spec), baseHref))) !== undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether bytes (a cached copy that failed to load) still have the pinned
  * size and SHA-256.
  * @param {Uint8Array} bytes

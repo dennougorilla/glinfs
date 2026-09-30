@@ -9,7 +9,9 @@ import {
   EDIT_LIMITS,
   getActiveTextLayers,
   getActiveTouchUps,
+  getRegionPicks,
   isAiCutoutActive,
+  isClickModel,
   isColorKeyActive,
   isEditsEmpty,
   limitStrokePoints,
@@ -28,7 +30,14 @@ describe('createDefaultEdits', () => {
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
-        ai: { model: 'anime', threshold: 0.5, smoothing: true, edge: 0, picks: [] },
+        ai: {
+          model: 'anime',
+          threshold: 0.5,
+          smoothing: true,
+          edge: 0,
+          picks: [],
+          clickScope: 'whole',
+        },
       },
       touchUps: [],
     });
@@ -358,7 +367,8 @@ describe('background method and AI cutout', () => {
     expect(ai({ model: 'isnetis' }).model).toBe('anime');
     expect(ai({ model: 7 }).model).toBe('anime');
     expect(ai({ model: 'portrait' }).model).toBe('portrait');
-    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait']);
+    expect(ai({ model: 'click' }).model).toBe('click');
+    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait', 'click']);
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {
@@ -543,5 +553,20 @@ describe('touch-ups (mask brush strokes)', () => {
     const edits = normalizeEdits({ touchUps: [valid] }, 5);
     expect(isEditsEmpty(edits)).toBe(true);
     expect(requiresTransparency({ edits })).toBe(false);
+  });
+});
+
+describe('click to select', () => {
+  it('keeps Whole / Part (default whole) and uses no region picks', () => {
+    const ai = (/** @type {unknown} */ input) =>
+      normalizeEdits({ background: { ai: input } }, 10).background.ai;
+    expect(ai({ model: 'click' }).clickScope).toBe('whole');
+    expect(ai({ model: 'click', clickScope: 'part' }).clickScope).toBe('part');
+    expect(ai({ model: 'click', clickScope: 'most' }).clickScope).toBe('whole');
+    const picks = [{ frame: 1, x: 0.5, y: 0.5, mode: 'keep' }];
+    expect(isClickModel(ai({ model: 'click' }))).toBe(true);
+    expect(isClickModel(ai({ model: 'anime' }))).toBe(false);
+    expect(getRegionPicks(ai({ model: 'click', picks }))).toEqual([]);
+    expect(getRegionPicks(ai({ model: 'anime', picks }))).toHaveLength(1);
   });
 });

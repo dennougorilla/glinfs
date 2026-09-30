@@ -118,6 +118,72 @@ export function installAiCutoutTestHooks(hooks) {
     },
 
     /**
+     * Click to select through the app's manager and worker: track `picks`
+     * over the active clip's frames `range` (default: all).
+     * @param {{ picks: { frame: number, x: number, y: number, mode: 'keep' | 'remove' }[], range?: { start: number, end: number }, currentFrame?: number, scope?: 'whole' | 'part', allowWasm?: boolean }} options
+     * @returns {Promise<Object>} Result, per-frame worker time and the phases
+     *   seen, or `{ error: { name, code, message } }`
+     */
+    async analyzeClickClip({ picks, range, currentFrame, scope = 'whole', allowWasm = false }) {
+      const clip = getClipPayload();
+      if (!clip) throw new Error('No active clip');
+      /** @type {number[]} */
+      const frameMs = [];
+      /** @type {string[]} */
+      const phases = [];
+      const startedAt = performance.now();
+      /** @type {number | null} */
+      let firstFrameAt = null;
+      const manager = getSegmentationManager();
+      try {
+        const result = await manager.analyzeClick(clip.frames, {
+          range: range ?? { start: 0, end: clip.frames.length - 1 },
+          currentFrame: currentFrame ?? picks[0]?.frame ?? 0,
+          picks,
+          scope,
+          allowWasm,
+          clipId: clip.id,
+          onProgress(/** @type {AnalysisProgress} */ progress) {
+            if (phases.at(-1) !== progress.phase) phases.push(progress.phase);
+            if (progress.frameMs !== null && progress.framesDone > 0) {
+              frameMs.push(progress.frameMs);
+              firstFrameAt ??= performance.now();
+            }
+          },
+        });
+        return {
+          ...result,
+          readyInfo: manager.getReadyInfo('click'),
+          frameMs,
+          phases,
+          totalMs: performance.now() - startedAt,
+          firstFrameAtMs: firstFrameAt === null ? null : firstFrameAt - startedAt,
+        };
+      } catch (error) {
+        const e = /** @type {any} */ (error);
+        return {
+          error: {
+            name: e?.name,
+            code: typeof e?.code === 'string' ? e.code : null,
+            message: String(e?.message ?? e),
+          },
+          frameMs,
+          phases,
+        };
+      }
+    },
+
+    /**
+     * Whether frame `index` of the active clip has a mask from `modelId`
+     * @param {number} index
+     * @param {string} [modelId]
+     * @returns {boolean}
+     */
+    hasMask(index, modelId = DEFAULT_MODEL_ID) {
+      return maskForFrame(index, modelId) !== null;
+    },
+
+    /**
      * Mask values of frame `index` (made by `modelId`) at pixel positions
      * given in SOURCE coordinates normalized to 0..1.
      * @param {number} index

@@ -2,9 +2,10 @@
  * AI models in Cache Storage (main thread, Settings)
  * @module features/ai-cutout/model-cache
  *
- * The segmentation worker keeps each verified model in Cache Storage under
- * `<model URL>?sha256=<pinned hash>` (see model-loader.js). Settings lists
- * the whole bucket: a registered model counts as downloaded only under its
+ * The segmentation worker keeps each verified model file in Cache Storage
+ * under `<file URL>?sha256=<pinned hash>` (see model-loader.js). Settings
+ * lists the whole bucket: a registered model counts as downloaded only when
+ * every one of its files (two for Click to select) is there under its
  * current key, and every other file in the bucket is an old file — a copy
  * under an earlier pin, or a model this version no longer ships (the fp32
  * isnetis.onnx of the first AI cutout release). Each one can be deleted on
@@ -13,7 +14,7 @@
  * Every browser API is injectable for unit tests.
  */
 
-import { getModelUrl } from './model-config.js';
+import { getModelSpec, getModelUrl, getSpecFiles } from './model-config.js';
 import { modelCacheKey } from './model-loader.js';
 import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
 
@@ -23,13 +24,13 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
  * @property {string} label - What it is for ("General")
  * @property {string} modelName - The network ("ISNet (general-use)")
  * @property {string} description
- * @property {number} bytes - Pinned size of the model file
+ * @property {number} bytes - Pinned size of the model (all its files)
  * @property {{ name: string, url: string }} license
  * @property {string} upstream
  * @property {import('./model-registry.js').ModelLicenseNote | null} [licenseNote]
  *   - A caveat about the weights' terms (Settings shows it on the row)
- * @property {boolean | null} cached - Its current file is in Cache Storage (null: unknown)
- * @property {string[]} staleUrls - Keys of its file under earlier pins
+ * @property {boolean | null} cached - Every current file of it is in Cache Storage (null: unknown)
+ * @property {string[]} staleUrls - Keys of its files under earlier pins
  * @property {boolean} updateAvailable - Not cached under its current pin, but
  *   an older copy of its file is (the pinned file changed since)
  */
@@ -55,37 +56,46 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
  * @property {CacheStorage | undefined} [cacheStorage] - Default: globalThis.caches
  * @property {string} [baseHref] - Resolves the model URLs (default: location.href)
  * @property {string} [baseUrl] - App base path (default: Vite's BASE_URL)
- * @property {(modelId: string) => string} [getSha256] - The hash a model's
- *   key carries (default: its registry pin; the app passes the DEV override)
+ * @property {(modelId: string) => { url: string, sha256: string }[]} [getFiles] - A
+ *   model's files and the hash each key carries (default: the registry
+ *   pins; the app passes the DEV override, see resolveModelSpec)
+ * @property {(modelId: string) => string} [getSha256] - Single-file models
+ *   only: the hash their key carries (older form of `getFiles`)
  */
 
 /**
  * @param {ModelCacheDeps} deps
  */
 function resolveDeps(deps) {
+  const baseUrl = deps.baseUrl;
+  /** @type {(modelId: string) => { url: string, sha256: string }[]} */
+  let getFiles = (id) => getSpecFiles(getModelSpec(id, baseUrl));
+  if (deps.getFiles) {
+    getFiles = deps.getFiles;
+  } else if (deps.getSha256) {
+    const getSha256 = deps.getSha256;
+    getFiles = (id) => {
+      const files = getSpecFiles(getModelSpec(id, baseUrl));
+      return files.length === 1
+        ? [{ url: getModelUrl(id, baseUrl), sha256: getSha256(id) }]
+        : files;
+    };
+  }
   return {
     cacheStorage: 'cacheStorage' in deps ? deps.cacheStorage : globalThis.caches,
     baseHref: deps.baseHref ?? globalThis.location?.href ?? 'http://localhost/',
-    baseUrl: deps.baseUrl,
-    getSha256:
-      deps.getSha256 ??
-      ((/** @type {string} */ id) =>
-        /** @type {(typeof MODEL_REGISTRY)[number]} */ (MODEL_REGISTRY.find((e) => e.id === id))
-          .sha256),
+    getFiles,
   };
 }
 
 /**
- * The Cache Storage key a model's current file is kept under.
+ * The Cache Storage keys a model's current files are kept under.
  * @param {string} modelId
  * @param {ReturnType<typeof resolveDeps>} deps
- * @returns {string}
+ * @returns {string[]}
  */
-function currentKey(modelId, { baseHref, baseUrl, getSha256 }) {
-  return modelCacheKey(
-    { url: getModelUrl(modelId, baseUrl), sha256: getSha256(modelId) },
-    baseHref,
-  );
+function currentKeys(modelId, { baseHref, getFiles }) {
+  return getFiles(modelId).map((file) => modelCacheKey(file, baseHref));
 }
 
 /**
@@ -170,13 +180,13 @@ export async function listDownloadedModels(deps = {}) {
       urls = null;
     }
   }
-  const keys = new Map(MODEL_REGISTRY.map((entry) => [entry.id, currentKey(entry.id, resolved)]));
+  const keys = new Map(MODEL_REGISTRY.map((entry) => [entry.id, currentKeys(entry.id, resolved)]));
   const allUrls = cache && urls ? [...urls] : [];
   const models = MODEL_REGISTRY.map((entry) => {
-    const key = /** @type {string} */ (keys.get(entry.id));
-    const file = withoutSearch(key);
-    const cached = urls ? urls.has(key) : null;
-    const staleUrls = allUrls.filter((url) => url !== key && withoutSearch(url) === file);
+    const own = /** @type {string[]} */ (keys.get(entry.id));
+    const files = new Set(own.map(withoutSearch));
+    const cached = urls ? own.every((key) => urls.has(key)) : null;
+    const staleUrls = allUrls.filter((url) => !own.includes(url) && files.has(withoutSearch(url)));
     return {
       id: entry.id,
       label: entry.label,
@@ -191,7 +201,12 @@ export async function listDownloadedModels(deps = {}) {
       updateAvailable: cached === false && staleUrls.length > 0,
     };
   });
-  const known = new Set(models.flatMap((model) => [keys.get(model.id), ...model.staleUrls]));
+  const known = new Set(
+    models.flatMap((model) => [
+      .../** @type {string[]} */ (keys.get(model.id)),
+      ...model.staleUrls,
+    ]),
+  );
   const oldUrls = allUrls.filter((url) => !known.has(url));
   const oldFiles = await Promise.all(
     oldUrls.map(async (url) => ({
@@ -205,8 +220,18 @@ export async function listDownloadedModels(deps = {}) {
       .flatMap((model) => model.staleUrls)
       .map((url) => cachedFileSize(/** @type {Cache} */ (cache), url)),
   );
+  // A model whose files are only partly there (an interrupted download of
+  // a two-file model) still takes the space of the files that are
+  const partSizes = await Promise.all(
+    models
+      .filter((model) => model.cached === false)
+      .flatMap((model) => /** @type {string[]} */ (keys.get(model.id)))
+      .filter((key) => urls?.has(key))
+      .map((key) => cachedFileSize(/** @type {Cache} */ (cache), key)),
+  );
   const cachedBytes =
     models.reduce((sum, model) => sum + (model.cached ? model.bytes : 0), 0) +
+    partSizes.reduce((/** @type {number} */ sum, size) => sum + (size ?? 0), 0) +
     [...staleSizes, ...oldFiles.map((file) => file.bytes)].reduce(
       (/** @type {number} */ sum, size) => sum + (size ?? 0),
       0,
@@ -231,8 +256,8 @@ async function deleteEntry(url, deps) {
 }
 
 /**
- * Delete a model's file from Cache Storage: its current copy and its copies
- * under earlier pins (an update that was not downloaded yet).
+ * Delete a model's files from Cache Storage: their current copies and
+ * their copies under earlier pins (an update that was not downloaded yet).
  * @param {string} modelId
  * @param {ModelCacheDeps} [deps]
  * @returns {Promise<boolean>} Something was deleted
@@ -241,17 +266,19 @@ export async function deleteDownloadedModel(modelId, deps = {}) {
   const resolved = resolveDeps(deps);
   const cache = await openExistingCache(resolved.cacheStorage);
   if (!cache) return false;
-  try {
-    return await cache.delete(withoutSearch(currentKey(modelId, resolved)), {
-      ignoreSearch: true,
-    });
-  } catch {
-    return false;
+  let deleted = false;
+  for (const key of currentKeys(modelId, resolved)) {
+    try {
+      if (await cache.delete(withoutSearch(key), { ignoreSearch: true })) deleted = true;
+    } catch {
+      // The next file may still go
+    }
   }
+  return deleted;
 }
 
 /**
- * Whether a model's current file is in Cache Storage (false when unknown).
+ * Whether every current file of a model is in Cache Storage (false when unknown).
  * @param {string} modelId
  * @param {ModelCacheDeps} [deps]
  * @returns {Promise<boolean>}
@@ -261,7 +288,10 @@ export async function isModelCached(modelId, deps = {}) {
   const cache = await openExistingCache(resolved.cacheStorage);
   if (!cache) return false;
   try {
-    return (await cache.match(currentKey(modelId, resolved))) !== undefined;
+    for (const key of currentKeys(modelId, resolved)) {
+      if ((await cache.match(key)) === undefined) return false;
+    }
+    return true;
   } catch {
     return false;
   }

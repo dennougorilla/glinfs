@@ -85,6 +85,7 @@ describe('listDownloadedModels', () => {
       ['general', true],
       ['portrait', false],
       ['anime', false],
+      ['click', false],
     ]);
     expect(models[0]).toMatchObject({
       label: 'General',
@@ -122,6 +123,7 @@ describe('listDownloadedModels', () => {
       ['general', true, false],
       ['portrait', false, false],
       ['anime', false, true],
+      ['click', false, false],
     ]);
     expect(models[2].staleUrls).toEqual([stalePin]);
     expect(oldFiles).toEqual([{ url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 }]);
@@ -166,6 +168,68 @@ describe('listDownloadedModels', () => {
     });
     const { models } = await listDownloadedModels({ cacheStorage: storage, ...DEPS });
     expect(models.every((m) => m.cached === null)).toBe(true);
+  });
+});
+
+describe('a model of two files (Click to select)', () => {
+  const CLICK = /** @type {any} */ (MODEL_REGISTRY.find((e) => e.id === 'click'));
+  const [ENCODER, DECODER] = CLICK.files;
+  const ENCODER_KEY = `${MODELS}/${ENCODER.fileName}?sha256=${ENCODER.sha256}`;
+  const DECODER_KEY = `${MODELS}/${DECODER.fileName}?sha256=${DECODER.sha256}`;
+
+  it('is downloaded only with both files; one file alone still counts as used space', async () => {
+    const { storage } = fakeCaches({ [ENCODER_KEY]: ENCODER.bytes });
+    const deps = { cacheStorage: storage, ...DEPS };
+    let listing = await listDownloadedModels(deps);
+    const click = listing.models.find((m) => m.id === 'click');
+    expect(click).toMatchObject({ label: 'Click to select', cached: false, bytes: CLICK.bytes });
+    expect(listing.oldFiles).toEqual([]);
+    expect(listing.cachedBytes).toBe(ENCODER.bytes);
+    await expect(isModelCached('click', deps)).resolves.toBe(false);
+
+    const both = fakeCaches({ [ENCODER_KEY]: ENCODER.bytes, [DECODER_KEY]: DECODER.bytes });
+    const bothDeps = { cacheStorage: both.storage, ...DEPS };
+    listing = await listDownloadedModels(bothDeps);
+    expect(listing.models.find((m) => m.id === 'click')?.cached).toBe(true);
+    expect(listing.cachedBytes).toBe(CLICK.bytes);
+    await expect(isModelCached('click', bothDeps)).resolves.toBe(true);
+  });
+
+  it('marks an older pin of either file as an update, and deletes both files', async () => {
+    const stale = `${MODELS}/${DECODER.fileName}?sha256=${'0'.repeat(64)}`;
+    const { storage, buckets } = fakeCaches({ [ENCODER_KEY]: 1, [stale]: 1, [ANIME_KEY]: 1 });
+    const deps = { cacheStorage: storage, ...DEPS };
+    const { models, oldFiles } = await listDownloadedModels(deps);
+    expect(models.find((m) => m.id === 'click')).toMatchObject({
+      cached: false,
+      updateAvailable: true,
+      staleUrls: [stale],
+    });
+    expect(oldFiles).toEqual([]);
+    await expect(deleteDownloadedModel('click', deps)).resolves.toBe(true);
+    expect([...(buckets.get(MODEL_CACHE_NAME)?.keys() ?? [])]).toEqual([ANIME_KEY]);
+  });
+
+  it('keys each file by the hash getFiles gives (the DEV override of the stubs)', async () => {
+    const { storage } = fakeCaches({
+      [`${MODELS}/${ENCODER.fileName}?sha256=e`]: 1,
+      [`${MODELS}/${DECODER.fileName}?sha256=d`]: 1,
+    });
+    const deps = {
+      cacheStorage: storage,
+      ...DEPS,
+      getFiles: (/** @type {string} */ id) =>
+        id === 'click'
+          ? [
+              { url: `/glinfs/models/${ENCODER.fileName}`, sha256: 'e' },
+              { url: `/glinfs/models/${DECODER.fileName}`, sha256: 'd' },
+            ]
+          : [{ url: '/glinfs/models/x.onnx', sha256: 'x' }],
+    };
+    await expect(isModelCached('click', deps)).resolves.toBe(true);
+    const { models, oldFiles } = await listDownloadedModels(deps);
+    expect(models.find((m) => m.id === 'click')?.cached).toBe(true);
+    expect(oldFiles).toEqual([]);
   });
 });
 
