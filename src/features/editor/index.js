@@ -676,7 +676,7 @@ export function initEditor() {
       lastRendered.previewView = state.previewView;
       lastRendered.comparing = state.comparing;
     }
-    if (frameChanged || editsChanged || aiChanged) {
+    if (frameChanged || editsChanged || aiChanged || pickToolChanged) {
       updateAiPreviewNote(container, state);
     }
 
@@ -1005,7 +1005,8 @@ function updateAiPreviewNote(container, state) {
     const click = getAiModelId(ai) === 'click';
     const analyzed = isFrameAnalyzed(frame, { modelId: getAiModelId(ai) });
     if (click && ai.picks.length === 0) {
-      text = 'Click the thing you want to keep';
+      // With the Keep tool on, the tool hint below the preview says it
+      text = state.aiPickTool ? '' : 'Choose Keep, then click the thing you want to keep';
     } else if (click && !analyzed && state.aiCutout.lostFrames?.includes(state.currentFrame)) {
       text = 'Lost track here. Click it to keep going.';
     } else if (click && !analyzed) {

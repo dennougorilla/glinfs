@@ -730,10 +730,62 @@ export function renderBackgroundPanel(handlers) {
     [smoothing, createElement('span', {}, ['Reduce flicker between frames'])],
   );
 
+  // --- Click to select: Whole / Part and the frames that need a click ---
+  const scopes = /** @type {const} */ ([
+    { value: 'whole', label: 'Whole', title: 'The whole thing you clicked' },
+    { value: 'part', label: 'Part', title: 'Only the part under the click' },
+  ]);
+  const clickScope = createElement(
+    'fieldset',
+    {
+      className: 'editor-cutout-segmented-group click-select-scope',
+      id: 'ai-click-scope',
+      hidden: 'true',
+    },
+    [
+      createElement('legend', { className: 'editor-cutout-label' }, ['Select']),
+      createElement(
+        'div',
+        { className: 'editor-cutout-segmented' },
+        scopes.map(({ value, label, title }) => {
+          const id = `ai-click-scope-${value}`;
+          const input = /** @type {HTMLInputElement} */ (
+            createElement('input', { type: 'radio', name: 'ai-click-scope', id, value })
+          );
+          cleanups.push(
+            on(input, 'change', () => {
+              if (input.checked) handlers.onSetAiParams?.({ clickScope: value });
+            }),
+          );
+          return createElement('label', { className: 'editor-cutout-segment', for: id, title }, [
+            input,
+            createElement('span', {}, [label]),
+          ]);
+        }),
+      ),
+    ],
+  );
+  const lostGo = createElement(
+    'button',
+    { type: 'button', id: 'ai-click-lost-go', className: 'editor-cutout-status-btn' },
+    ['Go there'],
+  );
+  cleanups.push(on(lostGo, 'click', () => handlers.onGoToLostFrame?.()));
+  const clickLost = createElement(
+    'div',
+    {
+      className: 'editor-cutout-alert editor-cutout-alert--warn click-select-lost',
+      id: 'ai-click-lost',
+      role: 'status',
+      hidden: 'true',
+    },
+    [createElement('p', { id: 'ai-click-lost-text' }), lostGo],
+  );
+
   const aiSection = createElement(
     'div',
     { className: 'editor-cutout-section', id: 'ai-section', hidden: 'true' },
-    [statusSlot, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
+    [statusSlot, clickScope, clickLost, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
   );
 
   // --- Color settings ---
@@ -884,58 +936,6 @@ export function renderBackgroundPanel(handlers) {
     }),
   );
 
-  // --- Click to select: Whole / Part and the frames that need a click ---
-  const scopes = /** @type {const} */ ([
-    { value: 'whole', label: 'Whole', title: 'The whole thing you clicked' },
-    { value: 'part', label: 'Part', title: 'Only the part under the click' },
-  ]);
-  const clickScope = createElement(
-    'fieldset',
-    {
-      className: 'editor-cutout-segmented-group click-select-scope',
-      id: 'ai-click-scope',
-      hidden: 'true',
-    },
-    [
-      createElement('legend', { className: 'editor-cutout-label' }, ['Select']),
-      createElement(
-        'div',
-        { className: 'editor-cutout-segmented' },
-        scopes.map(({ value, label, title }) => {
-          const id = `ai-click-scope-${value}`;
-          const input = /** @type {HTMLInputElement} */ (
-            createElement('input', { type: 'radio', name: 'ai-click-scope', id, value })
-          );
-          cleanups.push(
-            on(input, 'change', () => {
-              if (input.checked) handlers.onSetAiParams?.({ clickScope: value });
-            }),
-          );
-          return createElement('label', { className: 'editor-cutout-segment', for: id, title }, [
-            input,
-            createElement('span', {}, [label]),
-          ]);
-        }),
-      ),
-    ],
-  );
-  const lostGo = createElement(
-    'button',
-    { type: 'button', id: 'ai-click-lost-go', className: 'editor-cutout-status-btn' },
-    ['Go there'],
-  );
-  cleanups.push(on(lostGo, 'click', () => handlers.onGoToLostFrame?.()));
-  const clickLost = createElement(
-    'div',
-    {
-      className: 'editor-cutout-alert editor-cutout-alert--warn click-select-lost',
-      id: 'ai-click-lost',
-      role: 'status',
-      hidden: 'true',
-    },
-    [createElement('p', { id: 'ai-click-lost-text' }), lostGo],
-  );
-
   const tools = createElement(
     'div',
     {
@@ -948,8 +948,6 @@ export function renderBackgroundPanel(handlers) {
       createElement('h3', { className: 'editor-cutout-label', id: 'background-tools-title' }, [
         'Fix-ups',
       ]),
-      clickScope,
-      clickLost,
       createElement('div', { className: 'editor-cutout-tools' }, [
         keep.wrapper,
         remove.wrapper,
