@@ -67,6 +67,61 @@ export function modelCacheKey(spec, baseHref) {
   return url.href;
 }
 
+/** HTTP statuses that mean the model file is not on the server */
+const NOT_FOUND_STATUSES = new Set([404, 410]);
+
+/**
+ * Whether bytes are a text page (HTML) rather than a model: a server that
+ * has no model file often answers with its index.html (SPA fallback) and a
+ * 200, which would otherwise read as a damaged download
+ * @param {Uint8Array} bytes
+ * @returns {boolean}
+ */
+export function looksLikeHtml(bytes) {
+  const head = new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().toLowerCase();
+  return head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<head');
+}
+
+/**
+ * The MODEL_NOT_FOUND error for a model URL. A local build without the
+ * model files hits this: say how to fetch them in the console.
+ * @param {ModelSpec} spec
+ * @param {string} reason
+ * @returns {SegmentationError}
+ */
+function modelNotFound(spec, reason) {
+  console.warn(
+    `[ai-cutout] The model file ${spec.url} was not found (${reason}). In a local build, run \`npm run models:fetch\` to download the models.`,
+  );
+  return new SegmentationError(
+    SegmentationErrorCode.MODEL_NOT_FOUND,
+    `The model file was not found: ${reason}`,
+  );
+}
+
+/**
+ * Classify a download response that cannot be the model: not found (HTTP
+ * 404/410, or an HTML page) or another HTTP failure. Null when it may be
+ * the model.
+ * @param {Response} response
+ * @param {ModelSpec} spec
+ * @returns {SegmentationError | null}
+ */
+export function classifyModelResponse(response, spec) {
+  if (NOT_FOUND_STATUSES.has(response.status)) {
+    return modelNotFound(spec, `HTTP ${response.status}`);
+  }
+  if (!response.ok) {
+    return new SegmentationError(
+      SegmentationErrorCode.DOWNLOAD_FAILED,
+      `The model download failed: HTTP ${response.status}`,
+    );
+  }
+  const type = response.headers?.get('content-type') ?? '';
+  if (/^text\/html\b/i.test(type)) return modelNotFound(spec, 'the server sent a web page');
+  return null;
+}
+
 /**
  * Throw HASH_MISMATCH unless `bytes` has the pinned size and SHA-256.
  * @param {Uint8Array} bytes
@@ -232,12 +287,8 @@ export async function loadModelBytes(spec, deps = {}) {
       `The model download failed: ${error instanceof Error ? error.message : error}`,
     );
   }
-  if (!response.ok) {
-    throw new SegmentationError(
-      SegmentationErrorCode.DOWNLOAD_FAILED,
-      `The model download failed: HTTP ${response.status}`,
-    );
-  }
+  const rejected = classifyModelResponse(response, spec);
+  if (rejected) throw rejected;
 
   onProgress?.({ phase: 'downloading', loadedBytes: 0, totalBytes: spec.bytes, fromCache: false });
   let bytes;
@@ -269,6 +320,11 @@ export async function loadModelBytes(spec, deps = {}) {
     totalBytes: spec.bytes,
     fromCache: false,
   });
+  // A page instead of the model (no content type to tell): not found, not
+  // a damaged download
+  if (bytes.byteLength !== spec.bytes && looksLikeHtml(bytes)) {
+    throw modelNotFound(spec, 'the server sent a web page');
+  }
   await verifyModelBytes(bytes, spec, subtle);
   throwIfAborted();
 

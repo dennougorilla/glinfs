@@ -99,8 +99,8 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
 
     // The choice, with each model's download size
-    await expect(page.getByRole('radio', { name: 'Anime (88 MB)' })).toBeChecked();
-    await expect(page.getByRole('radio', { name: 'General (90 MB)' })).not.toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Anime 88 MB' })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'General 90 MB' })).not.toBeChecked();
     await chooseAiModel(page, 'general');
     await expect(page.locator('#ai-intro')).toContainText('General model');
     await expect(page.locator('#ai-intro')).toContainText('downloads 90 MB once');
@@ -134,7 +134,7 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await chooseAiModel(page, 'anime');
     await expect(page.locator('#ai-coverage')).toHaveText(`0 of ${N} frames analyzed`);
     await expect(page.locator('#ai-preview-note')).toHaveText('Not analyzed yet');
-    await expect(page.locator('#ai-analyze')).toHaveText(`Analyze selection (${N} frames)`);
+    await expect(page.locator('#ai-analyze')).toHaveText(`Analyze ${N} frames`);
     await page.locator('#ai-analyze').click();
     await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,

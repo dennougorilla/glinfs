@@ -23,8 +23,12 @@ import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } f
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { createFrameGridLauncher } from './panels/frame-grid-launcher.js';
 import { renderEditorLeftSidebar, renderScenesSidebar } from './panels/left-sidebar.js';
-import { renderEditorPreview } from './panels/preview.js';
-import { createClearCropButton, renderEditorPropertiesPanel } from './panels/properties.js';
+import { renderEditorPreview, updatePreviewViewSwitch } from './panels/preview.js';
+import {
+  createClearCropButton,
+  renderEditorPropertiesPanel,
+  updateSidebarTabs,
+} from './panels/properties.js';
 import { renderEditorStatusBar } from './panels/status-bar.js';
 import { renderEditorTimelineSection } from './panels/timeline-section.js';
 import { renderEditorToolbar } from './panels/toolbar.js';
@@ -55,7 +59,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(picking: boolean) => void} [onSetPickingKeyColor] - Enter/leave eyedropper mode
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
  * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
- * @property {(method: import('../../shared/edits/model.js').BackgroundMethod) => void} [onSetBackgroundMethod] - Color key or AI cutout
+ * @property {(method: import('../../shared/edits/model.js').BackgroundMethod | 'off') => void} [onSetBackgroundMethod] - Off | Color | AI switch: off turns removal off, a method turns it on with that method
  * @property {() => void} [onAiAnalyze] - Analyze the selection (also Retry)
  * @property {() => void} [onAiCancel] - Cancel the running analysis
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice
@@ -73,6 +77,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} [onUndoTouchUp] - Remove the last stroke
  * @property {() => void} [onClearTouchUpsOnFrame] - Take the current frame out of every stroke
  * @property {() => void} [onClearAllTouchUps] - Remove every stroke
+ * @property {(tab: import('./types.js').SidebarTab) => void} [onSelectSidebarTab] - Right sidebar tab chosen
+ * @property {(view: import('./types.js').PreviewView) => void} [onSetPreviewView] - Result / Original / Mask view of the preview
  */
 
 /**
@@ -135,6 +141,8 @@ export function renderEditorScreen(container, state, handlers, fps) {
   // Text/Background controls take their values from state (updated in place
   // on later changes by editor/index.js)
   updateEditsPanel(screen, state, fps);
+  updateSidebarTabs(screen, state);
+  updatePreviewViewSwitch(screen, state);
 
   // Populate scenes sidebar with thumbnails
   cleanups.push(...renderScenesSidebar(leftSidebar.scenesContainer, state, handlers));
@@ -246,7 +254,8 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
     plain('End', () => handlers.onFrameChange(getCurrentState().selectedRange.end)),
     plain('g', () => handlers.onToggleGrid()),
     // Escape unwinds the innermost editing mode first: a stroke being
-    // painted (cancelled, nothing is added), the brush, a pick tool, the
+    // painted (cancelled, nothing is added), the brush (the sidebar's Touch
+    // up mode), a pick tool, the
     // eyedropper, then the text selection, then the crop
     plain('Escape', () => {
       const current = getCurrentState();

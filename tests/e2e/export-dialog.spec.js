@@ -42,7 +42,7 @@ async function exportedGifBytes(page) {
 async function setEditorSpeed(page, value) {
   const select = page.locator('#editor-speed');
   if (!(await select.isVisible())) {
-    await page.locator('.prop-accordion-summary', { hasText: 'Playback' }).click();
+    await page.locator('#editor-side-tab-frame').click();
   }
   await select.selectOption(value);
   await expect

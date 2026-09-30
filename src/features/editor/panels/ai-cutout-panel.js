@@ -5,12 +5,13 @@
  * Built once; updateAiCutoutSection() patches it in place from the editor
  * state (AI parameters and picks in the edits, runtime status in
  * state.aiCutout) and the clip's analysis coverage. What shows, in order:
- * the model choice (Anime / General, each with its download size), what the
- * analysis does (one-time download, frames stay on the device), a
+ * the model choice (Anime / General, each with its download size), a
  * WebGPU warning with the explicit slow option, "Analyze selection",
  * progress with Cancel, an error with Retry, and once any frame is
- * analyzed: threshold, smoothing, edge, the Keep/Remove pick tools and the
- * pick list.
+ * analyzed: the Keep/Remove pick tools, the pick list and a collapsed
+ * Advanced disclosure (threshold, edge, smoothing). What the analysis does
+ * (one-time download, frames stay on the device) sits in a collapsed
+ * "About models" disclosure.
  *
  * Everything analysis-related (coverage, Analyze, controls) reflects the
  * chosen model's masks only; switching models keeps threshold, smoothing,
@@ -140,6 +141,33 @@ function toggleButton(id, label) {
   return { wrapper, input };
 }
 
+/** Order of the model switch's segments (left to right) */
+const MODEL_ORDER = ['general', 'anime'];
+
+/**
+ * Label of the Analyze button
+ * @param {number} pending - Frames of the selection still to analyze
+ * @returns {string}
+ */
+export function getAnalyzeLabel(pending) {
+  if (pending === 0) return 'Selection analyzed';
+  return `Analyze ${pending} frame${pending === 1 ? '' : 's'}`;
+}
+
+/**
+ * Collapsed "Advanced" disclosure for settings most clips never need
+ * (Background panel: the color key's Remove mode, the AI tuning sliders)
+ * @param {string} id
+ * @param {HTMLElement[]} children
+ * @returns {HTMLElement}
+ */
+export function advancedDetails(id, children) {
+  return createElement('details', { className: 'editor-bg-advanced', id }, [
+    createElement('summary', { className: 'editor-bg-advanced-summary' }, ['Advanced']),
+    createElement('div', { className: 'editor-bg-advanced-body' }, children),
+  ]);
+}
+
 /**
  * Render the method switch and the AI section
  * @param {import('../ui.js').EditorUIHandlers} handlers
@@ -149,16 +177,17 @@ export function renderAiCutoutSection(handlers) {
   /** @type {(() => void)[]} */
   const cleanups = [];
 
-  // --- Method switch ---
+  // --- Method switch: Off (no removal) | Color | AI ---
   const methods = /** @type {const} */ ([
+    { value: 'off', id: 'background-method-off', label: 'Off' },
     { value: 'color', id: 'ai-method-color', label: 'Color' },
-    { value: 'ai', id: 'ai-method-ai', label: 'AI cutout' },
+    { value: 'ai', id: 'ai-method-ai', label: 'AI' },
   ]);
   const methodSwitch = createElement(
     'fieldset',
-    { className: 'editor-text-fieldset editor-ai-method' },
+    { className: 'editor-text-fieldset editor-ai-method', id: 'background-method' },
     [
-      createElement('legend', { className: 'editor-text-field-label' }, ['Method']),
+      createElement('legend', { className: 'editor-bg-method-legend' }, ['Remove background']),
       createElement(
         'div',
         { className: 'editor-text-segmented' },
@@ -189,35 +218,51 @@ export function renderAiCutoutSection(handlers) {
       createElement(
         'div',
         { className: 'editor-text-segmented' },
-        MODEL_REGISTRY.map((entry) => {
-          const id = `ai-model-${entry.id}`;
-          const input = /** @type {HTMLInputElement} */ (
-            createElement('input', {
-              type: 'radio',
-              name: 'ai-model',
-              id,
-              value: entry.id,
-              'aria-describedby': 'ai-model-note',
-            })
-          );
-          cleanups.push(
-            on(input, 'change', () => {
-              if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
-            }),
-          );
-          return createElement('label', { className: 'editor-text-segment', for: id }, [
-            input,
-            createElement('span', {}, [`${entry.label} (${getModelSizeLabel(entry.id)})`]),
-          ]);
-        }),
+        // General first (left): the order shown, not the default model
+        [...MODEL_REGISTRY]
+          .sort((a, b) => MODEL_ORDER.indexOf(a.id) - MODEL_ORDER.indexOf(b.id))
+          .map((entry) => {
+            const id = `ai-model-${entry.id}`;
+            const input = /** @type {HTMLInputElement} */ (
+              createElement('input', {
+                type: 'radio',
+                name: 'ai-model',
+                id,
+                value: entry.id,
+                'aria-describedby': 'ai-model-note',
+              })
+            );
+            cleanups.push(
+              on(input, 'change', () => {
+                if (input.checked) handlers.onSetAiModel?.(/** @type {any} */ (entry.id));
+              }),
+            );
+            return createElement('label', { className: 'editor-text-segment', for: id }, [
+              input,
+              createElement('span', {}, [
+                entry.label,
+                createElement('small', { className: 'editor-ai-model-size' }, [
+                  ` ${getModelSizeLabel(entry.id)}`,
+                ]),
+              ]),
+            ]);
+          }),
       ),
-      createElement('p', { className: 'editor-ai-note', id: 'ai-model-note' }),
     ],
   );
 
-  // --- Explanation and WebGPU warning ---
+  // --- Explanation (collapsed: the model sizes are on the switch) and
+  // the WebGPU warning (only when it applies) ---
   const intro = createElement('p', { className: 'editor-ai-intro', id: 'ai-intro' }, [
     getAiIntro('anime'),
+  ]);
+  const about = createElement('details', { className: 'editor-ai-about', id: 'ai-about' }, [
+    createElement('summary', { className: 'editor-ai-about-summary' }, [
+      createElement('span', { className: 'editor-ai-about-icon', 'aria-hidden': 'true' }, ['i']),
+      'About models',
+    ]),
+    createElement('p', { className: 'editor-ai-note', id: 'ai-model-note' }),
+    intro,
   ]);
 
   const wasmBtn = createElement(
@@ -341,7 +386,7 @@ export function renderAiCutoutSection(handlers) {
     createElement('legend', { className: 'editor-text-field-label' }, ['Pick a character']),
     createElement('div', { className: 'editor-ai-tool-row' }, [keep.wrapper, remove.wrapper]),
     createElement('p', { className: 'editor-ai-note' }, [
-      'Click a character in the preview: Keep keeps only picked characters, Remove removes them. Each pick is followed through the clip.',
+      'Click a character in the preview. Each pick follows it through the clip.',
     ]),
   ]);
   const pickStatus = createElement('p', {
@@ -385,7 +430,14 @@ export function renderAiCutoutSection(handlers) {
   const controls = createElement(
     'div',
     { className: 'editor-ai-controls', id: 'ai-controls', hidden: 'true' },
-    [threshold.row, smoothingRow, edge.row, tools, pickStatus, pickList, clearBtn, buildStatus],
+    [
+      tools,
+      pickStatus,
+      pickList,
+      clearBtn,
+      buildStatus,
+      advancedDetails('ai-advanced', [threshold.row, edge.row, smoothingRow]),
+    ],
   );
 
   const section = createElement(
@@ -393,7 +445,7 @@ export function renderAiCutoutSection(handlers) {
     { className: 'editor-ai-section', id: 'ai-section', hidden: 'true' },
     [
       modelSwitch,
-      intro,
+      about,
       warning,
       wasmNote,
       analyzeBtn,
@@ -528,8 +580,10 @@ export function updateAiCutoutSection(root, state, fps) {
   const status = state.aiCutout;
   const focused = document.activeElement;
 
-  setChecked(q(root, '#ai-method-color'), !isAi);
-  setChecked(q(root, '#ai-method-ai'), isAi);
+  const on = background.enabled === true;
+  setChecked(q(root, '#background-method-off'), !on);
+  setChecked(q(root, '#ai-method-color'), on && !isAi);
+  setChecked(q(root, '#ai-method-ai'), on && isAi);
   /** @type {HTMLElement | null} */ (root.querySelector('#ai-color-fields'))?.toggleAttribute(
     'hidden',
     isAi,
@@ -567,8 +621,9 @@ export function updateAiCutoutSection(root, state, fps) {
 
   const analyzeBtn = /** @type {HTMLButtonElement} */ (q(section, '#ai-analyze'));
   const pending = cover.pendingInSelection;
-  setText(
-    analyzeBtn,
+  setText(analyzeBtn, getAnalyzeLabel(pending));
+  analyzeBtn.setAttribute(
+    'aria-label',
     pending > 0
       ? `Analyze selection (${pending} frame${pending === 1 ? '' : 's'})`
       : 'Selection analyzed',

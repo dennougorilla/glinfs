@@ -43,7 +43,55 @@ export function initEditorState(clip) {
     aiPickTool: null,
     aiCutout: createAiCutoutStatus(),
     brush: createBrushState(),
+    sidebarTab: 'frame',
+    previewView: 'result',
   };
+}
+
+// ============================================================
+// Sidebar tabs and preview view (view-only settings)
+// ============================================================
+
+/** @type {readonly import('./types.js').SidebarTab[]} */
+export const SIDEBAR_TABS = /** @type {const} */ (['frame', 'text', 'background']);
+
+/** @type {readonly import('./types.js').PreviewView[]} */
+export const PREVIEW_VIEWS = /** @type {const} */ (['result', 'original', 'mask']);
+
+/**
+ * Switch the right sidebar's tab (unknown values are ignored)
+ * @param {import('./types.js').EditorState} state
+ * @param {unknown} tab
+ * @returns {import('./types.js').EditorState}
+ */
+export function setSidebarTab(state, tab) {
+  if (!SIDEBAR_TABS.includes(/** @type {any} */ (tab)) || state.sidebarTab === tab) return state;
+  return { ...state, sidebarTab: /** @type {import('./types.js').SidebarTab} */ (tab) };
+}
+
+/**
+ * Choose what the preview shows while background removal is on (unknown
+ * values are ignored). View only: the export never reads it.
+ * @param {import('./types.js').EditorState} state
+ * @param {unknown} view
+ * @returns {import('./types.js').EditorState}
+ */
+export function setPreviewView(state, view) {
+  if (!PREVIEW_VIEWS.includes(/** @type {any} */ (view)) || state.previewView === view) {
+    return state;
+  }
+  return { ...state, previewView: /** @type {import('./types.js').PreviewView} */ (view) };
+}
+
+/**
+ * The view the preview draws: the chosen one while background removal is
+ * on, else the result (Original and Mask mean nothing without a removal)
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('./types.js').PreviewView}
+ */
+export function getEffectivePreviewView(state) {
+  if (!areTouchUpsActive(state.edits?.background)) return 'result';
+  return PREVIEW_VIEWS.includes(state.previewView) ? state.previewView : 'result';
 }
 
 /** @type {readonly import('./types.js').BrushScope[]} */

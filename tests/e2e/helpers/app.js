@@ -341,17 +341,48 @@ export async function injectDiscClip(page, { count, fps = 10 }) {
 }
 
 /**
- * Open the editor's Background accordion and choose the AI cutout
+ * Select a tab of the editor's right sidebar
+ * @param {import('@playwright/test').Page} page
+ * @param {'frame' | 'text' | 'background'} tab
+ */
+export async function openSidebarTab(page, tab) {
+  const button = page.locator(`#editor-side-tab-${tab}`);
+  if ((await button.getAttribute('aria-selected')) !== 'true') await button.click();
+  await expect(button).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator(`#editor-side-panel-${tab}`)).toBeVisible();
+}
+
+/**
+ * Open the Background tab and turn background removal on with the color
+ * key (the settings only show while a method is chosen)
+ * @param {import('@playwright/test').Page} page
+ */
+export async function enableBackgroundRemoval(page) {
+  await openSidebarTab(page, 'background');
+  await page.locator('label[for="ai-method-color"]').click();
+  await expect(page.locator('#background-settings')).toBeVisible();
+}
+
+/**
+ * Open the editor's Background tab and choose the AI cutout
  * @param {import('@playwright/test').Page} page
  */
 export async function chooseAiCutout(page) {
-  const accordion = page.locator('#editor-bg-accordion');
-  if ((await accordion.getAttribute('open')) === null) {
-    await accordion.locator('summary').click();
-  }
+  await openSidebarTab(page, 'background');
   await page.locator('label[for="ai-method-ai"]').click();
   await expect(page.locator('#ai-method-ai')).toBeChecked();
   await expect(page.locator('#ai-section')).toBeVisible();
+}
+
+/**
+ * Open a collapsed "Advanced" disclosure of the Background tab
+ * @param {import('@playwright/test').Page} page
+ * @param {'background-advanced' | 'ai-advanced'} id
+ */
+export async function openAdvanced(page, id) {
+  const details = page.locator(`#${id}`);
+  if ((await details.getAttribute('open')) === null) await details.locator('summary').click();
+  await expect(details).toHaveAttribute('open', '');
 }
 
 /**
@@ -360,6 +391,7 @@ export async function chooseAiCutout(page) {
  * @param {'anime' | 'general'} modelId
  */
 export async function chooseAiModel(page, modelId) {
+  await expect(page.locator('#ai-model')).toBeVisible();
   await page.locator(`label[for="ai-model-${modelId}"]`).click();
   await expect(page.locator(`#ai-model-${modelId}`)).toBeChecked();
 }

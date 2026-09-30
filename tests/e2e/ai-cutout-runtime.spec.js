@@ -307,12 +307,12 @@ test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
     expect(state.cached).toBe(0);
   });
 
-  test('a failed download surfaces a download error', async ({ page }) => {
+  test('a missing model file (404) surfaces a not-found error', async ({ page }) => {
     const requests = await serveStubModel(page, { status: 404 });
     await openAppWithStub(page, { sha256: STUB_SHA256, bytes: STUB_MODEL.length, allowWasm: true });
     await injectSyntheticClip(page, { count: 1, width: 640, height: 360 });
     const result = await analyzeClip(page);
-    expect(result.error?.code).toBe('download-failed');
+    expect(result.error?.code).toBe('model-not-found');
     expect(result.error?.message).toContain('404');
     expect(requests.count).toBe(1);
   });

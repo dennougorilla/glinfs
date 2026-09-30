@@ -25,6 +25,7 @@ import {
   gotoCaptureWithStubModel,
   injectDiscClip,
   maskCount,
+  openAdvanced,
   pauseEditorPlayback,
   readAiStatus,
   serveStubModel,
@@ -122,6 +123,7 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     await expect(page.locator('#ai-progress-bar')).toHaveJSProperty('value', 0.25);
 
     // Editing stays possible while the analysis runs
+    await openAdvanced(page, 'ai-advanced');
     await page.locator('#ai-threshold').fill('40');
     await expect(page.locator('#ai-threshold-value')).toHaveText('40%');
 
@@ -133,7 +135,7 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     await expect(page.locator('#ai-coverage')).toHaveText(`3 of ${N} frames analyzed`);
 
     // A second Analyze only does the 9 frames still missing
-    await expect(page.locator('#ai-analyze')).toHaveText('Analyze selection (9 frames)');
+    await expect(page.locator('#ai-analyze')).toHaveText('Analyze 9 frames');
     await page.locator('#ai-analyze').click();
     await expect(page.locator('#ai-coverage')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
@@ -172,7 +174,7 @@ test.describe('AI cutout analysis flow (stub model, WASM fallback)', () => {
     await page.evaluate(() =>
       window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 5 } }),
     );
-    await expect(page.locator('#ai-analyze')).toHaveText('Analyze selection (6 frames)');
+    await expect(page.locator('#ai-analyze')).toHaveText('Analyze 6 frames');
     await page.locator('#ai-analyze').click();
     await expect(page.locator('#ai-coverage')).toHaveText(`6 of ${N} frames analyzed`, {
       timeout: 60_000,

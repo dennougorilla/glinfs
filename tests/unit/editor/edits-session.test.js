@@ -102,7 +102,7 @@ describe('Editor edits session', () => {
     // The Text/Background panels show them
     expect(document.querySelector('#text-layer-list')?.textContent).toContain('Saved');
     expect(
-      /** @type {HTMLInputElement} */ (document.querySelector('#background-enabled')).checked,
+      /** @type {HTMLInputElement} */ (document.querySelector('#ai-method-color')).checked,
     ).toBe(true);
   });
 
@@ -238,7 +238,7 @@ describe('Editor edits session', () => {
     cleanup?.();
     cleanup = /** @type {() => void} */ (initEditor());
 
-    const toggle = /** @type {HTMLInputElement} */ (document.querySelector('#background-enabled'));
+    const toggle = /** @type {HTMLInputElement} */ (document.querySelector('#ai-method-color'));
     toggle.checked = true;
     toggle.dispatchEvent(new Event('change', { bubbles: true }));
     expect(getEditorState()?.edits.background).toMatchObject({ enabled: true, color: '#abcdef' });

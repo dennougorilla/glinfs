@@ -156,16 +156,19 @@ describe('AI cutout in the mounted editor', () => {
 
   it('switches the method: AI section instead of the color key, removal on, no key color', async () => {
     mount();
-    expect(/** @type {HTMLInputElement} */ ($('#ai-method-color')).checked).toBe(true);
+    // Removal starts Off; the stored method is the color key
+    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#ai-method-color')).checked).toBe(false);
     expect($('#ai-section').hidden).toBe(true);
-    expect($('#ai-color-fields').hidden).toBe(false);
+    expect($('#background-settings').hidden).toBe(true);
 
     await chooseAi();
     const bg = getEditorState()?.edits.background;
     expect(bg).toMatchObject({ method: 'ai', enabled: true, colorChosen: false });
     expect($('#ai-section').hidden).toBe(false);
     expect($('#ai-color-fields').hidden).toBe(true);
-    expect(/** @type {HTMLInputElement} */ ($('#background-enabled')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#ai-method-ai')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#background-method-off')).checked).toBe(false);
     expect($('#ai-intro').textContent).toContain('88 MB');
 
     // No adapter: the warning with the explicit slow option
@@ -173,9 +176,11 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-webgpu-warning').hidden).toBe(false);
     expect($('#ai-run-wasm').textContent).toBe('Run without WebGPU (very slow)');
 
-    // Turning removal off and on again never picks a key color for the AI
-    check('background-enabled', false);
-    check('background-enabled', true);
+    // Off and AI again never picks a key color for the AI
+    check('background-method-off');
+    await settle();
+    expect(getEditorState()?.edits.background).toMatchObject({ enabled: false, method: 'ai' });
+    check('ai-method-ai');
     await settle();
     expect(getEditorState()?.edits.background).toMatchObject({
       enabled: true,
@@ -187,6 +192,7 @@ describe('AI cutout in the mounted editor', () => {
     await settle();
     expect(getEditorState()?.edits.background.method).toBe('color');
     expect($('#ai-section').hidden).toBe(true);
+    expect($('#ai-color-fields').hidden).toBe(false);
   });
 
   it('analyzes the selection and shows the controls; the preview note follows', async () => {
@@ -198,7 +204,7 @@ describe('AI cutout in the mounted editor', () => {
 
     window.__TEST_HOOKS__.setEditorState({ selectedRange: { start: 0, end: 3 } });
     await settle();
-    expect($('#ai-analyze').textContent).toBe('Analyze selection (4 frames)');
+    expect($('#ai-analyze').textContent).toBe('Analyze 4 frames');
 
     $('#ai-analyze').click();
     await settle();
@@ -231,8 +237,11 @@ describe('AI cutout in the mounted editor', () => {
     const anime = /** @type {HTMLInputElement} */ ($('#ai-model-anime'));
     const general = /** @type {HTMLInputElement} */ ($('#ai-model-general'));
     expect(anime.checked).toBe(true);
-    expect(anime.labels?.[0]?.textContent).toBe('Anime (88 MB)');
-    expect(general.labels?.[0]?.textContent).toBe('General (90 MB)');
+    expect(anime.labels?.[0]?.textContent).toBe('Anime 88 MB');
+    expect(general.labels?.[0]?.textContent).toBe('General 90 MB');
+    // General on the left, Anime (the default) on the right
+    const order = Array.from($('#ai-model').querySelectorAll('input'), (i) => i.id);
+    expect(order).toEqual(['ai-model-general', 'ai-model-anime']);
     expect($('#ai-model').tagName).toBe('FIELDSET');
 
     // Anime analyzes the clip
@@ -261,7 +270,7 @@ describe('AI cutout in the mounted editor', () => {
       threshold: 0.3,
     });
     expect($('#ai-coverage').textContent).toBe('0 of 4 frames analyzed');
-    expect($('#ai-analyze').textContent).toBe('Analyze selection (4 frames)');
+    expect($('#ai-analyze').textContent).toBe('Analyze 4 frames');
     expect($('#ai-notice').textContent).toBe('');
     expect($('#ai-intro').textContent).toContain('General model');
     expect($('#ai-intro').textContent).toContain('90 MB');

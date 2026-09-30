@@ -211,6 +211,34 @@ export function createKeyedRegionCache(budgetBytes = KEYED_CACHE_BUDGET_BYTES) {
   };
 }
 
+/** Tint of removed pixels in the Mask view (RGB) and its opacity */
+const MASK_TINT = { r: 255, g: 40, b: 60, alpha: 0.65 };
+
+/**
+ * Mask view: tint the pixels the removal takes away (transparent in the
+ * keyed result) red over a dimmed gray of the original frame, so they read
+ * the same on any background color, and show every pixel opaque
+ * @param {Uint8ClampedArray} original - Source pixels of the region (tinted in place)
+ * @param {Uint8ClampedArray} keyed - The keyed (result) pixels of the same region
+ */
+export function tintRemovedPixels(original, keyed) {
+  const { r, g, b, alpha } = MASK_TINT;
+  const keep = 1 - alpha;
+  for (let i = 0; i < original.length; i += 4) {
+    if (keyed[i + 3] < ALPHA_THRESHOLD) {
+      // An already transparent source pixel has no color of its own
+      const gray =
+        (0.299 * original[i] + 0.587 * original[i + 1] + 0.114 * original[i + 2]) *
+        (original[i + 3] / 255) *
+        keep;
+      original[i] = gray + r * alpha;
+      original[i + 1] = gray + g * alpha;
+      original[i + 2] = gray + b * alpha;
+      original[i + 3] = 255;
+    }
+  }
+}
+
 /**
  * Create the editor's preview renderer (one per editor session)
  * @param {{ budgetBytes?: number }} [options]
@@ -227,7 +255,7 @@ export function createEditorFrameRenderer(options = {}) {
      * @param {CropArea | null | undefined} crop
      * @param {ClipEdits | null | undefined} edits
      * @param {number} frameIndex - Absolute clip frame index (text ranges, masks)
-     * @param {{ skipKey?: boolean, transparent?: boolean, maskSource?: MaskSource | null }} [options]
+     * @param {{ skipKey?: boolean, transparent?: boolean, maskSource?: MaskSource | null, view?: import('./types.js').PreviewView }} [options]
      *   - skipKey: draw without background removal (or alpha snapping) and
      *     leave the cache alone (a crop drag in progress moves the region on
      *     every pointer move; keying each move would read back and
@@ -240,13 +268,17 @@ export function createEditorFrameRenderer(options = {}) {
      *     read back for this.
      *   - maskSource: final AI cutout masks, used when the background
      *     method is 'ai' (frames without a mask preview unkeyed)
+     *   - view: what to show while background removal is on (view only):
+     *     'result' (default), 'original' (the frame without the removal)
+     *     or 'mask' (removed pixels tinted red over the frame, no text)
      */
     render(ctx, frame, crop, edits, frameIndex, options = {}) {
       const background = edits?.background;
       const keyOn = background?.enabled === true;
       const snap = options.transparent === true;
       const maskSource = options.maskSource ?? null;
-      if (options.skipKey && (keyOn || snap)) {
+      const view = keyOn ? (options.view ?? 'result') : 'result';
+      if ((options.skipKey && (keyOn || snap)) || view === 'original') {
         composeEditorFrame(
           ctx,
           frame,
@@ -295,6 +327,13 @@ export function createEditorFrameRenderer(options = {}) {
             snapAlphaToBinary(keyed.data);
           }
           cache.set(key, keyed, variant);
+        }
+        if (view === 'mask') {
+          // The source is on the canvas: tint what the removal takes away
+          const original = ctx.getImageData(region.x, region.y, keyed.width, keyed.height);
+          tintRemovedPixels(original.data, keyed.data);
+          ctx.putImageData(original, region.x, region.y);
+          return;
         }
         ctx.putImageData(keyed, region.x, region.y);
       }

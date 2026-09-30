@@ -17,6 +17,7 @@ import {
   exportFromEditor,
   exportGifAndWait,
   gotoEditorWithClip,
+  openSidebarTab,
   pauseEditorPlayback,
 } from './helpers/app.js';
 
@@ -57,6 +58,7 @@ test.describe('Editor text layers', () => {
       color: '#2050a0',
     });
     await pauseEditorPlayback(page);
+    await openSidebarTab(page, 'text');
   });
 
   test('typing a caption never triggers editor shortcuts', async ({ page }) => {

@@ -16,6 +16,7 @@ import {
   readSourceRegion,
   sampleSourceColor,
   sampleSourcePixel,
+  tintRemovedPixels,
 } from '../../../src/features/editor/edits-preview.js';
 import { composeEditorFrame } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
@@ -155,6 +156,50 @@ describe('createEditorFrameRenderer', () => {
       renderer.render(actual, frame('a'), c, e, 0);
       expect(Array.from(allPixels(actual))).toEqual(Array.from(allPixels(expected)));
     }
+  });
+
+  it('view option: Original draws the frame unkeyed, Mask tints removed pixels (no text)', () => {
+    const layer = createTextLayer({ text: 'Hi', color: '#ff0000', y: 0.5 }, 5);
+    const e = edits({ color: '#00ff00', tolerance: 0 }, [layer]);
+    const renderer = createEditorFrameRenderer();
+
+    const original = createFakeContext(20, 10);
+    renderer.render(original, frame('a'), null, e, 0, { view: 'original' });
+    const expected = createFakeContext(20, 10);
+    composeEditorFrame(
+      expected,
+      frame('a'),
+      null,
+      { ...e, background: { ...e.background, enabled: false } },
+      0,
+    );
+    expect(Array.from(allPixels(original))).toEqual(Array.from(allPixels(expected)));
+
+    const mask = createFakeContext(20, 10);
+    renderer.render(mask, frame('a'), null, e, 0, { view: 'mask' });
+    const px = allPixels(mask);
+    // Every pixel was green and removed: opaque and red-tinted
+    for (let i = 0; i < px.length; i += 4) {
+      expect(px[i + 3]).toBe(255);
+      expect(px[i]).toBeGreaterThan(px[i + 1]);
+    }
+
+    // Without removal the view is ignored (the result)
+    const off = edits({ enabled: false });
+    const plain = createFakeContext(20, 10);
+    renderer.render(plain, frame('a'), null, off, 0, { view: 'mask' });
+    const offExpected = createFakeContext(20, 10);
+    composeEditorFrame(offExpected, frame('a'), null, off, 0);
+    expect(Array.from(allPixels(plain))).toEqual(Array.from(allPixels(offExpected)));
+  });
+
+  it('tintRemovedPixels changes only removed pixels', () => {
+    const original = new Uint8ClampedArray([10, 200, 30, 255, 10, 200, 30, 255]);
+    const keyed = new Uint8ClampedArray([0, 0, 0, 0, 10, 200, 30, 255]);
+    tintRemovedPixels(original, keyed);
+    expect(original[3]).toBe(255);
+    expect(original[0]).toBeGreaterThan(original[1]);
+    expect(Array.from(original.slice(4))).toEqual([10, 200, 30, 255]);
   });
 
   it('keys each frame once per parameter set; text-only edits never read back', () => {

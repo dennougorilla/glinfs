@@ -305,6 +305,8 @@ const ERROR_COPY = {
     'This model could not run on WebGPU in this browser. You can run it without WebGPU instead (very slow).',
   [SegmentationErrorCode.DOWNLOAD_FAILED]:
     'The model could not be downloaded. Check your connection and try again.',
+  [SegmentationErrorCode.MODEL_NOT_FOUND]:
+    'Couldn’t download the model (not found). Check your connection and try again.',
   [SegmentationErrorCode.HASH_MISMATCH]:
     'The downloaded model is damaged or not the expected file, so it was not used. Try again.',
   [SegmentationErrorCode.MODEL_INIT_FAILED]: 'The model could not be started in this browser.',

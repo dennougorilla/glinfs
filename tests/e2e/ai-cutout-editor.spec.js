@@ -24,6 +24,7 @@ import {
   gifPixel,
   gotoCaptureWithStubModel,
   injectDiscClip,
+  openAdvanced,
   pauseEditorPlayback,
   serveStubModel,
   waitForAiMasks,
@@ -52,7 +53,7 @@ async function analyzeDiscClip(page) {
 
   // Nothing analyzed yet: the preview is unkeyed and says so
   await expect(page.locator('#ai-preview-note')).toHaveText('Not analyzed yet');
-  await expect(page.locator('#ai-analyze')).toHaveText(`Analyze selection (${FRAME_COUNT} frames)`);
+  await expect(page.locator('#ai-analyze')).toHaveText(`Analyze ${FRAME_COUNT} frames`);
   await expect(page.locator('#ai-intro')).toContainText('downloads 88 MB once');
   await expect(page.locator('#ai-intro')).toContainText('never leave this device');
 
@@ -256,6 +257,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     }
 
     // Threshold 70 %: grey disc B (63 %) falls below it, white disc A stays
+    await openAdvanced(page, 'ai-advanced');
     await page.locator('#ai-threshold').fill('70');
     await expect(page.locator('#ai-threshold-value')).toHaveText('70%');
     await waitForAiMasks(page);

@@ -40,6 +40,12 @@ export const SegmentationErrorCode = Object.freeze({
   WEBGPU_MODEL_FAILED: 'webgpu-model-failed',
   /** The model could not be downloaded (network error, HTTP error) */
   DOWNLOAD_FAILED: 'download-failed',
+  /**
+   * The model file is not on the server: HTTP 404/410, or a page (HTML)
+   * answered instead of the model — e.g. a local build without the model
+   * files, where the dev server's SPA fallback serves index.html
+   */
+  MODEL_NOT_FOUND: 'model-not-found',
   /** The downloaded model's size or SHA-256 is not the pinned one */
   HASH_MISMATCH: 'hash-mismatch',
   /** ONNX Runtime could not load or create a session for the model */

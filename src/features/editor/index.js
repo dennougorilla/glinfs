@@ -69,7 +69,8 @@ import {
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
-import { isBrushActive, setOverlayPickMode } from './panels/preview.js';
+import { isBrushActive, setOverlayPickMode, updatePreviewViewSwitch } from './panels/preview.js';
+import { updateSidebarTabs } from './panels/properties.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import { TOUCH_UP_NEEDS_REMOVAL, updateTouchUpSection } from './panels/touch-up-panel.js';
 import {
@@ -85,6 +86,7 @@ import {
   createEditorStore,
   createEditorStoreFromClip,
   getBrushStrokeRange,
+  getEffectivePreviewView,
   goToFrame,
   moveTextLayer,
   PICK_NEEDS_ANALYSIS_NOTICE,
@@ -101,8 +103,10 @@ import {
   setPickingKeyColor,
   setPlaybackSpeed,
   setPlaying,
+  setPreviewView,
   setSceneDetectionError,
   setSelectedAspectRatio,
+  setSidebarTab,
   startSceneDetection,
   toggleGrid,
   togglePlayback,
@@ -243,6 +247,13 @@ let brushGesture = null;
 
 /** @type {number | null} requestAnimationFrame of the live stroke preview */
 let brushDrawFrameId = null;
+
+/**
+ * The right sidebar's last chosen tab: kept for the whole page session, so
+ * switching clips (a new editor state) reopens the same tab
+ * @type {import('./types.js').SidebarTab}
+ */
+let lastSidebarTab = 'frame';
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -474,6 +485,9 @@ export function initEditor() {
     }
   }
 
+  // The sidebar reopens on the tab chosen last in this page session
+  store.setState((state) => setSidebarTab(state, lastSidebarTab));
+
   previewRenderer = createEditorFrameRenderer();
   cropDragging = false;
 
@@ -550,6 +564,8 @@ export function initEditor() {
     aiPickTool: initialState.aiPickTool,
     aiCutout: initialState.aiCutout,
     brush: initialState.brush,
+    sidebarTab: initialState.sidebarTab,
+    previewView: initialState.previewView,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -600,6 +616,8 @@ export function initEditor() {
     const aiChanged = state.aiCutout !== lastRendered.aiCutout;
     const brushChanged = state.brush !== lastRendered.brush;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
+    const tabChanged = state.sidebarTab !== lastRendered.sidebarTab;
+    const viewChanged = state.previewView !== lastRendered.previewView;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
     // The analysis coverage shown in the panel depends on the selection
     const selectionChanged =
@@ -612,8 +630,24 @@ export function initEditor() {
       (frameChanged || selectionChanged) && (state.edits.touchUps.length > 0 || state.brush.on);
 
     // Update base canvas ONLY when the composed frame changes
-    if (frameChanged || editsChanged || masksChanged || (cropChanged && editsUseCrop)) {
+    if (
+      frameChanged ||
+      editsChanged ||
+      masksChanged ||
+      viewChanged ||
+      (cropChanged && editsUseCrop)
+    ) {
       drawPreview(state);
+    }
+    // Sidebar tab, the Background tab's badge, the Touch up mode swap and
+    // the preview's view switch
+    if (tabChanged || brushChanged || editsChanged || aiChanged) {
+      updateSidebarTabs(container, state);
+      lastRendered.sidebarTab = state.sidebarTab;
+    }
+    if (viewChanged || editsChanged) {
+      updatePreviewViewSwitch(container, state);
+      lastRendered.previewView = state.previewView;
     }
     if (frameChanged || editsChanged || aiChanged) {
       updateAiPreviewNote(container, state);
@@ -862,7 +896,7 @@ function render(container) {
       onSetPickingKeyColor: handleSetPickingKeyColor,
       onPickKeyColor: handlePickKeyColor,
       onPickTransparentArea: handlePickTransparentArea,
-      onSetBackgroundMethod: handleSetBackgroundMethod,
+      onSetBackgroundMethod: handleSetBackgroundChoice,
       onAiAnalyze: handleAiAnalyze,
       onAiCancel: handleAiCancel,
       onAiAllowWasm: handleAiAllowWasm,
@@ -880,6 +914,8 @@ function render(container) {
       onUndoTouchUp: handleUndoTouchUp,
       onClearTouchUpsOnFrame: handleClearTouchUpsOnFrame,
       onClearAllTouchUps: handleClearAllTouchUps,
+      onSelectSidebarTab: handleSelectSidebarTab,
+      onSetPreviewView: handleSetPreviewView,
       getState: () => store?.getState() ?? null,
       getFrame: () => {
         const s = store?.getState();
@@ -916,6 +952,7 @@ function drawPreview(state) {
     skipKey: cropDragging,
     transparent: requiresTransparency({ edits: state.edits, hasAlpha: state.clip?.hasAlpha }),
     maskSource: isAiCutoutActive(state.edits.background) ? (aiSession?.maskSource ?? null) : null,
+    view: getEffectivePreviewView(state),
   });
 }
 
@@ -1290,10 +1327,15 @@ function handleAddText() {
   emit('editor:text', { action: 'add' });
 }
 
-/** @param {string | null} id */
+/**
+ * Select a text layer (null deselects). Selecting one (e.g. on the preview)
+ * shows the Text tab, where its settings are.
+ * @param {string | null} id
+ */
 function handleSelectText(id) {
   if (!store) return;
   store.setState((state) => selectTextLayer(state, id));
+  if (id !== null && !store.getState().brush.on) handleSelectSidebarTab('text');
 }
 
 /**
@@ -1394,6 +1436,27 @@ function handleToggleBackground(enabled) {
     }
   }
   store.setState((state) => setBackground(state, patch));
+}
+
+/**
+ * The Background tab's Off | Color | AI switch. Off turns removal off (a
+ * running analysis stops: its controls are hidden then); Color or AI turns
+ * it on with that method. Each method keeps its own settings; the first
+ * switch to Color without a chosen key color detects the edge color.
+ * @param {import('../../shared/edits/model.js').BackgroundMethod | 'off'} choice
+ */
+function handleSetBackgroundChoice(choice) {
+  if (!store) return;
+  if (choice === 'off') {
+    if (aiSession?.analyzing) {
+      aiSession.cancel();
+      announce('Background removal off. The analysis was stopped; finished frames are kept.');
+    }
+    handleToggleBackground(false);
+    return;
+  }
+  handleSetBackgroundMethod(choice);
+  if (!store.getState().edits.background.enabled) handleToggleBackground(true);
 }
 
 /**
@@ -1852,6 +1915,34 @@ function handleClearAllTouchUps() {
       announce('Touch-ups restored');
     },
   });
+}
+
+// ============================================================
+// Sidebar tabs and preview view
+// ============================================================
+
+/**
+ * A sidebar tab was chosen. Leaving the Background tab ends its preview
+ * tools (eyedropper, pick tool): their controls are no longer on screen.
+ * @param {import('./types.js').SidebarTab} tab
+ */
+function handleSelectSidebarTab(tab) {
+  if (!store) return;
+  store.setState((state) => setSidebarTab(state, tab));
+  const state = store.getState();
+  lastSidebarTab = state.sidebarTab;
+  if (state.sidebarTab === 'background') return;
+  if (state.aiPickTool) handleSetAiPickTool(null);
+  if (state.pickingKeyColor) handleSetPickingKeyColor(false);
+}
+
+/**
+ * Result / Original / Mask view of the preview (view only)
+ * @param {import('./types.js').PreviewView} view
+ */
+function handleSetPreviewView(view) {
+  if (!store) return;
+  store.setState((state) => setPreviewView(state, view));
 }
 
 /** @param {boolean} picking */
@@ -2449,6 +2540,8 @@ function registerTestHooks() {
         aiPickTool: state.aiPickTool,
         aiCutout: state.aiCutout,
         brush: state.brush,
+        sidebarTab: state.sidebarTab,
+        previewView: state.previewView,
       };
     };
     // Keyed-background cache counters: readbacks must not grow on text-only edits

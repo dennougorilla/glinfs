@@ -214,8 +214,7 @@ test.describe('US4: Professional Form Controls', () => {
       location.hash = '#/editor';
     });
     await page.waitForSelector('.editor-canvas', { state: 'visible' });
-    // Playback (the speed select) folds into an accordion since #100 v3
-    await page.locator('.prop-accordion-summary', { hasText: 'Playback' }).click();
+    // Playback (the speed select) is on the sidebar's Frame tab (the default)
     await expect(page.locator('.editor-sidebar select').first()).toBeVisible();
 
     // Export (the #/export deep link opens the editor with the dialog)
