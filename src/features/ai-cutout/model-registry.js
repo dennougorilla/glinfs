@@ -3,7 +3,7 @@
  * @module features/ai-cutout/model-registry
  *
  * Every segmentation model the app can run, with everything the worker,
- * the manager, Settings ("Downloaded models"), scripts/fetch-models.mjs and
+ * the manager, Settings ("AI models"), scripts/fetch-models.mjs and
  * the Pages deploy workflow need to know about it. Plain data with no
  * browser or Vite imports, so the Node fetch script imports it directly
  * (the pins exist once; tests/unit/ai-cutout/model-config.test.js checks
@@ -52,7 +52,12 @@
 /**
  * @typedef {Object} ModelEntry
  * @property {string} id - Stable id (edits, mask keys, messages)
- * @property {string} label - Short UI name
+ * @property {string} label - What it is for, the name the UI leads with
+ *   ("General", "Anime"; also in messages: "The Anime model was deleted")
+ * @property {string} modelName - The network behind it, shown small next to
+ *   the label where models are listed in full (Settings)
+ * @property {string} shortModelName - `modelName` short enough for the
+ *   editor's model switch
  * @property {string} description - What it is good at (UI copy)
  * @property {string} finds - What it cuts out, as the object of "Finds …
  *   in every frame" (UI copy)
@@ -103,6 +108,8 @@ const APACHE_2 = Object.freeze({
 const ANIME = {
   id: 'anime',
   label: 'Anime',
+  modelName: 'ISNet (isnet-anime)',
+  shortModelName: 'ISNet anime',
   description: 'Anime and illustrated characters',
   finds: 'the characters',
   fileName: 'isnetis-fp16.onnx',
@@ -154,6 +161,8 @@ const ANIME = {
 const GENERAL = {
   id: 'general',
   label: 'General',
+  modelName: 'ISNet (general-use)',
+  shortModelName: 'ISNet',
   description: 'People, pets and objects in live-action video',
   finds: 'the people, pets and objects',
   fileName: 'isnet-general-fp16.onnx',
@@ -193,8 +202,12 @@ function freezeEntry(entry) {
   return Object.freeze(entry);
 }
 
-/** Every model, in the order the UI lists them */
-export const MODEL_REGISTRY = Object.freeze([freezeEntry(ANIME), freezeEntry(GENERAL)]);
+/**
+ * Every model, in the order the UI lists them (the editor's switch left to
+ * right, Settings top to bottom). A new model needs only an entry here (and
+ * its file in the `models-v1` release).
+ */
+export const MODEL_REGISTRY = Object.freeze([freezeEntry(GENERAL), freezeEntry(ANIME)]);
 
 /** Model of edits that do not name one (everything saved before the general model) */
 export const DEFAULT_MODEL_ID = ANIME.id;

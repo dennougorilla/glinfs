@@ -237,8 +237,8 @@ describe('AI cutout in the mounted editor', () => {
     const anime = /** @type {HTMLInputElement} */ ($('#ai-model-anime'));
     const general = /** @type {HTMLInputElement} */ ($('#ai-model-general'));
     expect(anime.checked).toBe(true);
-    expect(anime.labels?.[0]?.textContent).toBe('Anime 88 MB');
-    expect(general.labels?.[0]?.textContent).toBe('General 90 MB');
+    expect(anime.labels?.[0]?.textContent).toBe('Anime ISNet anime Download 88 MB');
+    expect(general.labels?.[0]?.textContent).toBe('General ISNet Download 90 MB');
     // General on the left, Anime (the default) on the right
     const order = Array.from($('#ai-model').querySelectorAll('input'), (i) => i.id);
     expect(order).toEqual(['ai-model-general', 'ai-model-anime']);

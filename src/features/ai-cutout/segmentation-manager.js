@@ -11,8 +11,12 @@
  * `frame.sharedKey ?? frame.id` (imported holds share pixels, so they share
  * one mask).
  *
+ * preloadModel() creates a model's session ahead of the first analysis
+ * (the editor calls it at idle time for a model that is already
+ * downloaded); it never downloads: the worker loads it with `cacheOnly`.
+ *
  * One worker keeps one session per model it has loaded, so switching
- * between models never reloads ORT, re-verifies the file or re-runs the
+ * between models never reloads ORT, reads the file again or re-runs the
  * warm-up. Two exceptions free memory instead: a WASM session (it shares
  * the worker's heap with any other session) is unloaded before another
  * model loads, and the worker stops once no model is loaded any more.
@@ -30,6 +34,7 @@
 import { getDrawableSource } from '../../shared/utils/canvas.js';
 import { getSharedMaskStore } from './mask-store.js';
 import { DEFAULT_MODEL_ID, getModelSpec } from './model-config.js';
+import { requestPersistentStorage } from './model-storage.js';
 import { computeMaskSize } from './preprocess.js';
 import {
   createAbortError,
@@ -102,6 +107,8 @@ import {
  * @property {(source: CanvasImageSource, width: number, height: number) => Promise<ImageBitmap>} [createBitmap]
  * @property {(modelId: string) => ModelSpec} [getModelSpec]
  * @property {Navigator} [navigatorImpl] - For getCapabilities()
+ * @property {() => Promise<unknown>} [persistStorage] - Called after the
+ *   worker downloaded and cached a model (asks for persistent storage)
  */
 
 /** Frames handed to the worker ahead of the one being analyzed */
@@ -289,7 +296,13 @@ export class SegmentationManager {
     this.#createBitmap = options.createBitmap ?? createScaledBitmap;
     this.#getModelSpec = options.getModelSpec ?? ((modelId) => getModelSpec(modelId));
     this.#navigator = options.navigatorImpl ?? globalThis.navigator;
+    this.#persistStorage = options.persistStorage ?? (() => requestPersistentStorage());
   }
+
+  /** @type {() => Promise<unknown>} */
+  #persistStorage;
+  /** @type {Set<() => void>} */
+  #modelListeners = new Set();
 
   /** @type {MaskStore} */
   #maskStore;
@@ -401,6 +414,59 @@ export class SegmentationManager {
     if (!this.#slots.has(modelId) || this.isModelBusy(modelId)) return false;
     void this.#releaseSlot(modelId, createAbortError('Model unloaded'));
     return true;
+  }
+
+  /**
+   * Call `listener` whenever a model's session becomes ready or is released
+   * (Settings shows "Loaded", the editor "Ready").
+   * @param {() => void} listener
+   * @returns {() => void} Unsubscribe
+   */
+  onModelStateChange(listener) {
+    this.#modelListeners.add(listener);
+    return () => {
+      this.#modelListeners.delete(listener);
+    };
+  }
+
+  #notifyModelState() {
+    for (const listener of [...this.#modelListeners]) listener();
+  }
+
+  /**
+   * Create a model's session ahead of its first analysis, from its cached
+   * copy only (never downloads). Does nothing when the model is loading or
+   * loaded already, while an analysis runs, when another model runs on WASM
+   * (it would have to be unloaded), or when the model could only run on
+   * WASM without the user's choice. A failure is silent: the slot is
+   * released and the next analysis loads the model as usual.
+   * @param {string} modelId
+   * @param {{ allowWasm?: boolean }} [options]
+   * @returns {Promise<boolean>} The session is ready
+   */
+  async preloadModel(modelId, { allowWasm = false } = {}) {
+    if (this.#slots.has(modelId)) {
+      return (
+        this.#slots.get(modelId)?.ready.then(
+          () => true,
+          () => false,
+        ) ?? false
+      );
+    }
+    if (this.#busy.size > 0) return false;
+    if ([...this.#slots.values()].some((slot) => slot.info?.backend === 'wasm')) return false;
+    const resolved = applyDevOverride(this.#getModelSpec(modelId), allowWasm);
+    if (!resolved.allowWasm && !(await this.getCapabilities()).webgpu) return false;
+    // Re-checked: an analysis may have started or loaded it meanwhile
+    if (this.#slots.has(modelId) || this.#busy.size > 0) return false;
+    const slot = this.#loadModel(modelId, allowWasm, { cacheOnly: true });
+    try {
+      await slot.ready;
+      return true;
+    } catch (error) {
+      if (this.#slots.get(modelId) === slot && !slot.info) void this.#releaseSlot(modelId, error);
+      return false;
+    }
   }
 
   /**
@@ -577,9 +643,10 @@ export class SegmentationManager {
    * Ask the worker (started if needed) to load a model.
    * @param {string} modelId
    * @param {boolean} allowWasm
+   * @param {{ cacheOnly?: boolean }} [options] - cacheOnly: never download (preload)
    * @returns {ModelSlot}
    */
-  #loadModel(modelId, allowWasm) {
+  #loadModel(modelId, allowWasm, { cacheOnly = false } = {}) {
     const resolved = applyDevOverride(this.#getModelSpec(modelId), allowWasm);
     /** @type {(info: ReadyInfo) => void} */
     let resolve = () => undefined;
@@ -599,6 +666,7 @@ export class SegmentationManager {
         type: 'init',
         model: resolved.spec,
         allowWasm: resolved.allowWasm,
+        ...(cacheOnly ? { cacheOnly: true } : {}),
       });
     } catch (error) {
       slot.reject(error);
@@ -654,6 +722,9 @@ export class SegmentationManager {
             timings: data.timings,
           };
           slot.resolve(slot.info);
+          // Downloaded just now: keep it when space runs low
+          if (!data.fromCache && data.cached) void this.#persistStorage().catch(() => undefined);
+          this.#notifyModelState();
           break;
         }
         case 'init-error': {
@@ -708,6 +779,7 @@ export class SegmentationManager {
     this.#slots.delete(modelId);
     if (this.#lastReady?.modelId === modelId) this.#lastReady = null;
     slot.reject(error);
+    if (slot.info) this.#notifyModelState();
     const worker = this.#worker;
     const release = () => {
       if (!worker || this.#worker !== worker || this.#slots.has(modelId)) return;
@@ -865,6 +937,7 @@ export class SegmentationManager {
     const slots = [...this.#slots.values()];
     this.#slots.clear();
     for (const slot of slots) slot.reject(error);
+    if (slots.some((slot) => slot.info)) this.#notifyModelState();
     const requests = [...this.#requests.values()];
     this.#requests.clear();
     for (const request of requests) {

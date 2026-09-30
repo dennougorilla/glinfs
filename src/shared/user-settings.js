@@ -23,6 +23,13 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  * @property {CaptureSettingsPrefs} capture - Capture settings
  * @property {ExportSettingsPrefs} export - Export settings
  * @property {string} thumbnailQuality - Thumbnail quality preset
+ * @property {AiCutoutPrefs} aiCutout - AI cutout preferences
+ */
+
+/**
+ * @typedef {Object} AiCutoutPrefs
+ * @property {boolean} preloadModels - When the editor opens with the AI
+ *   method, prepare its model if it is downloaded already (never downloads)
  */
 
 /**
@@ -95,6 +102,9 @@ const DEFAULT_SETTINGS = {
     targetSizeMB: null,
   },
   thumbnailQuality: 'auto', // 'auto' | 'low' | 'standard' | 'high' | 'ultra'
+  aiCutout: {
+    preloadModels: true,
+  },
 };
 
 /**
@@ -251,6 +261,7 @@ function cloneDefaults() {
     capture: { ...DEFAULT_SETTINGS.capture },
     export: { ...DEFAULT_SETTINGS.export },
     thumbnailQuality: DEFAULT_SETTINGS.thumbnailQuality,
+    aiCutout: { ...DEFAULT_SETTINGS.aiCutout },
   };
 }
 
@@ -333,6 +344,7 @@ export function loadSettings() {
       capture: { ...DEFAULT_SETTINGS.capture, ...decodeStoredCapture(parsed.capture) },
       export: { ...DEFAULT_SETTINGS.export, ...parsed.export },
       thumbnailQuality: parsed.thumbnailQuality || DEFAULT_SETTINGS.thumbnailQuality,
+      aiCutout: { ...DEFAULT_SETTINGS.aiCutout, ...parsed.aiCutout },
     };
   } catch (error) {
     console.error('Failed to load user settings:', error);
@@ -357,7 +369,7 @@ export function saveSettings(settings) {
 
 /**
  * Update a specific setting
- * @param {string} category - 'capture' | 'export' | 'thumbnailQuality'
+ * @param {string} category - 'capture' | 'export' | 'thumbnailQuality' | 'aiCutout'
  * @param {string} key - Setting key
  * @param {any} value - New value
  */

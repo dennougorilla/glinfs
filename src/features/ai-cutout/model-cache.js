@@ -1,5 +1,5 @@
 /**
- * Downloaded models in Cache Storage (main thread, Settings)
+ * AI models in Cache Storage (main thread, Settings)
  * @module features/ai-cutout/model-cache
  *
  * The segmentation worker keeps each verified model in Cache Storage under
@@ -20,16 +20,20 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
 /**
  * @typedef {Object} DownloadedModelInfo
  * @property {string} id
- * @property {string} label
+ * @property {string} label - What it is for ("General")
+ * @property {string} modelName - The network ("ISNet (general-use)")
  * @property {string} description
  * @property {number} bytes - Pinned size of the model file
  * @property {{ name: string, url: string }} license
  * @property {string} upstream
  * @property {boolean | null} cached - Its current file is in Cache Storage (null: unknown)
+ * @property {string[]} staleUrls - Keys of its file under earlier pins
+ * @property {boolean} updateAvailable - Not cached under its current pin, but
+ *   an older copy of its file is (the pinned file changed since)
  */
 
 /**
- * A file in the model bucket that no registered model loads.
+ * A file in the model bucket that is no registered model's file.
  * @typedef {Object} OldModelFile
  * @property {string} url - Its exact Cache Storage key
  * @property {string} fileName - Last path segment of the URL
@@ -40,6 +44,8 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
  * @typedef {Object} DownloadedModelsListing
  * @property {DownloadedModelInfo[]} models - Every registered model
  * @property {OldModelFile[]} oldFiles - Every other file in the bucket
+ * @property {number} cachedBytes - Size of every model copy in the bucket
+ *   (current and older pins of registered models, and old files)
  */
 
 /**
@@ -119,6 +125,20 @@ async function cachedFileSize(cache, url) {
  * @param {string} url
  * @returns {string}
  */
+function withoutSearch(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.search = '';
+    return parsed.href;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * @param {string} url
+ * @returns {string}
+ */
 function fileNameOf(url) {
   try {
     const path = new URL(url).pathname;
@@ -149,17 +169,27 @@ export async function listDownloadedModels(deps = {}) {
     }
   }
   const keys = new Map(MODEL_REGISTRY.map((entry) => [entry.id, currentKey(entry.id, resolved)]));
-  const models = MODEL_REGISTRY.map((entry) => ({
-    id: entry.id,
-    label: entry.label,
-    description: entry.description,
-    bytes: entry.bytes,
-    license: entry.license,
-    upstream: entry.upstream,
-    cached: urls ? urls.has(/** @type {string} */ (keys.get(entry.id))) : null,
-  }));
-  const current = new Set(keys.values());
-  const oldUrls = cache && urls ? [...urls].filter((url) => !current.has(url)) : [];
+  const allUrls = cache && urls ? [...urls] : [];
+  const models = MODEL_REGISTRY.map((entry) => {
+    const key = /** @type {string} */ (keys.get(entry.id));
+    const file = withoutSearch(key);
+    const cached = urls ? urls.has(key) : null;
+    const staleUrls = allUrls.filter((url) => url !== key && withoutSearch(url) === file);
+    return {
+      id: entry.id,
+      label: entry.label,
+      modelName: entry.modelName,
+      description: entry.description,
+      bytes: entry.bytes,
+      license: entry.license,
+      upstream: entry.upstream,
+      cached,
+      staleUrls,
+      updateAvailable: cached === false && staleUrls.length > 0,
+    };
+  });
+  const known = new Set(models.flatMap((model) => [keys.get(model.id), ...model.staleUrls]));
+  const oldUrls = allUrls.filter((url) => !known.has(url));
   const oldFiles = await Promise.all(
     oldUrls.map(async (url) => ({
       url,
@@ -167,7 +197,18 @@ export async function listDownloadedModels(deps = {}) {
       bytes: await cachedFileSize(/** @type {Cache} */ (cache), url),
     })),
   );
-  return { models, oldFiles };
+  const staleSizes = await Promise.all(
+    models
+      .flatMap((model) => model.staleUrls)
+      .map((url) => cachedFileSize(/** @type {Cache} */ (cache), url)),
+  );
+  const cachedBytes =
+    models.reduce((sum, model) => sum + (model.cached ? model.bytes : 0), 0) +
+    [...staleSizes, ...oldFiles.map((file) => file.bytes)].reduce(
+      (/** @type {number} */ sum, size) => sum + (size ?? 0),
+      0,
+    );
+  return { models, oldFiles, cachedBytes };
 }
 
 /**
@@ -187,14 +228,40 @@ async function deleteEntry(url, deps) {
 }
 
 /**
- * Delete a model's current file from Cache Storage (old copies are
- * listed and deleted as old files).
+ * Delete a model's file from Cache Storage: its current copy and its copies
+ * under earlier pins (an update that was not downloaded yet).
  * @param {string} modelId
  * @param {ModelCacheDeps} [deps]
  * @returns {Promise<boolean>} Something was deleted
  */
-export function deleteDownloadedModel(modelId, deps = {}) {
-  return deleteEntry(currentKey(modelId, resolveDeps(deps)), deps);
+export async function deleteDownloadedModel(modelId, deps = {}) {
+  const resolved = resolveDeps(deps);
+  const cache = await openExistingCache(resolved.cacheStorage);
+  if (!cache) return false;
+  try {
+    return await cache.delete(withoutSearch(currentKey(modelId, resolved)), {
+      ignoreSearch: true,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a model's current file is in Cache Storage (false when unknown).
+ * @param {string} modelId
+ * @param {ModelCacheDeps} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function isModelCached(modelId, deps = {}) {
+  const resolved = resolveDeps(deps);
+  const cache = await openExistingCache(resolved.cacheStorage);
+  if (!cache) return false;
+  try {
+    return (await cache.match(currentKey(modelId, resolved))) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 /**

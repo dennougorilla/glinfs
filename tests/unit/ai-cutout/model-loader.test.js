@@ -1,6 +1,9 @@
 import { createHash, webcrypto } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  downloadModelToCache,
+  evictCachedModel,
+  isModelIntact,
   loadModelBytes,
   looksLikeHtml,
   modelCacheKey,
@@ -177,37 +180,39 @@ describe('loadModelBytes', () => {
     expect([...entries.keys()]).toEqual([stale]);
   });
 
-  it('serves a verified cached copy without fetching', async () => {
+  it('serves a cached copy without fetching and without hashing it again', async () => {
     const spec = specFor(MODEL);
     const { storage, entries } = createFakeCaches();
     entries.set(modelCacheKey(spec, BASE), MODEL.slice());
     const fetchImpl = vi.fn();
     const onProgress = vi.fn();
+    const digest = vi.fn();
 
     const result = await loadModelBytes(spec, {
       fetchImpl,
       cacheStorage: storage,
-      subtle,
+      subtle: /** @type {any} */ ({ digest }),
       baseHref: BASE,
       onProgress,
     });
-    expect(result.fromCache).toBe(true);
+    expect(result).toMatchObject({ fromCache: true, cached: true });
+    expect(Array.from(result.bytes)).toEqual(Array.from(MODEL));
     expect(fetchImpl).not.toHaveBeenCalled();
+    // Verified before it was stored under a key that carries its SHA-256
+    expect(digest).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith({
-      phase: 'verifying',
+      phase: 'downloading',
       loadedBytes: 1000,
       totalBytes: 1000,
       fromCache: true,
     });
   });
 
-  it('evicts a corrupt cached copy and downloads again', async () => {
+  it('evicts a cached copy of the wrong size (truncated) and downloads again', async () => {
     const spec = specFor(MODEL);
     const { storage, entries, cache } = createFakeCaches();
     const key = modelCacheKey(spec, BASE);
-    const corrupt = MODEL.slice();
-    corrupt[10] ^= 0xff;
-    entries.set(key, corrupt);
+    entries.set(key, MODEL.slice(0, 600));
     const fetchImpl = vi.fn(async () => chunkedResponse(MODEL));
 
     const result = await loadModelBytes(spec, {
@@ -218,6 +223,52 @@ describe('loadModelBytes', () => {
     });
     expect(cache.delete).toHaveBeenCalledWith(key);
     expect(result.fromCache).toBe(false);
+    expect(Array.from(entries.get(key) ?? [])).toEqual(Array.from(MODEL));
+  });
+
+  it('cacheOnly never downloads: MODEL_NOT_CACHED without a cached copy', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const fetchImpl = vi.fn();
+    const error = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      cacheOnly: true,
+    }).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.MODEL_NOT_CACHED);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    entries.set(modelCacheKey(spec, BASE), MODEL.slice());
+    const result = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      cacheOnly: true,
+    });
+    expect(result.fromCache).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('skipCache downloads (and verifies) a fresh copy over a cached one', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const key = modelCacheKey(spec, BASE);
+    const corrupt = MODEL.slice();
+    corrupt[10] ^= 0xff;
+    entries.set(key, corrupt);
+    const fetchImpl = vi.fn(async () => chunkedResponse(MODEL));
+    const result = await loadModelBytes(spec, {
+      fetchImpl,
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      skipCache: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ fromCache: false, cached: true });
     expect(Array.from(entries.get(key) ?? [])).toEqual(Array.from(MODEL));
   });
 
@@ -484,5 +535,56 @@ describe('loadModelBytes', () => {
       baseHref: BASE,
     }).catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.DOWNLOAD_FAILED);
+  });
+});
+
+describe('downloadModelToCache / evictCachedModel / isModelIntact', () => {
+  it('downloads, verifies and stores without reading the cache', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries, cache } = createFakeCaches();
+    const onProgress = vi.fn();
+    const result = await downloadModelToCache(spec, {
+      fetchImpl: async () => chunkedResponse(MODEL),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+      onProgress,
+    });
+    expect(result.cached).toBe(true);
+    expect(cache.match).not.toHaveBeenCalled();
+    expect(entries.has(modelCacheKey(spec, BASE))).toBe(true);
+    expect(onProgress.mock.calls.at(-1)?.[0].phase).toBe('verifying');
+  });
+
+  it('never stores bytes that fail verification', async () => {
+    const spec = specFor(MODEL, { sha256: 'ab'.repeat(32) });
+    const { storage, entries } = createFakeCaches();
+    const error = await downloadModelToCache(spec, {
+      fetchImpl: async () => chunkedResponse(MODEL),
+      cacheStorage: storage,
+      subtle,
+      baseHref: BASE,
+    }).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.HASH_MISMATCH);
+    expect(entries.size).toBe(0);
+  });
+
+  it('evicts the current copy only', async () => {
+    const spec = specFor(MODEL);
+    const { storage, entries } = createFakeCaches();
+    const other = 'https://example.test/glinfs/models/other.onnx?sha256=00';
+    entries.set(modelCacheKey(spec, BASE), MODEL.slice());
+    entries.set(other, MODEL.slice());
+    expect(await evictCachedModel(spec, { cacheStorage: storage, baseHref: BASE })).toBe(true);
+    expect([...entries.keys()]).toEqual([other]);
+    expect(await evictCachedModel(spec, { cacheStorage: undefined })).toBe(false);
+  });
+
+  it('tells intact bytes from damaged ones', async () => {
+    const spec = specFor(MODEL);
+    const damaged = MODEL.slice();
+    damaged[3] ^= 1;
+    expect(await isModelIntact(MODEL, spec, { subtle })).toBe(true);
+    expect(await isModelIntact(damaged, spec, { subtle })).toBe(false);
   });
 });

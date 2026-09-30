@@ -168,3 +168,55 @@ export async function createModelSession({
     );
   }
 }
+
+/**
+ * @typedef {Object} LoadedBytes
+ * @property {Uint8Array} bytes
+ * @property {boolean} fromCache
+ * @property {boolean} cached
+ */
+
+/**
+ * Load a model and create its session, recovering from a damaged cached
+ * copy. A cached copy is not hashed on load (it was verified before it was
+ * stored); when its session cannot be created the copy is hashed now: one
+ * that no longer matches is evicted and a fresh copy downloaded (fully
+ * verified) for one more attempt, so a corrupt entry can never wedge the
+ * feature. An intact copy that fails (e.g. the model cannot run on this
+ * adapter) fails as it is: downloading the same bytes again would not help.
+ * @template S
+ * @param {Object} options
+ * @param {(options: { skipCache?: boolean }) => Promise<LoadedBytes>} options.load
+ * @param {(model: LoadedBytes) => Promise<S>} options.create
+ * @param {(bytes: Uint8Array) => Promise<boolean>} options.isIntact - Size and SHA-256 still match
+ * @param {() => Promise<unknown>} options.evict - Delete the cached copy
+ * @param {() => void} [options.onVerify] - The cached copy is being hashed
+ * @param {boolean} [options.cacheOnly] - Never download (preloading): a
+ *   damaged copy is evicted and the original error rethrown
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<{ loaded: LoadedBytes, created: S, reloaded: boolean }>}
+ */
+export async function loadAndCreateSession({
+  load,
+  create,
+  isIntact,
+  evict,
+  onVerify,
+  cacheOnly = false,
+  signal,
+}) {
+  const loaded = await load({});
+  try {
+    return { loaded, created: await create(loaded), reloaded: false };
+  } catch (error) {
+    if (!loaded.fromCache || signal?.aborted) throw error;
+    onVerify?.();
+    if (await isIntact(loaded.bytes)) throw error;
+    if (signal?.aborted) throw error;
+    // The cached copy is damaged: never use it again
+    await evict();
+    if (cacheOnly) throw error;
+    const fresh = await load({ skipCache: true });
+    return { loaded: fresh, created: await create(fresh), reloaded: true };
+  }
+}

@@ -992,3 +992,78 @@ describe('getSegmentationManager', () => {
     expect(manager.maskStore).toBeDefined();
   });
 });
+
+describe('preloadModel', () => {
+  const webgpuNavigator = /** @type {any} */ ({ gpu: { requestAdapter: async () => ({}) } });
+
+  it('loads a model from its cached copy only (cacheOnly) and keeps the session', async () => {
+    const { manager, workers } = createHarness({}, { navigatorImpl: webgpuNavigator });
+    const listener = vi.fn();
+    manager.onModelStateChange(listener);
+    await expect(manager.preloadModel('general')).resolves.toBe(true);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].inits).toEqual([
+      expect.objectContaining({ model: GENERAL_SPEC, cacheOnly: true }),
+    ]);
+    expect(manager.getReadyInfo('general')).not.toBeNull();
+    expect(listener).toHaveBeenCalledTimes(1);
+    // The analysis reuses the preloaded session: no second init
+    await manager.analyzeFrames([makeFrame('a')], { modelId: 'general' });
+    expect(workers[0].inits).toHaveLength(1);
+  });
+
+  it('answers false and releases the slot when the model is not cached', async () => {
+    const { manager, workers } = createHarness(
+      { autoReady: false },
+      { navigatorImpl: webgpuNavigator },
+    );
+    const preload = manager.preloadModel('anime');
+    await flush();
+    workers[0].emit({
+      type: 'init-error',
+      error: { code: SegmentationErrorCode.MODEL_NOT_CACHED, message: 'not downloaded' },
+    });
+    await expect(preload).resolves.toBe(false);
+    expect(manager.loadedModelIds).toEqual([]);
+    // Nothing loaded: the worker stops
+    expect(workers[0].terminated).toBe(true);
+  });
+
+  it('does not start without WebGPU unless WASM is allowed', async () => {
+    const { manager, createWorker } = createHarness({}, { navigatorImpl: /** @type {any} */ ({}) });
+    await expect(manager.preloadModel('anime')).resolves.toBe(false);
+    expect(createWorker).not.toHaveBeenCalled();
+    await expect(manager.preloadModel('anime', { allowWasm: true })).resolves.toBe(true);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing while an analysis runs', async () => {
+    const { manager, workers } = createHarness(
+      { autoMask: false },
+      { navigatorImpl: webgpuNavigator },
+    );
+    const run = manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
+    run.catch(() => undefined);
+    await expect(manager.preloadModel('general')).resolves.toBe(false);
+    await flush();
+    expect(workers[0].inits.map((m) => m.model.id)).toEqual(['anime']);
+    manager.dispose();
+  });
+
+  it('asks for persistent storage after the worker downloaded and cached a model', async () => {
+    const persistStorage = vi.fn(async () => true);
+    const { manager, workers } = createHarness({ autoReady: false }, { persistStorage });
+    const run = manager.analyzeFrames([makeFrame('a')]);
+    await flush();
+    workers[0].ready({ fromCache: false, cached: true });
+    await run;
+    expect(persistStorage).toHaveBeenCalledTimes(1);
+
+    const second = createHarness({ autoReady: false }, { persistStorage });
+    const again = second.manager.analyzeFrames([makeFrame('b')]);
+    await flush();
+    second.workers[0].ready({ fromCache: true, cached: true });
+    await again;
+    expect(persistStorage).toHaveBeenCalledTimes(1);
+  });
+});

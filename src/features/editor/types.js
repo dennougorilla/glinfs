@@ -168,6 +168,15 @@
  * @property {boolean} building - Final masks are being rebuilt
  * @property {number} maskVersion - Version of the final masks the preview uses (0: none)
  * @property {number} storeVersion - Probability mask store version last seen
+ * @property {Record<string, ModelAvailability>} models - Per model id: whether its
+ *   session is loaded or its file downloaded (the model switch's hints)
+ */
+
+/**
+ * Whether a model can analyze right away: its session is loaded ('ready'),
+ * its file is in Cache Storage ('cached'), or it downloads on first use
+ * ('missing'; 'unknown' until checked)
+ * @typedef {'ready'|'cached'|'missing'|'unknown'} ModelAvailability
  */
 
 /**

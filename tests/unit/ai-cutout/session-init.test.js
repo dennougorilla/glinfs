@@ -4,6 +4,7 @@ import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.
 import {
   createModelSession,
   getFetches,
+  loadAndCreateSession,
   runModel,
 } from '../../../src/features/ai-cutout/session-init.js';
 
@@ -222,5 +223,114 @@ describe('createModelSession', () => {
     }).catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.MODEL_INIT_FAILED);
     expect(error.message).toContain('wasm create failed');
+  });
+});
+
+describe('loadAndCreateSession', () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  /** @param {{ fromCache: boolean }[]} results */
+  const loader = (results) => {
+    const queue = [...results];
+    return vi.fn(async () => ({ bytes, cached: true, .../** @type {any} */ (queue.shift()) }));
+  };
+
+  it('creates the session from a cached copy without hashing it', async () => {
+    const load = loader([{ fromCache: true }]);
+    const isIntact = vi.fn();
+    const evict = vi.fn();
+    const result = await loadAndCreateSession({
+      load,
+      create: async () => 'session',
+      isIntact,
+      evict,
+    });
+    expect(result).toMatchObject({ created: 'session', reloaded: false });
+    expect(isIntact).not.toHaveBeenCalled();
+    expect(evict).not.toHaveBeenCalled();
+  });
+
+  it('evicts a damaged cached copy on session failure and retries once with a fresh download', async () => {
+    const load = loader([{ fromCache: true }, { fromCache: false }]);
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('protobuf parsing failed'))
+      .mockResolvedValueOnce('session');
+    const evict = vi.fn(async () => true);
+    const onVerify = vi.fn();
+    const result = await loadAndCreateSession({
+      load,
+      create,
+      isIntact: async () => false,
+      evict,
+      onVerify,
+    });
+    expect(result).toMatchObject({ created: 'session', reloaded: true });
+    expect(result.loaded.fromCache).toBe(false);
+    expect(onVerify).toHaveBeenCalledTimes(1);
+    expect(evict).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenNthCalledWith(2, { skipCache: true });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('only retries once: a second failure is thrown', async () => {
+    const load = loader([{ fromCache: true }, { fromCache: false }]);
+    const create = vi.fn(async () => {
+      throw new Error('broken');
+    });
+    await expect(
+      loadAndCreateSession({ load, create, isIntact: async () => false, evict: vi.fn() }),
+    ).rejects.toThrow('broken');
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an intact cached copy and rethrows (e.g. the model cannot run on this adapter)', async () => {
+    const load = loader([{ fromCache: true }]);
+    const failure = new Error('webgpu failed');
+    const evict = vi.fn();
+    await expect(
+      loadAndCreateSession({
+        load,
+        create: async () => {
+          throw failure;
+        },
+        isIntact: async () => true,
+        evict,
+      }),
+    ).rejects.toBe(failure);
+    expect(evict).not.toHaveBeenCalled();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('never re-downloads a fresh download that fails, nor in cacheOnly mode', async () => {
+    const failure = new Error('bad');
+    const isIntact = vi.fn();
+    await expect(
+      loadAndCreateSession({
+        load: loader([{ fromCache: false }]),
+        create: async () => {
+          throw failure;
+        },
+        isIntact,
+        evict: vi.fn(),
+      }),
+    ).rejects.toBe(failure);
+    expect(isIntact).not.toHaveBeenCalled();
+
+    const load = loader([{ fromCache: true }]);
+    const evict = vi.fn();
+    await expect(
+      loadAndCreateSession({
+        load,
+        create: async () => {
+          throw failure;
+        },
+        isIntact: async () => false,
+        evict,
+        cacheOnly: true,
+      }),
+    ).rejects.toBe(failure);
+    expect(evict).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

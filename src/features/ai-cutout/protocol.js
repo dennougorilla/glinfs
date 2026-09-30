@@ -6,8 +6,10 @@
  * ORT and DOM code so both sides can import it).
  *
  * Manager -> worker:
- *   { type: 'init', model: ModelSpec, allowWasm: boolean }  - load a model
- *     next to the loaded ones (a loaded one answers with 'ready' again)
+ *   { type: 'init', model: ModelSpec, allowWasm: boolean, cacheOnly?: boolean }
+ *     - load a model next to the loaded ones (a loaded one answers with
+ *     'ready' again); cacheOnly: fail with MODEL_NOT_CACHED instead of
+ *     downloading (preloading)
  *   { type: 'unload', modelId }  - stop loading a model / release its session
  *   { type: 'segment', requestId, jobId, modelId, bitmap (transferred),
  *     sourceWidth, sourceHeight, maskWidth, maskHeight }
@@ -46,6 +48,11 @@ export const SegmentationErrorCode = Object.freeze({
    * files, where the dev server's SPA fallback serves index.html
    */
   MODEL_NOT_FOUND: 'model-not-found',
+  /**
+   * The model is not in Cache Storage and the load was not allowed to
+   * download it (preloading never downloads)
+   */
+  MODEL_NOT_CACHED: 'model-not-cached',
   /** The downloaded model's size or SHA-256 is not the pinned one */
   HASH_MISMATCH: 'hash-mismatch',
   /** ONNX Runtime could not load or create a session for the model */

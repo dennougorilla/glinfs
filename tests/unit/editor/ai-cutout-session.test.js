@@ -418,3 +418,91 @@ describe('AI cutout session', () => {
     expect(session.maskSource).toBeNull();
   });
 });
+
+describe('AI cutout session: model availability and preload', () => {
+  /**
+   * @param {{ cached?: Record<string, boolean>, preload?: boolean, method?: string, model?: string }} [options]
+   */
+  function setup({
+    cached = { anime: true, general: false },
+    preload = true,
+    method = 'ai',
+    model,
+  } = {}) {
+    const maskStore = createMaskStore();
+    /** @type {Set<string>} */
+    const ready = new Set();
+    /** @type {Set<() => void>} */
+    const listeners = new Set();
+    const manager = {
+      ...createFakeManager(maskStore),
+      getReadyInfo: (/** @type {string} */ id) => (ready.has(id) ? { modelId: id } : null),
+      onModelStateChange: (/** @type {() => void} */ l) => {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+      preloadModel: vi.fn(async (/** @type {string} */ id) => {
+        ready.add(id);
+        for (const l of listeners) l();
+        return true;
+      }),
+    };
+    const state = {
+      clip: { frames: makeFrames(2) },
+      edits: normalizeEdits(
+        { background: { enabled: true, method, ai: model ? { model } : {} } },
+        2,
+      ),
+    };
+    /** @type {Record<string, any>} */
+    const status = {};
+    const isModelCached = vi.fn(async (/** @type {string} */ id) => Boolean(cached[id]));
+    const scheduleIdle = vi.fn((/** @type {() => void} */ task) => task());
+    const session = createAiCutoutSession({
+      getState: () => /** @type {any} */ (state),
+      setStatus: (patch) => Object.assign(status, patch),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ (manager),
+      maskStore,
+      cache: createFinalMaskCache(),
+      isModelCached,
+      shouldPreload: () => preload,
+      scheduleIdle,
+    });
+    return { session, manager, status, isModelCached, scheduleIdle };
+  }
+
+  it('preloads the clip’s model at idle time when it is downloaded', async () => {
+    const { session, manager, status, scheduleIdle } = setup();
+    await expect(session.preload()).resolves.toBe(true);
+    expect(scheduleIdle).toHaveBeenCalledTimes(1);
+    expect(manager.preloadModel).toHaveBeenCalledWith('anime', { allowWasm: false });
+    await vi.waitFor(() => expect(status.models).toEqual({ general: 'missing', anime: 'ready' }));
+    session.dispose();
+  });
+
+  it('never preloads a model that is not downloaded (no implicit download)', async () => {
+    const { session, manager } = setup({ model: 'general' });
+    await expect(session.preload()).resolves.toBe(false);
+    expect(manager.preloadModel).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it('does nothing when the setting is off or the AI method is not chosen', async () => {
+    const off = setup({ preload: false });
+    await expect(off.session.preload()).resolves.toBe(false);
+    expect(off.isModelCached).not.toHaveBeenCalled();
+    off.session.dispose();
+    const color = setup({ method: 'color' });
+    await expect(color.session.preload()).resolves.toBe(false);
+    expect(color.manager.preloadModel).not.toHaveBeenCalled();
+    color.session.dispose();
+  });
+
+  it('reports each model as ready, downloaded or missing', async () => {
+    const { session, status } = setup({ cached: { anime: true, general: false } });
+    await session.refreshModels();
+    expect(status.models).toEqual({ general: 'missing', anime: 'cached' });
+    session.dispose();
+  });
+});

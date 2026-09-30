@@ -14,7 +14,9 @@
  * One session per model: each 'init' message loads one model (the spec:
  * file, input and output names, preprocessing) next to the ones already
  * loaded, and 'unload' releases one. Switching between models therefore
- * never reloads ORT, re-verifies the file or re-runs the warm-up. Every ORT
+ * never reloads ORT, reads the file again or re-runs the warm-up. A model
+ * read from Cache Storage is not hashed again (see model-loader.js); an
+ * 'init' with `cacheOnly` (preloading) never downloads. Every ORT
  * call (session creation with its warm-up, a frame's run, a release) goes
  * through one queue: the sessions share the input buffer, and a WebGPU
  * device runs one graph at a time anyway.
@@ -35,7 +37,11 @@
 
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import * as ort from 'onnxruntime-web/webgpu';
-import { loadModelBytes } from '../features/ai-cutout/model-loader.js';
+import {
+  evictCachedModel,
+  isModelIntact,
+  loadModelBytes,
+} from '../features/ai-cutout/model-loader.js';
 import {
   computeInputGeometry,
   probabilityToMask,
@@ -47,7 +53,11 @@ import {
   SegmentationErrorCode,
   toErrorPayload,
 } from '../features/ai-cutout/protocol.js';
-import { createModelSession, runModel } from '../features/ai-cutout/session-init.js';
+import {
+  createModelSession,
+  loadAndCreateSession,
+  runModel,
+} from '../features/ai-cutout/session-init.js';
 
 /** @typedef {import('../features/ai-cutout/model-config.js').ModelSpec} ModelSpec */
 
@@ -153,12 +163,14 @@ function describeAdapter(adapter) {
 }
 
 /**
- * Load a model and create its session.
+ * Load a model and create its session (a damaged cached copy is replaced
+ * once: see loadAndCreateSession).
  * @param {LoadedModel} entry
  * @param {boolean} allowWasm
+ * @param {boolean} cacheOnly - Preloading: never download
  * @returns {Promise<Object>} The 'ready' message
  */
-async function initialize(entry, allowWasm) {
+async function initialize(entry, allowWasm, cacheOnly) {
   const { spec } = entry;
   const { signal } = entry.controller;
   const modelId = spec.id;
@@ -172,53 +184,82 @@ async function initialize(entry, allowWasm) {
   }
 
   const loadStart = performance.now();
+  let loadMs = 0;
+  let createStart = loadStart;
   let lastProgressAt = 0;
-  const loaded = await loadModelBytes(spec, {
+  const { loaded, created, reloaded } = await loadAndCreateSession({
     signal,
-    onProgress(progress) {
-      const now = performance.now();
-      const final = progress.loadedBytes === progress.totalBytes;
-      if (
-        progress.phase === 'downloading' &&
-        !final &&
-        now - lastProgressAt < PROGRESS_INTERVAL_MS
-      ) {
-        return;
-      }
-      lastProgressAt = now;
-      post({ type: 'status', modelId, ...progress });
+    cacheOnly,
+    async load({ skipCache }) {
+      const start = performance.now();
+      const result = await loadModelBytes(spec, {
+        signal,
+        cacheOnly,
+        skipCache,
+        onProgress(progress) {
+          const now = performance.now();
+          const final = progress.loadedBytes === progress.totalBytes;
+          if (
+            progress.phase === 'downloading' &&
+            !final &&
+            now - lastProgressAt < PROGRESS_INTERVAL_MS
+          ) {
+            return;
+          }
+          lastProgressAt = now;
+          post({ type: 'status', modelId, ...progress });
+        },
+      });
+      loadMs += performance.now() - start;
+      return result;
     },
+    async create(model) {
+      post({
+        type: 'status',
+        modelId,
+        phase: 'initializing',
+        loadedBytes: model.bytes.byteLength,
+        totalBytes: spec.bytes,
+        fromCache: model.fromCache,
+      });
+      createStart = performance.now();
+      const session = await withOrt(async () => {
+        if (signal.aborted) throw createAbortError('Model unloaded');
+        // Allocated here so the warm-up reuses the buffer every frame fills later
+        getInputContext(spec.inputSize);
+        return createModelSession({
+          ort: /** @type {any} */ (ort),
+          bytes: model.bytes,
+          spec,
+          adapter,
+          allowWasm,
+          warmupInput: /** @type {Float32Array} */ (inputTensorData),
+        });
+      });
+      if (signal.aborted) {
+        // Unloaded while the session was being created
+        await withOrt(() => session.session.release?.() ?? Promise.resolve()).catch(
+          () => undefined,
+        );
+        throw createAbortError('Model unloaded');
+      }
+      return session;
+    },
+    onVerify() {
+      post({
+        type: 'status',
+        modelId,
+        phase: 'verifying',
+        loadedBytes: spec.bytes,
+        totalBytes: spec.bytes,
+        fromCache: true,
+      });
+    },
+    isIntact: (bytes) => isModelIntact(bytes, spec),
+    evict: () => evictCachedModel(spec),
   });
-  const loadMs = performance.now() - loadStart;
-
-  post({
-    type: 'status',
-    modelId,
-    phase: 'initializing',
-    loadedBytes: loaded.bytes.byteLength,
-    totalBytes: spec.bytes,
-    fromCache: loaded.fromCache,
-  });
-
-  const createStart = performance.now();
-  const created = await withOrt(async () => {
-    if (signal.aborted) throw createAbortError('Model unloaded');
-    // Allocated here so the warm-up reuses the buffer every frame fills later
-    getInputContext(spec.inputSize);
-    return createModelSession({
-      ort: /** @type {any} */ (ort),
-      bytes: loaded.bytes,
-      spec,
-      adapter,
-      allowWasm,
-      warmupInput: /** @type {Float32Array} */ (inputTensorData),
-    });
-  });
-  if (signal.aborted) {
-    // Unloaded while the session was being created
-    await withOrt(() => created.session.release?.() ?? Promise.resolve()).catch(() => undefined);
-    throw createAbortError('Model unloaded');
-  }
+  if (reloaded)
+    console.warn('[segmentation] The cached model was damaged; it was downloaded again');
   entry.session = /** @type {any} */ (created.session);
   if (created.webgpuError) {
     console.warn(`[segmentation] ${created.webgpuError}; running on WASM`);
@@ -244,8 +285,9 @@ async function initialize(entry, allowWasm) {
  * loaded one answers with its 'ready' again).
  * @param {ModelSpec} spec
  * @param {boolean} allowWasm
+ * @param {boolean} [cacheOnly] - Preloading: fail instead of downloading
  */
-function loadModel(spec, allowWasm) {
+function loadModel(spec, allowWasm, cacheOnly = false) {
   const existing = models.get(spec.id);
   if (existing) {
     if (existing.readyMessage) post(existing.readyMessage);
@@ -260,7 +302,7 @@ function loadModel(spec, allowWasm) {
     readyMessage: null,
   };
   models.set(spec.id, entry);
-  entry.ready = initialize(entry, allowWasm).then(
+  entry.ready = initialize(entry, allowWasm, cacheOnly).then(
     (message) => {
       entry.readyMessage = message;
       post(message);
@@ -419,7 +461,7 @@ self.onmessage = (event) => {
   const message = event.data;
   switch (message?.type) {
     case 'init':
-      loadModel(message.model, Boolean(message.allowWasm));
+      loadModel(message.model, Boolean(message.allowWasm), Boolean(message.cacheOnly));
       break;
     case 'unload':
       unloadModel(message.modelId);

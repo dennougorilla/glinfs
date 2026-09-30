@@ -13,7 +13,7 @@ import {
   updateSetting,
 } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
-import { renderDownloadedModelsSection } from './downloaded-models.js';
+import { renderAiModelsSection } from './downloaded-models.js';
 
 /**
  * Resolve a setting whose stored "auto" (null) value means a platform-
@@ -127,7 +127,7 @@ export function renderSettings(container, handlers = {}) {
     content.appendChild(thumbnailSection);
 
     // AI cutout models kept in Cache Storage (not a stored setting)
-    content.appendChild(renderDownloadedModelsSection(cleanups));
+    content.appendChild(renderAiModelsSection(cleanups));
 
     screen.append(header, content);
     container.appendChild(screen);

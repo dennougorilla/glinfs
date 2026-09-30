@@ -130,6 +130,7 @@ export function createAiCutoutStatus() {
     building: false,
     maskVersion: 0,
     storeVersion: 0,
+    models: {},
   };
 }
 

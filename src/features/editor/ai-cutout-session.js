@@ -17,10 +17,22 @@
  *   them would flash every frame unkeyed while the build runs).
  * - Everything reports through `setStatus` (editor store) and
  *   `onMaskSource`; after dispose() nothing is written anywhere.
+ * - preload() prepares the clip's model at idle time when it is already
+ *   downloaded (and the "Prepare downloaded models" setting is on), so
+ *   Analyze starts at once. It never downloads (the manager loads with
+ *   `cacheOnly`); the session stays loaded after this mount, like one an
+ *   analysis loaded, until the reset path frees the worker.
+ * - `models` in the status says per model whether it is ready, downloaded
+ *   or still to download (refreshed when a session loads or goes away and
+ *   after each analysis).
  */
 
 import { isAiCutoutActive } from '../../shared/edits/model.js';
+import { loadSettings } from '../../shared/user-settings.js';
+import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
+import { getModelIds } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
+import { resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
   describeAnalysisError,
@@ -60,7 +72,36 @@ export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
  * @property {import('../ai-cutout/mask-store.js').MaskStore} maskStore
  * @property {ReturnType<typeof getSharedFinalMaskCache>} [cache]
  * @property {() => number} [now]
+ * @property {(modelId: string) => Promise<boolean>} [isModelCached] - Its current
+ *   file is in Cache Storage
+ * @property {() => boolean} [shouldPreload] - The "Prepare downloaded models
+ *   when the editor opens" setting
+ * @property {(task: () => void) => void} [scheduleIdle] - Runs `task` when the
+ *   page is idle (requestIdleCallback, else a timeout)
  */
+
+/**
+ * Run a task when the page is idle (a timeout where requestIdleCallback is
+ * missing, e.g. Safari)
+ * @param {() => void} task
+ */
+function scheduleIdleDefault(task) {
+  const ric = /** @type {any} */ (globalThis).requestIdleCallback;
+  if (typeof ric === 'function') {
+    ric(task, { timeout: 2000 });
+  } else {
+    setTimeout(task, 200);
+  }
+}
+
+/** @returns {boolean} */
+function shouldPreloadDefault() {
+  try {
+    return loadSettings().aiCutout?.preloadModels !== false;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * @param {AiCutoutSessionOptions} options
@@ -76,6 +117,10 @@ export function createAiCutoutSession(options) {
     maskStore,
     cache = getSharedFinalMaskCache(),
     now = () => performance.now(),
+    isModelCached = (modelId) =>
+      isModelCachedDefault(modelId, { getSha256: (id) => resolveModelSpec(id).sha256 }),
+    shouldPreload = shouldPreloadDefault,
+    scheduleIdle = scheduleIdleDefault,
   } = options;
 
   let disposed = false;
@@ -223,6 +268,58 @@ export function createAiCutoutSession(options) {
     }, STORE_REBUILD_DELAY_MS);
   });
 
+  /** Bumped by every refreshModels call: only the latest one reports */
+  let modelsSeq = 0;
+
+  /**
+   * Report per model whether it is ready (session loaded), downloaded or
+   * still to download
+   * @returns {Promise<void>}
+   */
+  const refreshModels = async () => {
+    if (disposed) return;
+    const seq = ++modelsSeq;
+    const ids = getModelIds();
+    const cached = await Promise.all(ids.map((id) => isModelCached(id).catch(() => null)));
+    if (disposed || seq !== modelsSeq) return;
+    /** @type {Record<string, import('./types.js').ModelAvailability>} */
+    const models = {};
+    ids.forEach((id, i) => {
+      models[id] = manager.getReadyInfo?.(id)
+        ? 'ready'
+        : cached[i] === null
+          ? 'unknown'
+          : cached[i]
+            ? 'cached'
+            : 'missing';
+    });
+    report({ models });
+  };
+
+  const unsubscribeModels = manager.onModelStateChange?.(() => void refreshModels()) ?? (() => {});
+
+  /**
+   * Prepare the clip's model in the background when it is downloaded
+   * already: at idle time, never a download, nothing while an analysis
+   * runs or the AI method is off.
+   * @returns {Promise<boolean>} A preload was started and its session is ready
+   */
+  const preload = async () => {
+    if (disposed || !shouldPreload()) return false;
+    const state = getState();
+    if (state?.edits.background.method !== 'ai') return false;
+    const modelId = getAiModelId(state.edits.background.ai);
+    if (manager.getReadyInfo?.(modelId)) return true;
+    if (!(await isModelCached(modelId).catch(() => false))) return false;
+    await new Promise((resolve) => scheduleIdle(() => resolve(undefined)));
+    if (disposed || analysisController) return false;
+    // The model may have changed while waiting for idle time
+    const current = getState();
+    if (!current || getAiModelId(current.edits.background.ai) !== modelId) return false;
+    if (current.edits.background.method !== 'ai') return false;
+    return (await manager.preloadModel?.(modelId, { allowWasm: isWasmAllowed() })) ?? false;
+  };
+
   /** Check for a WebGPU adapter once and report it */
   const checkCapabilities = async () => {
     try {
@@ -326,12 +423,16 @@ export function createAiCutoutSession(options) {
       // Catch up with every mask now, not at the end of the cooldown
       clearCooldown();
       requestBuild();
+      // The model may have been downloaded (or its session released)
+      void refreshModels();
     }
   };
 
   return {
     analyze,
     checkCapabilities,
+    preload,
+    refreshModels,
     requestBuild,
 
     /** Stop the running analysis (finished masks stay) */
@@ -371,6 +472,7 @@ export function createAiCutoutSession(options) {
       }
       clearCooldown();
       unsubscribeStore();
+      unsubscribeModels();
       disposed = true;
       maskSource = null;
     },
