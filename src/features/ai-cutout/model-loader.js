@@ -1,13 +1,24 @@
 /**
- * Model download, verification and caching (runs in the segmentation worker)
+ * Model download, verification and caching
  * @module features/ai-cutout/model-loader
  *
  * The model is fetched same-origin with streaming progress, its size and
- * SHA-256 are checked against the pinned values, and the verified bytes are
- * kept in Cache Storage so later visits skip the download. A cached copy is
- * re-verified on every load and evicted when it no longer matches, so a
- * corrupt entry can never wedge the feature. Storing a verified download
- * removes the same model's copies under earlier pins.
+ * SHA-256 are checked against the pinned values, and only then are the
+ * bytes kept in Cache Storage, under a key that carries the pinned SHA-256
+ * (see modelCacheKey): nothing unverified is ever stored. Storing a
+ * verified download removes the same model's copies under earlier pins.
+ *
+ * A cached copy is therefore NOT hashed again on every load (about 90 MB of
+ * SHA-256 per model per visit): its key says which bytes were verified
+ * before they were stored, so a load only checks its size. A copy that
+ * nevertheless cannot become a session (the disk flipped a bit, a browser
+ * bug) is handled by the segmentation worker: it hashes that copy, and when
+ * it no longer matches evicts it and downloads a fresh, fully verified one
+ * (see evictCachedModel and the worker's initialize()).
+ *
+ * The segmentation worker loads models through loadModelBytes; Settings
+ * downloads one ahead of use through downloadModelToCache on the main
+ * thread — the same download, verification and storage code.
  *
  * Every browser API is injectable so the logic is unit-tested without a
  * browser.
@@ -19,6 +30,9 @@ import { createAbortError, SegmentationError, SegmentationErrorCode } from './pr
 /** @typedef {import('./model-config.js').ModelSpec} ModelSpec */
 
 /**
+ * Load progress. A copy read from Cache Storage reports one 'downloading'
+ * step with `fromCache: true` (the UI says "Loading the model from this
+ * browser's cache").
  * @typedef {Object} LoadProgress
  * @property {'downloading' | 'verifying'} phase
  * @property {number} loadedBytes
@@ -36,11 +50,16 @@ import { createAbortError, SegmentationError, SegmentationErrorCode } from './pr
  * @property {(progress: LoadProgress) => void} [onProgress]
  * @property {AbortSignal} [signal] - Aborting stops the download and rejects
  *   with an AbortError (the model was unloaded while it loaded)
+ * @property {boolean} [cacheOnly] - Never download: reject with
+ *   MODEL_NOT_CACHED when no cached copy exists (preloading)
+ * @property {boolean} [skipCache] - Ignore any cached copy and download a
+ *   fresh one (after a cached copy failed to load)
  */
 
 /**
  * @typedef {Object} LoadedModel
- * @property {Uint8Array} bytes - Verified model bytes
+ * @property {Uint8Array} bytes - Model bytes: just verified (downloaded), or a
+ *   cached copy that was verified before it was stored
  * @property {boolean} fromCache - Served from Cache Storage
  * @property {boolean} cached - A verified copy is in Cache Storage now
  */
@@ -223,57 +242,57 @@ async function removeOlderPins(cache, key) {
 }
 
 /**
- * Load the model: from Cache Storage when a verified copy is there,
- * otherwise from the network (then cached).
- * @param {ModelSpec} spec
- * @param {ModelLoaderDeps} [deps]
- * @returns {Promise<LoadedModel>}
+ * Resolve the injectable dependencies.
+ * @param {ModelLoaderDeps} deps
  */
-export async function loadModelBytes(spec, deps = {}) {
-  const {
-    fetchImpl = globalThis.fetch,
-    cacheStorage = globalThis.caches,
-    subtle = globalThis.crypto?.subtle,
-    baseHref = globalThis.location?.href ?? 'http://localhost/',
-    cacheName = MODEL_CACHE_NAME,
-    onProgress,
-    signal,
-  } = deps;
-  const throwIfAborted = () => {
-    if (signal?.aborted) throw createAbortError('Model load cancelled');
+function resolveDeps(deps) {
+  return {
+    fetchImpl: deps.fetchImpl ?? globalThis.fetch,
+    cacheStorage: 'cacheStorage' in deps ? deps.cacheStorage : globalThis.caches,
+    subtle: 'subtle' in deps ? deps.subtle : globalThis.crypto?.subtle,
+    baseHref: deps.baseHref ?? globalThis.location?.href ?? 'http://localhost/',
+    cacheName: deps.cacheName ?? MODEL_CACHE_NAME,
+    onProgress: deps.onProgress,
+    signal: deps.signal,
   };
-  throwIfAborted();
+}
+
+/**
+ * @param {AbortSignal | undefined} signal
+ */
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw createAbortError('Model load cancelled');
+}
+
+/**
+ * The SubtleCrypto that verifies downloads, or DOWNLOAD_FAILED.
+ * @param {SubtleCrypto | undefined | null} subtle
+ * @returns {SubtleCrypto}
+ */
+function requireSubtle(subtle) {
   if (!subtle) {
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
       'This page cannot verify the model (crypto.subtle needs a secure context)',
     );
   }
+  return subtle;
+}
 
-  const cache = await openCache(cacheStorage, cacheName);
-  const key = modelCacheKey(spec, baseHref);
-
-  if (cache) {
-    const hit = await cache.match(key).catch(() => undefined);
-    if (hit) {
-      try {
-        const bytes = new Uint8Array(await hit.arrayBuffer());
-        onProgress?.({
-          phase: 'verifying',
-          loadedBytes: bytes.byteLength,
-          totalBytes: spec.bytes,
-          fromCache: true,
-        });
-        await verifyModelBytes(bytes, spec, subtle);
-        throwIfAborted();
-        return { bytes, fromCache: true, cached: true };
-      } catch {
-        throwIfAborted();
-        // Unreadable, corrupt or stale entry: drop it and download a fresh copy
-        await cache.delete(key).catch(() => false);
-      }
-    }
-  }
+/**
+ * Download a model, verify its size and SHA-256 and store the verified
+ * bytes in Cache Storage (removing its copies under earlier pins). Never
+ * reads the cache: callers check it first.
+ * @param {ModelSpec} spec
+ * @param {ModelLoaderDeps} [deps]
+ * @returns {Promise<{ bytes: Uint8Array, cached: boolean }>} cached: the
+ *   verified copy is in Cache Storage now
+ */
+export async function downloadModelToCache(spec, deps = {}) {
+  const { fetchImpl, cacheStorage, baseHref, cacheName, onProgress, signal, subtle } =
+    resolveDeps(deps);
+  throwIfAborted(signal);
+  const verifier = requireSubtle(subtle);
 
   let response;
   try {
@@ -281,7 +300,7 @@ export async function loadModelBytes(spec, deps = {}) {
     // copy of the model (about 90 MB) in the HTTP cache would only waste disk
     response = await fetchImpl(spec.url, { cache: 'no-store', signal });
   } catch (error) {
-    throwIfAborted();
+    throwIfAborted(signal);
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
       `The model download failed: ${error instanceof Error ? error.message : error}`,
@@ -306,7 +325,7 @@ export async function loadModelBytes(spec, deps = {}) {
       signal,
     );
   } catch (error) {
-    throwIfAborted();
+    throwIfAborted(signal);
     if (error instanceof SegmentationError) throw error;
     throw new SegmentationError(
       SegmentationErrorCode.DOWNLOAD_FAILED,
@@ -325,11 +344,13 @@ export async function loadModelBytes(spec, deps = {}) {
   if (bytes.byteLength !== spec.bytes && looksLikeHtml(bytes)) {
     throw modelNotFound(spec, 'the server sent a web page');
   }
-  await verifyModelBytes(bytes, spec, subtle);
-  throwIfAborted();
+  await verifyModelBytes(bytes, spec, verifier);
+  throwIfAborted(signal);
 
   let cached = false;
+  const cache = await openCache(cacheStorage, cacheName);
   if (cache) {
+    const key = modelCacheKey(spec, baseHref);
     // Copies of this model under earlier pins can never load again: drop
     // them before storing the new one (it also frees the quota for it)
     await removeOlderPins(cache, key);
@@ -348,5 +369,89 @@ export async function loadModelBytes(spec, deps = {}) {
       // Quota exceeded or storage disabled: the model still works this visit
     }
   }
+  return { bytes, cached };
+}
+
+/**
+ * Delete a model's cached copy (under its current key).
+ * @param {ModelSpec} spec
+ * @param {ModelLoaderDeps} [deps]
+ * @returns {Promise<boolean>} Something was deleted
+ */
+export async function evictCachedModel(spec, deps = {}) {
+  const { cacheStorage, cacheName, baseHref } = resolveDeps(deps);
+  const cache = await openCache(cacheStorage, cacheName);
+  if (!cache) return false;
+  return cache.delete(modelCacheKey(spec, baseHref)).catch(() => false);
+}
+
+/**
+ * Whether bytes (a cached copy that failed to load) still have the pinned
+ * size and SHA-256.
+ * @param {Uint8Array} bytes
+ * @param {ModelSpec} spec
+ * @param {ModelLoaderDeps} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function isModelIntact(bytes, spec, deps = {}) {
+  const subtle = requireSubtle(resolveDeps(deps).subtle);
+  try {
+    await verifyModelBytes(bytes, spec, subtle);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Load the model: from Cache Storage when a copy is there (verified before
+ * it was stored: only its size is checked), otherwise from the network
+ * (verified, then cached).
+ * @param {ModelSpec} spec
+ * @param {ModelLoaderDeps} [deps]
+ * @returns {Promise<LoadedModel>}
+ * @throws {SegmentationError} MODEL_NOT_CACHED with `cacheOnly` and no cached copy
+ */
+export async function loadModelBytes(spec, deps = {}) {
+  const { cacheStorage, baseHref, cacheName, onProgress, signal, subtle } = resolveDeps(deps);
+  throwIfAborted(signal);
+  // Checked before anything else: a download could not be verified
+  requireSubtle(subtle);
+
+  const cache = deps.skipCache ? null : await openCache(cacheStorage, cacheName);
+  if (cache) {
+    const key = modelCacheKey(spec, baseHref);
+    const hit = await cache.match(key).catch(() => undefined);
+    if (hit) {
+      try {
+        const bytes = new Uint8Array(await hit.arrayBuffer());
+        throwIfAborted(signal);
+        // Verified before it was stored; a truncated entry fails this cheap check
+        if (bytes.byteLength !== spec.bytes) {
+          throw new Error(`The cached model has ${bytes.byteLength} bytes`);
+        }
+        onProgress?.({
+          phase: 'downloading',
+          loadedBytes: bytes.byteLength,
+          totalBytes: spec.bytes,
+          fromCache: true,
+        });
+        throwIfAborted(signal);
+        return { bytes, fromCache: true, cached: true };
+      } catch {
+        throwIfAborted(signal);
+        // Unreadable or truncated entry: drop it and download a fresh copy
+        await cache.delete(key).catch(() => false);
+      }
+    }
+  }
+
+  if (deps.cacheOnly) {
+    throw new SegmentationError(
+      SegmentationErrorCode.MODEL_NOT_CACHED,
+      'The model is not downloaded',
+    );
+  }
+  const { bytes, cached } = await downloadModelToCache(spec, deps);
   return { bytes, fromCache: false, cached };
 }
