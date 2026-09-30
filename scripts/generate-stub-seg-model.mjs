@@ -27,6 +27,19 @@
  * input is normalized to [-1, 1] (mean 0.5, std 0.5), so the graph maps it
  * back: `output = ReduceMean(input) * 0.5 + 0.5`.
  *
+ * tests/fixtures/models/stub-sam-encoder.onnx and stub-sam-decoder.onnx —
+ * the two files of the click-to-select model (MobileSAM), same names and
+ * shapes (opset 13). The encoder takes `input_image` [h, w, 3] (0..255),
+ * averages the channels, resizes that grey image to 64 × 64 and repeats it
+ * over 256 channels: `image_embeddings` [1, 256, 64, 64]. The decoder
+ * ignores the prompt: from channel 0 of the embedding it makes four mask
+ * logits `(grey - t) / 8` with t = 128, 200, 128, 60 (so the answers differ
+ * in size: a bright part, the bright things, all but the darkest), resizes
+ * them to `orig_im_size` (`masks` [1, 4, h, w]) and to 256 × 256
+ * (`low_res_masks`), and answers fixed `iou_predictions` 0.9, 0.95, 0.85,
+ * 0.3 — so Whole is threshold 128 and Part threshold 200. Its prompt inputs
+ * are declared but unused.
+ *
  * The ONNX protobuf is written by hand (proto2 wire format, see
  * https://github.com/onnx/onnx/blob/main/onnx/onnx.proto) so the script needs
  * no dependency; the output is deterministic, which keeps the committed file
@@ -54,11 +67,25 @@ export const STUB_PORTRAIT_MODEL_PATH = resolve(
   '../tests/fixtures/models/stub-seg-portrait.onnx',
 );
 
+/** Output paths of the committed click-to-select stubs */
+export const STUB_SAM_ENCODER_PATH = resolve(
+  __dirname,
+  '../tests/fixtures/models/stub-sam-encoder.onnx',
+);
+export const STUB_SAM_DECODER_PATH = resolve(
+  __dirname,
+  '../tests/fixtures/models/stub-sam-decoder.onnx',
+);
+
 const WIRE_VARINT = 0;
 const WIRE_LENGTH_DELIMITED = 2;
 
 /** onnx.TensorProto.DataType.FLOAT */
 const ELEM_FLOAT = 1;
+/** onnx.TensorProto.DataType.INT64 */
+const ELEM_INT64 = 7;
+/** onnx.AttributeProto.AttributeType.STRING */
+const ATTR_STRING = 3;
 /** onnx.AttributeProto.AttributeType */
 const ATTR_INT = 2;
 const ATTR_INTS = 7;
@@ -118,6 +145,161 @@ function floatTensorInfo(name, dims) {
   const tensorType = [...varintField(1, ELEM_FLOAT), ...bytesField(2, shape)];
   const typeProto = bytesField(1, tensorType);
   return [...bytesField(1, name), ...bytesField(2, typeProto)];
+}
+
+/**
+ * NodeProto
+ * @param {string} op
+ * @param {string[]} inputs - '' for an omitted optional input
+ * @param {string[]} outputs
+ * @param {number[][]} [attributes]
+ * @returns {number[]}
+ */
+function node(op, inputs, outputs, attributes = []) {
+  return [
+    ...inputs.flatMap((name) => bytesField(1, name)),
+    ...outputs.flatMap((name) => bytesField(2, name)),
+    ...bytesField(3, `${op}_${outputs[0]}`),
+    ...bytesField(4, op),
+    ...attributes.flatMap((attr) => bytesField(5, attr)),
+  ];
+}
+
+/** @param {string} name @param {number[]} values */
+const intsAttr = (name, values) => [
+  ...bytesField(1, name),
+  ...values.flatMap((v) => varintField(8, v)),
+  ...varintField(20, ATTR_INTS),
+];
+/** @param {string} name @param {number} value */
+const intAttr = (name, value) => [
+  ...bytesField(1, name),
+  ...varintField(3, value),
+  ...varintField(20, ATTR_INT),
+];
+/** @param {string} name @param {string} value */
+const stringAttr = (name, value) => [
+  ...bytesField(1, name),
+  ...bytesField(4, value),
+  ...varintField(20, ATTR_STRING),
+];
+
+/**
+ * TensorProto initializer with raw little-endian data
+ * @param {string} name
+ * @param {number[]} dims
+ * @param {'float' | 'int64'} type
+ * @param {number[]} values
+ * @returns {number[]}
+ */
+function initializer(name, dims, type, values) {
+  const raw = [];
+  for (const v of values) {
+    if (type === 'float') {
+      raw.push(...new Uint8Array(Float32Array.of(v).buffer));
+    } else {
+      raw.push(...new Uint8Array(BigInt64Array.of(BigInt(v)).buffer));
+    }
+  }
+  return [
+    ...dims.flatMap((d) => varintField(1, d)),
+    ...varintField(2, type === 'float' ? ELEM_FLOAT : ELEM_INT64),
+    ...bytesField(8, name),
+    ...bytesField(9, raw),
+  ];
+}
+
+/**
+ * ModelProto around a graph (opset 13)
+ * @param {number[]} graph
+ * @returns {Uint8Array}
+ */
+function model13(graph) {
+  const opset = [...bytesField(1, ''), ...varintField(2, 13)];
+  return Uint8Array.from([
+    ...varintField(1, 7),
+    ...bytesField(2, 'glinfs-stub-seg'),
+    ...bytesField(7, graph),
+    ...bytesField(8, opset),
+  ]);
+}
+
+/**
+ * Build the click-to-select encoder stub (see the file comment).
+ * @returns {Uint8Array}
+ */
+export function buildSamEncoderStubModel() {
+  const graph = [
+    ...bytesField(
+      1,
+      node(
+        'ReduceMean',
+        ['input_image'],
+        ['grey'],
+        [intsAttr('axes', [2]), intAttr('keepdims', 1)],
+      ),
+    ),
+    ...bytesField(1, node('Transpose', ['grey'], ['grey_chw'], [intsAttr('perm', [2, 0, 1])])),
+    ...bytesField(1, node('Unsqueeze', ['grey_chw', 'axis0'], ['grey_nchw'])),
+    ...bytesField(
+      1,
+      node('Resize', ['grey_nchw', '', '', 'grid_size'], ['grid'], [stringAttr('mode', 'linear')]),
+    ),
+    ...bytesField(1, node('Expand', ['grid', 'embedding_shape'], ['image_embeddings'])),
+    ...bytesField(2, 'stub-sam-encoder'),
+    ...bytesField(5, initializer('axis0', [1], 'int64', [0])),
+    ...bytesField(5, initializer('grid_size', [4], 'int64', [1, 1, 64, 64])),
+    ...bytesField(5, initializer('embedding_shape', [4], 'int64', [1, 256, 64, 64])),
+    ...bytesField(11, floatTensorInfo('input_image', ['image_height', 'image_width', 3])),
+    ...bytesField(12, floatTensorInfo('image_embeddings', [1, 256, 64, 64])),
+  ];
+  return model13(graph);
+}
+
+/**
+ * Build the click-to-select decoder stub (see the file comment).
+ * @returns {Uint8Array}
+ */
+export function buildSamDecoderStubModel() {
+  const graph = [
+    ...bytesField(1, node('Slice', ['image_embeddings', 'zero', 'one', 'one'], ['grey'])),
+    ...bytesField(1, node('Sub', ['grey', 'thresholds'], ['shifted'])),
+    ...bytesField(1, node('Div', ['shifted', 'eight'], ['logits'])),
+    ...bytesField(1, node('Cast', ['orig_im_size'], ['hw'], [intAttr('to', ELEM_INT64)])),
+    ...bytesField(1, node('Concat', ['one_four', 'hw'], ['mask_size'], [intAttr('axis', 0)])),
+    ...bytesField(
+      1,
+      node('Resize', ['logits', '', '', 'mask_size'], ['masks'], [stringAttr('mode', 'linear')]),
+    ),
+    ...bytesField(
+      1,
+      node(
+        'Resize',
+        ['logits', '', '', 'low_size'],
+        ['low_res_masks'],
+        [stringAttr('mode', 'linear')],
+      ),
+    ),
+    ...bytesField(1, node('Identity', ['scores'], ['iou_predictions'])),
+    ...bytesField(2, 'stub-sam-decoder'),
+    ...bytesField(5, initializer('zero', [1], 'int64', [0])),
+    ...bytesField(5, initializer('one', [1], 'int64', [1])),
+    ...bytesField(5, initializer('thresholds', [1, 4, 1, 1], 'float', [128, 200, 128, 60])),
+    ...bytesField(5, initializer('eight', [], 'float', [8])),
+    ...bytesField(5, initializer('one_four', [2], 'int64', [1, 4])),
+    ...bytesField(5, initializer('low_size', [4], 'int64', [1, 4, 256, 256])),
+    ...bytesField(5, initializer('scores', [1, 4], 'float', [0.9, 0.95, 0.85, 0.3])),
+    ...bytesField(11, floatTensorInfo('image_embeddings', [1, 256, 64, 64])),
+    ...bytesField(11, floatTensorInfo('point_coords', [1, 'num_points', 2])),
+    ...bytesField(11, floatTensorInfo('point_labels', [1, 'num_points'])),
+    ...bytesField(11, floatTensorInfo('mask_input', [1, 1, 256, 256])),
+    ...bytesField(11, floatTensorInfo('has_mask_input', [1])),
+    ...bytesField(11, floatTensorInfo('orig_im_size', [2])),
+    ...bytesField(12, floatTensorInfo('masks', [1, 4, 'h', 'w'])),
+    ...bytesField(12, floatTensorInfo('iou_predictions', [1, 4])),
+    ...bytesField(12, floatTensorInfo('low_res_masks', [1, 4, 256, 256])),
+  ];
+  return model13(graph);
 }
 
 /**
@@ -271,6 +453,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     [STUB_MODEL_PATH, buildStubModel()],
     [STUB_GENERAL_MODEL_PATH, buildGeneralStubModel()],
     [STUB_PORTRAIT_MODEL_PATH, buildPortraitStubModel()],
+    [STUB_SAM_ENCODER_PATH, buildSamEncoderStubModel()],
+    [STUB_SAM_DECODER_PATH, buildSamDecoderStubModel()],
   ]) {
     writeFileSync(path, bytes);
     console.log(`Wrote ${path} (${bytes.length} bytes)`);

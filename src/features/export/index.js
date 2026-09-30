@@ -45,7 +45,7 @@ import { on } from '../../shared/utils/dom.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import { getModelEntry } from '../ai-cutout/model-registry.js';
+import { getModelEntry, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
@@ -667,12 +667,9 @@ function updateMissingMasksNote() {
   if (!store || !session || !clipInfo.aiCutout) return;
   const { frameSkip } = store.getState().settings;
   const exported = framesAt(getExportedFrameIndices(frames.length, frameSkip, rangeStart));
-  const missing = collectPendingFrames(
-    exported,
-    getSharedMaskStore(),
-    getAiModelId(edits?.background.ai),
-  ).length;
-  updateExportAiNote(session.body, missing, exported.length);
+  const modelId = getAiModelId(edits?.background.ai);
+  const missing = collectPendingFrames(exported, getSharedMaskStore(), modelId).length;
+  updateExportAiNote(session.body, missing, exported.length, isSamModelId(modelId));
 }
 
 /**
@@ -714,35 +711,56 @@ async function prepareAiMasks(indices, signal) {
     if (clipId !== undefined) maskStore.touchClip(clipId, modelId);
     /** @type {number | null} */
     let analyzingSince = null;
-    await getSegmentationManager().analyzeFrames(exported, {
-      signal,
-      clipId,
-      modelId,
-      allowWasm: isWasmAllowed(),
-      onProgress(progress) {
-        if (signal.aborted) return;
-        if (progress.phase === 'analyzing' && analyzingSince === null) {
-          analyzingSince = performance.now();
-        }
-        showAiPrep({
-          phase: progress.phase,
-          loadedBytes: progress.loadedBytes,
-          totalBytes: progress.totalBytes,
-          fromCache: progress.fromCache,
-          framesDone: progress.framesDone,
-          framesTotal: progress.framesTotal,
-          remainingMs:
-            analyzingSince === null
-              ? null
-              : estimateRemainingMs({
-                  framesDone: progress.framesDone,
-                  framesTotal: progress.framesTotal,
-                  elapsedMs: performance.now() - analyzingSince,
-                  backend: progress.backend,
-                }),
-        });
-      },
-    });
+    /** @param {import('../ai-cutout/segmentation-manager.js').AnalysisProgress} progress */
+    const onProgress = (progress) => {
+      if (signal.aborted) return;
+      if (progress.phase === 'analyzing' && analyzingSince === null) {
+        analyzingSince = performance.now();
+      }
+      showAiPrep({
+        phase: progress.phase,
+        loadedBytes: progress.loadedBytes,
+        totalBytes: progress.totalBytes,
+        fromCache: progress.fromCache,
+        framesDone: progress.framesDone,
+        framesTotal: progress.framesTotal,
+        remainingMs:
+          analyzingSince === null
+            ? null
+            : estimateRemainingMs({
+                framesDone: progress.framesDone,
+                framesTotal: progress.framesTotal,
+                elapsedMs: performance.now() - analyzingSince,
+                backend: progress.backend,
+              }),
+      });
+    };
+    if (isSamModelId(modelId)) {
+      // Click to select: track the clicks over the exported span (frames
+      // where tracking loses the object export without the cutout, as the
+      // editor previews them)
+      const start = Math.min(...indices);
+      const end = Math.max(...indices);
+      await getSegmentationManager().analyzeClick(clipFrames, {
+        signal,
+        clipId,
+        modelId,
+        allowWasm: isWasmAllowed(),
+        range: { start, end },
+        currentFrame: ai.picks.find((p) => p.frame >= start && p.frame <= end)?.frame ?? start,
+        picks: ai.picks,
+        scope: ai.clickScope,
+        onProgress,
+      });
+    } else {
+      await getSegmentationManager().analyzeFrames(exported, {
+        signal,
+        clipId,
+        modelId,
+        allowWasm: isWasmAllowed(),
+        onProgress,
+      });
+    }
   }
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;

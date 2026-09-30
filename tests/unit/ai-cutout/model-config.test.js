@@ -15,11 +15,15 @@ import {
 import {
   buildGeneralStubModel,
   buildPortraitStubModel,
+  buildSamDecoderStubModel,
+  buildSamEncoderStubModel,
   buildStubModel,
   encodeVarint,
   STUB_GENERAL_MODEL_PATH,
   STUB_MODEL_PATH,
   STUB_PORTRAIT_MODEL_PATH,
+  STUB_SAM_DECODER_PATH,
+  STUB_SAM_ENCODER_PATH,
 } from '../../../scripts/generate-stub-seg-model.mjs';
 import {
   DEFAULT_MODEL_ID,
@@ -430,6 +434,29 @@ describe('scripts/generate-stub-seg-model.mjs', () => {
     expect(
       Buffer.from(buildPortraitStubModel()).equals(readFileSync(STUB_PORTRAIT_MODEL_PATH)),
     ).toBe(true);
+  });
+
+  it('reproduces the click-to-select stubs and gives them MobileSAM’s names', () => {
+    const encoder = Buffer.from(buildSamEncoderStubModel());
+    const decoder = Buffer.from(buildSamDecoderStubModel());
+    expect(encoder.equals(readFileSync(STUB_SAM_ENCODER_PATH))).toBe(true);
+    expect(decoder.equals(readFileSync(STUB_SAM_DECODER_PATH))).toBe(true);
+    for (const token of ['input_image', 'image_embeddings', 'Resize', 'Expand']) {
+      expect(encoder.toString('latin1')).toContain(token);
+    }
+    for (const token of [
+      'image_embeddings',
+      'point_coords',
+      'point_labels',
+      'mask_input',
+      'has_mask_input',
+      'orig_im_size',
+      'masks',
+      'iou_predictions',
+      'low_res_masks',
+    ]) {
+      expect(decoder.toString('latin1')).toContain(token);
+    }
   });
 
   it('names the same input/output and op as documented', () => {
