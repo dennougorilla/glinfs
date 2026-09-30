@@ -112,12 +112,19 @@ describe('subjects', () => {
     expect(cardModels.sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
   });
 
-  it('is one labelled radio group: Off and the four cards', () => {
+  it('is one labelled radio group: Off and the five cards', () => {
     const group = $('#background-subject');
     expect(group.getAttribute('aria-labelledby')).toBe('background-subject-title');
     expect($('#background-subject-title').textContent).toBe('What do you want to keep?');
     const radios = [...group.querySelectorAll('input[type="radio"]')];
-    expect(radios.map((r) => r.value)).toEqual(['none', 'anime', 'portrait', 'general', 'color']);
+    expect(radios.map((r) => r.value)).toEqual([
+      'none',
+      'anime',
+      'portrait',
+      'general',
+      'click',
+      'color',
+    ]);
     expect(new Set(radios.map((r) => r.name)).size).toBe(1);
     for (const radio of radios) {
       expect(root.querySelector(`label[for="${radio.id}"]`)?.contains(radio)).toBe(true);

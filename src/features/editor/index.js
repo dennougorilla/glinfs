@@ -937,6 +937,7 @@ function render(container) {
       onSetAiPickTool: handleSetAiPickTool,
       onAiPick: handleAiPick,
       onRemoveAiPick: handleRemoveAiPick,
+      onGoToLostFrame: handleGoToLostFrame,
       onClearAiPicks: handleClearAiPicks,
       onSetBrush: handleSetBrush,
       onBrushStrokeStart: handleBrushStrokeStart,
@@ -1000,7 +1001,16 @@ function updateAiPreviewNote(container, state) {
   let text = '';
   if (isAiCutoutActive(state.edits.background)) {
     const frame = state.clip?.frames[state.currentFrame];
-    if (!isFrameAnalyzed(frame, { modelId: getAiModelId(state.edits.background.ai) })) {
+    const { ai } = state.edits.background;
+    const click = getAiModelId(ai) === 'click';
+    const analyzed = isFrameAnalyzed(frame, { modelId: getAiModelId(ai) });
+    if (click && ai.picks.length === 0) {
+      text = 'Click the thing you want to keep';
+    } else if (click && !analyzed && state.aiCutout.lostFrames?.includes(state.currentFrame)) {
+      text = 'Lost track here. Click it to keep going.';
+    } else if (click && !analyzed) {
+      text = aiSession?.analyzing ? 'Tracking\u2026' : 'Not tracked yet';
+    } else if (!analyzed) {
       text = 'Not analyzed yet';
     } else if (!aiSession?.maskSource?.getFinalMask(state.currentFrame)) {
       text = 'Updating the cutout\u2026';
@@ -1641,7 +1651,15 @@ function applyAiSubject(modelId, analyze) {
     });
   }
   handleSetBackgroundChoice('ai');
-  announce(`${getModelEntry(modelId).label} selected`);
+  const clickNeeded =
+    modelId === 'click' && store.getState().edits.background.ai.picks.length === 0;
+  if (clickNeeded) {
+    // Click to select starts with a click on the preview
+    store.setState((s) => setAiPickTool(s, 'keep'));
+    announce('Click the thing you want to keep in the preview.');
+  } else {
+    announce(`${getModelEntry(modelId).label} selected`);
+  }
   if (!analyze || !aiSession) {
     void aiSession?.preload();
     return;
@@ -1754,6 +1772,10 @@ function handleAiPick(point) {
   const state = store.getState();
   const mode = state.aiPickTool;
   if (!mode) return;
+  if (getAiModelId(state.edits.background.ai) === 'click') {
+    handleClickSelectPoint(point, mode);
+    return;
+  }
   const frame = state.clip?.frames[state.currentFrame];
   if (!isFrameAnalyzed(frame, { modelId: getAiModelId(state.edits.background.ai) })) {
     const message = PICK_NEEDS_ANALYSIS_NOTICE;
@@ -1779,6 +1801,40 @@ function handleAiPick(point) {
     setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
   );
   announce(`${mode === 'keep' ? 'Keep' : 'Remove'} pick added. It is followed through the clip.`);
+}
+
+/**
+ * Click to select: a click on the preview adds a keep (or remove) point on
+ * the frame on screen. The store subscription then tracks again (see
+ * startAiCutoutSession): the frame on screen shows its mask first.
+ * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ * @param {import('../../shared/edits/model.js').PickMode} mode
+ */
+function handleClickSelectPoint(point, mode) {
+  if (!store) return;
+  const state = store.getState();
+  if (state.edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiPicks.max} points is reached`);
+    return;
+  }
+  const first = state.edits.background.ai.picks.length === 0;
+  store.setState((s) =>
+    setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
+  );
+  announce(
+    first
+      ? 'Selected. It is tracked through the clip. Choose Whole or Part, or add Keep and Remove points.'
+      : `${mode === 'keep' ? 'Keep' : 'Remove'} point added. Tracking again.`,
+  );
+}
+
+/** Click to select: go to the first frame that lost the object, Keep tool on */
+function handleGoToLostFrame() {
+  if (!store) return;
+  const [frame] = store.getState().aiCutout.lostFrames ?? [];
+  if (frame === undefined) return;
+  handleFrameChange(frame);
+  handleSetAiPickTool('keep');
 }
 
 /** @param {number} index */
@@ -1834,6 +1890,7 @@ function startAiCutoutSession() {
   aiEditsUnsubscribe = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
       session.requestBuild();
+      followClickSelection(session, state, prevState);
     }
   });
 
@@ -1847,6 +1904,29 @@ function startAiCutoutSession() {
     // Analyze starts at once (never a download)
     void session.preload();
   }
+}
+
+/**
+ * Click to select: the clicks (picks) or Whole / Part changed — track again
+ * (a running tracking starts over), or drop the masks when the last click
+ * went. A switch to the click model itself starts nothing here (choosing
+ * the subject does).
+ * @param {ReturnType<typeof createAiCutoutSession>} session
+ * @param {import('./types.js').EditorState} state
+ * @param {import('./types.js').EditorState} prevState
+ */
+function followClickSelection(session, state, prevState) {
+  const { background } = state.edits;
+  const ai = background.ai;
+  const prev = prevState.edits.background.ai;
+  if (!isAiCutoutActive(background) || getAiModelId(ai) !== 'click') return;
+  if (getAiModelId(prev) !== 'click') return;
+  if (ai.picks === prev.picks && ai.clickScope === prev.clickScope) return;
+  if (ai.picks.length === 0) {
+    session.clearClickMasks();
+    return;
+  }
+  session.analyzeNow([]);
 }
 
 // ============================================================

@@ -71,6 +71,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(tool: import('../../shared/edits/model.js').PickMode | null, options?: { fromKeyboard?: boolean }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks)
  * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)
  * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
+ * @property {() => void} [onGoToLostFrame] - Click to select: go to the first frame
+ *   where tracking lost the object, with the Keep tool on
  * @property {() => void} [onClearAiPicks] - Remove every pick
  * @property {(patch: Partial<import('./types.js').BrushState>) => void} [onSetBrush] - Mask brush on/off, mode, size, scope
  * @property {(point: { x: number, y: number } | null) => void} [onBrushStrokeStart] - A brush gesture starts (fractions of the source frame; null off the frame)

@@ -28,7 +28,14 @@ describe('createDefaultEdits', () => {
         tolerance: 20,
         mode: 'connected',
         colorChosen: false,
-        ai: { model: 'anime', threshold: 0.5, smoothing: true, edge: 0, picks: [] },
+        ai: {
+          model: 'anime',
+          threshold: 0.5,
+          smoothing: true,
+          edge: 0,
+          picks: [],
+          clickScope: 'whole',
+        },
       },
       touchUps: [],
     });
@@ -358,7 +365,8 @@ describe('background method and AI cutout', () => {
     expect(ai({ model: 'isnetis' }).model).toBe('anime');
     expect(ai({ model: 7 }).model).toBe('anime');
     expect(ai({ model: 'portrait' }).model).toBe('portrait');
-    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait']);
+    expect(ai({ model: 'click' }).model).toBe('click');
+    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait', 'click']);
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {

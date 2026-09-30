@@ -156,6 +156,7 @@ export function createAiCutoutStatus() {
     maskVersion: 0,
     storeVersion: 0,
     models: {},
+    lostFrames: [],
   };
 }
 

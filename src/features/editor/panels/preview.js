@@ -59,6 +59,13 @@ export function getPreviewToolHint(state) {
       ? 'Brush: paint to bring back · Esc to finish'
       : 'Brush: paint to erase · Esc to finish';
   }
+  const ai = state.edits?.background?.ai;
+  if (ai?.model === 'click' && state.aiPickTool) {
+    if (state.aiPickTool === 'remove') return 'Remove: click what to leave out · Esc to cancel';
+    return ai.picks.length === 0
+      ? 'Click the thing you want to keep · Esc to cancel'
+      : 'Keep: click to add to the selection · Esc to cancel';
+  }
   if (state.aiPickTool === 'keep') return 'Keep: click a character · Esc to cancel';
   if (state.aiPickTool === 'remove') return 'Remove: click a character · Esc to cancel';
   if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
