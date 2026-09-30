@@ -92,17 +92,22 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs one of two IS-Net segmentation models in the browser with
+The AI cutout runs one of three segmentation models in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
-- **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
-  model (`isnetis-fp16.onnx`, Apache-2.0, 88 MB)
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
-  (`isnet-general-fp16.onnx`, Apache-2.0, 90 MB)
+  (`isnet-general-fp16.onnx`, Apache-2.0 code, 90 MB). Its training data
+  (DIS5K) has non-commercial terms and upstream states no separate license for
+  the weights; Settings says so on its row.
+- **Portrait**: [MODNet](https://github.com/ZHKKKe/MODNet) portrait matting
+  (`modnet-portrait-fp16.onnx`, Apache-2.0, 13 MB): people only, 512×512
+  input, about 75 ms per frame on an M3 with WebGPU
+- **Anime**: skytnt's [anime-segmentation](https://github.com/SkyTNT/anime-segmentation)
+  model (`isnetis-fp16.onnx`, Apache-2.0, 88 MB; the default)
 
-Both are fp16 conversions of the upstream fp32 files (176 and 179 MB): half
-the download, and faster on WebGPU, with the same masks for practical
-purposes (see below). Both are described once in
+All three are fp16 conversions of the upstream fp32 files (176, 179 and 26 MB):
+half the download, and faster on WebGPU, with the same masks for practical
+purposes (see below). They are described once in
 `src/features/ai-cutout/model-registry.js` (the shipped file's size and
 SHA-256, the upstream file it was converted from, license and
 preprocessing); the worker, the fetch script, Settings and the deploy
@@ -124,8 +129,11 @@ since Vite copies that whole directory into the build.
 
 `scripts/convert-models-fp16.py` makes the release assets from the upstream
 files (pinned Hugging Face commits, checked by SHA-256). It keeps only the
-output the worker reads (the general model's 11 side outputs go) and converts
-the rest to float16 with `onnxconverter-common`, keeping the input and the
+output the worker reads (the general model's 11 side outputs go), for MODNet
+zero-pads the input channels of the three Convs whose channel count is not a
+multiple of 4 (35, 99, 35 → 36, 100, 36: ONNX Runtime Web 1.30's WebGPU backend
+computes those Convs wrong, the padded graph computes the same values), and
+converts the rest to float16 with `onnxconverter-common`, keeping the input and the
 output float32, so the worker code is the same for fp32 and fp16. With the
 versions pinned in `scripts/requirements-models.txt` (Python 3.11) the output
 is byte-for-byte identical to the release assets:
@@ -136,8 +144,8 @@ python3.11 -m venv .venv-models
 .venv-models/bin/python scripts/convert-models-fp16.py --src /path/to/fp32 --out /path/to/fp16
 ```
 
-`--src` holds `isnetis.onnx` and `isnet-general-use.onnx` (downloaded there
-when missing). The script prints each file's size and SHA-256, which must
+`--src` holds `isnetis.onnx`, `isnet-general-use.onnx` and `modnet.onnx`
+(downloaded there when missing; `--only portrait` converts one model). The script prints each file's size and SHA-256, which must
 equal the registry's pins. To publish new conversions, upload them to a new
 release, then update the release URL, sizes and SHA-256s in the registry, the
 deploy workflow's cache key and checks, and `THIRD_PARTY_NOTICES.md` (the
@@ -151,6 +159,12 @@ Metal 3 adapter), fp16 against fp32, masks thresholded at 0.5:
 | Anime | 6 CC0 anime-style illustrations | 0.00005–0.00016 | 0.051 | ≥ 99.99% | 469 → 356 ms |
 | General | 4 CC0 photos | 0.00001–0.00117 | 0.075 | ≥ 99.55% | 705 → 515 ms |
 
+For Portrait (MODNet), fp16 on WebGPU against the upstream fp32 on WASM with
+the same browser preprocessing (the unpatched fp32 is wrong on WebGPU), masks
+thresholded at 0.5: 99.9–100% of pixels agree on a person, an anime character,
+a cat and a synthetic scene, 99.0% on a coffee cup (not a portrait); about
+75 ms per frame at 512×512 (M3).
+
 (Mask values are the app's 8-bit masks, 0–1; 12 frames per image, 3 of them
 compared. fp16 was faster on every image in two runs; absolute times vary with
 the machine's load.)
@@ -163,8 +177,8 @@ models in `tests/fixtures/models/` (regenerate them with
 `node scripts/generate-stub-seg-model.mjs`). To check a real model on this
 machine's GPU, run
 `E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`
-(add `E2E_REAL_MODEL_ID=general` with a live-action photo for the general
-model; `E2E_REAL_IMAGE` takes several comma-separated paths).
+(add `E2E_REAL_MODEL_ID=general` or `E2E_REAL_MODEL_ID=portrait` with a
+live-action photo for the general or the portrait model; `E2E_REAL_IMAGE` takes several comma-separated paths).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
 
 ### Architecture

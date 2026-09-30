@@ -9,7 +9,7 @@
  *     E2E_REAL_IMAGE=/path/a.jpg,/path/b.jpg E2E_PORT=3106 \
  *     npx playwright test tests/e2e/ai-cutout-real-model.spec.js
  *
- * Runs a model (E2E_REAL_MODEL_ID: `anime`, the default, or `general`;
+ * Runs a model (E2E_REAL_MODEL_ID: `anime`, the default, `general` or `portrait`;
  * served by the dev server from public/models/) through the app's own
  * segmentation manager and worker on 12 frames made from one image
  * (shifted a few pixels per frame), then checks the mask is a plausible
@@ -34,7 +34,11 @@ import { gotoCapture, MODEL_FILES } from './helpers/app.js';
 
 const ENABLED = process.env.E2E_REAL_MODEL === '1';
 const BACKEND = process.env.E2E_REAL_MODEL_BACKEND === 'wasm' ? 'wasm' : 'webgpu';
-const MODEL_ID = process.env.E2E_REAL_MODEL_ID === 'general' ? 'general' : 'anime';
+const MODEL_ID = /** @type {keyof typeof MODEL_FILES} */ (
+  Object.hasOwn(MODEL_FILES, process.env.E2E_REAL_MODEL_ID ?? '')
+    ? process.env.E2E_REAL_MODEL_ID
+    : 'anime'
+);
 const FETCH_ALL = process.env.E2E_REAL_FETCH_ALL === '1';
 const MODEL_PATH = resolve(`public/models/${MODEL_FILES[MODEL_ID]}`);
 const IMAGE_PATHS = (process.env.E2E_REAL_IMAGE ?? '')
@@ -176,7 +180,7 @@ async function runRealModel(page, imagePath) {
   // A subject on a background: some but not all of the frame is
   // foreground, and the model is confident about most pixels (live-action
   // test photos include a small full-body figure in a street)
-  expect(stats.foregroundShare).toBeGreaterThan(MODEL_ID === 'general' ? 0.01 : 0.05);
+  expect(stats.foregroundShare).toBeGreaterThan(MODEL_ID === 'anime' ? 0.05 : 0.01);
   expect(stats.foregroundShare).toBeLessThan(0.95);
   expect(stats.softShare).toBeLessThan(0.25);
 }
