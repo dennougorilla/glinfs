@@ -246,9 +246,9 @@ export function attachTimelineAiMarks(
     const styles = getComputedStyle(holder);
     const colors = {
       [AI_MARK.ANALYZED]:
-        styles.getPropertyValue('--editor-timeline-ai-analyzed').trim() || '#06b6d4',
+        styles.getPropertyValue('--editor-timeline-ai-analyzed').trim() || '#22d3ee',
       [AI_MARK.PENDING]:
-        styles.getPropertyValue('--editor-timeline-ai-pending').trim() || 'rgba(255,255,255,0.22)',
+        styles.getPropertyValue('--editor-timeline-ai-pending').trim() || 'rgba(200,200,200,0.55)',
     };
 
     // Frame i sits at i / (n - 1) (the playhead's mapping); clip to the

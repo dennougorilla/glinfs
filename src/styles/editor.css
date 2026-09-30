@@ -646,14 +646,16 @@
    it never shifts the layout.
    ───────────────────────────────────────────────────────────────────────────── */
 .editor-timeline-ai-marks {
-  --editor-timeline-ai-analyzed: rgba(34, 211, 238, 0.85);
-  --editor-timeline-ai-pending: rgba(255, 255, 255, 0.22);
+  --editor-timeline-ai-analyzed: #22d3ee;
+  --editor-timeline-ai-pending: rgba(200, 200, 200, 0.55);
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 3px;
-  height: 3px;
+  bottom: 4px;
+  height: 4px;
   pointer-events: none;
+  /* Keeps the marks readable over bright thumbnails */
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
 }
 
 .editor-timeline-ai-marks[hidden] {
