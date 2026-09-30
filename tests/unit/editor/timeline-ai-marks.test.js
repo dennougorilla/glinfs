@@ -153,7 +153,7 @@ describe('attachTimelineAiMarks', () => {
   function setup(background) {
     const container = document.createElement('div');
     container.innerHTML =
-      '<div class="tl"><div class="tl-track"><div class="tl-filmstrip"></div><div class="tl-selection-layer"></div></div></div>';
+      '<div class="tl" role="slider" tabindex="0"><div class="tl-track"><div class="tl-filmstrip"></div><div class="tl-selection-layer"></div></div></div>';
     document.body.appendChild(container);
     const frames = makeFrames(10);
     let state = { clip: { frames }, selectedRange: { start: 2, end: 7 }, edits: { background } };
@@ -179,14 +179,15 @@ describe('attachTimelineAiMarks', () => {
     const holder = /** @type {HTMLElement} */ (
       container.querySelector('.editor-timeline-ai-marks')
     );
-    return { container, frames, editorStore, maskStore, cleanup, holder };
+    const slider = /** @type {HTMLElement} */ (container.querySelector('.tl'));
+    return { container, frames, editorStore, maskStore, cleanup, holder, slider };
   }
 
   const mask = { width: 1, height: 1, data: new Uint8Array(1) };
   const aiOn = { enabled: true, method: 'ai', ai: { model: 'anime' } };
 
   it('sits right after the filmstrip, hidden until an AI subject is on', () => {
-    const { holder, editorStore } = setup({ enabled: false, method: 'color' });
+    const { holder, slider, editorStore } = setup({ enabled: false, method: 'color' });
     expect(holder.previousElementSibling?.className).toBe('tl-filmstrip');
     expect(holder.querySelector('canvas')?.getAttribute('aria-hidden')).toBe('true');
     flush();
@@ -195,7 +196,9 @@ describe('attachTimelineAiMarks', () => {
     editorStore.setState({ edits: { background: aiOn } });
     flush();
     expect(holder.hidden).toBe(false);
-    expect(holder.getAttribute('aria-description')).toBe('0 of 6 frames analyzed');
+    // On the focusable slider: its descendants are presentational
+    expect(slider.getAttribute('aria-description')).toBe('0 of 6 frames analyzed');
+    expect(holder.hasAttribute('aria-description')).toBe(false);
   });
 
   it('follows the mask store of the current model, once per animation frame', () => {
@@ -213,7 +216,7 @@ describe('attachTimelineAiMarks', () => {
   });
 
   it('hides for Solid color and Off, and repaints on selection changes', () => {
-    const { holder, editorStore } = setup(aiOn);
+    const { holder, slider, editorStore } = setup(aiOn);
     flush();
     editorStore.setState({ selectedRange: { start: 0, end: 9 } });
     flush();
@@ -222,11 +225,21 @@ describe('attachTimelineAiMarks', () => {
     editorStore.setState({ edits: { background: { ...aiOn, method: 'color' } } });
     flush();
     expect(holder.hidden).toBe(true);
-    expect(holder.hasAttribute('aria-description')).toBe(false);
+    expect(slider.hasAttribute('aria-description')).toBe(false);
 
     editorStore.setState({ edits: { background: { ...aiOn, enabled: false } } });
     flush();
     expect(holder.hidden).toBe(true);
+  });
+
+  it('requests no frame for mask activity while the track is off', () => {
+    const { frames, maskStore, editorStore } = setup({ ...aiOn, method: 'color' });
+    flush();
+    maskStore.set(maskKey(frames[2], 'anime'), mask);
+    expect(rafQueue.length).toBe(0);
+    // Turning the AI subject on picks the mask up
+    editorStore.setState({ edits: { background: aiOn } });
+    expect(rafQueue.length).toBe(1);
   });
 
   it('ignores playback ticks', () => {
@@ -237,9 +250,12 @@ describe('attachTimelineAiMarks', () => {
   });
 
   it('removes the track and stops listening on cleanup', () => {
-    const { container, maskStore, frames, cleanup } = setup(aiOn);
+    const { container, maskStore, frames, cleanup, slider } = setup(aiOn);
+    flush();
+    expect(slider.hasAttribute('aria-description')).toBe(true);
     cleanup();
     expect(container.querySelector('.editor-timeline-ai-marks')).toBeNull();
+    expect(slider.hasAttribute('aria-description')).toBe(false);
     rafQueue = [];
     maskStore.set(maskKey(frames[2], 'anime'), mask);
     expect(rafQueue.length).toBe(0);

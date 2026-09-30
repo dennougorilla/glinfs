@@ -126,7 +126,8 @@ test.describe('Timeline AI analysis marks (stub model, WASM fallback)', () => {
     await expect(marks).toBeVisible();
     await expect(marks).toHaveAttribute('data-analyzed', '3', { timeout: 60_000 });
     await expect(marks).toHaveAttribute('data-selected', '8');
-    await expect(marks).toHaveAttribute('aria-description', '3 of 8 frames analyzed');
+    // Described on the focusable slider (its descendants are presentational)
+    await expect(page.locator('.tl')).toHaveAttribute('aria-description', '3 of 8 frames analyzed');
     await expect(page.locator('.editor-timeline-ai-marks-canvas')).toHaveAttribute(
       'aria-hidden',
       'true',
@@ -144,7 +145,7 @@ test.describe('Timeline AI analysis marks (stub model, WASM fallback)', () => {
     // The rest arrives: the whole selection fills
     await releaseFrames(page);
     await expect(marks).toHaveAttribute('data-analyzed', '8', { timeout: 60_000 });
-    await expect(marks).toHaveAttribute('aria-description', '8 of 8 frames analyzed');
+    await expect(page.locator('.tl')).toHaveAttribute('aria-description', '8 of 8 frames analyzed');
     await expect(page.locator('#ai-status-text')).toHaveText('8 of 12 frames analyzed');
     await expect.poll(() => markAt(page, 8, N)).toBe('accent');
     expect(await markAt(page, 0, N)).toBe('transparent');

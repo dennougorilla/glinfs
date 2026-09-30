@@ -8,6 +8,10 @@
  * yet (muted); frames outside the selection stay transparent. The track
  * redraws as the mask store fills, at most once per animation frame.
  *
+ * The coverage ("34 of 60 frames analyzed") is the timeline slider's own
+ * aria-description: descendants of a slider are presentational, so a
+ * description on the track would never reach a screen reader.
+ *
  * Long clips (thousands of frames) never become per-frame DOM: the frame
  * states are run-length encoded into segments (bucketed per device pixel
  * column when frames are denser than pixels) and painted into one canvas.
@@ -176,6 +180,8 @@ export function attachTimelineAiMarks(
 ) {
   const track = timelineContainer.querySelector('.tl-track');
   if (!(track instanceof HTMLElement)) return () => {};
+  /** The focusable timeline (role="slider") that carries the description */
+  const slider = track.closest('[role="slider"]');
 
   const holder = document.createElement('div');
   holder.className = 'editor-timeline-ai-marks';
@@ -200,14 +206,20 @@ export function attachTimelineAiMarks(
     });
   };
 
+  /**
+   * @param {AiMarksEditorState} state
+   * @returns {boolean} An AI subject is on for a clip with frames
+   */
+  const isActive = (state) =>
+    Boolean(state.clip?.frames?.length) && isAiCutoutActive(state.edits?.background);
+
   function paint() {
     const state = getState();
     const frames = state.clip?.frames;
-    const active = Boolean(frames?.length) && isAiCutoutActive(state.edits?.background);
-    if (!active || !frames) {
+    if (!isActive(state) || !frames) {
       if (!holder.hidden) {
         holder.hidden = true;
-        holder.removeAttribute('aria-description');
+        slider?.removeAttribute('aria-description');
         delete holder.dataset.analyzed;
         delete holder.dataset.selected;
       }
@@ -235,7 +247,7 @@ export function attachTimelineAiMarks(
 
     holder.dataset.analyzed = String(analyzed);
     holder.dataset.selected = String(selected);
-    holder.setAttribute('aria-description', describeAiMarks(analyzed, selected));
+    slider?.setAttribute('aria-description', describeAiMarks(analyzed, selected));
 
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
@@ -275,7 +287,11 @@ export function attachTimelineAiMarks(
       schedule();
     }
   });
-  const unsubscribeMasks = maskStore.subscribe(schedule);
+  // Mask activity while the track is off (another clip, Solid color) needs
+  // no frame: turning an AI subject on repaints through the editor store
+  const unsubscribeMasks = maskStore.subscribe(() => {
+    if (isActive(getState())) schedule();
+  });
   /** @type {ResizeObserver | null} */
   const resizeObserver =
     typeof ResizeObserver === 'function'
@@ -285,8 +301,7 @@ export function attachTimelineAiMarks(
       : null;
   resizeObserver?.observe(holder);
   // Nothing to draw (and no frame to request) until an AI subject is on
-  const initial = getState();
-  if (initial.clip?.frames?.length && isAiCutoutActive(initial.edits?.background)) schedule();
+  if (isActive(getState())) schedule();
 
   return () => {
     unsubscribeStore();
@@ -295,5 +310,6 @@ export function attachTimelineAiMarks(
     if (frameRequest) cancelAnimationFrame(frameRequest);
     frameRequest = 0;
     holder.remove();
+    slider?.removeAttribute('aria-description');
   };
 }
