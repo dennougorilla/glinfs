@@ -1,6 +1,6 @@
 {
   "name": "glinfs",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "High-performance screen capture to GIF converter",
   "type": "module",
   "scripts": {
