@@ -247,6 +247,37 @@ test.describe('AI cutout runtime (stub model, WASM fallback)', () => {
     expect(cachedKeys[0]).toContain(`models/isnetis-fp16.onnx?sha256=${STUB_SHA256}`);
   });
 
+  test('a damaged cached copy is detected when its session fails, evicted and downloaded again', async ({
+    page,
+  }) => {
+    const requests = await serveStubModel(page);
+    await openAppWithStub(page, { sha256: STUB_SHA256, bytes: STUB_MODEL.length, allowWasm: true });
+    // Same size as the model (the load only checks the size), wrong bytes
+    await page.evaluate(
+      async ({ sha, size }) => {
+        const cache = await caches.open('glinfs-models-v1');
+        const key = new URL(`models/isnetis-fp16.onnx?sha256=${sha}`, document.baseURI).href;
+        const body = new Uint8Array(size).fill(7);
+        await cache.put(key, new Response(body, { headers: { 'Content-Length': String(size) } }));
+      },
+      { sha: STUB_SHA256, size: STUB_MODEL.length },
+    );
+    await injectSyntheticClip(page, { count: 1, width: 640, height: 360 });
+    const result = await analyzeClip(page);
+    expect(result.error).toBeUndefined();
+    expect(result.analyzed).toBe(1);
+    expect(result.readyInfo.fromCache).toBe(false);
+    expect(requests.count).toBe(1);
+    const cachedBytes = await page.evaluate(async (sha) => {
+      const cache = await caches.open('glinfs-models-v1');
+      const key = new URL(`models/isnetis-fp16.onnx?sha256=${sha}`, document.baseURI).href;
+      const bytes = new Uint8Array(await (await cache.match(key)).arrayBuffer());
+      return Array.from(bytes.subarray(0, 8));
+    }, STUB_SHA256);
+    // The verified download replaced the damaged copy
+    expect(cachedBytes).toEqual(Array.from(STUB_MODEL.subarray(0, 8)));
+  });
+
   test('portrait frames are letterboxed and cropped back horizontally', async ({ page }) => {
     await serveStubModel(page);
     await openAppWithStub(page, { sha256: STUB_SHA256, bytes: STUB_MODEL.length, allowWasm: true });

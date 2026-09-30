@@ -1,7 +1,8 @@
 /**
  * E2E: the general AI model next to the anime one — model choice in the
  * editor, masks kept apart per model, the export using the chosen model,
- * the no-WebGPU path, and Settings → "Downloaded models".
+ * the no-WebGPU path, Settings → "AI models" (download, delete, old files)
+ * and the editor preparing a downloaded model without downloading again.
  *
  * Runs the app's real segmentation worker on the WASM fallback (headless
  * Chromium has no WebGPU) with two stubs served under the two model URLs:
@@ -98,9 +99,13 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const N = 6;
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
 
-    // The choice, with each model's download size
-    await expect(page.getByRole('radio', { name: 'Anime 88 MB' })).toBeChecked();
-    await expect(page.getByRole('radio', { name: 'General 90 MB' })).not.toBeChecked();
+    // The choice: purpose, network, and each model's download size
+    await expect(
+      page.getByRole('radio', { name: 'Anime ISNet anime Download 88 MB' }),
+    ).toBeChecked();
+    await expect(
+      page.getByRole('radio', { name: 'General ISNet Download 90 MB' }),
+    ).not.toBeChecked();
     await chooseAiModel(page, 'general');
     await expect(page.locator('#ai-intro')).toContainText('General model');
     await expect(page.locator('#ai-intro')).toContainText('downloads 90 MB once');
@@ -217,9 +222,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await expect(page.locator('#ai-wasm-note')).toBeVisible();
   });
 
-  test('Settings → Downloaded models lists the cached model and Delete removes it', async ({
-    page,
-  }) => {
+  test('Settings → AI models lists the cached model and Delete removes it', async ({ page }) => {
+    // Delete asks first
+    page.on('dialog', (dialog) => void dialog.accept());
     const requests = await openDiscClip(page, { count: 2, allowWasm: true });
     // Left over from earlier versions: the fp32 anime model of the first AI
     // cutout release, and the general file under an earlier pin
@@ -243,16 +248,18 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await page.evaluate(() => {
       location.hash = '#/settings';
     });
-    const section = page.getByRole('region', { name: 'Downloaded models' });
+    const section = page.getByRole('region', { name: 'AI models' });
     await expect(section).toBeVisible();
     const general = section.locator('[data-model-id="general"]');
     const anime = section.locator('[data-model-id="anime"]');
     await expect(general).toContainText('General');
+    await expect(general).toContainText('ISNet (general-use)');
     await expect(general).toContainText('90 MB');
     await expect(general.getByRole('link', { name: 'Apache-2.0' })).toBeVisible();
-    await expect(general).toContainText('Downloaded, kept in this browser’s cache');
+    // Its session is still in memory from the analysis
+    await expect(general).toHaveAttribute('data-model-status', 'loaded');
     await expect(anime).toContainText('Not downloaded');
-    await expect(anime.getByRole('button', { name: 'Delete the Anime model' })).toBeDisabled();
+    await expect(anime.getByRole('button', { name: 'Delete the Anime model' })).toHaveCount(0);
 
     // The verified download of the general model removed its earlier pin;
     // the fp32 file of another name is listed as an old file
@@ -276,7 +283,7 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await page.keyboard.press('Enter');
     await expect(section.getByRole('status')).toHaveText('The General model was deleted.');
     await expect(general).toContainText('Not downloaded');
-    await expect(deleteGeneral).toBeDisabled();
+    await expect(deleteGeneral).toHaveCount(0);
 
     // Gone from Cache Storage (every copy of that file)
     const left = await page.evaluate(async (file) => {
@@ -298,5 +305,87 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       timeout: 60_000,
     });
     expect(requests.byModel).toEqual({ anime: 0, general: 2 });
+  });
+
+  test('Settings → AI models downloads a model; the editor prepares it without downloading again', async ({
+    page,
+  }) => {
+    page.on('dialog', (dialog) => void dialog.accept());
+    const requests = await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB });
+    await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
+    await page.evaluate(() => {
+      location.hash = '#/settings';
+    });
+    const section = page.getByRole('region', { name: 'AI models' });
+    const anime = section.locator('[data-model-id="anime"]');
+    await expect(anime).toHaveAttribute('data-model-status', 'not-downloaded');
+    await expect(section.locator('#settings-models-preload')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await anime.getByRole('button', { name: 'Download the Anime model (88 MB)' }).click();
+    await expect(anime).toHaveAttribute('data-model-status', 'downloaded');
+    await expect(section.getByRole('status')).toHaveText('The Anime model was downloaded.');
+    await expect(section.locator('#settings-models-storage')).toContainText('Storage used:');
+    expect(requests.byModel).toEqual({ anime: 1, general: 0 });
+    const keys = await page.evaluate(async () =>
+      (await (await caches.open('glinfs-models-v1')).keys()).map((r) => r.url),
+    );
+    expect(keys.filter((url) => url.includes(MODEL_FILES.anime))).toHaveLength(1);
+
+    // The editor prepares the downloaded model (AI is chosen) from the cache
+    await injectDiscClip(page, { count: 3 });
+    await pauseEditorPlayback(page);
+    await chooseAiCutout(page);
+    await expect(page.locator('#ai-model-hint-anime')).toHaveText('Ready', { timeout: 60_000 });
+    await expect(page.locator('#ai-model-hint-general')).toHaveText('Download 90 MB');
+    const state = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState());
+    expect(state.loadedModelIds).toEqual(['anime']);
+    expect(requests.byModel).toEqual({ anime: 1, general: 0 });
+
+    // Analyze reuses the prepared session: no download
+    await page.locator('#ai-analyze').click();
+    await expect(page.locator('#ai-coverage')).toHaveText('3 of 3 frames analyzed', {
+      timeout: 60_000,
+    });
+    expect(requests.byModel).toEqual({ anime: 1, general: 0 });
+
+    // Settings shows it loaded; Delete frees the file and the session
+    await page.evaluate(() => {
+      location.hash = '#/settings';
+    });
+    await expect(anime).toHaveAttribute('data-model-status', 'loaded');
+    await anime.getByRole('button', { name: 'Delete the Anime model' }).click();
+    await expect(anime).toHaveAttribute('data-model-status', 'not-downloaded');
+    await expect
+      .poll(() => page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState()))
+      .toMatchObject({ loadedModelIds: [] });
+  });
+
+  test('with preparing turned off, the editor loads nothing until Analyze', async ({ page }) => {
+    const requests = await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB });
+    await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
+    await page.evaluate(() => {
+      location.hash = '#/settings';
+    });
+    const section = page.getByRole('region', { name: 'AI models' });
+    const anime = section.locator('[data-model-id="anime"]');
+    await anime.getByRole('button', { name: 'Download the Anime model (88 MB)' }).click();
+    await expect(anime).toHaveAttribute('data-model-status', 'downloaded');
+    await section.locator('#settings-models-preload').click();
+    await expect(section.locator('#settings-models-preload')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+
+    await injectDiscClip(page, { count: 2 });
+    await pauseEditorPlayback(page);
+    await chooseAiCutout(page);
+    await expect(page.locator('#ai-model-hint-anime')).toHaveText('Downloaded');
+    // Give an idle-time preload the chance to (wrongly) start
+    await page.waitForTimeout(1500);
+    const state = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState());
+    expect(state.loadedModelIds).toEqual([]);
+    expect(requests.byModel).toEqual({ anime: 1, general: 0 });
   });
 });
