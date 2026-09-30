@@ -26,6 +26,14 @@
  * converted file from the `models-v1` GitHub Release of this repository
  * (asset name = `fileName`) into public/models/<fileName>, and the browser
  * fetches it same-origin only when the user analyzes with that model.
+ *
+ * One model is made of two files: "Click to select" (MobileSAM) runs an
+ * image encoder once per frame and a small prompt decoder per click. Its
+ * entry lists both in `files` (and `bytes` is their total); every other
+ * entry is one file (`fileName`, `bytes`, `sha256`, `convertedFrom`).
+ * getModelFiles() gives the files of either kind, so the loader, the
+ * cache, Settings and the fetch script treat every model as a list of
+ * files. Users only ever see the model.
  */
 
 /**
@@ -82,6 +90,38 @@
  * @property {string} outputName - Mask output: float32 [1, 1, inputSize, inputSize]
  * @property {number} inputSize
  * @property {ModelPreprocess} preprocess
+ */
+
+/**
+ * One file of a model.
+ * @typedef {Object} ModelFile
+ * @property {string} role - What the file is ('model'; 'encoder' / 'decoder' of a SAM model)
+ * @property {string} fileName - File name under public/models/ and of the release asset
+ * @property {number} bytes
+ * @property {string} sha256
+ * @property {ModelUpstreamFile} convertedFrom - The upstream file (for a file
+ *   shipped unchanged, the same bytes and SHA-256)
+ */
+
+/**
+ * A click-to-select model: an image encoder (once per frame) and a prompt
+ * decoder (once per click or tracked frame), in the classic Segment
+ * Anything ONNX layout.
+ * @typedef {Object} SamModelEntry
+ * @property {string} id
+ * @property {'sam'} kind
+ * @property {string} label
+ * @property {string} modelName
+ * @property {string} shortModelName
+ * @property {string} description
+ * @property {string} finds
+ * @property {number} bytes - Total of `files`
+ * @property {readonly ModelFile[]} files - encoder, then decoder
+ * @property {{ name: string, url: string }} license
+ * @property {string} upstream
+ * @property {ModelLicenseNote} [licenseNote]
+ * @property {number} inputSize - Long side the frame is resized to for the encoder
+ * @property {number} maxPoints - Prompt points per decode (the UI's pick limit is lower)
  */
 
 /**
@@ -264,16 +304,92 @@ const PORTRAIT = {
 };
 
 /**
+ * MobileSAM (ChaoningZhang/MobileSAM, code and weights Apache-2.0): Segment
+ * Anything with a small image encoder, for "Click to select". The files are
+ * the ONNX export on Hugging Face (Acly/MobileSAM at the pinned commit,
+ * whose card says MIT; the weights are MobileSAM's), shipped unchanged:
+ * - `mobile_sam_image_encoder.onnx`: input `input_image` float32
+ *   [H, W, 3], RGB 0..255 of the frame resized so its long side is 1024
+ *   (normalization and padding to 1024×1024 are in the graph) → output
+ *   `image_embeddings` [1, 256, 64, 64]. About 250 ms per frame on an M3
+ *   (WebGPU).
+ * - `sam_mask_decoder_multi.onnx`: the original SAM prompt encoder and mask
+ *   decoder (`point_coords` [1, N, 2] in the resized frame's pixels,
+ *   `point_labels` [1, N] (1 keep, 0 remove, 2 / 3 box corners, -1
+ *   padding), `mask_input` [1, 1, 256, 256] + `has_mask_input` [1],
+ *   `orig_im_size` [2] = [h, w] of the wanted mask) → `masks` [1, 4, h, w]
+ *   logits (> 0 is inside), `iou_predictions` [1, 4], `low_res_masks`
+ *   [1, 4, 256, 256]. Mask 0 is SAM's single-mask output, 1–3 the three
+ *   multimask outputs (typically a part, a bigger part, the whole). About
+ *   35 ms per prompt.
+ * fp16 is not used: an fp16 conversion of the encoder computes wrong
+ * embeddings on onnxruntime-web 1.30's WebGPU backend (relative error ≈3,
+ * masks unusable), and the decoder does not convert.
+ * @type {SamModelEntry}
+ */
+const CLICK = {
+  id: 'click',
+  kind: 'sam',
+  label: 'Click to select',
+  modelName: 'MobileSAM',
+  shortModelName: 'MobileSAM',
+  description: 'Anything you click, followed through the clip',
+  finds: 'what you click',
+  bytes: 28_157_093 + 16_496_559,
+  files: [
+    {
+      role: 'encoder',
+      fileName: 'mobilesam-image-encoder.onnx',
+      bytes: 28_157_093,
+      sha256: '580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749',
+      convertedFrom: {
+        repo: 'Acly/MobileSAM',
+        revision: '0d3b403339b4674a82493d5e97964dd78089ddc8',
+        path: 'mobile_sam_image_encoder.onnx',
+        bytes: 28_157_093,
+        sha256: '580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749',
+      },
+    },
+    {
+      role: 'decoder',
+      fileName: 'mobilesam-mask-decoder.onnx',
+      bytes: 16_496_559,
+      sha256: '8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe',
+      convertedFrom: {
+        repo: 'Acly/MobileSAM',
+        revision: '0d3b403339b4674a82493d5e97964dd78089ddc8',
+        path: 'sam_mask_decoder_multi.onnx',
+        bytes: 16_496_559,
+        sha256: '8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe',
+      },
+    },
+  ],
+  license: APACHE_2,
+  upstream: 'https://github.com/ChaoningZhang/MobileSAM',
+  inputSize: 1024,
+  maxPoints: 32,
+};
+
+/**
  * Deep-freeze a registry entry (it is shared by every module).
- * @param {ModelEntry} entry
- * @returns {Readonly<ModelEntry>}
+ * @template {ModelEntry | SamModelEntry} T
+ * @param {T} entry
+ * @returns {Readonly<T>}
  */
 function freezeEntry(entry) {
-  Object.freeze(entry.convertedFrom);
   if (entry.licenseNote) Object.freeze(entry.licenseNote);
-  Object.freeze(entry.preprocess.mean);
-  Object.freeze(entry.preprocess.std);
-  Object.freeze(entry.preprocess);
+  if ('files' in entry) {
+    for (const file of entry.files) {
+      Object.freeze(file.convertedFrom);
+      Object.freeze(file);
+    }
+    Object.freeze(entry.files);
+  } else {
+    Object.freeze(entry.convertedFrom);
+    Object.freeze(entry.preprocess.mean);
+    Object.freeze(entry.preprocess.std);
+    Object.freeze(entry.preprocess);
+  }
   return Object.freeze(entry);
 }
 
@@ -282,11 +398,14 @@ function freezeEntry(entry) {
  * right, Settings top to bottom). A new model needs only an entry here (and
  * its file in the `models-v1` release).
  */
-export const MODEL_REGISTRY = Object.freeze([
-  freezeEntry(GENERAL),
-  freezeEntry(PORTRAIT),
-  freezeEntry(ANIME),
-]);
+export const MODEL_REGISTRY = Object.freeze(
+  /** @type {readonly Readonly<ModelEntry | SamModelEntry>[]} */ ([
+    freezeEntry(GENERAL),
+    freezeEntry(PORTRAIT),
+    freezeEntry(ANIME),
+    freezeEntry(CLICK),
+  ]),
+);
 
 /** Model of edits that do not name one (everything saved before the general model) */
 export const DEFAULT_MODEL_ID = ANIME.id;
@@ -310,7 +429,7 @@ export function isModelId(id) {
 /**
  * The registry entry of a model.
  * @param {string} id
- * @returns {Readonly<ModelEntry>}
+ * @returns {Readonly<ModelEntry | SamModelEntry> & Record<string, any>}
  * @throws {RangeError} for an unknown id
  */
 export function getModelEntry(id) {
@@ -320,19 +439,55 @@ export function getModelEntry(id) {
 }
 
 /**
- * Download URL of a shipped model: its asset in the `models-v1` GitHub
- * Release (used by the fetch script; the browser loads it same-origin).
- * @param {{ fileName: string }} entry
- * @returns {string}
+ * Whether an entry is a click-to-select (SAM) model
+ * @param {unknown} entry
+ * @returns {entry is SamModelEntry}
  */
-export function getModelDownloadUrl(entry) {
-  return `${MODEL_RELEASE_URL}/${entry.fileName}`;
+export function isSamEntry(entry) {
+  return /** @type {{ kind?: string } | null} */ (entry)?.kind === 'sam';
 }
 
 /**
- * Pinned Hugging Face URL of the upstream fp32 file a model was converted
- * from (scripts/convert-models-fp16.py downloads it).
- * @param {{ convertedFrom: ModelUpstreamFile }} entry
+ * Whether a model id names a click-to-select (SAM) model
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+export function isSamModelId(id) {
+  return isSamEntry(MODEL_REGISTRY.find((entry) => entry.id === id));
+}
+
+/**
+ * The files of a model: its `files`, or the one file of a single-file entry
+ * @param {Readonly<ModelEntry | SamModelEntry>} entry
+ * @returns {readonly ModelFile[]}
+ */
+export function getModelFiles(entry) {
+  if ('files' in entry) return entry.files;
+  return [
+    {
+      role: 'model',
+      fileName: entry.fileName,
+      bytes: entry.bytes,
+      sha256: entry.sha256,
+      convertedFrom: entry.convertedFrom,
+    },
+  ];
+}
+
+/**
+ * Download URL of a shipped model file: its asset in the `models-v1` GitHub
+ * Release (used by the fetch script; the browser loads it same-origin).
+ * @param {{ fileName: string }} file - A single-file entry or a ModelFile
+ * @returns {string}
+ */
+export function getModelDownloadUrl(file) {
+  return `${MODEL_RELEASE_URL}/${file.fileName}`;
+}
+
+/**
+ * Pinned Hugging Face URL of the upstream file a model file comes from
+ * (scripts/convert-models-fp16.py downloads the ones it converts).
+ * @param {{ convertedFrom: ModelUpstreamFile }} entry - A single-file entry or a ModelFile
  * @returns {string}
  */
 export function getUpstreamModelUrl(entry) {

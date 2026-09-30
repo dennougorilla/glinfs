@@ -5,14 +5,17 @@
  * Settings → "AI models" downloads a model ahead of use through the same
  * code the segmentation worker loads it with (downloadModelToCache: fetch,
  * size and SHA-256 check, then Cache Storage; nothing unverified is
- * stored). Downloads live here, not in the Settings screen, so one keeps
+ * stored). A model of several files (Click to select: encoder and decoder)
+ * downloads them one after the other as one download, its progress
+ * counting every file. Downloads live here, not in the Settings screen, so one keeps
  * going (and shows its progress again) when the user leaves Settings and
  * comes back. After a download the app asks for persistent storage.
  *
  * Every dependency is injectable for unit tests.
  */
 
-import { downloadModelToCache } from './model-loader.js';
+import { getSpecFiles } from './model-config.js';
+import { downloadModelToCache, hasCachedModel } from './model-loader.js';
 import { requestPersistentStorage } from './model-storage.js';
 
 import { resolveModelSpec } from './segmentation-manager.js';
@@ -37,6 +40,8 @@ export const DOWNLOAD_NOTIFY_INTERVAL_MS = 100;
 /**
  * @typedef {Object} ModelDownloadsDeps
  * @property {typeof downloadModelToCache} [download]
+ * @property {typeof hasCachedModel} [isCached] - Multi-file models: a file
+ *   already in Cache Storage is not downloaded again
  * @property {(modelId: string) => import('./model-config.js').ModelSpec} [resolveSpec]
  * @property {() => Promise<unknown>} [persist]
  * @property {() => number} [now]
@@ -48,6 +53,7 @@ export const DOWNLOAD_NOTIFY_INTERVAL_MS = 100;
 export function createModelDownloads(deps = {}) {
   const {
     download = downloadModelToCache,
+    isCached = hasCachedModel,
     resolveSpec = resolveModelSpec,
     persist = requestPersistentStorage,
     now = () => performance.now(),
@@ -82,16 +88,29 @@ export function createModelDownloads(deps = {}) {
       const state = { phase: 'downloading', loadedBytes: 0, totalBytes: spec.bytes };
       const promise = (async () => {
         try {
-          const { cached } = await download(spec, {
-            signal: controller.signal,
-            onProgress(progress) {
-              const phaseChanged = progress.phase !== state.phase;
-              state.phase = progress.phase;
-              state.loadedBytes = progress.loadedBytes;
-              state.totalBytes = progress.totalBytes;
-              notify(phaseChanged);
-            },
-          });
+          let cached = true;
+          let offset = 0;
+          const files = getSpecFiles(spec);
+          for (const file of files.length === 1 ? [spec] : files) {
+            // One file of a two-file model may be there already (an
+            // interrupted download): only the rest downloads
+            if (files.length > 1 && (await isCached(file).catch(() => false))) {
+              offset += file.bytes;
+              continue;
+            }
+            const result = await download(file, {
+              signal: controller.signal,
+              onProgress(progress) {
+                const phaseChanged = progress.phase !== state.phase;
+                state.phase = progress.phase;
+                state.loadedBytes = offset + progress.loadedBytes;
+                state.totalBytes = spec.bytes;
+                notify(phaseChanged);
+              },
+            });
+            cached &&= result.cached;
+            offset += file.bytes;
+          }
           // Keep what the user chose to download when space runs low
           if (cached) await persist();
           return /** @type {ModelDownloadResult} */ ({ outcome: 'done', cached });

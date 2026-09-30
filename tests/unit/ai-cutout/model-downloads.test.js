@@ -67,6 +67,50 @@ describe('createModelDownloads', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it('downloads the files of a two-file model one after the other as one download', async () => {
+    const files = [
+      { role: 'encoder', url: '/m/enc', bytes: 60, sha256: 'e' },
+      { role: 'decoder', url: '/m/dec', bytes: 40, sha256: 'd' },
+    ];
+    /** @type {any[]} */
+    const seen = [];
+    const downloads = createModelDownloads({
+      download: /** @type {any} */ (
+        async (/** @type {any} */ file, /** @type {any} */ opts) => {
+          opts.onProgress({ phase: 'downloading', loadedBytes: file.bytes / 2, totalBytes: 1 });
+          seen.push([file.url, downloads.get('click')?.loadedBytes]);
+          return { bytes: new Uint8Array(), cached: true };
+        }
+      ),
+      isCached: async () => false,
+      resolveSpec: () => /** @type {any} */ ({ id: 'click', bytes: 100, files }),
+      persist: async () => true,
+    });
+    await expect(downloads.start('click')).resolves.toEqual({ outcome: 'done', cached: true });
+    // Progress counts both files: the decoder's half is 60 + 20 of 100
+    expect(seen).toEqual([
+      ['/m/enc', 30],
+      ['/m/dec', 80],
+    ]);
+  });
+
+  it('skips a file of a two-file model that is already cached', async () => {
+    const files = [
+      { role: 'encoder', url: '/m/enc', bytes: 60, sha256: 'e' },
+      { role: 'decoder', url: '/m/dec', bytes: 40, sha256: 'd' },
+    ];
+    const download = vi.fn(async () => ({ bytes: new Uint8Array(), cached: true }));
+    const downloads = createModelDownloads({
+      download: /** @type {any} */ (download),
+      isCached: async (/** @type {any} */ file) => file.url === '/m/enc',
+      resolveSpec: () => /** @type {any} */ ({ id: 'click', bytes: 100, files }),
+      persist: async () => true,
+    });
+    await expect(downloads.start('click')).resolves.toMatchObject({ outcome: 'done' });
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(/** @type {any} */ (download.mock.calls[0])[0].url).toBe('/m/dec');
+  });
+
   it('cancel aborts the download', async () => {
     const downloads = createModelDownloads({
       download: /** @type {any} */ (

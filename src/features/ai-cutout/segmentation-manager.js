@@ -33,7 +33,7 @@
 
 import { getDrawableSource } from '../../shared/utils/canvas.js';
 import { getSharedMaskStore } from './mask-store.js';
-import { DEFAULT_MODEL_ID, getModelSpec } from './model-config.js';
+import { DEFAULT_MODEL_ID, getModelSpec, getSpecFiles } from './model-config.js';
 import { requestPersistentStorage } from './model-storage.js';
 import { computeMaskSize } from './preprocess.js';
 import {
@@ -116,13 +116,14 @@ export const MAX_FRAMES_IN_FLIGHT = 2;
 
 /**
  * DEV/E2E override of the model specs: `sha256`/`bytes` apply to every
- * model unless `models[id]` names that model's own (the stubs), `allowWasm`
+ * single-file model unless `models[id]` names that model's own (the stubs;
+ * a multi-file model names each file's in `models[id].files`), `allowWasm`
  * runs the WASM fallback without asking, `fetchAllOutputs` makes the
  * worker fetch every graph output (to measure what side outputs cost).
  * @typedef {Object} DevModelOverride
  * @property {string} [sha256]
  * @property {number} [bytes]
- * @property {Record<string, { sha256?: string, bytes?: number }>} [models]
+ * @property {Record<string, { sha256?: string, bytes?: number, files?: { sha256?: string, bytes?: number }[] }>} [models]
  * @property {boolean} [allowWasm]
  * @property {boolean} [fetchAllOutputs]
  */
@@ -148,6 +149,40 @@ export function setDevModelOverride(override) {
 }
 
 /**
+ * `spec` with the DEV override applied (the stubs' sizes and hashes).
+ * @param {ModelSpec} spec
+ * @param {DevModelOverride} override
+ * @returns {ModelSpec}
+ */
+export function applyModelOverride(spec, override) {
+  const own = override.models?.[spec.id];
+  const fetchAllOutputs = Boolean(override.fetchAllOutputs);
+  const specFiles = getSpecFiles(spec);
+  if (specFiles.length > 1) {
+    const files = specFiles.map((file, i) => ({
+      ...file,
+      sha256: own?.files?.[i]?.sha256 ?? file.sha256,
+      bytes: own?.files?.[i]?.bytes ?? file.bytes,
+    }));
+    return {
+      ...spec,
+      files,
+      bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+      fetchAllOutputs,
+    };
+  }
+  const sha256 = own?.sha256 ?? override.sha256 ?? spec.sha256;
+  const bytes = own?.bytes ?? override.bytes ?? spec.bytes;
+  return {
+    ...spec,
+    sha256,
+    bytes,
+    files: specFiles.map((file) => ({ ...file, sha256: sha256 ?? file.sha256, bytes })),
+    fetchAllOutputs,
+  };
+}
+
+/**
  * The spec a model loads with: `spec` itself, or in DEV the E2E override
  * applied to it (the stubs' size and hash).
  * @param {ModelSpec} spec
@@ -156,14 +191,8 @@ export function setDevModelOverride(override) {
  */
 function applyDevOverride(spec, allowWasm = false) {
   if (!import.meta.env.DEV || !devModelOverride) return { spec, allowWasm };
-  const own = devModelOverride.models?.[spec.id];
   return {
-    spec: {
-      ...spec,
-      sha256: own?.sha256 ?? devModelOverride.sha256 ?? spec.sha256,
-      bytes: own?.bytes ?? devModelOverride.bytes ?? spec.bytes,
-      fetchAllOutputs: Boolean(devModelOverride.fetchAllOutputs),
-    },
+    spec: applyModelOverride(spec, devModelOverride),
     allowWasm: allowWasm || Boolean(devModelOverride.allowWasm),
   };
 }

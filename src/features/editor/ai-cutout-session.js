@@ -134,7 +134,7 @@ export function createAiCutoutSession(options) {
     cache = getSharedFinalMaskCache(),
     now = () => performance.now(),
     isModelCached = (modelId) =>
-      isModelCachedDefault(modelId, { getSha256: (id) => resolveModelSpec(id).sha256 }),
+      isModelCachedDefault(modelId, { getFiles: (id) => resolveModelSpec(id).files }),
     shouldPreload = shouldPreloadDefault,
     scheduleIdle = scheduleIdleDefault,
   } = options;

@@ -351,7 +351,13 @@ describe('SegmentationManager.analyzeFrames', () => {
     await manager.analyzeFrames([makeFrame('a')]);
     expect(workers[0].posted[0].msg).toEqual({
       type: 'init',
-      model: { ...SPEC, sha256: 'abc', bytes: 170, fetchAllOutputs: false },
+      model: {
+        ...SPEC,
+        sha256: 'abc',
+        bytes: 170,
+        files: [{ role: 'model', url: SPEC.url, sha256: 'abc', bytes: 170 }],
+        fetchAllOutputs: false,
+      },
       allowWasm: true,
     });
     expect(manager.readyInfo?.modelBytes).toBe(170);
@@ -369,6 +375,7 @@ describe('SegmentationManager.analyzeFrames', () => {
       ...GENERAL_SPEC,
       sha256: 'gen',
       bytes: 302,
+      files: [{ role: 'model', url: GENERAL_SPEC.url, sha256: 'gen', bytes: 302 }],
       fetchAllOutputs: true,
     });
     await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
