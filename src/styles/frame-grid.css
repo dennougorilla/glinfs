@@ -170,7 +170,7 @@
 }
 
 .frame-grid-item:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -429,7 +429,6 @@
   background: var(--color-primary);
   border: none;
   color: var(--color-on-primary);
-  box-shadow: var(--reg-shadow);
 }
 
 .frame-grid-btn-apply:hover:not(:disabled) {
@@ -437,8 +436,7 @@
 }
 
 .frame-grid-btn-apply:active:not(:disabled) {
-  transform: translate(var(--reg-offset), var(--reg-offset));
-  box-shadow: none;
+  transform: scale(0.99);
 }
 
 .frame-grid-btn-apply:disabled {
@@ -495,7 +493,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(34, 211, 238, 0.1), rgba(240, 70, 143, 0.05));
+  background: rgba(255, 255, 255, 0.04);
   opacity: 0;
   transition: opacity 0.2s;
 }
@@ -516,11 +514,11 @@
 }
 
 .frame-grid-scene-btn.is-active {
-  background: var(--color-primary-muted, rgba(34, 211, 238, 0.15));
+  background: var(--color-primary-muted);
   border-color: var(--color-primary);
   box-shadow:
-    0 0 0 2px rgba(34, 211, 238, 0.2),
-    0 4px 12px rgba(34, 211, 238, 0.15);
+    0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 /* Scene Thumbnail */
@@ -609,7 +607,7 @@
 .frame-grid-scene-btn.is-active .frame-grid-scene-num {
   background: var(--color-primary);
   color: var(--color-on-primary);
-  box-shadow: 2px 2px 0 0 var(--ink-magenta);
+  box-shadow: none;
 }
 
 .frame-grid-scene-frames {

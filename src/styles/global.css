@@ -55,7 +55,7 @@ body {
 /* Focus: a cyan outline that keeps clear of the control, so it never fights
    the control's own shadow (the primary button carries a magenta plate). */
 :focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -85,53 +85,18 @@ body {
   position: relative;
 }
 
-/* A two-plate hairline under the header: the brand's misregistration at the
-   scale of a single pixel. */
-.app-header::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(34, 211, 238, 0.5) 20%,
-    rgba(34, 211, 238, 0) 45%,
-    rgba(240, 70, 143, 0) 55%,
-    rgba(240, 70, 143, 0.5) 80%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
-
 .app-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-family: var(--font-pixel);
   font-size: 16px;
-  font-weight: 400;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  font-stretch: 90%;
+  letter-spacing: -0.02em;
   line-height: 1;
   color: var(--color-text);
   text-decoration: none;
   border-radius: var(--radius-sm);
-}
-
-/* Wordmark: printed twice, off register, like the mark beside it */
-.app-logo > span:not(.app-logo-icon, .app-version) {
-  text-shadow:
-    -1px 0 0 rgba(34, 211, 238, 0.8),
-    1px 0 0 rgba(240, 70, 143, 0.8);
-  transition: text-shadow var(--transition-normal);
-}
-
-.app-logo:hover > span:not(.app-logo-icon, .app-version) {
-  text-shadow:
-    -2px 0 0 rgba(34, 211, 238, 0.9),
-    2px 0 0 rgba(240, 70, 143, 0.9);
 }
 
 /* 32px keeps the pixel-art logo on whole pixels (1 art pixel = 2px) */
@@ -344,7 +309,7 @@ body {
 .step--active .step-number {
   background: var(--color-primary);
   color: var(--color-on-primary);
-  box-shadow: 2px 2px 0 0 var(--ink-magenta);
+  box-shadow: none;
 }
 
 .step--completed .step-number {
@@ -487,9 +452,9 @@ button {
   cursor: not-allowed;
 }
 
-/* Primary Button — the cyan plate printed over a magenta one. Hover pulls
-   the plates further apart; pressing lands the cyan plate on the magenta,
-   so a click feels like a print stamp. */
+/* Primary Button — paper on graphite. At rest it is flat; on hover it lifts
+   off a magenta plate (the logo's misregistration), and pressing lands it
+   back on the plate like a print stamp. */
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-on-primary);
@@ -503,13 +468,14 @@ button {
 
 .btn-primary:hover:not(:disabled) {
   background: var(--color-primary-hover);
-  transform: translate(-1px, -1px);
+  transform: translate(-2px, -2px);
   box-shadow: var(--reg-shadow-hover);
 }
 
 .btn-primary:active:not(:disabled) {
-  transform: translate(var(--reg-offset), var(--reg-offset));
+  transform: translate(0, 0);
   box-shadow: 0 0 0 0 var(--ink-magenta);
+  transition-duration: 60ms;
 }
 
 .btn-primary:disabled {

@@ -2,55 +2,60 @@
 @import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@85..100,400..700&family=JetBrains+Mono:wght@400;500;600&family=Silkscreen&display=swap");
 
 :root {
-  /* Palette — "misregistration". Glinfs' mark is a pixel cursor printed with
-     its cyan and magenta plates slightly off register; the UI takes its two
-     inks from there. Cyan = what you can act on (focus, selection, primary
-     actions). Magenta = what is live (recording, the playhead). The base is a
-     cool graphite so frames, not chrome, carry the colour. */
+  /* Palette — paper and ink, with two spot colours.
+     The interface itself is neutral: emphasis is paper-white on graphite, so
+     the clip's own colours are the most saturated thing on screen. The two
+     inks from the logo's off-register print are spot colours with one job
+     each, and appear nowhere else:
+       cyan    = selection (the timeline range, its handles) and focus
+       magenta = live (recording, the playhead)
+     The misregistration itself appears in three places only: the logo, the
+     capture stage's crop marks, and the primary button on hover. */
   --ink-cyan: #22d3ee;
   --ink-cyan-bright: #67e8f9;
   --ink-magenta: #f0468f;
   --ink-magenta-bright: #ff6aa8;
-  --ink-paper: #eceef3;
+  --ink-paper: #ececef;
 
-  --color-bg: #0f1015;
-  --color-bg-secondary: #13141a;
-  --color-bg-tertiary: #1b1d25;
-  --color-surface: #252834;
-  --color-surface-hover: #2f3341;
-  --color-surface-active: #3a3e4f;
+  --color-bg: #0c0d10;
+  --color-bg-secondary: #111216;
+  --color-bg-tertiary: #17181d;
+  --color-surface: #202228;
+  --color-surface-hover: #292b32;
+  --color-surface-active: #34363e;
 
   /* Panel backgrounds */
-  --color-panel: #15161d;
-  --color-panel-header: #111218;
-  --color-panel-border: #23252f;
+  --color-panel: #121317;
+  --color-panel-header: #0f1013;
+  --color-panel-border: #1f2025;
 
-  /* Primary — cyan plate. Bright, so text on it is dark ink. */
-  --color-primary: var(--ink-cyan);
-  --color-primary-hover: var(--ink-cyan-bright);
-  --color-primary-muted: rgba(34, 211, 238, 0.12);
-  --color-primary-glow: rgba(34, 211, 238, 0.28);
-  --color-on-primary: #051a20;
+  /* Primary — paper. The emphasis colour for actions and active states. */
+  --color-primary: var(--ink-paper);
+  --color-primary-hover: #ffffff;
+  --color-primary-muted: rgba(255, 255, 255, 0.07);
+  --color-primary-glow: rgba(255, 255, 255, 0.16);
+  --color-on-primary: #0c0d10;
 
-  /* Second plate — magenta */
+  /* Spot colours */
   --color-accent: var(--ink-cyan);
   --color-accent-hover: var(--ink-cyan-bright);
   --color-accent-muted: rgba(34, 211, 238, 0.12);
   --color-highlight: var(--ink-magenta);
   --color-highlight-muted: rgba(240, 70, 143, 0.14);
+  --color-focus: var(--ink-cyan);
 
-  /* The registration offset: a hard magenta plate behind cyan things */
+  /* The registration offset: absent at rest; on hover the primary button
+     lifts off a magenta plate, and pressing lands it back. */
   --reg-offset: 3px;
-  --reg-shadow: var(--reg-offset) var(--reg-offset) 0 0 var(--ink-magenta);
-  --reg-shadow-hover: calc(var(--reg-offset) + 1px) calc(var(--reg-offset) + 1px) 0 0
-    var(--ink-magenta);
+  --reg-shadow: 0 0 0 0 var(--ink-magenta);
+  --reg-shadow-hover: var(--reg-offset) var(--reg-offset) 0 0 var(--ink-magenta);
 
-  /* Kept for existing call sites; both now read as the cyan plate */
-  --gradient-glinfs: linear-gradient(180deg, var(--ink-cyan-bright) 0%, var(--ink-cyan) 100%);
+  /* Kept for existing call sites */
+  --gradient-glinfs: linear-gradient(180deg, #ffffff 0%, var(--ink-paper) 100%);
   --gradient-glinfs-subtle: linear-gradient(
     180deg,
-    rgba(34, 211, 238, 0.1) 0%,
-    rgba(34, 211, 238, 0.02) 100%
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(255, 255, 255, 0.01) 100%
   );
   --gradient-primary: var(--gradient-glinfs);
   --gradient-recording: linear-gradient(180deg, #ff5c8a 0%, #e8336f 100%);
@@ -70,15 +75,15 @@
 
   /* Text hierarchy (muted/secondary pass WCAG AA on panel and bg) */
   --color-text: var(--ink-paper);
-  --color-text-secondary: #a6aab8;
-  --color-text-muted: #8b8fa0;
-  --color-text-disabled: #4b4f5e;
+  --color-text-secondary: #a3a5ad;
+  --color-text-muted: #85878f;
+  --color-text-disabled: #4a4c54;
 
   /* Borders */
-  --color-border: #272a36;
-  --color-border-subtle: #1d1f28;
-  --color-border-strong: #3a3e4d;
-  --color-border-focus: var(--color-primary);
+  --color-border: #24262c;
+  --color-border-subtle: #1a1b20;
+  --color-border-strong: #33353c;
+  --color-border-focus: var(--color-focus);
 
   /* Status colors */
   --color-warning: #fbbf24;
@@ -88,8 +93,8 @@
   --color-sponsor: #db61a2;
   --color-sponsor-hover: #ff6eb4;
 
-  /* Focus ring: cyan ring, magenta plate one step off */
-  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--ink-cyan);
+  /* Focus ring */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 
   /* Typography — Instrument Sans for the interface (narrow, crisp, keeps
      dense panels calm), JetBrains Mono strictly for timecodes and counts,

@@ -131,7 +131,7 @@
 }
 
 .clip-entries .clip-entry--active {
-  border-color: rgba(34, 211, 238, 0.45);
+  border-color: var(--color-border-strong);
   background: var(--color-primary-muted);
 }
 

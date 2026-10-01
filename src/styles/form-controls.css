@@ -28,13 +28,12 @@ input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   background: linear-gradient(
     90deg,
-    var(--color-primary) 0 var(--range-fill, 0%),
+    var(--color-text-secondary) 0 var(--range-fill, 0%),
     var(--color-surface-hover) var(--range-fill, 0%) 100%
   );
   border-radius: var(--radius-full);
 }
 
-/* A square "pixel" thumb printed over its magenta plate */
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 14px;
@@ -42,29 +41,29 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: -5px;
   background: var(--ink-paper);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   cursor: grab;
   transition:
     transform var(--transition-fast),
     box-shadow var(--transition-fast);
-  box-shadow: 2px 2px 0 0 var(--ink-magenta);
+  box-shadow:
+    0 0 0 3px var(--color-panel),
+    0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
 input[type="range"]:hover::-webkit-slider-thumb {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 0 var(--ink-magenta);
+  transform: scale(1.12);
 }
 
 input[type="range"]:active::-webkit-slider-thumb {
   cursor: grabbing;
-  transform: translate(1px, 1px);
-  box-shadow: 0 0 0 0 var(--ink-magenta);
+  transform: scale(0.95);
 }
 
 input[type="range"]:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 4px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
 }
 
 /* Firefox */
@@ -78,7 +77,7 @@ input[type="range"]::-moz-range-track {
 
 input[type="range"]::-moz-range-progress {
   height: 4px;
-  background: var(--color-primary);
+  background: var(--color-text-secondary);
   border-radius: var(--radius-full);
 }
 
@@ -87,9 +86,9 @@ input[type="range"]::-moz-range-thumb {
   height: 14px;
   background: var(--ink-paper);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   cursor: grab;
-  box-shadow: 2px 2px 0 0 var(--ink-magenta);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
 input[type="range"]::-moz-focus-outer {
