@@ -208,7 +208,7 @@
   z-index: 1;
 }
 
-/* Single selection (start = end) - orange outline */
+/* Single selection (start = end) - selection outline */
 .frame-grid-item.is-start.is-end {
   outline: 3px solid var(--color-selection);
 }

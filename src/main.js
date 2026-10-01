@@ -330,7 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Recording / exporting state in the tab's icon and title
   initTabStatus();
 
-  // Filled range tracks (global.css paints them from --range-fill)
+  // Filled range tracks (form-controls.css paints them from --range-fill)
   initRangeFill();
 
   // Create live region for screen reader announcements

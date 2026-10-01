@@ -145,8 +145,8 @@ select:focus {
 
 select:focus-visible {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-muted);
+  border-color: var(--color-border-focus);
+  box-shadow: var(--focus-ring);
 }
 
 /* Disabled state */
@@ -409,7 +409,7 @@ select:disabled {
   min-width: 56px;
   height: 26px;
   padding: 0 9px 0 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-family);
   font-size: var(--font-size-2xs);
   font-weight: 600;
   letter-spacing: 0.02em;

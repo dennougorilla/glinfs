@@ -1,5 +1,5 @@
 /* CSS Custom Properties - Glinfs theme */
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@85..100,400..700&family=JetBrains+Mono:wght@400;500;600&family=Silkscreen&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@85..100,400..700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 :root {
   /* Palette — paper and ink, with two spot colours.
@@ -9,8 +9,9 @@
      each, and appear nowhere else:
        cyan    = selection (the timeline range, its handles) and focus
        magenta = live (recording, the playhead)
-     The misregistration itself appears in three places only: the logo, the
-     capture stage's crop marks, and the primary button on hover. */
+     The misregistration itself is kept to the logo, the capture stage's
+     crop marks, the primary button on hover, and the welcome scene, where
+     it moves: the cast runs on offset plates, like the logo. */
   --ink-cyan: #22d3ee;
   --ink-cyan-bright: #67e8f9;
   --ink-magenta: #f0468f;
@@ -97,11 +98,9 @@
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-focus);
 
   /* Typography — Instrument Sans for the interface (narrow, crisp, keeps
-     dense panels calm), JetBrains Mono strictly for timecodes and counts,
-     Silkscreen only for the pixel wordmark. */
+     dense panels calm), JetBrains Mono strictly for timecodes and counts. */
   --font-family: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
-  --font-pixel: "Silkscreen", var(--font-mono);
 
   /* Type scale - Balanced for readability */
   --font-size-2xs: 0.625rem; /* 10px */

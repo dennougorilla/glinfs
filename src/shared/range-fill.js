@@ -3,10 +3,11 @@
  * @module shared/range-fill
  *
  * Chromium has no pseudo-element for the filled part of a range track, so
- * global.css paints it with a gradient stopped at `--range-fill`. This keeps
- * that property in step with every `<input type="range">` in the document:
- * on user input, on programmatic value changes made by re-renders (caught by
- * observing added nodes and `value` attribute changes), and at startup.
+ * form-controls.css paints it with a gradient stopped at `--range-fill`.
+ * This keeps that property in step with every `<input type="range">` in the
+ * document: on user input, on re-renders (observing added nodes and `value`,
+ * `min` and `max` attribute changes), on scripts assigning `value` directly
+ * (which fires no event and changes no attribute), and at startup.
  */
 
 /**
@@ -22,11 +23,38 @@ export function rangeFillPercent(input) {
   return Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
 }
 
+const valueProperty = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+/** @type {WeakSet<HTMLInputElement>} */
+const tracked = new WeakSet();
+
+/**
+ * Sync the fill whenever a script assigns `input.value`: the input gets its
+ * own `value` accessor that defers to the native one, then syncs
+ * @param {HTMLInputElement} input
+ */
+function track(input) {
+  if (tracked.has(input) || !valueProperty?.get || !valueProperty.set) return;
+  tracked.add(input);
+  const { get, set } = valueProperty;
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    enumerable: valueProperty.enumerable,
+    get() {
+      return get.call(this);
+    },
+    set(value) {
+      set.call(this, value);
+      sync(this);
+    },
+  });
+}
+
 /**
  * @param {Element} el
  */
 function sync(el) {
   if (el instanceof HTMLInputElement && el.type === 'range') {
+    track(el);
     el.style.setProperty('--range-fill', `${rangeFillPercent(el)}%`);
   }
 }
