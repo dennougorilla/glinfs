@@ -2167,7 +2167,7 @@
   font-size: var(--font-size-2xs);
   font-weight: 500;
   line-height: 1.5;
-  color: #fff;
+  color: var(--color-on-primary);
   white-space: nowrap;
 }
 
@@ -2968,7 +2968,7 @@
 
 .editor-screen .editor-cutout-tool.is-active svg,
 .editor-screen .editor-cutout-tool-input:checked + span svg {
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 /* The eyedropper next to the key color: a compact tool */
