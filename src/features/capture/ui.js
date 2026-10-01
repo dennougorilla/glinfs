@@ -105,7 +105,7 @@ export function renderCaptureScreen(container, state, handlers) {
   // Preview Panel
   const previewPanel = createElement('div', { className: 'capture-preview-panel' });
   const previewWrapper = createElement('div', { className: 'capture-preview-wrapper' });
-  previewWrapper.appendChild(renderVideoPreview(state, Boolean(handlers.onImportFile)));
+  previewWrapper.appendChild(renderVideoPreview(state, Boolean(handlers.onImportFile), cleanups));
   previewPanel.appendChild(previewWrapper);
   content.appendChild(previewPanel);
   if (handlers.onImportFile) {
@@ -212,9 +212,10 @@ function setupImportDropZone(panel, onImportFile, cleanups) {
  * Render video preview area
  * @param {import('./types.js').CaptureState} state
  * @param {boolean} [importAvailable=false] - Mention opening/dropping a GIF
+ * @param {(() => void)[]} [cleanups] - Receives the welcome scene's stop
  * @returns {HTMLElement}
  */
-function renderVideoPreview(state, importAvailable = false) {
+function renderVideoPreview(state, importAvailable = false, cleanups = []) {
   if (state.isSharing && state.stream) {
     const previewClasses = [
       'video-preview',
@@ -265,7 +266,7 @@ function renderVideoPreview(state, importAvailable = false) {
           `${state.settings.fps} fps · ${seconds}s buffer`,
         ]),
       ]),
-      createWelcomeScene(seconds),
+      createWelcomeScene(seconds, cleanups),
       createElement('h2', { className: 'empty-state-title capture-stage-title' }, [
         'Clip what just happened',
       ]),
