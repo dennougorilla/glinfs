@@ -37,6 +37,21 @@ const GIF_BOX = { x: 350, y: 10, w: 240, h: 128 };
 const STRIP_Y = 198;
 
 /**
+ * Add a rounded rectangle to the current path. The app supports Chrome 94,
+ * and CanvasRenderingContext2D.roundRect only arrived in 99.
+ * @param {CanvasRenderingContext2D} ctx
+ */
+function roundRectPath(ctx, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
+/**
  * Copy a rectangle of the pixel video into a box (cover), keeping hard edges
  * @param {CanvasRenderingContext2D} ctx
  * @param {CanvasImageSource} src
@@ -136,7 +151,7 @@ export function drawStage(ctx, t, scene) {
   const p = (t / CYCLE) * 100;
   const rr = (x, y, w, h, r, fill, stroke) => {
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, r);
+    roundRectPath(ctx, x, y, w, h, r);
     if (fill) {
       ctx.fillStyle = fill;
       ctx.fill();
@@ -306,7 +321,7 @@ export function drawStage(ctx, t, scene) {
     const sweep = easeInOut(seg(p, ...BEATS.alpha));
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(wx, wy, gw, gh, 4);
+    roundRectPath(ctx, wx, wy, gw, gh, 4);
     ctx.clip();
     // the moment with its background, where the sweep has not cleared it yet
     if (sweep < 1) {
@@ -396,7 +411,7 @@ export function drawStage(ctx, t, scene) {
     if (x > STRIP.now || x + STRIP.width < 0) continue;
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(x, y0 + 4, STRIP.width, STRIP.height, 3);
+    roundRectPath(ctx, x, y0 + 4, STRIP.width, STRIP.height, 3);
     ctx.clip();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(thumbs[i], x, y0 + 4, STRIP.width, STRIP.height);
@@ -423,7 +438,7 @@ export function drawStage(ctx, t, scene) {
     ctx.strokeStyle = P.cyan;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(597 - bw, y0 + 1, bw - 2, 40, 4);
+    roundRectPath(ctx, 597 - bw, y0 + 1, bw - 2, 40, 4);
     ctx.stroke();
     ctx.fillStyle = P.cyan;
     ctx.fillRect(594 - bw, y0 + 9, 4, 25);

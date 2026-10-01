@@ -2,7 +2,7 @@
  * A stand-in for CanvasRenderingContext2D under jsdom, which has no canvas.
  * It keeps the drawing state a renderer must save and restore, and records
  * what was drawn: enough to check the welcome scene's drawing code without a
- * browser.
+ * browser. It has no roundRect, like Chrome 94-98, which the app supports.
  */
 
 import { vi } from 'vitest';
@@ -90,8 +90,8 @@ export function createFakeContext2d(canvas) {
     'moveTo',
     'lineTo',
     'rect',
-    'roundRect',
     'arc',
+    'arcTo',
     'fill',
     'stroke',
     'clip',

@@ -454,12 +454,13 @@ export const VHS_MEMBER = {
     }
     const sprite = baked(`vhs:${JSON.stringify(pose)}`, () => buildVhs(pose), opt.plates);
     drawBaked(g, sprite, PCX, GY + 2 - lift + dy, reg, t, rowShift);
-    if (opt.bg === false) return;
-    if (glitch > 0) {
+    // scan lines cross the whole picture: not part of the cut-out
+    if (glitch > 0 && opt.bg !== false) {
       const random = rng(Math.floor(t * 25) + 3);
       g.fillStyle = 'rgba(255, 255, 255, 0.35)';
       for (let i = 0; i < 3; i++) g.fillRect(0, Math.floor(random() * 71), 149, 1);
     }
+    // the punchline is: the transparent GIF keeps it
     if (t > JUMP1 + 0.4 && (t < 6 || mod(Math.floor(t * 2), 2) === 0)) {
       const x = PCX - 10;
       const y = GY - 30;

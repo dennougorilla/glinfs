@@ -26,6 +26,8 @@ export function rangeFillPercent(input) {
 const valueProperty = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
 /** @type {WeakSet<HTMLInputElement>} */
 const tracked = new WeakSet();
+/** Running initRangeFill calls: scripted values sync only while one runs */
+let running = 0;
 
 /**
  * Sync the fill whenever a script assigns `input.value`: the input gets its
@@ -44,7 +46,7 @@ function track(input) {
     },
     set(value) {
       set.call(this, value);
-      sync(this);
+      if (running) sync(this);
     },
   });
 }
@@ -72,6 +74,8 @@ function syncAll(root) {
  * @returns {() => void} Stop function
  */
 export function initRangeFill(doc = document) {
+  running++;
+  let stopped = false;
   const onInput = (/** @type {Event} */ event) => {
     if (event.target instanceof Element) sync(event.target);
   };
@@ -100,6 +104,9 @@ export function initRangeFill(doc = document) {
   syncAll(doc);
 
   return () => {
+    if (stopped) return;
+    stopped = true;
+    running--;
     doc.removeEventListener('input', onInput, true);
     doc.removeEventListener('change', onInput, true);
     observer.disconnect();

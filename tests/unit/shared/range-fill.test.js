@@ -73,6 +73,19 @@ describe('initRangeFill', () => {
     expect(fill(input)).toBe('25%');
   });
 
+  it('stops following scripted values once stopped', () => {
+    const input = range({ value: '20' });
+    document.body.appendChild(input);
+    const stopFill = initRangeFill();
+    input.value = '40';
+    expect(fill(input)).toBe('40%');
+    stopFill();
+    stopFill();
+    input.value = '70';
+    expect(input.value).toBe('70');
+    expect(fill(input)).toBe('40%');
+  });
+
   it('picks up a value set right after insertion', async () => {
     stop = initRangeFill();
     const input = range({ value: '10' });

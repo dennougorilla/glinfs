@@ -241,9 +241,6 @@
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Pinned to the card's top edge as a tab, so it never competes with the

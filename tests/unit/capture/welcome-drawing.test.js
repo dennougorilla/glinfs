@@ -251,6 +251,14 @@ describe('drawStage', () => {
         }
       }
     }
+    // the VHS's PLAY belongs to the clip, so the cut-out keeps it
+    const vhs = CAST.find((c) => c.key === 'vhs');
+    g.fillStyles.clear();
+    renderVideo(target, 4, vhs, BACKDROPS[0], PLATES, false);
+    expect(g.fillStyles.has('#ffffff')).toBe(true);
+    g.fillStyles.clear();
+    renderVideo(target, 1, vhs, BACKDROPS[0], PLATES, false);
+    expect(g.fillStyles.size).toBe(0);
     // with the backdrop, both are there
     g.fillStyles.clear();
     g.draws.length = 0;
