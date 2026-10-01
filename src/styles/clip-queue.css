@@ -366,3 +366,26 @@
     width: 100%;
   }
 }
+
+/* Chrome/Edge 94-104 have no container queries: the editor rail, the one
+   narrow list, stacks its cards anyway */
+@supports not (container-type: inline-size) {
+  .editor-sidebar-left .clip-entries .clip-entry {
+    flex-direction: column;
+  }
+  .editor-sidebar-left .clip-entries .clip-entry-num {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    margin: 0;
+    z-index: 1;
+  }
+  .editor-sidebar-left .clip-entries .clip-entry-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .editor-sidebar-left .clip-entries .clip-entry-thumb {
+    width: 100%;
+  }
+}
