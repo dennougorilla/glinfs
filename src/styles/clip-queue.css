@@ -30,7 +30,7 @@
   justify-content: center;
   border-radius: var(--radius-full);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 1;
@@ -104,10 +104,8 @@
 
 .clip-queue-popover-title {
   padding: var(--space-1) var(--space-2) var(--space-2);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: var(--color-text-muted);
 }
 
@@ -120,6 +118,7 @@
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+  container-type: inline-size;
 }
 
 .clip-entries .clip-entry {
@@ -132,7 +131,7 @@
 }
 
 .clip-entries .clip-entry--active {
-  border-color: var(--color-primary);
+  border-color: rgba(34, 211, 238, 0.45);
   background: var(--color-primary-muted);
 }
 
@@ -183,15 +182,16 @@
 
 .clip-entries .clip-entry--active .clip-entry-num {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 .clip-entries .clip-entry-thumb {
   display: block;
-  width: 72px;
+  width: 56px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: var(--color-bg-tertiary);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .clip-entries .clip-entry-thumb--placeholder {
@@ -210,31 +210,56 @@
   gap: 2px;
 }
 
+/* Duration on the first line, frames and time wrapped onto a second; the
+   " · " between them only exists for the text/tooltip form */
 .clip-entries .clip-entry-meta {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.clip-entries .clip-entry-duration {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.clip-entries .clip-entry-sep {
+  display: none;
+}
+
+.clip-entries .clip-entry-time {
+  order: 1;
+  flex-basis: 100%;
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.clip-entries .clip-entry-time {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-muted);
-}
-
+/* Pinned to the card's top edge as a tab, so it never competes with the
+   duration for row width */
 .clip-entries .clip-entry-editing-badge {
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-full);
+  position: absolute;
+  top: -1px;
+  right: var(--space-2);
+  padding: 0 5px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-family: var(--font-family);
   font-size: var(--font-size-2xs);
   font-weight: 600;
+  line-height: 16px;
 }
 
 /* Codec lifecycle indicator (#92): shown while an entry is compressing
@@ -276,17 +301,20 @@
 /* Trash button at the row's trailing edge (#100 r5): a flex sibling of the
    promote surface — never over the thumbnail, which hover-skims. Revealed
    on row hover/focus; single click deletes (undo toast covers safety). */
+/* Floats over the row's trailing edge (never over the thumbnail, which
+   hover-skims) instead of reserving width the metadata needs */
 .clip-entries .clip-entry-delete {
-  flex-shrink: 0;
-  align-self: center;
-  width: 28px;
-  height: 28px;
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--color-bg-tertiary);
   color: var(--color-text-muted);
   cursor: pointer;
   opacity: 0;
@@ -303,7 +331,7 @@
 
 .clip-entries .clip-entry-delete:hover {
   background: var(--color-recording);
-  color: white;
+  color: #fff;
 }
 
 @media (pointer: coarse) {
@@ -317,4 +345,27 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   text-align: center;
+}
+
+/* A narrow list (the editor rail at small window widths) stacks each card:
+   thumbnail on top, details underneath */
+@container (max-width: 200px) {
+  .clip-entries .clip-entry {
+    flex-direction: column;
+  }
+  .clip-entries .clip-entry-num {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    margin: 0;
+    z-index: 1;
+  }
+  .clip-entries .clip-entry-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .clip-entries .clip-entry-thumb {
+    width: 100%;
+  }
 }

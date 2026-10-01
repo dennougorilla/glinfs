@@ -20,7 +20,9 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg);
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(34, 211, 238, 0.035) 0%, transparent 60%),
+    var(--color-bg);
   overflow: hidden;
   min-width: 0;
 }
@@ -34,6 +36,7 @@
   min-height: 0;
   min-width: 0;
   position: relative;
+  overflow: auto;
 }
 
 /* Video Preview */
@@ -42,20 +45,21 @@
   max-width: 100%;
   max-height: 100%;
   background: var(--color-canvas-bg);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: var(--shadow-lg);
 }
 
 .video-preview--active {
   box-shadow:
-    0 0 0 3px var(--color-primary),
+    0 0 0 1px var(--color-primary),
+    6px 6px 0 0 rgba(240, 70, 143, 0.35),
     var(--shadow-lg);
 }
 
 .video-preview--recording {
   box-shadow:
-    0 0 0 3px var(--color-recording),
+    0 0 0 2px var(--color-recording),
     var(--shadow-lg);
 }
 
@@ -74,40 +78,227 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-recording);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: white;
-  animation: pulse-badge 1s infinite;
+  padding: 5px var(--space-2);
+  background: rgba(15, 16, 21, 0.78);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-pixel);
+  font-size: var(--font-size-xs);
+  color: #fff;
 }
 
 .recording-badge .dot {
   width: 8px;
   height: 8px;
-  background: white;
+  background: var(--color-recording);
   border-radius: var(--radius-full);
+  box-shadow: 0 0 8px var(--color-recording);
+  animation: pulse-badge 1s step-end infinite;
 }
 
-/* Empty State - Uses unified .empty-state from global.css */
-.preview-empty {
-  /* Inherits from .empty-state */
+/* ============================================================
+   Capture stage: the empty preview drawn as a viewfinder on standby.
+   Corner crop marks are printed twice (cyan, then magenta one step off),
+   echoing the logo's misregistration; a faint pixel grid marks it as a
+   capture surface. Text is left-aligned and set like a title card.
+   ============================================================ */
+.capture-stage.empty-state {
+  --stage-mark: 22px;
+  position: relative;
+  width: min(780px, 100%);
+  height: auto;
+  min-height: min(470px, 100%);
+  margin: auto;
+  padding: var(--space-16) var(--space-12) var(--space-10);
+  align-items: flex-start;
+  justify-content: center;
+  text-align: left;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(236, 238, 243, 0.06) 1px, transparent 1.5px) 0 0 / 16px
+    16px,
+    linear-gradient(180deg, var(--color-bg-secondary) 0%, var(--color-bg) 100%);
+  border-radius: var(--radius-xs);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
 }
 
-/* Capture-specific icon styling */
-.preview-empty .empty-state-icon {
-  background: var(--gradient-glinfs-subtle);
-  border-color: rgba(59, 130, 246, 0.2);
+/* Crop marks: the cyan plate */
+.capture-stage.empty-state::before,
+.capture-stage.empty-state::after {
+  --c: var(--ink-cyan);
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--stage-mark) 2px,
+    linear-gradient(var(--c), var(--c)) top left / 2px var(--stage-mark),
+    linear-gradient(var(--c), var(--c)) top right / var(--stage-mark) 2px,
+    linear-gradient(var(--c), var(--c)) top right / 2px var(--stage-mark),
+    linear-gradient(var(--c), var(--c)) bottom left / var(--stage-mark) 2px,
+    linear-gradient(var(--c), var(--c)) bottom left / 2px var(--stage-mark),
+    linear-gradient(var(--c), var(--c)) bottom right / var(--stage-mark) 2px,
+    linear-gradient(var(--c), var(--c)) bottom right / 2px var(--stage-mark);
+  background-repeat: no-repeat;
 }
 
-.preview-empty .empty-state-icon svg {
-  color: var(--color-primary);
+/* ...and the magenta plate, off register */
+.capture-stage.empty-state::after {
+  --c: var(--ink-magenta);
+  transform: translate(3px, 3px);
+  mix-blend-mode: screen;
+  opacity: 0.85;
 }
 
-/* Steps specific to capture */
-.preview-empty .empty-state-steps {
-  max-width: 280px;
+/* Every few seconds the plates slip and settle: the only ambient motion on
+   the screen, and the same step-timed jitter as the logo. */
+@media (prefers-reduced-motion: no-preference) {
+  .capture-stage.empty-state::after {
+    animation: stage-register 5s steps(1, end) infinite;
+  }
+}
+
+@keyframes stage-register {
+  0%,
+  88%,
+  100% {
+    transform: translate(3px, 3px);
+  }
+  90% {
+    transform: translate(-2px, 4px);
+  }
+  93% {
+    transform: translate(5px, 1px);
+  }
+}
+
+.capture-stage-hud {
+  position: absolute;
+  top: var(--space-5);
+  left: var(--space-6);
+  right: var(--space-6);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.capture-stage-standby {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.capture-stage-standby-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  box-shadow: inset 0 0 0 1.5px var(--color-text-muted);
+}
+
+.capture-stage-title.empty-state-title {
+  margin: 0 0 var(--space-4);
+  max-width: 16ch;
+  font-size: var(--font-size-display);
+  font-weight: 600;
+  font-stretch: 85%;
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  color: var(--color-text);
+  text-wrap: balance;
+}
+
+.capture-stage-lede {
+  margin: 0 0 var(--space-8);
+  max-width: 46ch;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-secondary);
+  text-wrap: pretty;
+}
+
+/* Steps: a real sequence, so numbered; laid out as one ruled row */
+.capture-stage-steps.empty-state-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.capture-stage-steps .empty-state-step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5) 0 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}
+
+.capture-stage-steps .empty-state-step:hover {
+  background: none;
+  border: 0;
+}
+
+.capture-stage-steps .empty-state-step-number {
+  width: auto;
+  height: auto;
+  background: none;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.capture-stage-chip {
+  display: inline-block;
+  margin-right: 2px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 600;
+  box-shadow: 2px 2px 0 0 var(--ink-magenta);
+}
+
+.capture-stage-chip--quiet {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: none;
+}
+
+/* One orchestrated entrance: the title card settles in once, on load */
+@media (prefers-reduced-motion: no-preference) {
+  .capture-stage > * {
+    animation: stage-in 520ms var(--easing-standard) both;
+  }
+  .capture-stage > :nth-child(2) {
+    animation-delay: 60ms;
+  }
+  .capture-stage > :nth-child(3) {
+    animation-delay: 120ms;
+  }
+  .capture-stage > :nth-child(4) {
+    animation-delay: 180ms;
+  }
+  .capture-stage > :nth-child(5) {
+    animation-delay: 240ms;
+  }
+}
+
+@keyframes stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 /* Sidebar Panel */
@@ -117,14 +308,14 @@
   display: flex;
   flex-direction: column;
   background: var(--color-panel);
-  border-left: 1px solid var(--color-border);
-  overflow: hidden;
+  border-left: 1px solid var(--color-border-subtle);
+  overflow-y: auto;
 }
 
 /* Control Section */
 .control-section {
   padding: var(--space-5);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .control-section:last-child {
@@ -135,15 +326,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .control-section-title {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
 }
 
 /* Main Actions */
@@ -154,28 +343,33 @@
 }
 
 .btn-capture {
-  width: 100%;
+  width: calc(100% - var(--reg-offset));
   height: var(--control-height-lg);
   font-size: var(--font-size-md);
   font-weight: 600;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
 }
 
+/* The screen's one loud control: cyan plate over magenta (see .btn-primary) */
 .btn-capture-start {
-  background: var(--gradient-glinfs);
-  color: white;
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
-  transition: all var(--transition-normal);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  box-shadow: var(--reg-shadow);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .btn-capture-start:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+  background: var(--color-primary-hover);
+  transform: translate(-1px, -1px);
+  box-shadow: var(--reg-shadow-hover);
 }
 
 .btn-capture-start:active:not(:disabled) {
-  transform: translateY(0);
-  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
+  transform: translate(var(--reg-offset), var(--reg-offset));
+  box-shadow: 0 0 0 0 var(--ink-magenta);
 }
 
 .btn-capture-stop {
@@ -195,15 +389,15 @@
 }
 
 .btn-capture-stop:hover:not(:disabled) {
-  background: #dc2626;
+  background: #e8336f;
 }
 
 .btn-create-clip {
-  width: 100%;
+  width: calc(100% - var(--reg-offset));
   height: var(--control-height-lg);
   font-size: var(--font-size-md);
   font-weight: 600;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   transition:
     transform var(--transition-fast),
     box-shadow var(--transition-fast);
@@ -218,7 +412,7 @@
 /* Active state during recording */
 .btn-create-clip--active {
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   border-color: var(--color-primary);
 }
 
@@ -235,15 +429,15 @@
 @keyframes clip-pulse {
   0% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.5);
   }
   50% {
     transform: scale(0.97);
-    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.2);
+    box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.2);
   }
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0);
   }
 }
 
@@ -284,46 +478,48 @@
 /* Stats Display */
 .capture-stats-limit-note {
   grid-column: 1 / -1;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-xs);
   color: var(--color-warning, #f59e0b);
 }
 
+/* Buffer readout: three instrument cells sharing one ruled strip. The value
+   reads first; its label sits underneath. */
 .capture-stats {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
 }
 
 .stat-item {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 2px;
   padding: var(--space-3);
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  transition:
-    background-color var(--transition-normal),
-    border-color var(--transition-normal);
+  min-width: 0;
 }
 
-.stat-item:hover {
-  background: var(--color-surface);
-  border-color: var(--color-border);
+.stat-item + .stat-item {
+  border-left: 1px solid var(--color-border-subtle);
 }
 
 .stat-label {
   font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .stat-value {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
+  font-size: var(--font-size-xl);
+  font-weight: 500;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--color-text);
 }
 
@@ -357,7 +553,8 @@
 .capture-settings .setting-value {
   font-size: var(--font-size-sm);
   font-family: var(--font-mono);
-  color: var(--color-primary);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
   font-weight: 500;
 }
 
@@ -382,9 +579,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--space-5);
-  background: var(--color-panel-header);
-  border-top: 1px solid var(--color-border);
-  font-size: var(--font-size-sm);
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
@@ -429,8 +626,8 @@
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-4);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(255, 61, 113, 0.1);
+  border: 1px solid rgba(255, 61, 113, 0.3);
   border-radius: var(--radius-lg);
   margin-top: var(--space-4);
 }
@@ -482,10 +679,10 @@
 }
 
 .capture-screen .capture-import-hint {
-  margin-top: var(--space-4);
+  margin-top: var(--space-6);
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
-  text-align: center;
+  text-align: left;
 }
 
 /* Drag-and-drop target: the whole preview panel */
@@ -500,8 +697,8 @@
   align-items: center;
   justify-content: center;
   border: 2px dashed var(--color-primary);
-  border-radius: var(--radius-lg);
-  background: rgba(59, 130, 246, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(34, 211, 238, 0.12);
   pointer-events: none;
   z-index: 2;
 }
@@ -513,8 +710,44 @@
 .capture-screen .capture-import-drop-label {
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
-  background: var(--color-panel);
-  color: var(--color-text);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
   font-weight: 600;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--reg-shadow);
+}
+
+/* Narrow windows: the stage and the controls stack and scroll together */
+@media (max-width: 720px) {
+  .capture-content {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .capture-preview-panel {
+    flex: none;
+    overflow: visible;
+  }
+  .capture-preview-wrapper {
+    padding: var(--space-4);
+    overflow: visible;
+  }
+  .capture-sidebar {
+    width: 100%;
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+  .capture-stage.empty-state {
+    min-height: 0;
+    padding: var(--space-12) var(--space-5) var(--space-6);
+  }
+  .capture-footer .footer-link:last-child {
+    display: none;
+  }
+  .capture-stage-steps.empty-state-steps {
+    grid-template-columns: 1fr;
+  }
+  .capture-stage-hud {
+    left: var(--space-4);
+    right: var(--space-4);
+  }
 }

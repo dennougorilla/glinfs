@@ -122,7 +122,7 @@
   border: none;
   border-radius: var(--radius-sm);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-size: var(--font-size-2xs);
   font-weight: 600;
   cursor: pointer;

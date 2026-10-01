@@ -9,6 +9,29 @@ import { frameToTimecode } from '../../../shared/utils/format.js';
 import { getPositionInSelection } from '../core.js';
 
 /**
+ * A 16px stroked toolbar glyph (decorative: the button text names the action)
+ * @param {string} d - Path data on a 16x16 grid
+ * @returns {SVGSVGElement}
+ */
+function toolbarIcon(d) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.6');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', d);
+  svg.appendChild(path);
+  return svg;
+}
+
+/**
  * Render the editor toolbar
  * @param {import('../types.js').EditorState} state - Render-time state (initial values only)
  * @param {import('../ui.js').EditorUIHandlers} handlers
@@ -34,7 +57,7 @@ export function renderEditorToolbar(state, handlers, fps) {
         type: 'button',
         'aria-label': 'Back to capture',
       },
-      ['← Capture'],
+      [toolbarIcon('M10 3.5 5.5 8l4.5 4.5'), 'Capture'],
     ),
   ]);
   cleanups.push(on(toolbarLeft.querySelector('button'), 'click', () => navigate('/capture')));
@@ -142,7 +165,7 @@ export function renderEditorToolbar(state, handlers, fps) {
       'aria-haspopup': 'dialog',
       title: 'Export GIF (Ctrl/Cmd+E)',
     },
-    ['Export →'],
+    [toolbarIcon('M8 2.5v8m-3.5-3.5L8 10.5l3.5-3.5M3 13.5h10'), 'Export GIF'],
   );
   cleanups.push(on(exportBtn, 'click', () => handlers.onExport()));
   toolbarRight.appendChild(exportBtn);

@@ -33,6 +33,7 @@ import { renderClipEntries } from './shared/clip-entries.js';
 import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { registerHotkey } from './shared/hotkeys.js';
 import { announce } from './shared/live-region.js';
+import { initRangeFill } from './shared/range-fill.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import { initTabStatus } from './shared/tab-status.js';
 import {
@@ -328,6 +329,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Recording / exporting state in the tab's icon and title
   initTabStatus();
+
+  // Filled range tracks (global.css paints them from --range-fill)
+  initRangeFill();
 
   // Create live region for screen reader announcements
   const liveRegion = document.createElement('div');

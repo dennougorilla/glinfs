@@ -168,9 +168,12 @@ function buildEntry(clip, options, cleanups) {
     status === 'compressed' && typeof clip.byteLengthMB === 'number'
       ? ` · ${clip.byteLengthMB < 0.1 ? '<0.1' : clip.byteLengthMB.toFixed(1)} MB`
       : '';
-  // One compact line ("3.9s · 117f · 08:36"); full detail lives in the
-  // title tooltip - the stacked layout wrapped badly at sidebar width (#98)
-  const metaLabel = `${durationSec.toFixed(1)}s · ${frameCount}f · ${shortTime}`;
+  // One compact label ("3.9s · 117f · 08:36"); full detail lives in the
+  // title tooltip (#98). On screen the duration leads and the rest drops to
+  // a quieter second line, so neither truncates at sidebar width.
+  const durationLabel = `${durationSec.toFixed(1)}s`;
+  const detailLabel = `${frameCount}f · ${shortTime}`;
+  const metaLabel = `${durationLabel} · ${detailLabel}`;
   const fullDetail = `${durationSec.toFixed(1)}s · ${frameCount} frames${sizeLabel} · captured ${timeLabel}`;
   const busyLabel = status ? BUSY_STATUS_LABELS[status] : undefined;
 
@@ -195,7 +198,9 @@ function buildEntry(clip, options, cleanups) {
 
   const info = createElement('div', { className: 'clip-entry-info', title: fullDetail }, [
     createElement('div', { className: 'clip-entry-meta' }, [
-      metaLabel,
+      createElement('span', { className: 'clip-entry-duration' }, [durationLabel]),
+      createElement('span', { className: 'clip-entry-sep' }, [' · ']),
+      createElement('span', { className: 'clip-entry-time' }, [detailLabel]),
       ...(options.active
         ? [createElement('span', { className: 'clip-entry-editing-badge' }, ['Editing'])]
         : []),

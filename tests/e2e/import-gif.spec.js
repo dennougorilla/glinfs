@@ -101,7 +101,7 @@ test.describe('Import a GIF from the Capture screen', () => {
 
     await gotoCapture(page);
     await expect(page.locator('.capture-import-btn')).toHaveText('Open GIF or image');
-    await expect(page.locator('.capture-import-hint')).toContainText('drop a GIF here');
+    await expect(page.locator('.capture-import-hint')).toContainText('Drop it here');
 
     await page.locator('[data-testid="import-file-input"]').setInputFiles({
       name: 'fixture.gif',

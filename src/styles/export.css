@@ -214,10 +214,8 @@
 
 .export-dialog .export-section-title {
   margin: 0 0 var(--space-3);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--color-text-muted);
 }
 
@@ -401,7 +399,7 @@
 
 .export-dialog .export-encoder-badge--wasm {
   background: var(--color-highlight-muted);
-  color: #c4b5fd;
+  color: var(--ink-magenta-bright);
 }
 
 .export-dialog .export-encoder-description {
@@ -565,9 +563,7 @@
 }
 
 .export-dialog .export-fact dt {
-  font-size: var(--font-size-2xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
