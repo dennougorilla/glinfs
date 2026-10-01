@@ -144,11 +144,18 @@ let ortTail = Promise.resolve();
 const queue = [];
 
 /**
- * Click-to-select image embeddings per model and frame (4 MB each): 24
- * frames. Tracking walks the clip in order, so a clip longer than that is
- * encoded again on a second pass; refining a click stays cheap.
+ * Click-to-select image embeddings per model and frame: 48 frames, held as
+ * float16 (2 MB each, 4 MB as float32 where Float16Array is missing: 24).
+ * A tracking job scopes the embeddings it uses (see byte-lru.js): on a clip
+ * longer than the cache, tracking again finds the frames the last job kept
+ * instead of none.
  */
 export const EMBEDDING_CACHE_BYTES = 96 * 1024 * 1024;
+
+/** Float16Array where the browser has it (Chrome 135+) */
+const Half = /** @type {Float32ArrayConstructor | undefined} */ (
+  /** @type {any} */ (globalThis).Float16Array
+);
 
 /** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
 const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
@@ -596,8 +603,10 @@ async function prompt(request) {
   await entry.ready;
   const start = performance.now();
   const key = `${request.modelId}\u0000${request.frameKey}\u0000${request.encoderWidth}x${request.encoderHeight}`;
-  let embedding = embeddings.get(key);
-  const cached = embedding !== undefined;
+  const stored = embeddings.get(key, request.jobId);
+  const cached = stored !== undefined;
+  /** @type {Float32Array | undefined} */
+  let embedding = stored && (stored instanceof Float32Array ? stored : new Float32Array(stored));
   let encodeMs = 0;
   if (!embedding) {
     embedding = await withOrt(async () => {
@@ -622,7 +631,8 @@ async function prompt(request) {
       encodeMs = performance.now() - encodeStart;
       return result;
     });
-    if (embeddings.set(key, embedding, embedding.byteLength))
+    const keep = Half ? new Half(embedding) : embedding;
+    if (embeddings.set(key, keep, keep.byteLength, request.jobId))
       embeddingKeys(request.modelId).add(key);
   }
   request.bitmap?.close();
