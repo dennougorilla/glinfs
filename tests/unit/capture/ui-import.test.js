@@ -73,9 +73,7 @@ describe('import controls', () => {
 
   it('mentions opening/dropping a GIF in the empty state', () => {
     renderCaptureScreen(container, initCaptureState(), createHandlers());
-    expect(container.querySelector('.capture-import-hint')?.textContent).toContain(
-      'drop a GIF here',
-    );
+    expect(container.querySelector('.capture-import-hint')?.textContent).toContain('Drop it here');
   });
 
   it('renders no import controls without an import handler', () => {

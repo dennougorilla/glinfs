@@ -5,7 +5,7 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  padding: var(--space-2);
+  padding: 0;
   box-sizing: border-box;
 }
 
@@ -17,7 +17,7 @@
   align-items: center;
   justify-content: center;
   padding: 0 var(--space-5);
-  background: var(--color-panel);
+  background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
   position: relative;
 }
@@ -69,41 +69,41 @@
 }
 
 .btn-playback:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-.btn-playback.active,
-.btn-play.playing {
+.btn-playback.active {
   background: var(--color-primary-muted);
   color: var(--color-primary);
 }
 
 .btn-play {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
   margin: 0 var(--space-2);
   border-radius: var(--radius-full);
-  background: var(--gradient-glinfs);
-  color: white;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
   font-size: var(--font-size-xl);
   flex-shrink: 0;
   box-shadow:
-    0 2px 12px var(--color-primary-glow),
-    0 0 0 3px rgba(59, 130, 246, 0.1);
+    0 1px 0 0 rgba(255, 255, 255, 0.25) inset,
+    0 2px 8px rgba(0, 0, 0, 0.5);
   transition: all var(--transition-normal);
 }
 
 .btn-play:hover:not(:disabled) {
-  transform: scale(1.08);
+  transform: scale(1.06);
+  background: var(--color-primary-hover);
   box-shadow:
-    0 4px 16px var(--color-primary-glow),
-    0 0 0 4px rgba(59, 130, 246, 0.15);
+    0 1px 0 0 rgba(255, 255, 255, 0.25) inset,
+    0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 .btn-play:focus-visible {
-  outline: 2px solid white;
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -112,10 +112,8 @@
 }
 
 .btn-play.playing {
-  background: var(--gradient-recording);
-  box-shadow:
-    0 2px 12px var(--color-recording-glow),
-    0 0 0 3px rgba(239, 68, 68, 0.1);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
 }
 
 /* Frame Grid Button (Timeline Header) - Clickable accent button */
@@ -124,10 +122,10 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-1) var(--space-3);
-  background: rgba(59, 130, 246, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
-  color: #60a5fa;
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: 600;
   cursor: pointer;
@@ -135,28 +133,31 @@
 }
 
 .btn-frame-grid-compact:hover {
-  background: rgba(59, 130, 246, 0.25);
-  border-color: rgba(59, 130, 246, 0.6);
-  color: #93c5fd;
+  background: var(--color-surface);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .btn-frame-grid-compact:active {
   transform: scale(0.96);
-  background: rgba(59, 130, 246, 0.3);
+  background: var(--color-surface-hover);
 }
 
 /* Time Display */
 .time-display {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-left: var(--space-5);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg-tertiary);
+  gap: var(--space-1);
+  margin-left: var(--space-4);
+  padding: 0 var(--space-3);
+  height: 30px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
 }
 
 .time-display .current {
@@ -172,17 +173,22 @@
 .editor-content {
   flex: 1;
   display: flex;
-  gap: var(--space-1);
+  gap: 0;
   overflow: hidden;
   min-height: 0;
 }
 
 /* Preview Panel */
+/* The stage behind the frame: the same faint pixel grid as the capture
+   viewfinder, so the clip sits on a working surface rather than a void. */
 .editor-preview-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg);
+  background:
+    radial-gradient(circle at 1px 1px, rgba(236, 238, 243, 0.05) 1px, transparent 1.5px) 0 0 / 16px
+    16px,
+    var(--color-bg);
   overflow: hidden;
   min-width: 0;
 }
@@ -207,10 +213,8 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: var(--color-canvas-bg);
-  border-radius: var(--radius-lg);
+  background: transparent;
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
 }
 
 .editor-canvas {
@@ -222,6 +226,10 @@
   object-fit: contain;
   position: relative;
   z-index: 0;
+  background: var(--color-canvas-bg);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 24px 60px -20px rgba(0, 0, 0, 0.9);
 }
 
 /* Overlay Canvas - positioned over base canvas for crop interaction */
@@ -282,11 +290,9 @@
 }
 
 .property-group-title {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   margin-bottom: var(--space-3);
 }
 
@@ -384,7 +390,7 @@
   height: var(--control-height-md);
   margin-top: auto;
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-weight: 600;
 }
 
@@ -400,7 +406,7 @@
   flex-direction: column;
   background: var(--color-panel);
   border-top: 1px solid var(--color-border);
-  margin-top: var(--space-2);
+  margin-top: 0;
 }
 
 /* Timeline Container - rendered by timeline.js */
@@ -418,9 +424,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-5);
-  background: var(--color-panel-header);
-  border-bottom: 1px solid var(--color-border);
+  padding: 0 var(--space-4) 0 var(--space-5);
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .timeline-header-left {
@@ -430,28 +436,31 @@
 }
 
 .timeline-title {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
 }
 
+/* In / Out / Selection read like a timecode strip: labels and values set in
+   a row, separated by hairlines rather than boxed one by one */
 .timeline-info {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: 0;
   font-size: var(--font-size-sm);
 }
 
-/* Timeline In/Out/Duration points */
 .timeline-point {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
+  padding: 0 var(--space-4);
+  background: none;
+  border-radius: 0;
+}
+
+.timeline-point + .timeline-point {
+  border-left: 1px solid var(--color-border);
 }
 
 .timeline-point .label {
@@ -459,7 +468,7 @@
   font-weight: 600;
   color: var(--color-text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .timeline-point .value {
@@ -479,8 +488,7 @@
 
 /* Duration highlight */
 .timeline-duration {
-  background: var(--color-selection-bg);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: none;
 }
 
 .timeline-duration .label {
@@ -493,8 +501,7 @@
 
 /* Selection info display - shows frame count and duration */
 .timeline-selection-info {
-  background: var(--color-selection-bg);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: none;
 }
 
 .timeline-selection-info .label {
@@ -508,8 +515,7 @@
 
 /* Playhead position display */
 .timeline-playhead {
-  background: var(--color-primary-muted);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: none;
 }
 
 .timeline-playhead .label {
@@ -532,6 +538,10 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* Inline padding keeps the IN/OUT grips clear of the window edge; ruler
+     and track share it, so their 0-100% spaces stay aligned */
+  padding: 0 var(--space-3);
+  box-sizing: border-box;
   background: var(--color-bg);
   user-select: none;
   overflow: hidden;
@@ -542,7 +552,7 @@
 }
 
 .tl:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--color-primary);
+  box-shadow: inset 0 0 0 2px var(--color-focus);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -646,7 +656,7 @@
    it never shifts the layout.
    ───────────────────────────────────────────────────────────────────────────── */
 .editor-timeline-ai-marks {
-  --editor-timeline-ai-analyzed: #22d3ee;
+  --editor-timeline-ai-analyzed: var(--color-success);
   --editor-timeline-ai-pending: rgba(200, 200, 200, 0.55);
   position: absolute;
   left: 0;
@@ -705,7 +715,7 @@
   bottom: 0;
   box-shadow:
     inset 0 0 0 2px var(--color-selection),
-    0 0 20px rgba(245, 158, 11, 0.15);
+    0 0 20px rgba(34, 211, 238, 0.15);
   border-radius: 3px;
   transition:
     left 0.05s ease-out,
@@ -737,7 +747,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--color-on-primary);
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.3),
     0 2px 8px rgba(0, 0, 0, 0.3);
@@ -751,7 +761,7 @@
 }
 
 .tl-handle:focus-visible .tl-handle-grip {
-  outline: 3px solid var(--color-primary);
+  outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -769,13 +779,13 @@
 .tl-handle-wing {
   width: 12px;
   height: 100%;
-  background: linear-gradient(to right, transparent 0%, rgba(245, 158, 11, 0.15) 100%);
+  background: linear-gradient(to right, transparent 0%, rgba(34, 211, 238, 0.15) 100%);
   opacity: 0;
   transition: opacity var(--transition-normal);
 }
 
 .tl-handle--out .tl-handle-wing {
-  background: linear-gradient(to left, transparent 0%, rgba(245, 158, 11, 0.15) 100%);
+  background: linear-gradient(to left, transparent 0%, rgba(34, 211, 238, 0.15) 100%);
 }
 
 .tl-handle:hover .tl-handle-wing {
@@ -791,16 +801,16 @@
   transform: scaleY(1.05);
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.2),
-    0 0 16px rgba(251, 191, 36, 0.4),
+    0 0 16px rgba(103, 232, 249, 0.4),
     0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 .tl-handle--dragging .tl-handle-grip {
-  background: #fcd34d;
+  background: #a5f3fc;
   transform: scaleY(1.08) scaleX(1.1);
   box-shadow:
-    0 0 0 2px rgba(252, 211, 77, 0.5),
-    0 0 24px rgba(251, 191, 36, 0.6),
+    0 0 0 2px rgba(165, 243, 252, 0.5),
+    0 0 24px rgba(103, 232, 249, 0.6),
     0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
@@ -828,7 +838,7 @@
   border-left: 10px solid transparent;
   border-right: 10px solid transparent;
   border-top: 14px solid var(--color-recording);
-  filter: drop-shadow(0 2px 4px rgba(239, 68, 68, 0.5));
+  filter: drop-shadow(0 2px 4px rgba(255, 61, 113, 0.5));
 }
 
 .tl-playhead-line {
@@ -840,8 +850,8 @@
   background: var(--color-recording);
   transform: translateX(-50%);
   box-shadow:
-    0 0 8px rgba(239, 68, 68, 0.6),
-    0 0 16px rgba(239, 68, 68, 0.3);
+    0 0 8px rgba(255, 61, 113, 0.6),
+    0 0 16px rgba(255, 61, 113, 0.3);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -878,9 +888,9 @@
   font-size: 10px;
   font-family: var(--font-mono);
   font-weight: 500;
-  color: white;
+  color: var(--color-on-primary);
   white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -892,17 +902,17 @@
   bottom: 0;
   background: linear-gradient(
     180deg,
-    rgba(59, 130, 246, 0.3) 0%,
-    rgba(59, 130, 246, 0.15) 50%,
-    rgba(59, 130, 246, 0.3) 100%
+    rgba(34, 211, 238, 0.3) 0%,
+    rgba(34, 211, 238, 0.15) 50%,
+    rgba(34, 211, 238, 0.3) 100%
   );
-  border: 2px solid var(--color-primary);
+  border: 2px solid var(--color-selection);
   border-radius: 4px;
   pointer-events: none;
   z-index: var(--z-timeline-selection);
   box-shadow:
-    0 0 20px rgba(59, 130, 246, 0.3),
-    inset 0 0 30px rgba(59, 130, 246, 0.1);
+    0 0 20px rgba(34, 211, 238, 0.3),
+    inset 0 0 30px rgba(34, 211, 238, 0.1);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -914,7 +924,7 @@
 
 .tl--drawing .tl-hover-time {
   background: var(--color-primary);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.5);
 }
 
 .tl--drawing .tl-hover-line {
@@ -932,7 +942,7 @@
 
 .tl--dragging .tl-hover-time {
   background: var(--color-selection);
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.5);
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.5);
 }
 
 .tl--dragging .tl-hover-line {
@@ -949,9 +959,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--space-5);
-  background: var(--color-panel-header);
+  background: var(--color-bg);
   border-top: 1px solid var(--color-border);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
@@ -961,26 +971,30 @@
   gap: var(--space-5);
 }
 
-/* Keyboard shortcuts hint */
+/* Keyboard shortcuts hint: quiet keycaps, the action name after each */
 .shortcuts-hint {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .shortcut {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
 }
 
 .kbd {
-  padding: var(--space-1) var(--space-2);
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
+  min-width: 18px;
+  padding: 1px 5px;
+  background: var(--color-surface);
+  border: 0;
   border-radius: var(--radius-sm);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.5);
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-2xs);
+  line-height: 16px;
+  text-align: center;
   color: var(--color-text-secondary);
 }
 
@@ -1116,8 +1130,8 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(255, 61, 113, 0.1);
+  border: 1px solid rgba(255, 61, 113, 0.3);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   color: var(--color-recording);
@@ -1239,11 +1253,9 @@
 
 .editor-sidebar .prop-accordion-summary {
   padding: var(--space-2) var(--space-4);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   cursor: pointer;
   list-style-position: inside;
 }
@@ -1261,20 +1273,28 @@
 .editor-sidebar-left .sidebar-tabs {
   flex-shrink: 0;
   display: flex;
-  border-bottom: 1px solid var(--color-border);
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
 }
 
 .editor-sidebar-left .sidebar-tab {
   flex: 1;
-  padding: var(--space-2) 0;
+  height: 26px;
+  padding: 0;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-muted);
-  font-size: var(--font-size-2xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
   cursor: pointer;
+}
+
+.editor-sidebar-left .sidebar-tab:hover {
+  color: var(--color-text-secondary);
 }
 
 /* Tab count (#100 r7): shows how many items each pane holds; empty when 0 */
@@ -1294,8 +1314,8 @@
 
 .editor-sidebar-left .sidebar-tab--active {
   color: var(--color-text);
-  background: var(--color-panel-header);
-  box-shadow: inset 0 -2px 0 var(--color-primary);
+  background: var(--color-surface);
+  box-shadow: none;
 }
 
 /* Panes fill the remaining sidebar height; each list scrolls internally */
@@ -1376,11 +1396,11 @@
   border: none;
   border-radius: var(--radius-lg);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-size: var(--font-size-base);
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 .editor-preview-wrapper .live-view-clip-btn:hover {
@@ -1520,8 +1540,8 @@
 }
 
 .scene-thumbnail-card.is-selected {
-  background: rgba(59, 130, 246, 0.08);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: var(--color-primary-muted);
+  border-color: var(--color-border-strong);
 }
 
 .scene-thumbnail-card.is-selected::before {
@@ -1536,7 +1556,7 @@
 }
 
 .scene-thumbnail-card:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -1856,7 +1876,7 @@
 }
 
 .editor-screen .editor-text-segment input:focus-visible + span {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -1890,7 +1910,7 @@
 .editor-screen .editor-text-panel select:focus-visible,
 .editor-screen .editor-text-panel textarea:focus-visible,
 .editor-screen .editor-text-panel input:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -1912,7 +1932,7 @@
 
 /* Keyboard picks: the focused preview shows a solid ring (and the marker) */
 .editor-screen .editor-ai-picking .editor-canvas-overlay:focus-visible {
-  outline: 3px solid var(--color-primary);
+  outline: 3px solid var(--color-focus);
   outline-offset: -3px;
 }
 
@@ -1997,7 +2017,7 @@
 /* Brush toggle: a checkbox styled as a button */
 
 .editor-screen .editor-brush-group input:focus-visible + span {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -2014,7 +2034,7 @@
 }
 
 .editor-screen .editor-brush-action:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -2035,13 +2055,13 @@
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.8),
     inset 0 0 0 1px rgba(0, 0, 0, 0.8);
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(255, 61, 113, 0.15);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
 .editor-screen .editor-brush-cursor--restore {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(34, 211, 238, 0.2);
 }
 
 .editor-screen .editor-brush-cursor[hidden],
@@ -2106,7 +2126,7 @@
 }
 
 .editor-screen .editor-side-tab:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
   border-radius: var(--radius-sm);
 }
@@ -2147,7 +2167,7 @@
   font-size: var(--font-size-2xs);
   font-weight: 500;
   line-height: 1.5;
-  color: #fff;
+  color: var(--color-on-primary);
   white-space: nowrap;
 }
 
@@ -2520,7 +2540,7 @@
 }
 
 .editor-screen .editor-cutout-radio:focus-visible + .editor-cutout-option-body {
-  outline: 2px solid var(--color-primary-hover);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -2672,7 +2692,7 @@
 }
 
 .editor-screen .editor-cutout-status-btn:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -2718,11 +2738,11 @@
 }
 
 .editor-screen .editor-cutout-alert--warn {
-  background: rgba(245, 158, 11, 0.1);
+  background: rgba(251, 191, 36, 0.1);
 }
 
 .editor-screen .editor-cutout-alert--error {
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(255, 61, 113, 0.1);
 }
 
 .editor-screen .editor-cutout-block-btn {
@@ -2753,7 +2773,7 @@
 }
 
 .editor-screen .editor-cutout-range:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -2778,7 +2798,7 @@
 }
 
 .editor-screen .editor-cutout-switch:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -2800,7 +2820,7 @@
 }
 
 .editor-screen .editor-cutout-swatch:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -2854,7 +2874,7 @@
 }
 
 .editor-screen .editor-cutout-segment input:focus-visible + span {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -2915,12 +2935,12 @@
 .editor-screen .editor-cutout-tool-input:checked + span {
   border-color: var(--color-primary);
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 .editor-screen .editor-cutout-tool-input:focus-visible + span,
 .editor-screen .editor-cutout-tool--button:focus-visible span {
-  outline: 2px solid var(--color-primary-hover);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -2948,7 +2968,7 @@
 
 .editor-screen .editor-cutout-tool.is-active svg,
 .editor-screen .editor-cutout-tool-input:checked + span svg {
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 /* The eyedropper next to the key color: a compact tool */
@@ -2986,7 +3006,7 @@
 }
 
 .editor-screen .editor-cutout-pick--remove {
-  border-color: rgba(239, 68, 68, 0.5);
+  border-color: rgba(255, 61, 113, 0.5);
 }
 
 .editor-screen .editor-cutout-pick-go,
@@ -3015,7 +3035,7 @@
 
 .editor-screen .editor-cutout-pick-go:focus-visible,
 .editor-screen .editor-cutout-pick-delete:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: -2px;
 }
 
@@ -3035,7 +3055,7 @@
   padding: 3px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-full);
-  background: rgba(24, 24, 27, 0.88);
+  background: rgba(17, 18, 24, 0.88);
   box-shadow: var(--shadow-md);
   backdrop-filter: blur(6px);
 }
@@ -3087,7 +3107,7 @@
 
 .editor-screen .editor-compare-hold:focus-visible,
 .editor-screen .editor-compare-input:focus-visible + span {
-  outline: 2px solid var(--color-primary-hover);
+  outline: 2px solid var(--color-focus);
   outline-offset: 1px;
 }
 
@@ -3102,7 +3122,7 @@
   padding: 6px var(--space-4);
   border-radius: var(--radius-full);
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
   font-size: var(--font-size-sm);
   white-space: nowrap;
   overflow: hidden;

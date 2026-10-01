@@ -65,7 +65,7 @@
 }
 
 .export-dialog .export-dialog-title:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -187,8 +187,8 @@
 .export-dialog .export-badge {
   padding: 2px var(--space-2);
   border-radius: var(--radius-full);
-  background: var(--color-accent-muted);
-  color: var(--color-accent-hover);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   font-weight: 500;
 }
@@ -214,10 +214,8 @@
 
 .export-dialog .export-section-title {
   margin: 0 0 var(--space-3);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--color-text-muted);
 }
 
@@ -284,7 +282,7 @@
 
 .export-dialog .export-checkbox:focus-visible,
 .export-dialog .export-number:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -394,14 +392,11 @@
   letter-spacing: 0.04em;
 }
 
-.export-dialog .export-encoder-badge--js {
-  background: var(--color-selection-bg);
-  color: var(--color-selection-handle);
-}
-
+.export-dialog .export-encoder-badge--js,
 .export-dialog .export-encoder-badge--wasm {
-  background: var(--color-highlight-muted);
-  color: #c4b5fd;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
 }
 
 .export-dialog .export-encoder-description {
@@ -565,9 +560,7 @@
 }
 
 .export-dialog .export-fact dt {
-  font-size: var(--font-size-2xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 

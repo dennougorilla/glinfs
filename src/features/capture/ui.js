@@ -8,6 +8,7 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { formatDuration } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { IMPORT_ACCEPT_ATTRIBUTE } from '../import/core.js';
+import { createWelcomeScene } from './welcome-scene.js';
 
 /** @constant {string} GitHub repository URL */
 const GITHUB_REPO_URL = 'https://github.com/dennougorilla/glinfs';
@@ -31,27 +32,6 @@ function createControlSection(title, content) {
   );
   section.appendChild(content);
   return section;
-}
-
-/**
- * Create SVG capture icon
- * @returns {SVGElement}
- */
-function createCaptureIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '2');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.innerHTML = `
-    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-    <circle cx="12" cy="10" r="3"/>
-    <path d="M17 21v-4H7v4"/>
-    <line x1="12" y1="17" x2="12" y2="21"/>
-  `;
-  return svg;
 }
 
 /**
@@ -125,7 +105,7 @@ export function renderCaptureScreen(container, state, handlers) {
   // Preview Panel
   const previewPanel = createElement('div', { className: 'capture-preview-panel' });
   const previewWrapper = createElement('div', { className: 'capture-preview-wrapper' });
-  previewWrapper.appendChild(renderVideoPreview(state, Boolean(handlers.onImportFile)));
+  previewWrapper.appendChild(renderVideoPreview(state, Boolean(handlers.onImportFile), cleanups));
   previewPanel.appendChild(previewWrapper);
   content.appendChild(previewPanel);
   if (handlers.onImportFile) {
@@ -232,9 +212,10 @@ function setupImportDropZone(panel, onImportFile, cleanups) {
  * Render video preview area
  * @param {import('./types.js').CaptureState} state
  * @param {boolean} [importAvailable=false] - Mention opening/dropping a GIF
+ * @param {(() => void)[]} [cleanups] - Receives the welcome scene's stop
  * @returns {HTMLElement}
  */
-function renderVideoPreview(state, importAvailable = false) {
+function renderVideoPreview(state, importAvailable = false, cleanups = []) {
   if (state.isSharing && state.stream) {
     const previewClasses = [
       'video-preview',
@@ -251,7 +232,7 @@ function renderVideoPreview(state, importAvailable = false) {
       preview.appendChild(
         createElement('div', { className: 'recording-badge' }, [
           createElement('span', { className: 'dot' }),
-          'REC',
+          'Rec',
         ]),
       );
     }
@@ -268,33 +249,57 @@ function renderVideoPreview(state, importAvailable = false) {
     return preview;
   }
 
-  // Empty state - Glinfs branded
+  // Empty state: the preview is a viewfinder on standby. It explains the
+  // one idea that makes Glinfs different (a rolling buffer: clip what just
+  // happened) and walks through the three steps.
+  const seconds = state.settings.bufferDuration;
   return createElement(
     'div',
-    { className: 'empty-state preview-empty' },
+    { className: 'empty-state preview-empty capture-stage' },
     [
-      createElement('div', { className: 'empty-state-icon' }, [
-        // Camera/Screen icon SVG
-        createCaptureIcon(),
+      createElement('div', { className: 'capture-stage-hud', 'aria-hidden': 'true' }, [
+        createElement('span', { className: 'capture-stage-standby' }, [
+          createElement('span', { className: 'capture-stage-standby-dot' }),
+          'Standby',
+        ]),
+        createElement('span', { className: 'capture-stage-spec' }, [
+          `${state.settings.fps} fps · ${seconds}s buffer`,
+        ]),
       ]),
-      createElement('h2', { className: 'empty-state-title' }, ['Ready to Capture']),
-      createElement('div', { className: 'empty-state-steps' }, [
-        createElement('div', { className: 'empty-state-step' }, [
+      createWelcomeScene(seconds, cleanups),
+      createElement('h2', { className: 'empty-state-title capture-stage-title' }, [
+        'Clip what just happened',
+      ]),
+      createElement('p', { className: 'capture-stage-lede' }, [
+        `Share a screen, window or tab. Glinfs keeps the last ${seconds} seconds, so when something is worth a GIF, it is already recorded.`,
+      ]),
+      createElement('ol', { className: 'empty-state-steps capture-stage-steps' }, [
+        createElement('li', { className: 'empty-state-step' }, [
           createElement('span', { className: 'empty-state-step-number' }, ['1']),
-          'Click "Select Screen" button',
+          createElement('span', { className: 'capture-stage-step-text' }, [
+            createElement('span', { className: 'capture-stage-chip' }, ['Select Screen']),
+            ' and pick what to record',
+          ]),
         ]),
-        createElement('div', { className: 'empty-state-step' }, [
+        createElement('li', { className: 'empty-state-step' }, [
           createElement('span', { className: 'empty-state-step-number' }, ['2']),
-          'Choose a screen, window, or tab to capture',
+          createElement('span', { className: 'capture-stage-step-text' }, [
+            `Keep working. The last ${seconds}s stay buffered`,
+          ]),
         ]),
-        createElement('div', { className: 'empty-state-step' }, [
+        createElement('li', { className: 'empty-state-step' }, [
           createElement('span', { className: 'empty-state-step-number' }, ['3']),
-          'Click "Create Clip" to edit your recording',
+          createElement('span', { className: 'capture-stage-step-text' }, [
+            createElement('span', { className: 'capture-stage-chip capture-stage-chip--quiet' }, [
+              'Create Clip',
+            ]),
+            ' to trim it and export the GIF',
+          ]),
         ]),
       ]),
       importAvailable
         ? createElement('p', { className: 'capture-import-hint' }, [
-            'Editing an existing GIF? Click "Open GIF or image", or drop a GIF here',
+            'Already have a GIF? Drop it here, or use Open GIF or image.',
           ])
         : null,
     ].filter(Boolean),

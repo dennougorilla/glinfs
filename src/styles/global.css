@@ -21,9 +21,15 @@ body {
   line-height: var(--line-height-normal);
   color: var(--color-text);
   background-color: var(--color-bg);
+  font-stretch: 96%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
 }
 
 /* Skip link for accessibility */
@@ -33,7 +39,7 @@ body {
   left: var(--space-4);
   padding: var(--space-2) var(--space-4);
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   border-radius: var(--radius-sm);
   font-weight: 500;
   z-index: var(--z-tooltip);
@@ -46,21 +52,11 @@ body {
   outline-offset: 2px;
 }
 
-/* Focus indicators - Enhanced visibility */
+/* Focus: a cyan outline that keeps clear of the control, so it never fights
+   the control's own shadow (the primary button carries a magenta plate). */
 :focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--color-bg),
-    0 0 0 4px var(--color-primary),
-    0 0 12px rgba(59, 130, 246, 0.3);
-}
-
-/* Buttons focus - more subtle */
-button:focus-visible,
-.btn:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--color-bg),
-    0 0 0 4px var(--color-primary);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 /* ========================================
@@ -82,20 +78,25 @@ button:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-6);
-  background: var(--color-panel-header);
-  border-bottom: 1px solid var(--color-border);
+  padding: 0 var(--space-5);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border-subtle);
   z-index: var(--z-sticky);
+  position: relative;
 }
 
 .app-logo {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--font-size-md);
+  gap: 10px;
+  font-size: 16px;
   font-weight: 600;
+  font-stretch: 90%;
+  letter-spacing: -0.02em;
+  line-height: 1;
   color: var(--color-text);
   text-decoration: none;
+  border-radius: var(--radius-sm);
 }
 
 /* 32px keeps the pixel-art logo on whole pixels (1 art pixel = 2px) */
@@ -192,11 +193,13 @@ button:focus-visible,
 }
 
 .app-version {
-  padding: 2px 6px;
-  font-size: var(--font-size-xs);
+  padding: 3px 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
   font-weight: 500;
+  letter-spacing: 0;
   color: var(--color-text-muted);
-  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   margin-left: var(--space-1);
 }
@@ -205,14 +208,19 @@ button:focus-visible,
 .step-indicator {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  padding: 3px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
 }
 
 .step {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+  height: 30px;
+  padding: 0 var(--space-3) 0 var(--space-2);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   font-weight: 500;
@@ -220,7 +228,9 @@ button:focus-visible,
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
   text-decoration: none;
 }
 
@@ -232,10 +242,11 @@ button:focus-visible,
 .step--active {
   color: var(--color-text);
   background: var(--color-surface);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.05) inset;
 }
 
 .step--completed {
-  color: var(--color-success);
+  color: var(--color-text-secondary);
 }
 
 .step--disabled {
@@ -258,19 +269,19 @@ button:focus-visible,
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--color-error);
-  box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6);
+  box-shadow: 0 0 0 0 rgba(255, 61, 113, 0.6);
   animation: step-live-pulse 1.6s ease-out infinite;
 }
 
 @keyframes step-live-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6);
+    box-shadow: 0 0 0 0 rgba(255, 61, 113, 0.6);
   }
   70% {
-    box-shadow: 0 0 0 6px rgba(229, 72, 77, 0);
+    box-shadow: 0 0 0 6px rgba(255, 61, 113, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
+    box-shadow: 0 0 0 0 rgba(255, 61, 113, 0);
   }
 }
 
@@ -281,33 +292,36 @@ button:focus-visible,
 }
 
 .step-number {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-full);
-  background: var(--color-surface);
-  font-size: var(--font-size-xs);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
   font-weight: 600;
   color: var(--color-text-muted);
 }
 
 .step--active .step-number {
   background: var(--color-primary);
-  color: white;
-  box-shadow: 0 0 0 4px var(--color-primary-muted);
+  color: var(--color-on-primary);
+  box-shadow: none;
 }
 
 .step--completed .step-number {
-  background: var(--color-success);
-  color: white;
+  background: var(--color-primary-muted);
+  color: var(--color-primary);
+  box-shadow: none;
 }
 
 .step-connector {
-  width: 32px;
-  height: 3px;
-  background: var(--color-border);
+  width: 14px;
+  height: 1px;
+  background: var(--color-border-strong);
   border-radius: var(--radius-full);
   position: relative;
   overflow: hidden;
@@ -320,7 +334,7 @@ button:focus-visible,
   left: 0;
   height: 100%;
   width: 0;
-  background: var(--color-success);
+  background: var(--color-primary);
   border-radius: var(--radius-full);
   transition: width 0.3s var(--easing-standard);
 }
@@ -369,11 +383,9 @@ main {
 }
 
 .panel-title {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .panel-actions {
@@ -417,6 +429,7 @@ button {
   border: none;
   background: none;
   font-family: inherit;
+  font-stretch: inherit;
   font-weight: 500;
   transition: all var(--transition-fast);
 }
@@ -439,35 +452,50 @@ button {
   cursor: not-allowed;
 }
 
-/* Primary Button - Enhanced with Glinfs gradient */
+/* Primary Button — paper on graphite. At rest it is flat; on hover it lifts
+   off a magenta plate (the logo's misregistration), and pressing lands it
+   back on the plate like a print stamp. */
 .btn-primary {
-  background: var(--gradient-primary);
-  color: white;
-  transition: all var(--transition-normal);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 600;
+  box-shadow: var(--reg-shadow);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--gradient-glinfs);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+  background: var(--color-primary-hover);
+  transform: translate(-2px, -2px);
+  box-shadow: var(--reg-shadow-hover);
 }
 
 .btn-primary:active:not(:disabled) {
-  transform: translateY(0);
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.2);
+  transform: translate(0, 0);
+  box-shadow: 0 0 0 0 var(--ink-magenta);
+  transition-duration: 60ms;
+}
+
+.btn-primary:disabled {
+  box-shadow: none;
 }
 
 /* Secondary Button */
 .btn-secondary {
-  background: var(--color-surface);
+  background: var(--color-bg-tertiary);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: var(--color-surface-hover);
+  background: var(--color-surface);
   border-color: var(--color-text-muted);
+}
+
+.btn-secondary:active:not(:disabled) {
+  background: var(--color-surface-hover);
 }
 
 .btn-secondary.active {
@@ -494,7 +522,7 @@ button {
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #dc2626;
+  background: #e8336f;
 }
 
 /* Icon Button
@@ -561,13 +589,16 @@ input[type="text"],
 input[type="number"] {
   height: var(--control-height-md);
   padding: 0 var(--space-3);
-  background: var(--color-bg-tertiary);
+  background: var(--color-bg-secondary);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   font-family: inherit;
-  transition: all var(--transition-fast);
+  font-stretch: inherit;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 select:hover,
@@ -579,45 +610,22 @@ select:focus,
 input:focus {
   outline: none;
   border-color: var(--color-primary);
-  background: var(--color-bg-secondary);
+  background: var(--color-bg);
+}
+
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
 }
 
 /* Range Slider */
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  background: var(--color-primary);
-  border-radius: var(--radius-full);
-  cursor: grab;
-  transition: all var(--transition-fast);
-  box-shadow: var(--shadow-sm);
-}
-
-input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.1);
-  background: var(--color-primary-hover);
-}
-
-input[type="range"]::-webkit-slider-thumb:active {
-  cursor: grabbing;
-  transform: scale(0.95);
-}
+/* Range sliders: see form-controls.css */
 
 /* Checkbox */
 input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   accent-color: var(--color-primary);
   cursor: pointer;
 }
@@ -634,8 +642,6 @@ input[type="checkbox"] {
   font-size: var(--font-size-xs);
   font-weight: 600;
   border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .badge-success {
@@ -644,12 +650,12 @@ input[type="checkbox"] {
 }
 
 .badge-warning {
-  background: rgba(245, 158, 11, 0.15);
+  background: rgba(251, 191, 36, 0.15);
   color: var(--color-warning);
 }
 
 .badge-error {
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(255, 61, 113, 0.15);
   color: var(--color-error);
 }
 
@@ -724,8 +730,8 @@ input[type="checkbox"] {
 /* Error message (inline) */
 .error-message {
   padding: var(--space-3);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(255, 61, 113, 0.1);
+  border: 1px solid rgba(255, 61, 113, 0.3);
   border-radius: var(--radius-md);
   color: var(--color-error);
   font-size: var(--font-size-sm);
@@ -750,7 +756,7 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(255, 61, 113, 0.15);
   border: 2px solid var(--color-error);
   border-radius: var(--radius-full);
   font-size: 36px;
@@ -766,7 +772,7 @@ input[type="checkbox"] {
 .error-screen__message {
   max-width: 480px;
   padding: var(--space-4) var(--space-5);
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(255, 61, 113, 0.1);
   border-radius: var(--radius-lg);
   font-size: var(--font-size-sm);
   color: var(--color-error);
@@ -790,7 +796,7 @@ input[type="checkbox"] {
 }
 
 .btn-error:hover:not(:disabled) {
-  background: #dc2626;
+  background: #e8336f;
 }
 
 /* Tooltip */
@@ -804,12 +810,12 @@ input[type="checkbox"] {
   bottom: 100%;
   left: 50%;
   transform: translateX(-50%) translateY(-8px);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
+  padding: 5px var(--space-2);
+  background: var(--ink-paper);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-bg);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -817,8 +823,10 @@ input[type="checkbox"] {
   z-index: var(--z-tooltip);
 }
 
-[data-tooltip]:hover::after {
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
   opacity: 1;
+  transition-delay: 300ms;
 }
 
 /* Tooltips default to opening upward, which puts them off-screen for the
@@ -854,13 +862,25 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-5);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
   font-size: var(--font-size-sm);
   color: var(--color-text);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-toast {
+    animation: toast-in 280ms var(--easing-emphasized);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .app-toast-action {
@@ -962,9 +982,10 @@ input[type="checkbox"] {
 /* High contrast mode support */
 @media (prefers-contrast: high) {
   :root {
-    --color-border: #71717a;
-    --color-text-muted: #a1a1aa;
-    --color-text-secondary: #d4d4d8;
+    --color-border: #6b7080;
+    --color-border-strong: #8b8fa0;
+    --color-text-muted: #b4b8c5;
+    --color-text-secondary: #d6d9e1;
   }
 
   .btn-primary,
