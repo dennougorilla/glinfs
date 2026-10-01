@@ -8,6 +8,7 @@ import { createElement, on } from '../../shared/utils/dom.js';
 import { formatDuration } from '../../shared/utils/format.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { IMPORT_ACCEPT_ATTRIBUTE } from '../import/core.js';
+import { createWelcomeScene } from './welcome-scene.js';
 
 /** @constant {string} GitHub repository URL */
 const GITHUB_REPO_URL = 'https://github.com/dennougorilla/glinfs';
@@ -264,6 +265,7 @@ function renderVideoPreview(state, importAvailable = false) {
           `${state.settings.fps} fps · ${seconds}s buffer`,
         ]),
       ]),
+      createWelcomeScene(seconds),
       createElement('h2', { className: 'empty-state-title capture-stage-title' }, [
         'Clip what just happened',
       ]),
