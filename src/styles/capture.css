@@ -798,11 +798,35 @@
   height: 100%;
 }
 
+/* Chrome/Edge 94-104 have no container queries (they drop the width above
+   and the rule that hides the scene). There the scene is sized from the
+   window height instead, leaving ~600px for the rest of the stage; its box
+   clips it rather than let it reach the title, and short windows go
+   without it. The phone and laptop layouts below size it their own way. */
+@supports not (container-type: size) {
+  .welcome {
+    overflow: hidden;
+  }
+  .welcome-scene {
+    width: min(100%, 560px, calc((100vh - 600px) * 2.5));
+  }
+  @media (max-height: 660px) {
+    .welcome {
+      display: none;
+    }
+  }
+}
+
 @media (max-width: 720px) {
   .welcome {
     flex: none;
     height: 170px;
     margin-bottom: var(--space-6);
+  }
+  @supports not (container-type: size) {
+    .welcome-scene {
+      width: min(100%, 425px);
+    }
   }
 }
 
@@ -840,5 +864,10 @@
   .capture-stage > .capture-import-hint {
     grid-column: 1 / -1;
     grid-row: 5;
+  }
+  @supports not (container-type: size) {
+    .welcome-scene {
+      width: min(100%, 560px);
+    }
   }
 }
