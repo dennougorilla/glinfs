@@ -103,6 +103,27 @@ describe('trackClicks', () => {
     expect(progress.mock.calls[0][0]).toEqual({ done: 1, total: 10, frame: 3 });
   });
 
+  it("passes the low-res logits of the answer each frame kept as the next frame's mask_input", async () => {
+    const segmenter = fakeSegmenter();
+    const { promise } = run({
+      prompt: async (f, p) => {
+        const candidates = await segmenter.prompt(f, p);
+        return candidates.map((c) => {
+          const lowRes = Float32Array.of(f, c.index);
+          return { ...c, lowRes };
+        });
+      },
+    });
+    await promise;
+    const byFrame = new Map(segmenter.calls.map((c) => [c.frame, c.prompt]));
+    expect(byFrame.get(3).maskInput).toBeUndefined();
+    // Frame 4 follows 3, frame 2 follows 3 backward, frame 0 follows 1;
+    // the answer kept is the object (index 2)
+    expect([...byFrame.get(4).maskInput]).toEqual([3, 2]);
+    expect([...byFrame.get(2).maskInput]).toEqual([3, 2]);
+    expect([...byFrame.get(0).maskInput]).toEqual([1, 2]);
+  });
+
   it('Part: the best-scoring smaller answer on the clicked frame', async () => {
     const { promise, masks } = run({ scope: 'part' });
     await promise;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backgroundPoints,
   buildPromptInputs,
   chooseCandidate,
   expandBox,
@@ -215,6 +216,42 @@ describe('tracking', () => {
     expect(p.y).toBeGreaterThan(0.2);
     expect(p.y).toBeLessThan(0.6);
     expect(trackingPrompt(new Uint8Array(100 * 50), 100, 50)).toBeNull();
+  });
+
+  it('adds remove points deep in the background the previous mask left out', () => {
+    // An L: its box holds a large empty corner, open to the box's edge
+    const previous = rectMask(100, 100, [10, 10, 90, 20]);
+    previous.set(rectMask(100, 100, [10, 10, 20, 90]).map((v, i) => v || previous[i]));
+    const prompt = /** @type {NonNullable<ReturnType<typeof trackingPrompt>>} */ (
+      trackingPrompt(previous, 100, 100)
+    );
+    expect(prompt.points[0].mode).toBe('keep');
+    const [corner, ...more] = prompt.points.filter((p) => p.mode === 'remove');
+    // In the empty corner, not on the L; one point for one patch of background
+    expect(corner.x).toBeGreaterThan(0.2);
+    expect(corner.y).toBeGreaterThan(0.2);
+    expect(more).toEqual([]);
+
+    // A post with background on both sides: one point each side
+    const post = rectMask(100, 100, [45, 10, 55, 90]);
+    const sides = backgroundPoints(post, 100, 100, [0.1, 0.1, 0.9, 0.9]);
+    expect(sides).toHaveLength(2);
+    expect(sides.every((p) => p.mode === 'remove')).toBe(true);
+    expect(sides.map((p) => p.x < 0.45).sort()).toEqual([false, true]);
+  });
+
+  it('puts no background point in a hole of the object or where it meets the frame edge', () => {
+    // A ring: the hole is enclosed
+    const ring = rectMask(100, 100, [10, 10, 90, 90]);
+    ring.set(rectMask(100, 100, [30, 30, 70, 70]).map((v, i) => (v ? 0 : ring[i])));
+    expect(backgroundPoints(ring, 100, 100, [0.1, 0.1, 0.9, 0.9])).toEqual([]);
+    // A notch open only to the frame's right edge (more of the object coming in)
+    const edge = rectMask(100, 100, [50, 0, 100, 100]);
+    edge.set(rectMask(100, 100, [75, 25, 100, 75]).map((v, i) => (v ? 0 : edge[i])));
+    expect(backgroundPoints(edge, 100, 100, [0.5, 0, 1, 1])).toEqual([]);
+    // Too thin a background (closer than 4 mask pixels to the object) gets none
+    const box = rectMask(100, 100, [20, 20, 80, 80]);
+    expect(backgroundPoints(box, 100, 100, [0.17, 0.17, 0.83, 0.83])).toEqual([]);
   });
 
   it('flags a lost object when the area jumps by more than half or vanishes', () => {

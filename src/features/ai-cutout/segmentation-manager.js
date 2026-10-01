@@ -52,7 +52,7 @@ import {
   SegmentationError,
   SegmentationErrorCode,
 } from './protocol.js';
-import { buildPromptInputs, getEncoderSize } from './sam-prompts.js';
+import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-prompts.js';
 
 /**
  * @typedef {import('../capture/types.js').Frame} Frame
@@ -119,7 +119,7 @@ import { buildPromptInputs, getEncoderSize } from './sam-prompts.js';
 
 /**
  * @typedef {Object} PromptResult
- * @property {{ data: Uint8Array, width: number, height: number, score: number, index: number }[]} candidates
+ * @property {import('./sam-prompts.js').SamCandidate[]} candidates
  * @property {number} totalMs
  * @property {boolean} cached - The frame's embedding was reused
  */
@@ -287,6 +287,18 @@ export function collectPendingFrames(frames, maskStore, modelId = DEFAULT_MODEL_
     pending.push({ key, frame });
   }
   return pending;
+}
+
+/**
+ * One answer's low-res logits out of the decoder's four (a copy: the next
+ * prompt sends it to the worker)
+ * @param {ArrayBuffer} buffer - 4 × 256 × 256 float32
+ * @param {number} index
+ * @returns {Float32Array}
+ */
+function lowResAt(buffer, index) {
+  const size = SAM_LOW_RES_SIZE * SAM_LOW_RES_SIZE;
+  return new Float32Array(buffer, index * size * 4, size).slice();
 }
 
 /**
@@ -700,7 +712,7 @@ export class SegmentationManager {
    * the prompt as decoder inputs.
    * @param {number} jobId
    * @param {Frame} frame
-   * @param {{ points: import('./sam-prompts.js').SamPoint[], box: import('./sam-prompts.js').SamBox | null }} prompt
+   * @param {{ points: import('./sam-prompts.js').SamPoint[], box: import('./sam-prompts.js').SamBox | null, maskInput?: Float32Array | null }} prompt
    * @param {ModelSpec} spec
    * @returns {Promise<PromptResult>}
    */
@@ -757,6 +769,8 @@ export class SegmentationManager {
             maskHeight: mask.height,
             coords,
             labels,
+            maskInput: prompt.maskInput ?? null,
+            wantLowRes: true,
           },
           [bitmap],
         );
@@ -987,6 +1001,7 @@ export class SegmentationManager {
                   height: data.height,
                   score: data.scores?.[index] ?? 0,
                   index,
+                  ...(data.lowRes ? { lowRes: lowResAt(data.lowRes, index) } : {}),
                 }),
               ),
               totalMs: data.totalMs,

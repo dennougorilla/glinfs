@@ -72,6 +72,8 @@ export const WHOLE_MIN_SCORE_RATIO = 0.8;
  * @property {number} height
  * @property {number} score - The decoder's predicted IoU
  * @property {number} index - 0 (single-mask answer) .. 3
+ * @property {Float32Array} [lowRes] - The answer's 256 × 256 low-res logits,
+ *   to pass as the next frame's `mask_input`
  */
 
 /**
@@ -210,6 +212,20 @@ export function expandBox(box, margin = TRACK_BOX_MARGIN) {
  * @returns {{ x: number, y: number } | null} null for an empty mask
  */
 export function interiorPoint(data, width, height, threshold = 128) {
+  const deepest = deepestPoint(data, width, height, threshold);
+  return deepest && { x: deepest.x, y: deepest.y };
+}
+
+/**
+ * interiorPoint with its depth (chamfer distance to the nearest outside
+ * pixel, 3 per pixel step)
+ * @param {Uint8Array} data
+ * @param {number} width
+ * @param {number} height
+ * @param {number} [threshold]
+ * @returns {{ x: number, y: number, depth: number, index: number } | null}
+ */
+export function deepestPoint(data, width, height, threshold = 128) {
   const size = width * height;
   if (size === 0) return null;
   const big = 1 << 30;
@@ -251,7 +267,12 @@ export function interiorPoint(data, width, height, threshold = 128) {
     }
   }
   if (best < 0) return null;
-  return { x: ((best % width) + 0.5) / width, y: (Math.floor(best / width) + 0.5) / height };
+  return {
+    x: ((best % width) + 0.5) / width,
+    y: (Math.floor(best / width) + 0.5) / height,
+    depth: bestValue,
+    index: best,
+  };
 }
 
 /**
@@ -326,7 +347,8 @@ export function chooseCandidate(candidates, { scope = 'whole', previous = null }
 
 /**
  * The prompt of a tracked frame: the previous frame's mask box grown by
- * TRACK_BOX_MARGIN, plus a keep point deep inside that mask.
+ * TRACK_BOX_MARGIN, a keep point deep inside that mask, and remove points
+ * deep in the background it left out (see backgroundPoints).
  * @param {Uint8Array} previous - 0..255
  * @param {number} width
  * @param {number} height
@@ -336,10 +358,82 @@ export function trackingPrompt(previous, width, height) {
   const { box } = maskStats(previous, width, height);
   if (!box) return null;
   const inside = interiorPoint(previous, width, height);
-  return {
-    points: inside ? [{ x: inside.x, y: inside.y, mode: 'keep' }] : [],
-    box: expandBox(box),
+  const grown = expandBox(box);
+  /** @type {SamPoint[]} */
+  const points = inside ? [{ x: inside.x, y: inside.y, mode: 'keep' }] : [];
+  points.push(...backgroundPoints(previous, width, height, grown));
+  return { points, box: grown };
+}
+
+/** Background points: at most this many per tracked frame */
+const TRACK_BACKGROUND_POINTS = 2;
+/** ...each at least this deep in the background (mask pixels) */
+const TRACK_BACKGROUND_MIN_DEPTH = 4;
+
+/**
+ * Points deep inside what the previous mask left out within the prompt's
+ * box (the table under a cup, the sky around a person): remove points
+ * that keep the next frame's answer from spreading over what was excluded
+ * @param {Uint8Array} previous - 0..255
+ * @param {number} width
+ * @param {number} height
+ * @param {SamBox} box - Fractions of the frame
+ * @returns {SamPoint[]}
+ */
+export function backgroundPoints(previous, width, height, box) {
+  const x0 = Math.floor(box[0] * width);
+  const y0 = Math.floor(box[1] * height);
+  const x1 = Math.ceil(box[2] * width);
+  const y1 = Math.ceil(box[3] * height);
+  // Background is what the mask left out that reaches the box's edge
+  // inside the frame: holes in the object, and what comes in at the frame's
+  // edge (the rest of the object, entering as the camera pans), are not
+  const outside = new Uint8Array(width * height);
+  /** @type {number[]} */
+  const stack = [];
+  const free = (/** @type {number} */ x, /** @type {number} */ y) =>
+    x >= x0 && x < x1 && y >= y0 && y < y1 && previous[y * width + x] < 128;
+  const seed = (/** @type {number} */ x, /** @type {number} */ y) => {
+    const i = y * width + x;
+    if (!outside[i] && free(x, y)) {
+      outside[i] = 255;
+      stack.push(i);
+    }
   };
+  for (let x = x0; x < x1; x++) {
+    if (y0 > 0) seed(x, y0);
+    if (y1 < height) seed(x, y1 - 1);
+  }
+  for (let y = y0; y < y1; y++) {
+    if (x0 > 0) seed(x0, y);
+    if (x1 < width) seed(x1 - 1, y);
+  }
+  while (stack.length > 0) {
+    const i = /** @type {number} */ (stack.pop());
+    const x = i % width;
+    const y = (i - x) / width;
+    if (x > 0) seed(x - 1, y);
+    if (x < width - 1) seed(x + 1, y);
+    if (y > 0) seed(x, y - 1);
+    if (y < height - 1) seed(x, y + 1);
+  }
+  /** @type {SamPoint[]} */
+  const points = [];
+  for (let k = 0; k < TRACK_BACKGROUND_POINTS; k++) {
+    const deepest = deepestPoint(outside, width, height);
+    if (!deepest || deepest.depth < TRACK_BACKGROUND_MIN_DEPTH * 3) break;
+    points.push({ x: deepest.x, y: deepest.y, mode: 'remove' });
+    // The next point comes from elsewhere: clear a disc as deep as this one
+    const cx = deepest.index % width;
+    const cy = Math.floor(deepest.index / width);
+    const r = Math.ceil(deepest.depth / 3) * 2;
+    for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r + 1); y++) {
+      for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r + 1); x++) {
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r) outside[y * width + x] = 0;
+      }
+    }
+  }
+  return points;
 }
 
 /**

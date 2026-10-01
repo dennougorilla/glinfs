@@ -75,6 +75,10 @@ class FakeSamWorker {
       height: h,
       masks: [square(2), square(4), square(8), new Uint8Array(w * h).fill(255).buffer],
       scores: [0.9, 0.8, 0.95, 0.2],
+      // Low-res logits of answer i all equal i + 1
+      lowRes: msg.wantLowRes
+        ? Float32Array.from({ length: 4 * 256 * 256 }, (_, i) => Math.floor(i / 65536) + 1).buffer
+        : null,
       cached: false,
       encodeMs: 200,
       decodeMs: 30,
@@ -147,6 +151,15 @@ describe('SegmentationManager.analyzeClick', () => {
     expect([...first.labels]).toEqual([1, -1]);
     // Tracked frames carry a box (labels 2 and 3)
     expect([...worker.prompts[1].labels]).toContain(2);
+    // Every prompt asks for the low-res logits; a tracked frame sends those
+    // of the answer the previous frame kept (the object, answer 2) as its
+    // mask_input, the clicked frame none
+    expect(worker.prompts.every((m) => m.wantLowRes === true)).toBe(true);
+    expect(first.maskInput).toBeNull();
+    const { maskInput } = worker.prompts[1];
+    expect(maskInput).toBeInstanceOf(Float32Array);
+    expect(maskInput).toHaveLength(256 * 256);
+    expect(new Set(maskInput)).toEqual(new Set([3]));
     expect(bitmaps.every((b) => b.width === 1024 && b.height === 512)).toBe(true);
     for (const f of frames) expect(maskStore.has(`click:${f.id}`)).toBe(true);
     // Whole: the object (a 15×15 square), not the whole frame
