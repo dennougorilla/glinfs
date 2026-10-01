@@ -83,7 +83,7 @@ async function load() {
   /** The last drawn frame: its time in the loop and its character */
   const last = () => {
     const [, t, options] = drawStage.mock.calls.at(-1);
-    return { t, cast: options.cast.key };
+    return { t, cast: options.cast.key, scale: options.scale };
   };
   return { mount, drawStage, last, STILL_TIME };
 }
@@ -261,4 +261,78 @@ describe('welcome scene lifecycle', () => {
     expect(last().t).toBe(0);
     expect(last().cast).not.toBe(before.cast);
   });
+
+  it('follows reduced motion switched on or off while it runs', async () => {
+    const queries = stubMediaQueries();
+    const { mount, drawStage, last, STILL_TIME } = await load();
+    const { io, ro, stop } = mount();
+    ro.layout();
+    io.show();
+    frame(1000);
+    frame(1100);
+
+    queries.set('(prefers-reduced-motion: reduce)', true);
+    expect(frames.size).toBe(0);
+    expect(last().t).toBe(STILL_TIME);
+    const drawn = drawStage.mock.calls.length;
+    frame(1200);
+    expect(drawStage).toHaveBeenCalledTimes(drawn);
+
+    queries.set('(prefers-reduced-motion: reduce)', false);
+    expect(frames.size).toBe(1);
+
+    stop();
+    expect(queries.listening()).toBe(0);
+  });
+
+  it('sizes the canvas again when the pixel ratio changes without a resize', async () => {
+    const queries = stubMediaQueries();
+    vi.stubGlobal('devicePixelRatio', 1);
+    const { mount, last } = await load();
+    const { root, ro } = mount();
+    ro.layout();
+    const canvas = root.querySelector('canvas');
+    expect(canvas.width).toBe(600);
+
+    vi.stubGlobal('devicePixelRatio', 2);
+    queries.set('(resolution: 1dppx)', false);
+    expect(canvas.width).toBe(1200);
+    expect(last().scale).toBe(2);
+    // now watching the new ratio
+    expect(queries.watched()).toContain('(resolution: 2dppx)');
+  });
 });
+
+/**
+ * matchMedia with lists that can change: set(query, matches) updates a
+ * query and tells its listeners
+ */
+function stubMediaQueries() {
+  /** @type {Map<string, { matches: boolean, listeners: Set<() => void> }>} */
+  const lists = new Map();
+  const list = (query) => {
+    if (!lists.has(query)) lists.set(query, { matches: false, listeners: new Set() });
+    return lists.get(query);
+  };
+  vi.stubGlobal('matchMedia', (query) => {
+    const entry = list(query);
+    return {
+      get matches() {
+        return entry.matches;
+      },
+      addEventListener: (_type, fn) => entry.listeners.add(fn),
+      removeEventListener: (_type, fn) => entry.listeners.delete(fn),
+    };
+  });
+  return {
+    set(query, matches) {
+      const entry = list(query);
+      entry.matches = matches;
+      for (const fn of [...entry.listeners]) fn();
+    },
+    /** How many listeners are attached, over all queries */
+    listening: () => [...lists.values()].reduce((n, entry) => n + entry.listeners.size, 0),
+    /** Queries with a listener attached */
+    watched: () => [...lists].filter(([, entry]) => entry.listeners.size).map(([query]) => query),
+  };
+}

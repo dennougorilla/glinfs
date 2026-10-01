@@ -66,6 +66,20 @@ test.describe('welcome scene', () => {
     expect((await canvasStats(page)).hash).toBe(first.hash);
   });
 
+  test('stops moving as soon as motion is reduced', async ({ page }) => {
+    await gotoCapture(page);
+    await expect
+      .poll(async () => (await canvasStats(page)).painted, { timeout: 5000 })
+      .toBeGreaterThan(500);
+    await page.evaluate(() => document.fonts.ready);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForTimeout(100);
+    const first = await canvasStats(page);
+    await page.waitForTimeout(600);
+    expect((await canvasStats(page)).hash).toBe(first.hash);
+  });
+
   test('gives way to the live preview once a screen is shared', async ({ page }) => {
     await page.goto('/#/capture?testMode=true');
     await page.waitForFunction(() => window.__TEST_HOOKS__);

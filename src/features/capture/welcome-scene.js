@@ -99,7 +99,9 @@ function start(canvas, bufferSeconds) {
     session.elapsed = 0;
   }
 
-  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  // followed while the scene runs, not only read when it mounts
+  const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
+  let reduce = motion?.matches ?? false;
   const palette = readPalette();
   const buffers = new StageBuffers();
   // the backing store is sized from layout; until then (a new canvas is
@@ -182,9 +184,30 @@ function start(canvas, bufferSeconds) {
     if (document.hidden) pause();
     else if (visible) play();
   };
+  const onMotion = () => {
+    reduce = motion?.matches ?? false;
+    if (reduce) pause();
+    render();
+    if (!reduce && visible) play();
+  };
+  // a new pixel ratio with no new size (zoom, another screen) is not a
+  // resize; watch the current ratio and size the backing store again
+  /** @type {MediaQueryList | null} */
+  let density = null;
+  function watchDensity() {
+    density?.removeEventListener?.('change', onDensity);
+    density = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`) ?? null;
+    density?.addEventListener?.('change', onDensity);
+  }
+  function onDensity() {
+    resize();
+    watchDensity();
+  }
   io.observe(canvas);
   ro.observe(canvas);
   document.addEventListener('visibilitychange', onVisibility);
+  motion?.addEventListener?.('change', onMotion);
+  watchDensity();
   // canvas text does not wait for web fonts: ask for the faces the scene
   // uses, and draw again once they are in (a still frame would otherwise
   // keep the fallback font)
@@ -209,6 +232,8 @@ function start(canvas, bufferSeconds) {
     io.disconnect();
     ro.disconnect();
     document.removeEventListener('visibilitychange', onVisibility);
+    motion?.removeEventListener?.('change', onMotion);
+    density?.removeEventListener?.('change', onDensity);
     session.lastSeen = performance.now();
   }
   return stop;
