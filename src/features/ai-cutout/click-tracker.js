@@ -233,12 +233,14 @@ export async function trackClicks({
    * @param {number} frame
    * @param {ClickMask} base - The mask to start from
    * @param {SamPoint[]} removes
+   * @param {Float32Array | null} [maskInput] - Low-res logits of `base` (a
+   *   mask of this run; none for a mask stored before it)
    * @returns {Promise<boolean>} false when `base` or the answer is empty
    */
-  const refine = async (frame, base, removes) => {
+  const refine = async (frame, base, removes, maskInput = null) => {
     const next = refinePrompt(base, removes);
     if (!next) return false;
-    const candidates = await prompt(frame, next);
+    const candidates = await prompt(frame, { ...next, maskInput });
     throwIfAborted(signal);
     const chosen = bestScoring(candidates);
     const { area } = maskStats(chosen.data, chosen.width, chosen.height);
@@ -258,7 +260,7 @@ export async function trackClicks({
       done.get(from)
     );
     const removes = refineOnPass.get(frame);
-    if (removes) return refine(frame, previous.mask, removes);
+    if (removes) return refine(frame, previous.mask, removes, previous.lowRes);
     const same = doneKeys.get(keyOf(frame));
     if (same !== undefined) {
       const shared = /** @type {{ mask: ClickMask, area: number, lowRes: Float32Array | null }} */ (

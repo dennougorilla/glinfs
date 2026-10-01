@@ -124,6 +124,22 @@ describe('trackClicks', () => {
     expect([...byFrame.get(0).maskInput]).toEqual([1, 2]);
   });
 
+  it("a frame with only remove points reached by a pass gets the previous frame's logits too", async () => {
+    const segmenter = fakeSegmenter();
+    const { promise } = run({
+      picks: [
+        { frame: 3, x: 0.3, y: 0.5, mode: 'keep' },
+        { frame: 6, x: 0.5, y: 0.65, mode: 'remove' },
+      ],
+      prompt: async (f, p) =>
+        (await segmenter.prompt(f, p)).map((c) => ({ ...c, lowRes: Float32Array.of(f, c.index) })),
+    });
+    await promise;
+    const six = /** @type {{ prompt: any }} */ (segmenter.calls.find((c) => c.frame === 6));
+    expect(six.prompt.points.at(-1)).toEqual({ x: 0.5, y: 0.65, mode: 'remove' });
+    expect([...six.prompt.maskInput]).toEqual([5, 2]);
+  });
+
   it('Part: the best-scoring smaller answer on the clicked frame', async () => {
     const { promise, masks } = run({ scope: 'part' });
     await promise;
