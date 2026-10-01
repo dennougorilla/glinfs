@@ -16,9 +16,10 @@
  *    reaches it (see refinePrompt).
  * 2. Tracking: from each anchor, forward to the next anchor (or the end of
  *    the selection), then backward to the previous one (or the start):
- *    each frame is prompted with the previous frame's mask box and a point
- *    deep inside it, and keeps the answer that overlaps the previous mask
- *    most. A backward pass stops at frames an earlier pass already did, so
+ *    each frame is prompted with the previous frame's mask box, a point
+ *    deep inside it, points deep in the background it left out, and its
+ *    low-res logits as `mask_input` (which holds the answer to the object's
+ *    shape), and keeps the answer that overlaps the previous mask most. A backward pass stops at frames an earlier pass already did, so
  *    a frame between two anchors is done once, by whichever pass reaches it
  *    first — after a click that re-anchors a lost object, tracking fills
  *    the gap from both sides.
@@ -78,7 +79,7 @@ import {
  * @property {number} currentFrame - Frame on screen (worked on first)
  * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} picks
  * @property {'whole' | 'part'} [scope]
- * @property {(frameIndex: number, prompt: { points: SamPoint[], box: SamBox | null }) => Promise<SamCandidate[]>} prompt
+ * @property {(frameIndex: number, prompt: { points: SamPoint[], box: SamBox | null, maskInput?: Float32Array | null }) => Promise<SamCandidate[]>} prompt
  * @property {(frameIndex: number) => string} keyOf - Pixel identity of a frame
  * @property {(frameIndex: number, mask: ClickMask) => void} store
  * @property {(frameIndex: number) => void} clear - Drop a frame's mask (no-op when none)
@@ -110,9 +111,9 @@ function hasKeepPoint(points) {
 }
 
 /**
- * The prompt that refines a mask with remove points: the mask's box (grown
- * as tracking grows it), a keep point deep inside the mask unless a remove
- * point is right there, and the remove points
+ * The prompt that refines a mask with remove points: the tracking prompt of
+ * the mask (its grown box, a keep point deep inside it unless a remove point
+ * is right there, background points) and the remove points
  * @param {ClickMask} base
  * @param {SamPoint[]} removes
  * @returns {{ points: SamPoint[], box: SamBox } | null} null when `base` is empty
@@ -125,7 +126,7 @@ export function refinePrompt(base, removes) {
     inside !== null &&
     removes.every((r) => Math.hypot(r.x - inside.x, r.y - inside.y) > REFINE_POINT_CLEARANCE);
   return {
-    points: [...(clear ? tracked.points : []), ...removes],
+    points: [...tracked.points.filter((p) => clear || p.mode !== 'keep'), ...removes],
     box: tracked.box,
   };
 }
@@ -187,7 +188,11 @@ export async function trackClicks({
     if (!anchorFrames.has(f) && f !== currentFrame) clear(f);
   }
 
-  /** Masks of this run @type {Map<number, { mask: ClickMask, area: number }>} */
+  /**
+   * Masks of this run, with the decoder's low-res logits of each (the next
+   * frame's mask_input)
+   * @type {Map<number, { mask: ClickMask, area: number, lowRes: Float32Array | null }>}
+   */
   const done = new Map();
   /** Frame key → the frame of this run holding its mask @type {Map<string, number>} */
   const doneKeys = new Map();
@@ -204,9 +209,10 @@ export async function trackClicks({
    * @param {number} frame
    * @param {ClickMask} mask
    * @param {number} area
+   * @param {Float32Array | null} [lowRes]
    */
-  const record = (frame, mask, area) => {
-    done.set(frame, { mask, area });
+  const record = (frame, mask, area, lowRes = null) => {
+    done.set(frame, { mask, area, lowRes });
     doneKeys.set(keyOf(frame), frame);
     store(frame, mask);
     onProgress?.({ done: done.size, total, frame });
@@ -227,17 +233,19 @@ export async function trackClicks({
    * @param {number} frame
    * @param {ClickMask} base - The mask to start from
    * @param {SamPoint[]} removes
+   * @param {Float32Array | null} [maskInput] - Low-res logits of `base` (a
+   *   mask of this run; none for a mask stored before it)
    * @returns {Promise<boolean>} false when `base` or the answer is empty
    */
-  const refine = async (frame, base, removes) => {
+  const refine = async (frame, base, removes, maskInput = null) => {
     const next = refinePrompt(base, removes);
     if (!next) return false;
-    const candidates = await prompt(frame, next);
+    const candidates = await prompt(frame, { ...next, maskInput });
     throwIfAborted(signal);
     const chosen = bestScoring(candidates);
     const { area } = maskStats(chosen.data, chosen.width, chosen.height);
     if (area <= 0) return false;
-    record(frame, toMask(chosen), area);
+    record(frame, toMask(chosen), area, chosen.lowRes ?? null);
     return true;
   };
 
@@ -248,24 +256,28 @@ export async function trackClicks({
    * @returns {Promise<boolean>}
    */
   const step = async (frame, from) => {
-    const previous = /** @type {{ mask: ClickMask, area: number }} */ (done.get(from));
+    const previous = /** @type {{ mask: ClickMask, area: number, lowRes: Float32Array | null }} */ (
+      done.get(from)
+    );
     const removes = refineOnPass.get(frame);
-    if (removes) return refine(frame, previous.mask, removes);
+    if (removes) return refine(frame, previous.mask, removes, previous.lowRes);
     const same = doneKeys.get(keyOf(frame));
     if (same !== undefined) {
-      const shared = /** @type {{ mask: ClickMask, area: number }} */ (done.get(same));
-      record(frame, shared.mask, shared.area);
+      const shared = /** @type {{ mask: ClickMask, area: number, lowRes: Float32Array | null }} */ (
+        done.get(same)
+      );
+      record(frame, shared.mask, shared.area, shared.lowRes);
       return true;
     }
     const { data, width, height } = previous.mask;
     const next = trackingPrompt(data, width, height);
     if (!next) return false;
-    const candidates = await prompt(frame, next);
+    const candidates = await prompt(frame, { ...next, maskInput: previous.lowRes });
     throwIfAborted(signal);
     const chosen = chooseCandidate(candidates, { previous: data });
     const { area } = maskStats(chosen.data, chosen.width, chosen.height);
     if (isTrackingLost(previous.area, area)) return false;
-    record(frame, toMask(chosen), area);
+    record(frame, toMask(chosen), area, chosen.lowRes ?? null);
     return true;
   };
 
@@ -303,7 +315,7 @@ export async function trackClicks({
       throwIfAborted(signal);
       const chosen = chooseCandidate(candidates, { scope });
       const { area } = maskStats(chosen.data, chosen.width, chosen.height);
-      record(anchor.frame, toMask(chosen), area);
+      record(anchor.frame, toMask(chosen), area, chosen.lowRes ?? null);
     }
     for (const anchor of anchors) {
       if (!done.has(anchor.frame)) continue;

@@ -103,6 +103,43 @@ describe('trackClicks', () => {
     expect(progress.mock.calls[0][0]).toEqual({ done: 1, total: 10, frame: 3 });
   });
 
+  it("passes the low-res logits of the answer each frame kept as the next frame's mask_input", async () => {
+    const segmenter = fakeSegmenter();
+    const { promise } = run({
+      prompt: async (f, p) => {
+        const candidates = await segmenter.prompt(f, p);
+        return candidates.map((c) => {
+          const lowRes = Float32Array.of(f, c.index);
+          return { ...c, lowRes };
+        });
+      },
+    });
+    await promise;
+    const byFrame = new Map(segmenter.calls.map((c) => [c.frame, c.prompt]));
+    expect(byFrame.get(3).maskInput).toBeUndefined();
+    // Frame 4 follows 3, frame 2 follows 3 backward, frame 0 follows 1;
+    // the answer kept is the object (index 2)
+    expect([...byFrame.get(4).maskInput]).toEqual([3, 2]);
+    expect([...byFrame.get(2).maskInput]).toEqual([3, 2]);
+    expect([...byFrame.get(0).maskInput]).toEqual([1, 2]);
+  });
+
+  it("a frame with only remove points reached by a pass gets the previous frame's logits too", async () => {
+    const segmenter = fakeSegmenter();
+    const { promise } = run({
+      picks: [
+        { frame: 3, x: 0.3, y: 0.5, mode: 'keep' },
+        { frame: 6, x: 0.5, y: 0.65, mode: 'remove' },
+      ],
+      prompt: async (f, p) =>
+        (await segmenter.prompt(f, p)).map((c) => ({ ...c, lowRes: Float32Array.of(f, c.index) })),
+    });
+    await promise;
+    const six = /** @type {{ prompt: any }} */ (segmenter.calls.find((c) => c.frame === 6));
+    expect(six.prompt.points.at(-1)).toEqual({ x: 0.5, y: 0.65, mode: 'remove' });
+    expect([...six.prompt.maskInput]).toEqual([5, 2]);
+  });
+
   it('Part: the best-scoring smaller answer on the clicked frame', async () => {
     const { promise, masks } = run({ scope: 'part' });
     await promise;
