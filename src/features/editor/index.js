@@ -45,7 +45,7 @@ import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import { getModelEntry } from '../ai-cutout/model-registry.js';
+import { getModelEntry, isModelId } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
@@ -927,6 +927,7 @@ function render(container) {
       onPickKeyColor: handlePickKeyColor,
       onPickTransparentArea: handlePickTransparentArea,
       onChooseSubject: handleChooseSubject,
+      onChooseModel: handleChooseModel,
       onConfirmModelDownload: handleConfirmModelDownload,
       onCancelModelDownload: handleCancelModelDownload,
       onResetBackground: handleResetBackground,
@@ -1612,8 +1613,20 @@ async function handleChooseSubject(subject) {
     handleSetBackgroundChoice(subject === 'none' ? 'off' : 'color');
     return;
   }
-  const modelId = getSubjectModel(subject);
+  const modelId = getSubjectModel(subject, store.getState().edits?.background.ai ?? null);
   if (!modelId) return;
+  await handleChooseModel(modelId);
+}
+
+/**
+ * The Model choice of an AI subject (and the model of a chosen subject):
+ * a ready model starts at once, one that still has to download asks first
+ * (see handleChooseSubject).
+ * @param {string} modelId
+ */
+async function handleChooseModel(modelId) {
+  if (!store || !isModelId(modelId)) return;
+  store.setState((s) => setDownloadPrompt(s, null));
   const current = store;
   let availability = current.getState().aiCutout.models?.[modelId];
   if (availability === undefined && aiSession) {

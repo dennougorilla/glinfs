@@ -17,7 +17,7 @@
 /**
  * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
  * keeps AI_MODELS equal to the registry's ids)
- * @typedef {'anime'|'general'|'portrait'|'click'} AiModel
+ * @typedef {'anime'|'general'|'portrait'|'click'|'ben2'|'video-person'} AiModel
  */
 /** @typedef {'keep'|'remove'} PickMode */
 /**
@@ -138,7 +138,14 @@ export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 export const CLICK_SCOPES = /** @type {const} */ (['whole', 'part']);
 
 /** @type {readonly AiModel[]} */
-export const AI_MODELS = /** @type {const} */ (['anime', 'general', 'portrait', 'click']);
+export const AI_MODELS = /** @type {const} */ ([
+  'anime',
+  'general',
+  'portrait',
+  'click',
+  'ben2',
+  'video-person',
+]);
 
 /** @type {readonly TouchUpMode[]} */
 export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);

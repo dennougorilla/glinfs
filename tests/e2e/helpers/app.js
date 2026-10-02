@@ -237,6 +237,8 @@ export const MODEL_FILES = /** @type {const} */ ({
   anime: 'isnetis-fp16.onnx',
   general: 'isnet-general-fp16.onnx',
   portrait: 'modnet-portrait-fp16.onnx',
+  ben2: 'ben2-base-fp16.onnx',
+  'video-person': 'rvm-resnet50-fp16.onnx',
 });
 
 /**

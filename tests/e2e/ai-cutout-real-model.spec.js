@@ -17,6 +17,9 @@
  * E2E_REAL_IMAGE takes one path or several separated by commas (one test
  * per image). E2E_REAL_FETCH_ALL=1 makes the worker fetch every graph
  * output instead of the mask alone (to time what side outputs cost).
+ * E2E_REAL_MODEL_UNPINNED=1 runs whatever file public/models/ holds for
+ * the model (its size and SHA-256 are passed as the DEV override), to try
+ * a conversion before pinning it.
  *
  * Backend: by default the full Chromium build (new headless mode, which has
  * a real WebGPU adapter; the default headless shell has none) with WebGPU
@@ -27,7 +30,8 @@
  * receives the inputs, the masks and a JSON report per image.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { gotoCapture, MODEL_FILES } from './helpers/app.js';
@@ -40,6 +44,7 @@ const MODEL_ID = /** @type {keyof typeof MODEL_FILES} */ (
     : 'anime'
 );
 const FETCH_ALL = process.env.E2E_REAL_FETCH_ALL === '1';
+const UNPINNED = process.env.E2E_REAL_MODEL_UNPINNED === '1';
 const MODEL_PATH = resolve(`public/models/${MODEL_FILES[MODEL_ID]}`);
 const IMAGE_PATHS = (process.env.E2E_REAL_IMAGE ?? '')
   .split(',')
@@ -69,11 +74,16 @@ async function runRealModel(page, imagePath) {
 
   await gotoCapture(page);
   await page.waitForFunction(() => Boolean(window.__TEST_HOOKS__?.aiCutout));
-  await page.evaluate(
-    (fetchAllOutputs) =>
-      window.__TEST_HOOKS__.aiCutout.setModelOverride(fetchAllOutputs ? { fetchAllOutputs } : null),
-    FETCH_ALL,
-  );
+  /** @type {Record<string, unknown> | null} */
+  let override = FETCH_ALL ? { fetchAllOutputs: true } : null;
+  if (UNPINNED) {
+    const sha256 = createHash('sha256').update(readFileSync(MODEL_PATH)).digest('hex');
+    override = {
+      ...override,
+      models: { [MODEL_ID]: { sha256, bytes: statSync(MODEL_PATH).size } },
+    };
+  }
+  await page.evaluate((value) => window.__TEST_HOOKS__.aiCutout.setModelOverride(value), override);
 
   const mime = extname(imagePath).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg';
   const imageBase64 = readFileSync(imagePath).toString('base64');

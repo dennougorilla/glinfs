@@ -103,6 +103,78 @@ components only.
   and `models/mobilesam-mask-decoder.onnx`; the browser runs them locally
   ("Something else — click it"). They are not stored in this repository.
 
+## BEN2 base model (`ben2-base-fp16.onnx`, converted from `BEN2_Base.onnx`)
+
+- Source: https://github.com/PramaLLC/BEN2 and the published ONNX file
+  https://huggingface.co/PramaLLC/BEN2, file `BEN2_Base.onnx` at commit
+  `e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f` (SHA-256
+  `22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101`)
+- Copyright: Copyright (c) 2025 Prama LLC
+- License: MIT License (text below)
+- Modifications: Glinfs ships `ben2-base-fp16.onnx` (SHA-256
+  `b58fc673c81561a7cb58a5428c50d8ed7db08f70656c141256bfb356ba6e6c82`),
+  made by `scripts/convert-models-fp16.py`: every Pow(x, 2) is rewritten
+  as Mul(x, x), the three LayerNorms computed in float64 are computed in
+  float32, and the float16 output is cast to float32 and named `mask` (the
+  weights are float16 upstream already and are not converted). The
+  conversion is recorded in the file's ONNX metadata. The modified file is
+  under the same MIT License.
+- Use in Glinfs: published as an asset of this repository's `models-v1`
+  GitHub Release, downloaded by `npm run models:fetch` / the Pages deploy
+  workflow and served next to the app as `models/ben2-base-fp16.onnx`; the
+  browser runs it locally. It is not stored in this repository. The
+  preprocessing (RGB / 255, 1024×1024) follows upstream's `onnx_run.py`.
+
+```
+MIT License
+
+Copyright (c) 2025 Prama LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Robust Video Matting model (`rvm-resnet50-fp16.onnx`, converted from `rvm_resnet50_fp32.onnx`)
+
+- Source: https://github.com/PeterL1n/RobustVideoMatting, release `v1.0.0`
+  (commit `17d1774b032fd503bfe53c57d295db719f9e3da1`), asset
+  `rvm_resnet50_fp32.onnx` (SHA-256
+  `25db300fcb6ee27f941a1b52c97856e8d1f13c7f35817f81a612f89af0e8a85c`)
+- Copyright: Shanchuan Lin and the Robust Video Matting authors
+- License: GNU General Public License v3.0, the license of Glinfs itself
+  (full text in [LICENSE](LICENSE))
+- Modifications: Glinfs ships `rvm-resnet50-fp16.onnx` (SHA-256
+  `c1d2ce94dc34029527bd6fff914a04d9eeddcbf8dd0be4e03e5f20143be3a409`),
+  made by `scripts/convert-models-fp16.py`: the foreground output `fgr` is
+  dropped, `downsample_ratio` is the constant 0.5, the recurrent state
+  outputs sit behind Identity nodes and their symbolic dimensions get
+  distinct names, the input channels of four convolutions (771, 387, 131
+  and 35) are zero-padded to a multiple of 4 (the computed values are
+  unchanged), and weights and activations are converted to float16 (input
+  and outputs kept float32). The conversion is recorded in the file's ONNX
+  metadata. The modified file is under the same GPL-3.0; its source is the
+  upstream file above plus the conversion script in this repository.
+- Use in Glinfs: published as an asset of this repository's `models-v1`
+  GitHub Release, downloaded by `npm run models:fetch` / the Pages deploy
+  workflow and served next to the app as `models/rvm-resnet50-fp16.onnx`;
+  the browser runs it locally. It is not stored in this repository. The
+  preprocessing (RGB / 255) follows upstream's `documentation/inference.md`.
+
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 
 - Source: https://github.com/microsoft/onnxruntime (npm package `onnxruntime-web`)

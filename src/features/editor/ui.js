@@ -60,6 +60,7 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(color: string) => void} [onPickKeyColor] - Eyedropper picked a key color
  * @property {() => void} [onPickTransparentArea] - Eyedropper clicked an already transparent pixel
  * @property {(subject: import('./panels/background-panel.js').Subject) => void} [onChooseSubject] - "What do you want to keep?": Off, an AI subject (its model) or Solid color
+ * @property {(modelId: string) => void} [onChooseModel] - The Model choice of an AI subject that can use several
  * @property {() => void} [onConfirmModelDownload] - Download the model the panel asked about, and start
  * @property {() => void} [onCancelModelDownload] - Keep the previous choice instead of downloading
  * @property {() => void} [onResetBackground] - Reset the current method's adjustments, the picks and the brush strokes

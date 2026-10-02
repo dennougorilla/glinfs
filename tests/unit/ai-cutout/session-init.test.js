@@ -6,6 +6,7 @@ import {
   createModelSession,
   getFetches,
   loadAndCreateSession,
+  resetRecurrentState,
   runModel,
 } from '../../../src/features/ai-cutout/session-init.js';
 
@@ -119,6 +120,88 @@ describe('getFetches / runModel', () => {
         new Float32Array(48),
       ),
     ).rejects.toThrow('no output named "nope"');
+  });
+});
+
+describe('runModel with a recurrent (video) model', () => {
+  const VIDEO = { ...getModelSpec('video-person'), inputSize: SIZE };
+
+  /** A session whose state outputs count the frames it has seen */
+  function recurrentSession() {
+    const { ort } = fakeOrt();
+    /** @type {Record<string, any>[]} */
+    const feedsSeen = [];
+    /** @type {any[]} */
+    const outputsMade = [];
+    const session = {
+      run: vi.fn(
+        async (/** @type {Record<string, any>} */ feeds, /** @type {string[]} */ fetches) => {
+          feedsSeen.push(feeds);
+          const seen =
+            feeds.r1i.dims.length === 4 && feeds.r1i.dims[1] === 1 ? 0 : feeds.r1i.frames;
+          /** @type {Record<string, any>} */
+          const outputs = {};
+          for (const name of fetches) {
+            outputs[name] = {
+              name,
+              frames: seen + 1,
+              dims: [1, 16, 2, 2],
+              getData: async () => new Float32Array(SIZE * SIZE).fill(0.5),
+              dispose: vi.fn(),
+            };
+            outputsMade.push(outputs[name]);
+          }
+          return outputs;
+        },
+      ),
+    };
+    return { ort, session, feedsSeen, outputsMade };
+  }
+
+  it('fetches the matte and the state outputs', () => {
+    expect(getFetches(VIDEO)).toEqual(['pha', 'r1o', 'r2o', 'r3o', 'r4o']);
+  });
+
+  it('starts from [1, 1, 1, 1] zeros and feeds each frame’s states to the next', async () => {
+    const { ort, session, feedsSeen, outputsMade } = recurrentSession();
+    const state = { tensors: null };
+    const input = new Float32Array(3 * SIZE * SIZE);
+    await runModel(/** @type {any} */ (ort), /** @type {any} */ (session), VIDEO, input, state);
+    for (const name of ['r1i', 'r2i', 'r3i', 'r4i']) {
+      expect(feedsSeen[0][name].dims).toEqual([1, 1, 1, 1]);
+      expect([...feedsSeen[0][name].data]).toEqual([0]);
+    }
+    const first = /** @type {any} */ (state.tensors);
+    expect(first.r1i.name).toBe('r1o');
+    expect(first.r4i.name).toBe('r4o');
+
+    await runModel(/** @type {any} */ (ort), /** @type {any} */ (session), VIDEO, input, state);
+    expect(feedsSeen[1].r1i).toBe(first.r1i);
+    expect(feedsSeen[1].r3i).toBe(first.r3i);
+    // The previous state and every mask output are disposed; the new state is kept
+    expect(first.r1i.dispose).toHaveBeenCalledTimes(1);
+    const masks = outputsMade.filter((o) => o.name === 'pha');
+    expect(masks.every((o) => o.dispose.mock.calls.length === 1)).toBe(true);
+    expect(/** @type {any} */ (state.tensors).r1i.frames).toBe(2);
+    expect(/** @type {any} */ (state.tensors).r1i.dispose).not.toHaveBeenCalled();
+
+    resetRecurrentState(state);
+    expect(state.tensors).toBeNull();
+    expect(
+      outputsMade.filter((o) => o.name !== 'pha').every((o) => o.dispose.mock.calls.length === 1),
+    ).toBe(true);
+  });
+
+  it('keeps nothing without a state (the warm-up runs from zeros)', async () => {
+    const { ort, session, outputsMade } = recurrentSession();
+    await runModel(
+      /** @type {any} */ (ort),
+      /** @type {any} */ (session),
+      VIDEO,
+      new Float32Array(3 * SIZE * SIZE),
+    );
+    expect(outputsMade).toHaveLength(5);
+    expect(outputsMade.every((o) => o.dispose.mock.calls.length === 1)).toBe(true);
   });
 });
 

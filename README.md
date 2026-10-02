@@ -24,7 +24,7 @@ The **Background** tab asks **What do you want to keep?** and makes the rest tra
 **Solid color** picks the most common edge color of the frame; the eyedropper (**Pick**) takes another one from the preview. **Similar colors** (Fewer … More) sets how close a color must be to go, and **Edges only** / **Everywhere** chooses between the backdrop connected to the frame border and every matching pixel.
 
 ### AI cutout
-The **Anime**, **Person** and **Anything** cards cut the subject out of every frame with a segmentation model that runs in your browser (ISNet anime, MODNet and ISNet). Each card says whether its model is **Ready** or how much it downloads (88 MB, 13 MB, 90 MB, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). Choosing a model that is not downloaded yet asks first (**Download 88 MB?**); nothing is downloaded without that. Your frames never leave your device.
+The **Anime**, **Person** and **Anything** cards cut the subject out of every frame with a segmentation model that runs in your browser (ISNet anime, MODNet and ISNet). Each card says whether its model is **Ready** or how much it downloads (88 MB, 13 MB, 90 MB, plus about 27 MB for the runtime the first time; kept in the browser's cache afterwards). **Person** and **Anything** also offer a larger alternative under **Model**: **Video person** (Robust Video Matting, 54 MB) carries what it saw in earlier frames to the next one, so the cutout of a person stays steadier through a clip; **Hair & detail** (BEN2, 223 MB) gives finer hair and edges for people, pets and objects, at about half a second per frame. Choosing a model that is not downloaded yet asks first (**Download 88 MB?**); nothing is downloaded without that. Your frames never leave your device.
 
 Choosing a card starts at once with the frame on screen, so the preview shows a cutout within about a second, then analyzes the rest of the selection (IN to OUT) in the background. The status line under the cards shows the progress with **Cancel** (finished frames are kept), how many frames of the selection are not analyzed yet with **Analyze**, or that everything is done. Each model keeps its own analysis: switching cards restarts with the new model and switching back reuses the frames it already analyzed.
 
@@ -97,7 +97,7 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs one of four models in the browser with
+The AI cutout runs one of six models in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
@@ -119,13 +119,22 @@ The AI cutout runs one of four models in the browser with
   only reruns the decoder.
   fp16 is not used: an fp16 encoder computes wrong embeddings on the WebGPU
   backend.
+- **Hair & detail** (Anything's alternative): [BEN2](https://github.com/PramaLLC/BEN2)
+  base (`ben2-base-fp16.onnx`, MIT, 223 MB): about 430 ms per frame on an
+  RTX 3080 Ti with WebGPU
+- **Video person** (Person's alternative): [Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting)
+  ResNet-50 (`rvm-resnet50-fp16.onnx`, GPL-3.0 like this app, 54 MB): people
+  only, a recurrent network whose state the worker carries from frame to
+  frame within an analysis (the first frame runs twice to settle it); about
+  80 ms per frame on an RTX 3080 Ti
 
-The first three are fp16 conversions of the upstream fp32 files (176, 179 and 26 MB):
-half the download, and faster on WebGPU, with the same masks for practical
-purposes (see below). They are described once in
+General, Portrait, Anime and Video person are fp16 conversions of the
+upstream fp32 files (179, 26, 176 and 107 MB); BEN2 is float16 upstream
+already. fp16 halves the download and is faster on WebGPU, with the same
+masks for practical purposes (see below). They are described once in
 `src/features/ai-cutout/model-registry.js` (the shipped file's size and
-SHA-256, the upstream file it was converted from, license and
-preprocessing); the worker, the fetch script, Settings and the deploy
+SHA-256, the upstream file it was converted from, license,
+preprocessing and, for RVM, its recurrent state); the worker, the fetch script, Settings and the deploy
 workflow read it.
 The models are not in the repository; they are assets of the
 [`models-v1` release](https://github.com/dennougorilla/glinfs/releases/tag/models-v1).
@@ -143,11 +152,15 @@ since Vite copies that whole directory into the build.
 #### Converting the models to fp16
 
 `scripts/convert-models-fp16.py` makes the release assets from the upstream
-files (pinned Hugging Face commits, checked by SHA-256). It keeps only the
-output the worker reads (the general model's 11 side outputs go), for MODNet
-zero-pads the input channels of the three Convs whose channel count is not a
-multiple of 4 (35, 99, 35 → 36, 100, 36: ONNX Runtime Web 1.30's WebGPU backend
-computes those Convs wrong, the padded graph computes the same values), and
+files (pinned Hugging Face commits or release assets, checked by SHA-256). It
+keeps only the output the worker reads (the general model's 11 side outputs
+go), for MODNet and RVM zero-pads the input channels of the Convs whose channel
+count is not a multiple of 4 (MODNet: 35, 99, 35 → 36, 100, 36; RVM: 771, 387,
+131, 35: ONNX Runtime Web 1.30's WebGPU backend computes those Convs wrong, the
+padded graph computes the same values), applies the model-specific fixes
+listed in the script (BEN2: Pow(x, 2) as Mul(x, x) and no float64, which
+WebGPU cannot run; RVM: a constant `downsample_ratio` and recurrent states
+that survive the fp16 conversion), and
 converts the rest to float16 with `onnxconverter-common`, keeping the input and the
 output float32, so the worker code is the same for fp32 and fp16. With the
 versions pinned in `scripts/requirements-models.txt` (Python 3.11) the output
@@ -159,7 +172,8 @@ python3.11 -m venv .venv-models
 .venv-models/bin/python scripts/convert-models-fp16.py --src /path/to/fp32 --out /path/to/fp16
 ```
 
-`--src` holds `isnetis.onnx`, `isnet-general-use.onnx` and `modnet.onnx`
+`--src` holds `isnetis.onnx`, `isnet-general-use.onnx`, `modnet.onnx`,
+`BEN2_Base.onnx` and `rvm_resnet50_fp32.onnx`
 (downloaded there when missing; `--only portrait` converts one model). The script prints each file's size and SHA-256, which must
 equal the registry's pins. To publish new conversions, upload them to a new
 release, then update the release URL, sizes and SHA-256s in the registry, the
@@ -173,6 +187,10 @@ Metal 3 adapter), fp16 against fp32, masks thresholded at 0.5:
 | --- | --- | --- | --- | --- | --- |
 | Anime | 6 CC0 anime-style illustrations | 0.00005–0.00016 | 0.051 | ≥ 99.99% | 469 → 356 ms |
 | General | 4 CC0 photos | 0.00001–0.00117 | 0.075 | ≥ 99.55% | 705 → 515 ms |
+
+For BEN2 and RVM, the converted files against the upstream files on the CPU
+(ONNX Runtime 1.30), masks thresholded at 0.5: more than 99.99% (BEN2) and
+99.98% (RVM, three frames in a row) of pixels agree on COCO photos.
 
 For Portrait (MODNet), fp16 on WebGPU against the upstream fp32 on WASM with
 the same browser preprocessing (the unpatched fp32 is wrong on WebGPU), masks
@@ -192,8 +210,10 @@ models in `tests/fixtures/models/` (regenerate them with
 `node scripts/generate-stub-seg-model.mjs`). To check a real model on this
 machine's GPU, run
 `E2E_REAL_MODEL=1 E2E_REAL_IMAGE=/path/to/anime.jpg npx playwright test tests/e2e/ai-cutout-real-model.spec.js`
-(add `E2E_REAL_MODEL_ID=general` or `E2E_REAL_MODEL_ID=portrait` with a
-live-action photo for the general or the portrait model; `E2E_REAL_IMAGE` takes several comma-separated paths).
+(add `E2E_REAL_MODEL_ID=general`, `portrait`, `ben2` or `video-person` with a
+live-action photo for the other models; `E2E_REAL_IMAGE` takes several comma-separated paths;
+`E2E_REAL_MODEL_UNPINNED=1` runs whatever file `public/models/` holds, to try a conversion
+before pinning it; `E2E_REAL_MODEL_CHANNEL=chrome` uses the installed Chrome).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
 
 ### Architecture

@@ -368,7 +368,7 @@ describe('background method and AI cutout', () => {
     expect(ai({ model: 7 }).model).toBe('anime');
     expect(ai({ model: 'portrait' }).model).toBe('portrait');
     expect(ai({ model: 'click' }).model).toBe('click');
-    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait', 'click']);
+    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait', 'click', 'ben2', 'video-person']);
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {

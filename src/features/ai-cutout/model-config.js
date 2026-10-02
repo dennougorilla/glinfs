@@ -31,6 +31,7 @@ export const MODEL_INPUT_SIZE = 1024;
 export const MASK_MAX_SIDE = 1024;
 
 /** @typedef {import('./model-registry.js').ModelPreprocess} ModelPreprocess */
+/** @typedef {import('./model-registry.js').ModelRecurrentPair} ModelRecurrentPair */
 
 /**
  * Same-origin URL of a model file, under the app's base path
@@ -79,6 +80,8 @@ export function getModelUrl(modelId, baseUrl) {
  * @property {number} inputSize - Square input side, or the encoder's long side (SAM)
  * @property {ModelPreprocess} [preprocess]
  * @property {number} [maxPoints] - SAM: prompt points per decode
+ * @property {readonly ModelRecurrentPair[]} [recurrent] - A video model's
+ *   state: each output is fed back as its input on the next frame
  * @property {boolean} [fetchAllOutputs] - DEV/E2E only: fetch every graph
  *   output instead of the mask alone (measures what the side outputs cost)
  */
@@ -135,5 +138,6 @@ export function getModelSpec(modelId, baseUrl) {
     outputName: entry.outputName,
     inputSize: entry.inputSize,
     preprocess: entry.preprocess,
+    ...(entry.recurrent ? { recurrent: entry.recurrent } : {}),
   };
 }

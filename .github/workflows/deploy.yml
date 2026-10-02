@@ -25,10 +25,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # AI cutout models (fp16, about 88 + 90 + 13 MB, and MobileSAM's
-      # encoder + decoder, 28 + 16.5 MB; too large for the repository):
-      # restored from the cache or downloaded from the models-v1 GitHub
-      # Release. The cache key holds every pinned SHA-256
+      # AI cutout models (fp16, about 88 + 90 + 13 MB, MobileSAM's encoder +
+      # decoder, 28 + 16.5 MB, BEN2 (mixed precision, 223 MB) and RVM (fp16,
+      # 54 MB); too large for the repository): restored from the cache or
+      # downloaded from the models-v1 GitHub Release. The cache key holds
+      # every pinned SHA-256
       # (src/features/ai-cutout/model-registry.js, which the fetch script
       # reads; a unit test keeps this file in sync with it).
       - name: Restore AI cutout models
@@ -40,7 +41,9 @@ jobs:
             public/models/modnet-portrait-fp16.onnx
             public/models/mobilesam-image-encoder.onnx
             public/models/mobilesam-mask-decoder.onnx
-          key: ai-models-sha256-f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0-437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b-e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c-580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749-8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe
+            public/models/ben2-base-fp16.onnx
+            public/models/rvm-resnet50-fp16.onnx
+          key: ai-models-sha256-f1aa383a62119572263a36ac9ebbd99bd14bc4052d0948662dc76b4b8c8d0bb0-437b3207d043c5206b11c9f1681a0b1d647aeb560174f07420ed651989f3b38b-e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c-580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749-8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe-b58fc673c81561a7cb58a5428c50d8ed7db08f70656c141256bfb356ba6e6c82-c1d2ce94dc34029527bd6fff914a04d9eeddcbf8dd0be4e03e5f20143be3a409
       # Verifies size and SHA-256 of restored copies too; any mismatch
       # re-downloads, and a mismatching download fails the job
       - name: Fetch AI cutout models
@@ -60,6 +63,8 @@ jobs:
           check modnet-portrait-fp16.onnx e59298740c266e5a095b5b7f7c7d69c824e231799dd475e6c6d1e8fc83560f1c
           check mobilesam-image-encoder.onnx 580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749
           check mobilesam-mask-decoder.onnx 8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe
+          check ben2-base-fp16.onnx b58fc673c81561a7cb58a5428c50d8ed7db08f70656c141256bfb356ba6e6c82
+          check rvm-resnet50-fp16.onnx c1d2ce94dc34029527bd6fff914a04d9eeddcbf8dd0be4e03e5f20143be3a409
       # GitHub Pages rejects artifacts of 1 GB or more
       - name: Check the Pages artifact size
         run: |
