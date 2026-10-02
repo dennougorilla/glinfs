@@ -298,7 +298,7 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     const ids = await section
       .locator('[data-model-id]')
       .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-model-id')));
-    expect(ids).toEqual(['general', 'portrait', 'anime', 'click']);
+    expect(ids).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
     const row = section.locator('[data-model-id="click"]');
     await expect(row.locator('h3')).toHaveText('Click to selectMobileSAM');
     await expect(row).toContainText('Anything you click, followed through the clip');
