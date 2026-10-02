@@ -120,7 +120,14 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     expect(requests.byModel).toEqual({ anime: 0, general: 0, portrait: 1 });
     expect(await readAiStatus(page)).toMatchObject({ backend: 'wasm' });
     const stats = await page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getMaskStoreStats());
-    expect(stats.byModel).toEqual({ anime: 0, general: 0, portrait: N, click: 0 });
+    expect(stats.byModel).toEqual({
+      anime: 0,
+      general: 0,
+      portrait: N,
+      click: 0,
+      ben2: 0,
+      'video-person': 0,
+    });
 
     // ±1 normalization round trip through the stub, stretched to 512² and back
     for (const index of [0, N - 1]) {
@@ -135,9 +142,26 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     await expect.poll(() => editorPreviewAlpha(page, 5, 5)).toBe(0);
     expect(await editorPreviewAlpha(page, discA(f).x, discA(f).y)).toBe(255);
     await expect(page.locator('#subject-status-portrait')).toContainText('Ready');
+
+    // Person can also use Video person (RVM): choosing it asks before its
+    // download, and Cancel keeps MODNet
+    const model = page.getByLabel('Model', { exact: true });
+    await expect(model).toBeVisible();
+    await expect(model).toHaveValue('portrait');
+    expect(await model.locator('option').evaluateAll((o) => o.map((x) => x.value))).toEqual([
+      'portrait',
+      'video-person',
+    ]);
+    await model.selectOption('video-person');
+    await expect(page.locator('#background-download-title')).toHaveText('Download 54 MB?');
+    await expect(page.locator('#background-download-detail')).toContainText('Person model (RVM)');
+    await page.locator('#background-download-cancel').click();
+    await expect(page.locator('#background-download')).toBeHidden();
+    await expect(model).toHaveValue('portrait');
+    expect(requests.byModel).toEqual({ anime: 0, general: 0, portrait: 1 });
   });
 
-  test('Settings → AI models lists four models, with the note on General', async ({ page }) => {
+  test('Settings → AI models lists six models, with the note on General', async ({ page }) => {
     await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB, portrait: PORTRAIT_STUB });
     await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
     await page.evaluate(() => {
@@ -148,7 +172,15 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     const ids = await section
       .locator('[data-model-id]')
       .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-model-id')));
-    expect(ids).toEqual(['general', 'portrait', 'anime', 'click']);
+    expect(ids).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
+    const ben2 = section.locator('[data-model-id="ben2"]');
+    await expect(ben2.locator('h3')).toHaveText('Hair & detailBEN2 (base)');
+    await expect(ben2).toContainText('223 MB');
+    await expect(ben2.getByRole('link', { name: 'MIT' })).toBeVisible();
+    const video = section.locator('[data-model-id="video-person"]');
+    await expect(video.locator('h3')).toHaveText('Video personRobust Video Matting (ResNet-50)');
+    await expect(video).toContainText('54 MB');
+    await expect(video.getByRole('link', { name: 'GPL-3.0' })).toBeVisible();
 
     const portrait = section.locator('[data-model-id="portrait"]');
     await expect(portrait.locator('h3')).toHaveText('PortraitMODNet');

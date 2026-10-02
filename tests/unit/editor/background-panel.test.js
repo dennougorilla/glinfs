@@ -18,10 +18,12 @@ import {
   getDownloadPrompt,
   getLostFramesInSelection,
   getLostFramesText,
+  getModelOptionLabel,
   getModelReadiness,
   getModelTooltip,
   getSubject,
   getSubjectModel,
+  getSubjectModels,
   getWebgpuWarning,
   renderBackgroundPanel,
   SUBJECT_CARDS,
@@ -71,6 +73,7 @@ const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
 beforeEach(() => {
   handlers = {
     onChooseSubject: vi.fn(),
+    onChooseModel: vi.fn(),
     onConfirmModelDownload: vi.fn(),
     onCancelModelDownload: vi.fn(),
     onSetBackground: vi.fn(),
@@ -101,19 +104,33 @@ describe('subjects', () => {
     for (const [model, subject] of [
       ['anime', 'anime'],
       ['portrait', 'portrait'],
+      ['video-person', 'portrait'],
       ['general', 'general'],
+      ['ben2', 'general'],
     ]) {
       const { background } = normalizeEdits(
         { background: { enabled: true, method: 'ai', ai: { model } } },
         1,
       );
       expect(getSubject(background)).toBe(subject);
-      expect(getSubjectModel(/** @type {any} */ (subject))).toBe(model);
+      // The subject keeps the model chosen for it
+      expect(getSubjectModel(/** @type {any} */ (subject), background.ai)).toBe(model);
     }
+    // Without a choice for it (or another subject's model): the default
+    expect(getSubjectModel('portrait')).toBe('portrait');
+    expect(getSubjectModel('general', { model: 'video-person' })).toBe('general');
+    expect(getSubjectModel('anime', { model: 'ben2' })).toBe('anime');
     expect(getSubjectModel('color')).toBeNull();
     expect(getSubjectModel('none')).toBeNull();
-    const cardModels = SUBJECT_CARDS.map((card) => card.model).filter(Boolean);
-    expect(cardModels.sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
+    expect(getSubjectModels('general')).toEqual(['general', 'ben2']);
+    expect(getSubjectModels('portrait')).toEqual(['portrait', 'video-person']);
+    expect(getSubjectModels('color')).toEqual([]);
+    // Every registered model belongs to exactly one card, its default first
+    const cardModels = SUBJECT_CARDS.flatMap((card) => card.models);
+    expect([...cardModels].sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
+    for (const card of SUBJECT_CARDS) {
+      expect(card.models[0] ?? null).toBe(card.model);
+    }
   });
 
   it('is one labelled radio group: Off and the five cards', () => {
@@ -200,6 +217,60 @@ describe('download question', () => {
     updateBackgroundPanel(root, makeState(), 10);
     expect($('#background-download').hidden).toBe(true);
     expect($('#subject-none').checked).toBe(true);
+  });
+});
+
+describe('model choice', () => {
+  it('offers the models of a subject that can use several, with size and readiness', () => {
+    expect(getModelOptionLabel('ben2')).toBe('Hair & detail · BEN2 · 223 MB');
+    updateBackgroundPanel(
+      root,
+      makeState(
+        { enabled: true, method: 'ai', ai: { model: 'ben2' } },
+        { aiCutout: { ...createAiCutoutStatus(), models: { general: 'ready' } } },
+      ),
+      10,
+    );
+    expect($('#subject-general').checked).toBe(true);
+    expect($('#ai-model-row').hidden).toBe(false);
+    const select = $('#ai-model');
+    expect([...select.options].map((o) => o.value)).toEqual(['general', 'ben2']);
+    expect(select.value).toBe('ben2');
+    expect(select.options[0].textContent).toBe('General · ISNet · 90 MB');
+    expect(select.options[1].textContent).toBe('Hair & detail · BEN2 · 223 MB (download)');
+    expect($('#ai-model-hint').textContent).toContain('MIT');
+    expect($('label[for="ai-model"]').textContent).toBe('Model');
+    // The card says what its current model needs
+    expect($('#subject-status-general').textContent).toContain('223 MB');
+
+    select.value = 'general';
+    fire(select, 'change');
+    expect(handlers.onChooseModel).toHaveBeenLastCalledWith('general');
+  });
+
+  it('is hidden for a subject with one model', () => {
+    updateBackgroundPanel(
+      root,
+      makeState({ enabled: true, method: 'ai', ai: { model: 'anime' } }),
+      10,
+    );
+    expect($('#ai-model-row').hidden).toBe(true);
+    updateBackgroundPanel(
+      root,
+      makeState({ enabled: true, method: 'ai', ai: { model: 'video-person' } }),
+      10,
+    );
+    expect($('#ai-model-row').hidden).toBe(false);
+    expect([...$('#ai-model').options].map((o) => o.value)).toEqual(['portrait', 'video-person']);
+    expect($('#ai-model').value).toBe('video-person');
+  });
+
+  it('asks before a download of an alternative model on its subject’s card', () => {
+    updateBackgroundPanel(root, makeState({}, { downloadPrompt: 'ben2' }), 10);
+    expect($('#subject-general').checked).toBe(true);
+    expect($('#background-download-title').textContent).toBe('Download 223 MB?');
+    expect($('#background-download-detail').textContent).toContain('Anything model (BEN2)');
+    expect($('#subject-status-general').textContent).toContain('223 MB');
   });
 });
 

@@ -2603,6 +2603,18 @@
   white-space: nowrap;
 }
 
+/* Model choice of a subject with several models (Person, Anything) */
+.editor-screen .editor-cutout-select {
+  width: 100%;
+}
+
+.editor-screen .editor-cutout-model-hint {
+  margin: 4px 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
 .editor-screen .editor-cutout-note {
   margin: 0;
   font-size: var(--font-size-xs);

@@ -59,9 +59,11 @@ import {
 
 /**
  * The subject cards, in the order shown (two columns). `model` is the AI
- * model a card uses; the color card uses the color key. `name` is how the
+ * model a card uses by default and `models` every model it can use (the
+ * default first; the AI settings show a Model choice when there are
+ * several); the color card uses the color key. `name` is how the
  * download question names the model.
- * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, name?: string, icon: string }[]}
+ * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, models: readonly string[], name?: string, icon: string }[]}
  */
 export const SUBJECT_CARDS = Object.freeze([
   {
@@ -69,6 +71,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anime',
     hint: 'Characters, art',
     model: 'anime',
+    models: Object.freeze(['anime']),
     icon: '<path d="M12 3l2.4 5.1 5.6.7-4.1 3.9 1 5.5L12 15.6 7.1 18.2l1-5.5L4 8.8l5.6-.7z"/>',
   },
   {
@@ -76,6 +79,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Person',
     hint: 'Real people, fast',
     model: 'portrait',
+    models: Object.freeze(['portrait', 'video-person']),
     icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
   },
   {
@@ -83,6 +87,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anything',
     hint: 'People, pets, objects',
     model: 'general',
+    models: Object.freeze(['general', 'ben2']),
     icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="3.5"/>',
   },
   {
@@ -90,6 +95,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Something else',
     hint: 'Click it to select',
     model: 'click',
+    models: Object.freeze(['click']),
     name: 'Click to select',
     icon: '<circle cx="11" cy="11" r="7"/><path d="M11 2v3M11 17v3M2 11h3M17 11h3"/><path d="M13.5 13.5l6.5 2.5-2.7 1.3-1.3 2.7z" fill="currentColor"/>',
   },
@@ -98,13 +104,14 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Solid color',
     hint: 'Green screen, flat',
     model: null,
+    models: Object.freeze([]),
     icon: '<path d="M12 3.5c3.5 4.2 6 7.4 6 10.5a6 6 0 0 1-12 0c0-3.1 2.5-6.3 6-10.5z"/>',
   },
 ]);
 
 /** The AI subject card of a model */
 const CARD_BY_MODEL = Object.fromEntries(
-  SUBJECT_CARDS.filter((card) => card.model).map((card) => [card.model, card]),
+  SUBJECT_CARDS.flatMap((card) => card.models.map((model) => [model, card])),
 );
 
 /**
@@ -119,12 +126,37 @@ export function getSubject(background) {
 }
 
 /**
- * The AI model of a subject, or null (Off, Solid color)
+ * The AI model of a subject, or null (Off, Solid color): the model of
+ * `ai` when the subject can use it (the last choice stays), else the
+ * subject's default
  * @param {Subject} subject
+ * @param {{ model?: unknown } | null} [ai]
  * @returns {string | null}
  */
-export function getSubjectModel(subject) {
-  return SUBJECT_CARDS.find((card) => card.value === subject)?.model ?? null;
+export function getSubjectModel(subject, ai = null) {
+  const card = SUBJECT_CARDS.find((c) => c.value === subject);
+  if (!card?.model) return null;
+  const current = ai ? getAiModelId(ai) : null;
+  return current && card.models.includes(current) ? current : card.model;
+}
+
+/**
+ * The models a subject can use (empty for Off and Solid color)
+ * @param {Subject} subject
+ * @returns {readonly string[]}
+ */
+export function getSubjectModels(subject) {
+  return SUBJECT_CARDS.find((c) => c.value === subject)?.models ?? [];
+}
+
+/**
+ * Text of a model in the Model choice: purpose, network and size
+ * @param {string} modelId
+ * @returns {string}
+ */
+export function getModelOptionLabel(modelId) {
+  const entry = getModelEntry(modelId);
+  return `${entry.label} · ${entry.shortModelName} · ${getModelSizeLabel(modelId)}`;
 }
 
 // ------------------------------------------------------------------
@@ -351,7 +383,7 @@ export function describeAiStatus({ running, pending, analyzed, total, status }) 
 /** What the About (i) disclosure says */
 const ABOUT_TEXT = [
   'Pick what to keep and the rest turns transparent in the GIF.',
-  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, Anything is ISNet, Something else is MobileSAM, all Apache-2.0. Manage them in Settings.`,
+  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, or RVM (steadier in video, GPL-3.0); Anything is ISNet, or BEN2 (finer hair and edges, a larger download, MIT); Something else is MobileSAM. The others are Apache-2.0. Manage them in Settings.`,
   'Something else: click the thing you want to keep. It is followed through the clip; Keep and Remove add points to fix it.',
   'Solid color removes one backdrop color, such as a green screen.',
   'Hold \\ (or Hold to compare) to see the original; Show mask tints what is removed.',
@@ -792,11 +824,25 @@ export function renderBackgroundPanel(handlers) {
     },
     [createElement('p', { id: 'ai-click-lost-text' }), lostGo],
   );
+  // Model: shown when the subject can use several (Person, Anything)
+  const modelSelect = /** @type {HTMLSelectElement} */ (
+    createElement('select', { id: 'ai-model', className: 'editor-cutout-select' })
+  );
+  cleanups.push(on(modelSelect, 'change', () => handlers.onChooseModel?.(modelSelect.value)));
+  const modelRow = createElement(
+    'div',
+    { className: 'editor-cutout-model', id: 'ai-model-row', hidden: 'true' },
+    [
+      createElement('label', { className: 'editor-cutout-label', for: 'ai-model' }, ['Model']),
+      modelSelect,
+      createElement('p', { className: 'editor-cutout-model-hint', id: 'ai-model-hint' }),
+    ],
+  );
 
   const aiSection = createElement(
     'div',
     { className: 'editor-cutout-section', id: 'ai-section', hidden: 'true' },
-    [statusSlot, clickScope, clickLost, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
+    [modelRow, statusSlot, clickScope, clickLost, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
   );
 
   // --- Color settings ---
@@ -1152,7 +1198,15 @@ export function updateBackgroundPanel(container, state, fps) {
   }
   for (const card of SUBJECT_CARDS) {
     if (!card.model) continue;
-    const readiness = getModelReadiness(card.model, status?.models?.[card.model]);
+    // The model the card would use (the prompt's while it is asked about)
+    const model =
+      promptCard === card.value && prompt
+        ? prompt
+        : /** @type {string} */ (getSubjectModel(card.value, background.ai));
+    const readiness = getModelReadiness(model, status?.models?.[model]);
+    const option = q(root, `label[data-subject="${card.value}"]`);
+    const tooltip = getModelTooltip(model);
+    if (option.title !== tooltip) option.title = tooltip;
     const el = q(root, `#subject-status-${card.value}`);
     el.setAttribute('data-ready', String(readiness.ready));
     setText(q(el, '.editor-cutout-card-status-text'), readiness.text);
@@ -1251,6 +1305,26 @@ function updateAiSettings(root, state, _fps) {
   const running = isAnalysisRunning(status.phase);
   const frames = state.clip?.frames ?? [];
   const modelId = getAiModelId(background.ai);
+  // Model choice (rebuilt only when the subject's list changes)
+  const choices = getSubjectModels(getSubject(background));
+  const select = /** @type {HTMLSelectElement} */ (q(root, '#ai-model'));
+  setHidden(q(root, '#ai-model-row'), choices.length < 2);
+  if (select.dataset.models !== choices.join(',')) {
+    select.dataset.models = choices.join(',');
+    select.replaceChildren(
+      ...choices.map((id) => createElement('option', { value: id }, [getModelOptionLabel(id)])),
+    );
+  }
+  for (const option of select.options) {
+    const { ready } = getModelReadiness(option.value, status.models?.[option.value]);
+    const text = `${getModelOptionLabel(option.value)}${ready ? '' : ' (download)'}`;
+    if (option.textContent !== text) option.textContent = text;
+  }
+  setValue(select, modelId);
+  select.disabled = running;
+  const entry = getModelEntry(modelId);
+  setText(q(root, '#ai-model-hint'), `${entry.description}. ${entry.license.name}.`);
+
   const click = modelId === 'click';
   const cover = getAnalysisCoverage(frames, state.selectedRange, { modelId });
   const { start, end } = state.selectedRange;
