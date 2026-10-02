@@ -47,42 +47,81 @@ import { SegmentationError, SegmentationErrorCode } from './protocol.js';
  */
 
 /**
- * Output names to fetch: the mask alone, unless the DEV-only
- * `fetchAllOutputs` asks for every graph output. Models with side outputs
- * (the general IS-Net has 12) would otherwise copy all of them back from
- * the GPU on every frame.
+ * The recurrent state a video model carries from one frame to the next:
+ * its state outputs of the previous frame, fed back as the state inputs.
+ * Null tensors: the next run starts from zeros (a new clip).
+ * @typedef {Object} RecurrentState
+ * @property {Record<string, { dispose?: () => void }> | null} tensors - By state input name
+ */
+
+/**
+ * Output names to fetch: the mask alone (and a recurrent model's state
+ * outputs), unless the DEV-only `fetchAllOutputs` asks for every graph
+ * output. Models with side outputs (the general IS-Net has 12) would
+ * otherwise copy all of them back from the GPU on every frame.
  * @param {ModelSpec} spec
  * @returns {string[] | undefined}
  */
 export function getFetches(spec) {
-  return spec.fetchAllOutputs ? undefined : [spec.outputName];
+  if (spec.fetchAllOutputs) return undefined;
+  return [spec.outputName, ...(spec.recurrent?.map((pair) => pair.output) ?? [])];
+}
+
+/**
+ * Forget a recurrent state (the next run starts from zeros).
+ * @param {RecurrentState} state
+ */
+export function resetRecurrentState(state) {
+  for (const tensor of Object.values(state.tensors ?? {})) tensor?.dispose?.();
+  state.tensors = null;
 }
 
 /**
  * Run the model once and return its mask output's data. Every output
- * tensor is disposed.
+ * tensor is disposed, except the state outputs of a recurrent model,
+ * which become `state` (the previous state is disposed). A recurrent
+ * model without `state` runs from zeros and keeps nothing.
  * @param {OrtLike} ort
  * @param {SessionLike} session
  * @param {ModelSpec} spec
  * @param {Float32Array} inputData - 3 × inputSize × inputSize values
+ * @param {RecurrentState} [state]
  * @returns {Promise<Float32Array>}
  */
-export async function runModel(ort, session, spec, inputData) {
+export async function runModel(ort, session, spec, inputData, state) {
   const size = spec.inputSize;
-  const input = new ort.Tensor('float32', inputData, [1, 3, size, size]);
+  /** @type {Record<string, unknown>} */
+  const feeds = { [spec.inputName]: new ort.Tensor('float32', inputData, [1, 3, size, size]) };
+  for (const { input } of spec.recurrent ?? []) {
+    // Zeros of shape [1, 1, 1, 1] broadcast to the first frame's state
+    feeds[input] =
+      state?.tensors?.[input] ?? new ort.Tensor('float32', new Float32Array(1), [1, 1, 1, 1]);
+  }
   const fetches = getFetches(spec);
-  const outputs = fetches
-    ? await session.run({ [spec.inputName]: input }, fetches)
-    : await session.run({ [spec.inputName]: input });
+  const outputs = fetches ? await session.run(feeds, fetches) : await session.run(feeds);
+  /** @type {Set<unknown>} */
+  const kept = new Set();
   try {
     const output = outputs[spec.outputName];
     if (!output?.getData) {
       throw new Error(`The model has no output named "${spec.outputName}"`);
     }
-    return /** @type {Float32Array} */ (await output.getData());
+    const data = /** @type {Float32Array} */ (await output.getData());
+    if (state && spec.recurrent) {
+      /** @type {Record<string, { dispose?: () => void }>} */
+      const next = {};
+      for (const { input, output: name } of spec.recurrent) {
+        if (!outputs[name]) throw new Error(`The model has no output named "${name}"`);
+        next[input] = outputs[name];
+        kept.add(outputs[name]);
+      }
+      resetRecurrentState(state);
+      state.tensors = next;
+    }
+    return data;
   } finally {
     for (const tensor of Object.values(outputs)) {
-      tensor?.dispose?.();
+      if (!kept.has(tensor)) tensor?.dispose?.();
     }
   }
 }

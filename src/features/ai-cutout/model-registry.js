@@ -48,11 +48,22 @@
  */
 
 /**
+ * One recurrent state of a video model: `output` of a frame is fed back as
+ * `input` of the next one (zeros on a job's first frame).
+ * @typedef {Object} ModelRecurrentPair
+ * @property {string} input
+ * @property {string} output
+ */
+
+/**
  * The upstream fp32 file a shipped model was converted from.
  * @typedef {Object} ModelUpstreamFile
- * @property {string} repo - Hugging Face repository
+ * @property {string} repo - Hugging Face repository (GitHub when `url` is set)
  * @property {string} revision - Pinned commit (never a branch)
- * @property {string} path - File path inside the repository
+ * @property {string} path - File path inside the repository (the asset
+ *   name when `url` is set)
+ * @property {string} [url] - Download URL of a file that is not on Hugging
+ *   Face (a GitHub release asset; the release tag points at `revision`)
  * @property {number} bytes - Exact byte size
  * @property {string} sha256 - Lowercase hex SHA-256
  */
@@ -90,6 +101,8 @@
  * @property {string} outputName - Mask output: float32 [1, 1, inputSize, inputSize]
  * @property {number} inputSize
  * @property {ModelPreprocess} preprocess
+ * @property {readonly ModelRecurrentPair[]} [recurrent] - A video model's
+ *   state, carried from frame to frame by the worker
  */
 
 /**
@@ -134,6 +147,16 @@ export const MODEL_RELEASE_URL =
 const APACHE_2 = Object.freeze({
   name: 'Apache-2.0',
   url: 'https://www.apache.org/licenses/LICENSE-2.0',
+});
+
+const MIT = Object.freeze({
+  name: 'MIT',
+  url: 'https://opensource.org/license/mit',
+});
+
+const GPL_3 = Object.freeze({
+  name: 'GPL-3.0',
+  url: 'https://www.gnu.org/licenses/gpl-3.0.html',
 });
 
 /**
@@ -371,6 +394,127 @@ const CLICK = {
 };
 
 /**
+ * BEN2 base (PramaLLC/BEN2, MIT): the Background Erase Network with its
+ * confidence-guided refiner, strongest on hair and fine detail. Upstream
+ * publishes the ONNX file already in mixed precision (float16 weights, a
+ * float16 output named "17728"), so nothing is converted to fp16: the
+ * conversion only appends a Cast to float32 and names the output `mask`.
+ *
+ * Preprocessing, from upstream's onnx_run.py at the pinned revision:
+ * `Resize((1024, 1024))` and ToTensor, i.e. stretch to 1024×1024 and
+ * `/ 255` with no mean/std. The graph ends in a sigmoid: the output is a
+ * [0, 1] probability. Upstream then min-max normalizes each image; not
+ * done here, for the reason given on the general model.
+ *
+ * Three fixes make it run on WebGPU (scripts/convert-models-fp16.py): its
+ * 68 Pow(x, 2) take a float16 base and a float32 exponent, for which
+ * onnxruntime-web has no kernel (rewritten as Mul(x, x)); three
+ * LayerNorms run in float64, which WebGPU lacks (computed in float32,
+ * from float16 inputs); and the output is cast to float32. Against the
+ * upstream file on the CPU: masks agree on more than 99.99% of pixels at
+ * 0.5. On WebGPU about 430 ms per frame on an RTX 3080 Ti (a 2.5 s
+ * warm-up).
+ *
+ * Trained on DIS5K and Prama's own data; the weights are MIT.
+ * @type {ModelEntry}
+ */
+const BEN2 = {
+  id: 'ben2',
+  label: 'Hair & detail',
+  modelName: 'BEN2 (base)',
+  shortModelName: 'BEN2',
+  description: 'People, pets and objects, best on hair and fine detail',
+  finds: 'the people, pets and objects',
+  fileName: 'ben2-base-fp16.onnx',
+  bytes: 222_923_759,
+  sha256: 'b58fc673c81561a7cb58a5428c50d8ed7db08f70656c141256bfb356ba6e6c82',
+  convertedFrom: {
+    repo: 'PramaLLC/BEN2',
+    revision: 'e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f',
+    path: 'BEN2_Base.onnx',
+    bytes: 222_932_053,
+    sha256: '22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101',
+  },
+  license: MIT,
+  upstream: 'https://github.com/PramaLLC/BEN2',
+  inputName: 'input.1',
+  outputName: 'mask',
+  inputSize: 1024,
+  preprocess: {
+    resize: 'stretch',
+    scale: 1 / 255,
+    mean: [0, 0, 0],
+    std: [1, 1, 1],
+    output: 'probability',
+  },
+};
+
+/**
+ * Robust Video Matting, ResNet-50 (PeterL1n/RobustVideoMatting, GPL-3.0,
+ * like this app), converted to fp16 from the fp32 ONNX file of its v1.0.0
+ * release. A recurrent network: four ConvGRU states carry what it saw in
+ * earlier frames, which keeps the matte steady from frame to frame (the
+ * worker feeds each frame's `r1o`…`r4o` back as the next frame's
+ * `r1i`…`r4i`, see `recurrent`). The conversion keeps `pha` and the
+ * states (drops the foreground colour `fgr`) and makes `downsample_ratio`
+ * the constant 0.5: the 1024×1024 input is analyzed at 512 and the
+ * refiner brings the matte back to 1024. Like MODNet's, four decoder
+ * Convs read a channel count that is not a multiple of 4 (771, 387, 131,
+ * 35), which onnxruntime-web's WebGPU backend computes wrong: the
+ * conversion zero-pads them. Two more fixes keep the graph valid after the
+ * fp16 conversion: the state outputs, which the graph also reads, sit
+ * behind an Identity, and the states' symbolic dimensions get distinct
+ * names (the export calls all four "channels × height × width", which
+ * made ONNX Runtime share one state's buffer with another). fp16 on the
+ * CPU vs the fp32 export over three frames: masks agree on more than
+ * 99.98% of pixels at 0.5; on WebGPU about 80 ms per frame on an RTX
+ * 3080 Ti.
+ *
+ * Trained on people only. Preprocessing, from upstream's
+ * documentation/inference.md: RGB in [0, 1] (`/ 255`, no mean/std), any
+ * size (here a 1024×1024 stretch, like the other models). `pha` is
+ * clipped to [0, 1].
+ * @type {ModelEntry}
+ */
+const VIDEO_PERSON = {
+  id: 'video-person',
+  label: 'Video person',
+  modelName: 'Robust Video Matting (ResNet-50)',
+  shortModelName: 'RVM',
+  description: 'People in live-action video, steady from frame to frame',
+  finds: 'the people',
+  fileName: 'rvm-resnet50-fp16.onnx',
+  bytes: 53_779_519,
+  sha256: 'c1d2ce94dc34029527bd6fff914a04d9eeddcbf8dd0be4e03e5f20143be3a409',
+  convertedFrom: {
+    repo: 'PeterL1n/RobustVideoMatting',
+    revision: '17d1774b032fd503bfe53c57d295db719f9e3da1',
+    path: 'rvm_resnet50_fp32.onnx',
+    url: 'https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50_fp32.onnx',
+    bytes: 107_479_165,
+    sha256: '25db300fcb6ee27f941a1b52c97856e8d1f13c7f35817f81a612f89af0e8a85c',
+  },
+  license: GPL_3,
+  upstream: 'https://github.com/PeterL1n/RobustVideoMatting',
+  inputName: 'src',
+  outputName: 'pha',
+  inputSize: 1024,
+  preprocess: {
+    resize: 'stretch',
+    scale: 1 / 255,
+    mean: [0, 0, 0],
+    std: [1, 1, 1],
+    output: 'probability',
+  },
+  recurrent: [
+    { input: 'r1i', output: 'r1o' },
+    { input: 'r2i', output: 'r2o' },
+    { input: 'r3i', output: 'r3o' },
+    { input: 'r4i', output: 'r4o' },
+  ],
+};
+
+/**
  * Deep-freeze a registry entry (it is shared by every module).
  * @template {ModelEntry | SamModelEntry} T
  * @param {T} entry
@@ -389,6 +533,10 @@ function freezeEntry(entry) {
     Object.freeze(entry.preprocess.mean);
     Object.freeze(entry.preprocess.std);
     Object.freeze(entry.preprocess);
+    if (entry.recurrent) {
+      for (const pair of entry.recurrent) Object.freeze(pair);
+      Object.freeze(entry.recurrent);
+    }
   }
   return Object.freeze(entry);
 }
@@ -404,6 +552,8 @@ export const MODEL_REGISTRY = Object.freeze(
     freezeEntry(PORTRAIT),
     freezeEntry(ANIME),
     freezeEntry(CLICK),
+    freezeEntry(BEN2),
+    freezeEntry(VIDEO_PERSON),
   ]),
 );
 
@@ -485,13 +635,15 @@ export function getModelDownloadUrl(file) {
 }
 
 /**
- * Pinned Hugging Face URL of the upstream file a model file comes from
- * (scripts/convert-models-fp16.py downloads the ones it converts).
+ * Pinned URL of the upstream file a model file comes from: its Hugging
+ * Face commit, or `convertedFrom.url` (scripts/convert-models-fp16.py
+ * downloads the ones it converts).
  * @param {{ convertedFrom: ModelUpstreamFile }} entry - A single-file entry or a ModelFile
  * @returns {string}
  */
 export function getUpstreamModelUrl(entry) {
-  const { repo, revision, path } = entry.convertedFrom;
+  const { repo, revision, path, url } = entry.convertedFrom;
+  if (url) return url;
   return `https://huggingface.co/${repo}/resolve/${revision}/${path}`;
 }
 

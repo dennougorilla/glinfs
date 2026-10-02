@@ -28,6 +28,12 @@
  * `env.wasm.wasmPaths`; the JS glue is inlined in the ORT bundle, so no
  * extra module is fetched. `numThreads = 1` and no proxy worker.
  *
+ * A video model (`spec.recurrent`, Robust Video Matting) carries a state
+ * from frame to frame. Frames of one job arrive in clip order, so the state
+ * lives for one job: the first frame of a job starts from zeros and runs
+ * twice (the first run only settles the state, the way a video model sees
+ * a still first frame), every later frame continues from the one before.
+ *
  * Frames arrive as transferred ImageBitmaps already scaled (to the mask
  * resolution for a letterbox model, to the square input for a stretch
  * model: drawing either into the input rectangle needs no further loss of
@@ -75,6 +81,7 @@ import {
   combineBackends,
   createModelSession,
   loadAndCreateSession,
+  resetRecurrentState,
   runModel,
 } from '../features/ai-cutout/session-init.js';
 
@@ -121,6 +128,8 @@ import {
  * @property {Promise<void>} ready - Settles once the session exists (or failed)
  * @property {import('onnxruntime-web').InferenceSession | null} session
  * @property {Object | null} readyMessage - The 'ready' message, sent again to a repeated 'init'
+ * @property {import('../features/ai-cutout/session-init.js').RecurrentState & { jobId: number | null }} recurrentState
+ *   - A video model's state and the job it belongs to
  */
 
 ort.env.wasm.wasmPaths = { wasm: ortWasmUrl };
@@ -440,6 +449,7 @@ function loadModel(spec, allowWasm, cacheOnly = false) {
     ready: Promise.resolve(),
     session: null,
     readyMessage: null,
+    recurrentState: { tensors: null, jobId: null },
   };
   models.set(spec.id, entry);
   entry.ready = initialize(entry, allowWasm, cacheOnly).then(
@@ -477,7 +487,12 @@ function unloadModel(modelId) {
   if (entry.spec.kind === 'sam') {
     for (const key of [...embeddingKeys(modelId)]) embeddings.delete(key);
   }
-  // A session still being created is released by initialize()
+  // A session still being created is released by initialize(). A video
+  // model's state goes in the queue too: a frame running now may still
+  // read it.
+  void withOrt(async () => {
+    resetRecurrentState(entry.recurrentState);
+  }).catch(() => undefined);
   const sessions = session?.encoder ? [session.encoder, session.decoder] : session ? [session] : [];
   for (const one of sessions) {
     void withOrt(() => one.release?.() ?? Promise.resolve()).catch(() => undefined);
@@ -542,7 +557,17 @@ async function segment(request) {
       preprocess,
     );
     const inferenceStart = performance.now();
-    const output = await runModel(/** @type {any} */ (ort), session, model, inputData);
+    /** @type {LoadedModel['recurrentState'] | undefined} */
+    let state;
+    if (model.recurrent) {
+      state = entry.recurrentState;
+      if (state.jobId !== request.jobId) {
+        resetRecurrentState(state);
+        state.jobId = request.jobId;
+        await runModel(/** @type {any} */ (ort), session, model, inputData, state);
+      }
+    }
+    const output = await runModel(/** @type {any} */ (ort), session, model, inputData, state);
     return { probability: output, inferenceMs: performance.now() - inferenceStart };
   });
 

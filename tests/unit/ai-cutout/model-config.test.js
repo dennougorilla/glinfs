@@ -132,9 +132,9 @@ describe('model registry', () => {
       inputName: 'input',
       outputName: 'output',
     });
-    // Only MODNet needs the WebGPU Conv workaround in the conversion script
+    // MODNet and RVM need the WebGPU Conv workaround in the conversion script
     const script = repoFile('scripts/convert-models-fp16.py');
-    expect(script.match(/"pad_conv_channels": True/g)).toHaveLength(1);
+    expect(script.match(/"pad_conv_channels": True/g)).toHaveLength(2);
   });
 
   it('notes the general model’s training-data terms (DIS5K) for Settings', () => {
@@ -215,17 +215,30 @@ describe('model registry', () => {
 
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
-    // UI order: General left/top, Portrait, Anime, then Click to select
-    expect(ids).toEqual(['general', 'portrait', 'anime', 'click']);
+    // UI order: General left/top, Portrait, Anime, Click to select, then
+    // the larger alternatives
+    expect(ids).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
     const fileNames = MODEL_REGISTRY.flatMap((e) => getModelFiles(e).map((f) => f.fileName));
     expect(new Set(fileNames).size).toBe(fileNames.length);
     for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
+      if (entry.convertedFrom.url) {
+        // Not on Hugging Face: a GitHub release asset
+        expect(entry.convertedFrom.url).toMatch(
+          /^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//,
+        );
+        expect(entry.convertedFrom.url.endsWith(`/${entry.convertedFrom.path}`)).toBe(true);
+      }
       expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(entry.convertedFrom.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(Number.isSafeInteger(entry.bytes)).toBe(true);
-      // fp16 halves the upstream fp32 file
-      expect(entry.bytes).toBeLessThan(entry.convertedFrom.bytes * 0.55);
+      if (entry.id === 'ben2') {
+        // Upstream is float16 already: only a Cast is added
+        expect(entry.bytes - entry.convertedFrom.bytes).toBeLessThan(1000);
+      } else {
+        // fp16 halves the upstream fp32 file
+        expect(entry.bytes).toBeLessThan(entry.convertedFrom.bytes * 0.55);
+      }
       expect(Object.isFrozen(entry.convertedFrom)).toBe(true);
       expect(entry.license.url).toMatch(/^https:\/\//);
       for (const field of ['label', 'modelName', 'shortModelName', 'description']) {
@@ -245,6 +258,8 @@ describe('model registry', () => {
     expect(formatModelSize(getModelEntry('anime').bytes)).toBe('88 MB');
     expect(formatModelSize(getModelEntry('general').bytes)).toBe('90 MB');
     expect(formatModelSize(getModelEntry('portrait').bytes)).toBe('13 MB');
+    expect(formatModelSize(getModelEntry('ben2').bytes)).toBe('223 MB');
+    expect(formatModelSize(getModelEntry('video-person').bytes)).toBe('54 MB');
     // One helper for every size: download progress asks for a decimal
     expect(formatModelSize(getModelEntry('anime').bytes, 1)).toBe('88.1 MB');
     expect(formatModelSize(0, 1)).toBe('0.0 MB');
@@ -329,7 +344,16 @@ describe('model-config', () => {
         `"upstream_bytes": ${bytes.toLocaleString('en-US').replaceAll(',', '_')}`,
       );
       expect(flat).toContain(`"upstream_sha256": "${sha256}"`);
-      expect(flat).toContain(`"keep_outputs": ["${entry.outputName}"]`);
+      // The mask output is kept (BEN2's is renamed by a Cast; a recurrent
+      // model keeps its state outputs too)
+      const kept = flat.includes(`"cast_output_float32": "${entry.outputName}"`)
+        ? `"cast_output_float32": "${entry.outputName}"`
+        : `"keep_outputs": ["${entry.outputName}"`;
+      expect(flat).toContain(kept);
+      const outputs = [...flat.matchAll(/"keep_outputs": \[([^\]]*)\]/g)].map((m) => m[1]);
+      for (const pair of entry.recurrent ?? []) {
+        expect(outputs.some((list) => list.includes(`"${pair.output}"`))).toBe(true);
+      }
     }
     expect(repoFile('scripts/requirements-models.txt')).toMatch(/^onnxconverter-common==\d/m);
   });
@@ -351,7 +375,7 @@ describe('model-config', () => {
     // The Pages artifact must stay under 1 GB
     expect(workflow).toContain('-ge 1000000000');
     const total = MODEL_REGISTRY.reduce((sum, e) => sum + e.bytes, 0);
-    expect(total).toBeLessThan(250_000_000);
+    expect(total).toBeLessThan(700_000_000);
   });
 
   it('serves each model same-origin under the base path', () => {

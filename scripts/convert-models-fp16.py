@@ -13,7 +13,10 @@ checked against its pinned size and SHA-256. The script then
 - keeps only the graph output the segmentation worker reads (the general
   IS-Net export also returns 11 side outputs the app never fetches) and
   drops the nodes and weights that only fed the others;
-- for models marked `pad_conv_channels` (MODNet), zero-pads the input
+- for models marked `fix_inputs`, `isolate_outputs`, `rename_dim_params`,
+  `square_pows`, `double_to_float` or `cast_output_float32`, applies that step (see the
+  model list and the functions);
+- for models marked `pad_conv_channels` (MODNet, RVM), zero-pads the input
   channels of every Conv whose channel count is not a multiple of 4 (see
   pad_conv_input_channels: onnxruntime-web's WebGPU backend computes those
   Convs wrong; the padded graph computes exactly the same values);
@@ -79,6 +82,42 @@ MODELS = [
         "upstream_bytes": 25_888_640,
         "upstream_sha256": "07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9",
         "keep_outputs": ["output"],
+        "pad_conv_channels": True,
+    },
+    {
+        "id": "ben2",
+        "asset": "ben2-base-fp16.onnx",
+        "fp32_file": "BEN2_Base.onnx",
+        "upstream_url": "https://huggingface.co/PramaLLC/BEN2/resolve/"
+        "e48a20765fb421d19dcdb0bf3cc61e802ca5ec8f/BEN2_Base.onnx",
+        "upstream_bytes": 222_932_053,
+        "upstream_sha256": "22cea62108ff53b7ccc20f7a008bf30494228d84b1687f29ecbe76936a998101",
+        "keep_outputs": ["17728"],
+        # Upstream already ships it in mixed precision (float16 weights, a
+        # float16 output): no conversion, only a float32 output named `mask`
+        "fp16": False,
+        "cast_output_float32": "mask",
+        "square_pows": True,
+        "double_to_float": True,
+    },
+    {
+        "id": "video-person",
+        "asset": "rvm-resnet50-fp16.onnx",
+        "fp32_file": "rvm_resnet50_fp32.onnx",
+        "upstream_url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/"
+        "v1.0.0/rvm_resnet50_fp32.onnx",
+        "upstream_bytes": 107_479_165,
+        "upstream_sha256": "25db300fcb6ee27f941a1b52c97856e8d1f13c7f35817f81a612f89af0e8a85c",
+        # The alpha matte and the recurrent states; the foreground colour
+        # (`fgr`) is never read
+        "keep_outputs": ["pha", "r1o", "r2o", "r3o", "r4o"],
+        # A constant: the app always feeds 1024×1024 frames, downsampled
+        # inside the graph to 512 (the refiner restores full resolution)
+        "fix_inputs": {"downsample_ratio": 0.5},
+        # r1o…r4o also feed the next ConvGRU step inside the graph
+        "isolate_outputs": True,
+        "rename_dim_params": ["r1i", "r2i", "r3i", "r4i", "r1o", "r2o", "r3o", "r4o"],
+        # The decoder's Convs read 771, 387, 131 and 35 channels
         "pad_conv_channels": True,
     },
 ]
@@ -214,18 +253,184 @@ def pad_conv_input_channels(model: onnx.ModelProto, multiple: int = 4) -> list[s
     return changed
 
 
+def isolate_outputs(model: onnx.ModelProto) -> list[str]:
+    """Give every graph output that nodes also read its own Identity node.
+    Returns the outputs changed.
+
+    float16.convert_float_to_float16(keep_io_types=True) casts such an
+    output back to float32 under its own name but leaves the nodes that read
+    it reading that float32 tensor next to float16 ones (RVM's `r4o` feeds a
+    Concat: "Type parameter (T) of Optype (Concat) bound to different
+    types"). Behind an Identity, the nodes read the inner float16 tensor.
+    """
+    graph = model.graph
+    read = {name for node in graph.node for name in node.input}
+    changed = []
+    for output in graph.output:
+        if output.name not in read:
+            continue
+        inner = f"{output.name}_inner"
+        for node in graph.node:
+            node.output[:] = [inner if o == output.name else o for o in node.output]
+            node.input[:] = [inner if i == output.name else i for i in node.input]
+        graph.node.append(
+            helper.make_node("Identity", [inner], [output.name], name=f"{output.name}_identity")
+        )
+        changed.append(output.name)
+    return changed
+
+
+def rename_dim_params(model: onnx.ModelProto, names: list[str]) -> None:
+    """Prefix the symbolic dimensions of the graph inputs and outputs in
+    `names` with the tensor's name ("height" -> "r1i_height").
+
+    RVM's export names the dimensions of all four recurrent states
+    "channels", "height" and "width" although each state has its own size.
+    Once the float16 conversion puts Casts behind them, ONNX Runtime trusts
+    the shared names and reuses one state's buffer for another ("Shape
+    mismatch attempting to re-use buffer") from the second frame on.
+    """
+    graph = model.graph
+    for value in [*graph.input, *graph.output]:
+        if value.name not in names:
+            continue
+        for dim in value.type.tensor_type.shape.dim:
+            if dim.dim_param and dim.dim_param != "batch_size":
+                dim.dim_param = f"{value.name}_{dim.dim_param}"
+
+
+def double_to_float(model: onnx.ModelProto) -> int:
+    """Compute in float32 what the graph computes in float64. Returns the
+    number of Casts and constants changed.
+
+    BEN2 runs three of its LayerNorms in float64 (Cast to double, then the
+    statistics); WebGPU has no float64, so session creation fails
+    ("Provider type for … node is not set"). Their inputs are float16, so
+    float32 holds every value they carry.
+    """
+    graph = model.graph
+    double = onnx.TensorProto.DOUBLE
+    changed = 0
+    for node in graph.node:
+        for attr in node.attribute:
+            if node.op_type == "Cast" and attr.name == "to" and attr.i == double:
+                attr.i = onnx.TensorProto.FLOAT
+                changed += 1
+            if node.op_type == "Constant" and attr.name == "value" and attr.t.data_type == double:
+                value = numpy_helper.to_array(attr.t).astype(np.float32)
+                attr.t.CopyFrom(numpy_helper.from_array(value, attr.t.name))
+                changed += 1
+    for i, tensor in enumerate(graph.initializer):
+        if tensor.data_type == double:
+            value = numpy_helper.to_array(tensor).astype(np.float32)
+            graph.initializer[i].CopyFrom(numpy_helper.from_array(value, tensor.name))
+            changed += 1
+    for value_info in [*graph.value_info, *graph.input, *graph.output]:
+        if value_info.type.tensor_type.elem_type == double:
+            value_info.type.tensor_type.elem_type = onnx.TensorProto.FLOAT
+    return changed
+
+
+def square_pows(model: onnx.ModelProto) -> int:
+    """Rewrite every Pow(x, 2) as Mul(x, x). Returns how many.
+
+    BEN2's mixed-precision export squares float16 tensors with a float32
+    exponent; onnxruntime-web has no kernel for that type pair, so session
+    creation fails ("Provider type for Pow node … is not set"). x * x is
+    the same value.
+    """
+    graph = model.graph
+    constants = {t.name: numpy_helper.to_array(t) for t in graph.initializer}
+    for node in graph.node:
+        if node.op_type == "Constant":
+            value = next((a.t for a in node.attribute if a.name == "value"), None)
+            if value is not None:
+                constants[node.output[0]] = numpy_helper.to_array(value)
+    count = 0
+    for node in graph.node:
+        if node.op_type != "Pow" or node.input[1] not in constants:
+            continue
+        exponent = constants[node.input[1]]
+        if exponent.size != 1 or float(exponent.reshape(-1)[0]) != 2.0:
+            raise ValueError(f"{node.name}: Pow with an exponent other than 2")
+        node.op_type = "Mul"
+        node.input[1] = node.input[0]
+        count += 1
+    # Drop the exponent constants nothing reads any more
+    used = {name for node in graph.node for name in node.input}
+    kept = [n for n in graph.node if n.op_type != "Constant" or n.output[0] in used]
+    del graph.node[:]
+    graph.node.extend(kept)
+    return count
+
+
+def append_output_node(model: onnx.ModelProto, op_type: str, name: str, **attrs) -> None:
+    """Feed the (single) graph output through one more node: `op_type`
+    reads what the output was and the output now holds its result, under
+    the same name unless `name` gives a new one."""
+    graph = model.graph
+    if len(graph.output) != 1:
+        raise ValueError(f"{op_type} needs exactly one graph output")
+    output = graph.output[0]
+    old_name = output.name
+    inner = f"{old_name}_before_{op_type.lower()}"
+    for node in graph.node:
+        node.output[:] = [inner if o == old_name else o for o in node.output]
+        node.input[:] = [inner if i == old_name else i for i in node.input]
+    graph.node.append(helper.make_node(op_type, [inner], [name], name=f"glinfs_{op_type}", **attrs))
+    output.name = name
+    if "to" in attrs:
+        output.type.tensor_type.elem_type = attrs["to"]
+
+
+def fix_inputs(model: onnx.ModelProto, values: dict[str, float]) -> None:
+    """Turn graph inputs into constants (float32 tensors of shape [1])."""
+    graph = model.graph
+    for name, value in values.items():
+        matches = [i for i in graph.input if i.name == name]
+        if not matches:
+            raise ValueError(f"no graph input named {name}")
+        graph.input.remove(matches[0])
+        graph.initializer.append(numpy_helper.from_array(np.array([value], np.float32), name))
+
+
 def convert(model_def: dict, src: Path, out: Path) -> dict:
     model = onnx.load(str(src))
     removed = keep_only_outputs(model, model_def["keep_outputs"])
     padded = pad_conv_input_channels(model) if model_def.get("pad_conv_channels") else []
-    with warnings.catch_warnings(record=True) as caught:
-        # A warning per tensor holding values of magnitude below 1e-7 (the
-        # converter's min_positive_val), which are clamped to ±1e-7; counted
-        warnings.simplefilter("always")
-        model = float16.convert_float_to_float16(model, keep_io_types=True)
-    clamped = sum("truncated" in str(w.message) for w in caught)
-    del model.metadata_props[:]
     steps = "; outputs kept: " + ", ".join(model_def["keep_outputs"])
+    if model_def.get("fix_inputs"):
+        fix_inputs(model, model_def["fix_inputs"])
+        steps += "; inputs made constant: " + ", ".join(
+            f"{k} = {v}" for k, v in model_def["fix_inputs"].items()
+        )
+    if model_def.get("isolate_outputs"):
+        isolated = isolate_outputs(model)
+        steps += "; outputs read inside the graph behind an Identity: " + ", ".join(isolated)
+    if model_def.get("rename_dim_params"):
+        rename_dim_params(model, model_def["rename_dim_params"])
+        steps += "; symbolic dimensions of the recurrent states made distinct"
+    if model_def.get("double_to_float"):
+        steps += f"; float64 computed in float32 ({double_to_float(model)} Casts and constants)"
+    if model_def.get("square_pows"):
+        steps += f"; Pow(x, 2) rewritten as Mul(x, x) ({square_pows(model)} nodes)"
+    clamped = 0
+    if model_def.get("fp16", True):
+        with warnings.catch_warnings(record=True) as caught:
+            # A warning per tensor holding values of magnitude below 1e-7 (the
+            # converter's min_positive_val), which are clamped to ±1e-7; counted
+            warnings.simplefilter("always")
+            model = float16.convert_float_to_float16(model, keep_io_types=True)
+        clamped = sum("truncated" in str(w.message) for w in caught)
+        conversion = ": float16.convert_float_to_float16(keep_io_types=True)"
+    else:
+        conversion = ": no float16 conversion (upstream is float16 already)"
+    if model_def.get("cast_output_float32"):
+        append_output_node(
+            model, "Cast", model_def["cast_output_float32"], to=onnx.TensorProto.FLOAT
+        )
+        steps += f"; output cast to float32 as {model_def['cast_output_float32']}"
+    del model.metadata_props[:]
     if padded:
         steps += "; Conv input channels zero-padded to a multiple of 4: " + ", ".join(padded)
     for key, value in (
@@ -234,7 +439,8 @@ def convert(model_def: dict, src: Path, out: Path) -> dict:
         (
             "glinfs.conversion",
             f"onnx {onnx.__version__}, onnxconverter-common {onnxconverter_common.__version__}"
-            ": float16.convert_float_to_float16(keep_io_types=True)" + steps,
+            + conversion
+            + steps,
         ),
     ):
         model.metadata_props.add(key=key, value=value)

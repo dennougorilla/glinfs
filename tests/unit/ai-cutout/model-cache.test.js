@@ -86,6 +86,8 @@ describe('listDownloadedModels', () => {
       ['portrait', false],
       ['anime', false],
       ['click', false],
+      ['ben2', false],
+      ['video-person', false],
     ]);
     expect(models[0]).toMatchObject({
       label: 'General',
@@ -124,6 +126,8 @@ describe('listDownloadedModels', () => {
       ['portrait', false, false],
       ['anime', false, true],
       ['click', false, false],
+      ['ben2', false, false],
+      ['video-person', false, false],
     ]);
     expect(models[2].staleUrls).toEqual([stalePin]);
     expect(oldFiles).toEqual([{ url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 }]);

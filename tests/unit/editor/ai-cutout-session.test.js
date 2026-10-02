@@ -612,6 +612,8 @@ describe('AI cutout session: model availability and preload', () => {
         portrait: 'missing',
         anime: 'ready',
         click: 'missing',
+        ben2: 'missing',
+        'video-person': 'missing',
       }),
     );
     session.dispose();
@@ -643,6 +645,8 @@ describe('AI cutout session: model availability and preload', () => {
       portrait: 'missing',
       anime: 'cached',
       click: 'missing',
+      ben2: 'missing',
+      'video-person': 'missing',
     });
     session.dispose();
   });
