@@ -842,7 +842,18 @@ export function renderBackgroundPanel(handlers) {
   const aiSection = createElement(
     'div',
     { className: 'editor-cutout-section', id: 'ai-section', hidden: 'true' },
-    [modelRow, statusSlot, clickScope, clickLost, warning, wasmNote, errorBox, notice, fit.row, smoothingRow],
+    [
+      modelRow,
+      statusSlot,
+      clickScope,
+      clickLost,
+      warning,
+      wasmNote,
+      errorBox,
+      notice,
+      fit.row,
+      smoothingRow,
+    ],
   );
 
   // --- Color settings ---
