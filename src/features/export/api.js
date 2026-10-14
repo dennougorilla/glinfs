@@ -109,15 +109,21 @@ export async function getFrameRGBA(frame, crop) {
       const byteLength = sourceWidth * sourceHeight * 4;
       const buffer = new Uint8ClampedArray(byteLength);
 
-      await videoFrame.copyTo(buffer, {
-        rect: { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
-        format: 'RGBA',
-      });
-
-      return { data: buffer, width: sourceWidth, height: sourceHeight };
+      try {
+        await videoFrame.copyTo(buffer, {
+          rect: { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
+          format: 'RGBA',
+        });
+        return { data: buffer, width: sourceWidth, height: sourceHeight };
+      } catch {
+        // copyTo cannot always convert to RGBA (e.g. I420/NV12 frames from
+        // VideoDecoder reject with NotSupportedError); fall through to the
+        // canvas readback, as decode.js does
+      }
     }
 
-    // Fallback: use OffscreenCanvas (for environments without copyTo)
+    // Fallback: use OffscreenCanvas (for environments without copyTo, or
+    // where it rejects)
     const { ctx } = getExtractionCanvas(sourceWidth, sourceHeight);
 
     ctx.drawImage(videoFrame, 0, 0);
@@ -138,15 +144,20 @@ export async function getFrameRGBA(frame, crop) {
     const byteLength = outputWidth * outputHeight * 4;
     const buffer = new Uint8ClampedArray(byteLength);
 
-    await videoFrame.copyTo(buffer, {
-      rect: { x: crop.x, y: crop.y, width: outputWidth, height: outputHeight },
-      format: 'RGBA',
-    });
-
-    return { data: buffer, width: outputWidth, height: outputHeight };
+    try {
+      await videoFrame.copyTo(buffer, {
+        rect: { x: crop.x, y: crop.y, width: outputWidth, height: outputHeight },
+        format: 'RGBA',
+      });
+      return { data: buffer, width: outputWidth, height: outputHeight };
+    } catch {
+      // Same as above, plus InvalidStateError for odd crop rects on
+      // chroma-subsampled formats; fall through to the canvas readback
+    }
   }
 
-  // Fallback: use OffscreenCanvas (for environments without copyTo)
+  // Fallback: use OffscreenCanvas (for environments without copyTo, or
+  // where it rejects)
   const { ctx } = getExtractionCanvas(outputWidth, outputHeight);
 
   // Draw cropped region from VideoFrame
