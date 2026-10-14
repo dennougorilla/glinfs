@@ -263,6 +263,13 @@ async function handleImportFile(file) {
 async function handleStart() {
   if (!store) return;
 
+  // The screen this start belongs to. cleanup() nulls the module `store` when
+  // the user navigates away (and initCapture creates a new one on return), so
+  // after every await below a mismatch means this screen is gone: whatever
+  // was acquired for it must be released here, because nothing else holds it
+  // and the browser would keep sharing the screen until reload (#168).
+  const sessionStore = store;
+
   // Terminate any previous worker before creating a new one.
   // Without this, re-selecting a screen after "Stop sharing" orphans the old
   // worker together with its full frame buffer (up to maxFrames ImageBitmaps),
@@ -276,16 +283,33 @@ async function handleStart() {
   // for the previous session's async teardown (track stop, worker
   // termination) to finish so the new pipeline can't race the old one
   await clearScreenCaptureState();
+  if (store !== sessionStore) return;
+
+  /** @type {MediaStream | null} */
+  let stream = null;
+  /** @type {MediaStreamTrack | null} */
+  let videoTrack = null;
+  /** @type {HTMLVideoElement | null} */
+  let video = null;
 
   try {
-    const stream = await startScreenCapture();
+    stream = await startScreenCapture();
+    if (store !== sessionStore) {
+      stopScreenCapture(stream);
+      return;
+    }
 
     // Get video track for event handling
-    const videoTrack = stream.getVideoTracks()[0];
+    videoTrack = stream.getVideoTracks()[0];
     captureTrack = videoTrack;
 
     // Create video element for capture and preview
-    videoElement = await createVideoElement(stream);
+    video = await createVideoElement(stream);
+    if (store !== sessionStore) {
+      releaseAbandonedStart(stream, videoTrack, video);
+      return;
+    }
+    videoElement = video;
 
     // Listen for stream end. This listener stays attached across navigation
     // (cleanup() below does not remove it) so a share stopped from the
@@ -306,7 +330,6 @@ async function handleStart() {
     // the user is on another route — writing them through the module variable
     // silently dropped them all, freezing the live monitor's buffer-fullness
     // readout.
-    const sessionStore = store;
     const memorySettings = loadSettings().capture;
     workerManager = new CaptureWorkerManager();
     workerManager.init(videoElement, {
@@ -345,6 +368,14 @@ async function handleStart() {
     const container = qsRequired('#main-content');
     render(container);
   } catch (err) {
+    if (store !== sessionStore) {
+      // The picker was cancelled or the stream failed after the screen was
+      // left: release what this start acquired, without touching the module
+      // state (it may already belong to a newer screen) or the gone UI
+      if (stream) releaseAbandonedStart(stream, videoTrack, video);
+      return;
+    }
+
     const message = err instanceof Error ? err.message : 'Failed to start capture';
     store.setState((state) => setError(state, message));
     emit('capture:error', { error: message });
@@ -353,6 +384,14 @@ async function handleStart() {
     if (captureTrack) {
       captureTrack.stop();
       captureTrack = null;
+    }
+    if (stream) {
+      stopScreenCapture(stream);
+    }
+    if (videoElement) {
+      videoElement.pause();
+      videoElement.srcObject = null;
+      videoElement = null;
     }
     if (workerManager) {
       workerManager.terminate();
@@ -363,6 +402,26 @@ async function handleStart() {
     const container = qsRequired('#main-content');
     render(container);
     throw err;
+  }
+}
+
+/**
+ * Release a stream (and its video element) acquired by a handleStart() whose
+ * screen was left while it was awaiting. Only clears the module track if it
+ * is still this start's: a newer screen may already own the module state.
+ *
+ * @param {MediaStream} stream
+ * @param {MediaStreamTrack | null} videoTrack
+ * @param {HTMLVideoElement | null} video
+ */
+function releaseAbandonedStart(stream, videoTrack, video) {
+  stopScreenCapture(stream);
+  if (videoTrack && captureTrack === videoTrack) {
+    captureTrack = null;
+  }
+  if (video) {
+    video.pause();
+    video.srcObject = null;
   }
 }
 
