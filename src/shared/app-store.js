@@ -600,7 +600,10 @@ function maybeCompressEntry(entry) {
     })
     .then((result) => {
       pendingEncodeJobs.delete(entry.id);
-      const live = state.clipQueue.includes(entry);
+      // An entry held for Undo is still owned: Undo puts it back, so it must
+      // receive the result like a queued one (#167)
+      const held = pendingDeletion?.entry === entry;
+      const live = held || state.clipQueue.includes(entry);
 
       if (result.ok) {
         if (!live) return; // Deleted while compressing: chunks are plain buffers, GC takes them
@@ -615,7 +618,7 @@ function maybeCompressEntry(entry) {
         };
         entry.byteLengthMB = result.byteLength / (1024 * 1024);
         entry.status = 'compressed';
-        emitQueueChanged('compress');
+        if (!held) emitQueueChanged('compress');
         return;
       }
 
@@ -643,7 +646,7 @@ function maybeCompressEntry(entry) {
           return wrapper;
         });
         entry.status = 'raw';
-        emitQueueChanged('compress-error');
+        if (!held) emitQueueChanged('compress-error');
       } else {
         // LOSS (see the failure contract in the module header): the worker
         // crashed/was terminated mid-job, or could not hand every frame
@@ -653,6 +656,12 @@ function maybeCompressEntry(entry) {
         // delete, so the UI can tell the user instead of failing silently.
         closeVideoFrames(result.frames);
         entry.frames = null;
+        if (held) {
+          // Lost while held for Undo: nothing is left to restore, so the
+          // hold ends now (Undo becomes a no-op) — a user delete, no notice
+          finalizePendingDeletion();
+          return;
+        }
         const index = state.clipQueue.indexOf(entry);
         if (index !== -1) {
           state.clipQueue.splice(index, 1);
@@ -915,9 +924,11 @@ export function promoteQueuedClip(id, currentEditorState = null) {
  * Delete a queued clip. One of only two explicit paths that close frames.
  *
  * Compression lifecycle (#92): a 'compressed' entry's chunks are plain
- * buffers (GC). Deleting a 'compressing' or 'decoding' entry removes it
- * immediately; when its in-flight codec job settles, the job handler sees
- * the entry is gone and discards/closes the result (cancel-by-discard).
+ * buffers (GC). Deleting a 'compressing' entry removes it from the queue but
+ * the Undo hold still owns it: an encode that settles inside the grace
+ * window is applied to the held entry so Undo restores a usable clip
+ * (#167); one that settles after the hold was finalized is discarded/closed
+ * (cancel-by-discard). A 'decoding' entry's late decode is always discarded.
  * @param {string} id
  * @returns {boolean} true if an entry was removed
  */
@@ -996,14 +1007,21 @@ export function hasPendingDeletion() {
  * position; a deleted ACTIVE clip returns to the queue front (never
  * re-activated — silently swapping the open editor would be worse than the
  * deletion was).
+ *
+ * REFUSED when the queue is already at its limit (e.g. the deleted clip was
+ * the active one and the queue was full): the hold is left as is and
+ * finalizes when its grace window ends. A restored raw entry (the deleted
+ * active clip) compresses in the background like any demoted clip (#92).
  * @returns {boolean} true if something was restored
  */
 export function undoDelete() {
   if (!pendingDeletion) return false;
+  if (state.clipQueue.length >= getClipQueueLimit()) return false;
   const { entry, index, timer } = pendingDeletion;
   clearTimeout(timer);
   pendingDeletion = null;
   state.clipQueue.splice(Math.min(index, state.clipQueue.length), 0, entry);
+  maybeCompressEntry(entry);
   emitQueueChanged('enqueue');
   return true;
 }
@@ -1013,19 +1031,30 @@ export function undoDelete() {
  * the editor's memory footer. Raw frames count at conservative RGBA w*h*4;
  * compressed entries count at their ACTUAL compressed byteLength (#92) —
  * 'compressing' entries still count raw, since the real frames are alive in
- * the codec worker until the encode finishes.
+ * the codec worker until the encode finishes. A clip held for Undo counts
+ * too: its resources stay alive until the grace window ends (#167).
  * @returns {number} Estimated MB
  */
 export function getClipMemoryEstimateMB() {
   let total = estimateFramesMemoryMB(state.clipPayload?.frames ?? []);
   for (const entry of state.clipQueue) {
-    if (entry.status === 'compressed' || entry.status === 'decoding') {
-      total += (entry.compressed?.byteLength ?? 0) / (1024 * 1024);
-    } else {
-      total += estimateFramesMemoryMB(entry.frames ?? []);
-    }
+    total += estimateEntryMemoryMB(entry);
+  }
+  if (pendingDeletion) {
+    total += estimateEntryMemoryMB(pendingDeletion.entry);
   }
   return total;
+}
+
+/**
+ * @param {ClipQueueEntry} entry
+ * @returns {number} Estimated MB (see getClipMemoryEstimateMB)
+ */
+function estimateEntryMemoryMB(entry) {
+  if (entry.status === 'compressed' || entry.status === 'decoding') {
+    return (entry.compressed?.byteLength ?? 0) / (1024 * 1024);
+  }
+  return estimateFramesMemoryMB(entry.frames ?? []);
 }
 
 // ============================================================
@@ -1365,6 +1394,10 @@ export function resetAppStore() {
   state.clipPayload = null;
   state.editorPayload = null;
   state.clipQueue.length = 0;
+  if (pendingDeletion) {
+    clearTimeout(pendingDeletion.timer);
+    pendingDeletion = null;
+  }
   exportResult = null;
   clearScreenCaptureState();
 }
