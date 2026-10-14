@@ -6,6 +6,7 @@ import {
   getClipMemoryEstimateMB,
   getClipPayload,
   getClipQueue,
+  hasPendingDeletion,
   isClipCompressionAvailable,
   prepareQueuedClipForPromote,
   promoteQueuedClip,
@@ -30,7 +31,9 @@ import { updateSetting } from '../../../src/shared/user-settings.js';
  *   replaced by chunk accounting)
  * - encode failure -> back to raw with the returned frames, clip never lost
  * - no codec / unavailable codec -> entries stay raw exactly as before
- * - delete during compress/decode -> stale results are discarded/closed
+ * - delete during compress -> the result lands on the Undo hold, so Undo
+ *   restores a usable clip (#167); after the hold ends it is discarded/closed
+ * - delete during decode -> stale results are discarded/closed
  * - promote of a compressed entry: prepare decodes (decoding status,
  *   double-promote refused), then the normal sync promote works
  * - accounting switches from raw w*h*4 to actual compressed byteLength
@@ -263,10 +266,14 @@ describe('codec terminate() with 1 running + 2 pending encodes (#120)', () => {
     expect(kept.status).toBe('raw');
     expect(kept.frames.map((f) => f.frame)).toEqual(keptFrames.map((f) => f.frame));
     expect(keptFrames.every((f) => !f.frame.closed)).toBe(true);
-    // Pending clip deleted meanwhile: handed-back frames closed, not leaked
+    // Pending clip deleted meanwhile: the Undo hold gets its frames back
+    // (#167), and they are closed once the hold finalizes, not leaked
+    expect(deleted.status).toBe('raw');
+    expect(deletedFrames.every((f) => !f.frame.closed)).toBe(true);
+    unsubscribe();
+    releaseAllFramesAndReset();
     expect(deletedFrames.every((f) => f.frame.close.mock.calls.length === 1)).toBe(true);
 
-    unsubscribe();
     vi.unstubAllGlobals();
   });
 });
@@ -425,7 +432,7 @@ describe('crash during a pending Undo (review of #92 failure contract)', () => {
 });
 
 describe('delete during compress', () => {
-  it('discards a late success result without resurrecting the entry', async () => {
+  it('applies a late success result to the held entry without resurrecting it', async () => {
     const codec = createMockCodec();
     registerClipCodec(codec);
     const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
@@ -433,14 +440,19 @@ describe('delete during compress', () => {
     expect(deleteQueuedClip(entry.id)).toBe(true);
     expect(getClipQueue()).toHaveLength(0);
 
+    const types = [];
+    const unsubscribe = onBus('queue:changed', (payload) => types.push(payload.type));
     codec.encodeCalls[0].resolve(okEncodeResult());
     await flushJobs();
 
     expect(getClipQueue()).toHaveLength(0);
-    expect(getClipMemoryEstimateMB()).toBe(0);
+    expect(entry.status).toBe('compressed');
+    // The queue itself did not change, so nothing is announced
+    expect(types).toEqual([]);
+    unsubscribe();
   });
 
-  it('closes returned frames when the encode fails after the delete', async () => {
+  it('keeps returned frames with the held entry until the hold is finalized', async () => {
     const codec = createMockCodec();
     registerClipCodec(codec);
     const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
@@ -450,10 +462,196 @@ describe('delete during compress', () => {
     codec.encodeCalls[0].resolve({ ok: false, error: 'boom', frames: returned });
     await flushJobs();
 
+    expect(entry.status).toBe('raw');
+    expect(entry.frames.map((f) => f.frame)).toEqual(returned);
+    for (const vf of returned) {
+      expect(vf.close).not.toHaveBeenCalled();
+    }
+
+    releaseAllFramesAndReset();
+
     for (const vf of returned) {
       expect(vf.close).toHaveBeenCalledOnce();
     }
     expect(getClipQueue()).toHaveLength(0);
+  });
+
+  it('discards a late success result once the hold was finalized', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+    releaseAllFramesAndReset();
+
+    codec.encodeCalls[0].resolve(okEncodeResult());
+    await flushJobs();
+
+    expect(getClipQueue()).toHaveLength(0);
+    expect(entry.compressed).toBeNull();
+    expect(getClipMemoryEstimateMB()).toBe(0);
+  });
+
+  it('closes returned frames when the encode fails after the hold was finalized', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+    releaseAllFramesAndReset();
+
+    const returned = codec.encodeCalls[0].frames;
+    codec.encodeCalls[0].resolve({ ok: false, error: 'boom', frames: returned });
+    await flushJobs();
+
+    for (const vf of returned) {
+      expect(vf.close).toHaveBeenCalledOnce();
+    }
+    expect(getClipQueue()).toHaveLength(0);
+  });
+
+  it('a crash while held ends the hold: Undo has nothing to restore', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+
+    codec.encodeCalls[0].resolve({ ok: false, error: 'worker crashed', frames: [] });
+    await flushJobs();
+
+    expect(hasPendingDeletion()).toBe(false);
+    expect(undoDelete()).toBe(false);
+    expect(getClipQueue()).toHaveLength(0);
+    expect(getClipMemoryEstimateMB()).toBe(0);
+  });
+});
+
+describe('Undo after delete-while-compressing (#167)', () => {
+  it('worker completes during the hold -> Undo restores a compressed, promotable entry', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    expect(entry.status).toBe('compressing');
+
+    deleteQueuedClip(entry.id);
+    codec.encodeCalls[0].resolve(okEncodeResult(2 * 1024 * 1024));
+    await flushJobs();
+
+    expect(undoDelete()).toBe(true);
+    expect(getClipQueue()).toEqual([entry]);
+    expect(entry.status).toBe('compressed');
+    expect(entry.frames).toBeNull();
+    expect(entry.compressed.byteLength).toBe(2 * 1024 * 1024);
+    // Restoring a compressed entry starts no second encode
+    expect(codec.encode).toHaveBeenCalledTimes(1);
+
+    // Promotable: prepare decodes it back to raw, then the sync promote works
+    const prepared = prepareQueuedClipForPromote(entry.id);
+    expect(entry.status).toBe('decoding');
+    const decoded = [0, 1].map((i) => ({ closed: false, close: vi.fn(), timestamp: i }));
+    codec.decodeCalls[0].resolve({ ok: true, frames: decoded });
+    await expect(prepared).resolves.toEqual({ ok: true });
+    expect(promoteQueuedClip(entry.id, null)).not.toBeNull();
+    expect(getClipPayload()?.frames.map((f) => f.frame)).toEqual(decoded);
+  });
+
+  it('encode fails during the hold -> Undo restores the raw clip with its returned frames', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+
+    const returned = codec.encodeCalls[0].frames;
+    codec.encodeCalls[0].resolve({ ok: false, error: 'boom', frames: returned });
+    await flushJobs();
+
+    expect(undoDelete()).toBe(true);
+    expect(getClipQueue()).toEqual([entry]);
+    // Back in the queue as raw, so compression is retried with the same frames
+    expect(entry.status).toBe('compressing');
+    expect(codec.encodeCalls[1].frames).toEqual(returned);
+  });
+
+  it('Undo before the worker completes: the entry compresses in place', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+
+    expect(undoDelete()).toBe(true);
+    expect(entry.status).toBe('compressing');
+    expect(codec.encode).toHaveBeenCalledTimes(1);
+
+    codec.encodeCalls[0].resolve(okEncodeResult());
+    await flushJobs();
+
+    expect(getClipQueue()).toEqual([entry]);
+    expect(entry.status).toBe('compressed');
+  });
+});
+
+describe('Undo of a deleted active clip (#167)', () => {
+  it('compresses the restored clip in the background', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const frames = createMockFrames(2);
+    setClipPayload(clipPayloadOf(frames));
+    deleteActiveClip();
+    expect(codec.encode).not.toHaveBeenCalled();
+
+    expect(undoDelete()).toBe(true);
+
+    const [restored] = getClipQueue();
+    expect(restored.status).toBe('compressing');
+    expect(codec.encodeCalls[0].frames).toEqual(frames.map((f) => f.frame));
+
+    codec.encodeCalls[0].resolve(okEncodeResult());
+    await flushJobs();
+    expect(restored.status).toBe('compressed');
+  });
+
+  it('is refused when the queue is at its limit, keeping the hold', () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    updateSetting('capture', 'clipQueueLimit', 1);
+    const activeFrames = createMockFrames(2);
+    setClipPayload(clipPayloadOf(activeFrames));
+    enqueueClip(clipPayloadOf(createMockFrames(1)));
+    deleteActiveClip();
+    codec.encode.mockClear();
+
+    expect(undoDelete()).toBe(false);
+
+    expect(getClipQueue()).toHaveLength(1);
+    expect(hasPendingDeletion()).toBe(true);
+    expect(codec.encode).not.toHaveBeenCalled();
+    expect(activeFrames.every((f) => f.frame.closed === false)).toBe(true);
+  });
+});
+
+describe('memory estimate during the Undo window (#167)', () => {
+  const rawMB = (count) => (count * 100 * 100 * 4) / (1024 * 1024);
+
+  it('counts a held raw clip until the hold ends', () => {
+    setClipPayload(clipPayloadOf(createMockFrames(2)));
+    deleteActiveClip();
+
+    expect(getClipMemoryEstimateMB()).toBeCloseTo(rawMB(2), 6);
+
+    releaseAllFramesAndReset();
+    expect(getClipMemoryEstimateMB()).toBe(0);
+  });
+
+  it('counts a held compressed clip at its compressed size', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const { entry } = enqueueClip(clipPayloadOf(createMockFrames(2)));
+    deleteQueuedClip(entry.id);
+
+    // Still compressing: the real frames are alive in the worker
+    expect(getClipMemoryEstimateMB()).toBeCloseTo(rawMB(2), 6);
+
+    codec.encodeCalls[0].resolve(okEncodeResult(3 * 1024 * 1024));
+    await flushJobs();
+    expect(getClipMemoryEstimateMB()).toBeCloseTo(3, 6);
   });
 });
 
