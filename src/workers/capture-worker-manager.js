@@ -41,8 +41,10 @@ export class CaptureWorkerManager {
   /** @type {StatsCallback | null} */
   #onStatsUpdate = null;
 
-  /** @type {((frames: TransferredFrame[]) => void) | null} */
-  #pendingFramesCallback = null;
+  /** @type {Array<(frames: TransferredFrame[]) => void>} Resolvers for in-flight
+   * requestFrames() calls, oldest first. The worker answers each GET_FRAMES with
+   * exactly one FRAMES_RESPONSE in order, so responses settle them FIFO (#170). */
+  #pendingFramesCallbacks = [];
 
   /** @type {boolean} */
   #isInitialized = false;
@@ -140,8 +142,8 @@ export class CaptureWorkerManager {
         return;
       }
 
-      // Store callback to be called when frames arrive
-      this.#pendingFramesCallback = resolve;
+      // Queue (not overwrite) so a concurrent call can't strand this one (#170)
+      this.#pendingFramesCallbacks.push(resolve);
       this.#worker?.postMessage({ type: 'GET_FRAMES' });
     });
   }
@@ -157,8 +159,8 @@ export class CaptureWorkerManager {
    * Terminate the worker and cleanup
    */
   terminate() {
-    const pendingFramesCallback = this.#pendingFramesCallback;
-    this.#pendingFramesCallback = null;
+    const pendingFramesCallbacks = this.#pendingFramesCallbacks;
+    this.#pendingFramesCallbacks = [];
 
     if (this.#worker) {
       this.#worker.terminate();
@@ -171,7 +173,9 @@ export class CaptureWorkerManager {
 
     // Do not leave requestFrames() callers waiting forever when teardown wins
     // the race with a worker response.
-    pendingFramesCallback?.([]);
+    for (const callback of pendingFramesCallbacks) {
+      callback([]);
+    }
   }
 
   /**
@@ -245,11 +249,9 @@ export class CaptureWorkerManager {
         break;
 
       case 'FRAMES_RESPONSE':
-        // Call pending callback with received frames
-        if (this.#pendingFramesCallback) {
-          this.#pendingFramesCallback(payload.frames || []);
-          this.#pendingFramesCallback = null;
-        }
+        // Each response answers the oldest GET_FRAMES. Only that caller gets
+        // the frames: the bitmaps were transferred and must have one owner.
+        this.#pendingFramesCallbacks.shift()?.(payload.frames || []);
         break;
     }
   }
@@ -262,9 +264,10 @@ export class CaptureWorkerManager {
     console.error('[CaptureWorkerManager] Worker error:', e.message);
 
     // Reject any pending frame requests with empty result
-    if (this.#pendingFramesCallback) {
-      this.#pendingFramesCallback([]);
-      this.#pendingFramesCallback = null;
+    const pendingFramesCallbacks = this.#pendingFramesCallbacks;
+    this.#pendingFramesCallbacks = [];
+    for (const callback of pendingFramesCallbacks) {
+      callback([]);
     }
 
     // Mark as uninitialized to prevent further operations
