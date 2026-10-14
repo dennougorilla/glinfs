@@ -14,7 +14,13 @@ vi.mock('../../../src/shared/router.js', () => ({
 }));
 
 import { initLoading } from '../../../src/features/loading/index.js';
-import { getClipPayload, resetAppStore, setClipPayload } from '../../../src/shared/app-store.js';
+import {
+  deleteActiveClip,
+  getClipPayload,
+  getClipQueue,
+  resetAppStore,
+  setClipPayload,
+} from '../../../src/shared/app-store.js';
 import { offAll, on } from '../../../src/shared/bus.js';
 
 function createPayload(sceneDetectionEnabled = true) {
@@ -172,6 +178,63 @@ describe('loading feature production lifecycle', () => {
     expect(getClipPayload()).toBe(payload);
     expect(document.querySelector('[data-progress="text"]')?.textContent).toBe('0%');
     unsubscribe();
+  });
+
+  describe('active clip changed while detection runs (#171)', () => {
+    /** Start detection on `payload` and return the resolver for its result */
+    async function startPendingDetection(payload) {
+      let resolveDetection;
+      manager.detect.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDetection = resolve;
+        }),
+      );
+      setClipPayload(payload);
+      initLoading();
+      await vi.waitFor(() => expect(manager.detect).toHaveBeenCalledOnce());
+      return resolveDetection;
+    }
+
+    const staleResult = {
+      scenes: [{ id: 'stale-scene', startFrame: 0, endFrame: 0 }],
+      totalFrames: 1,
+      processingTimeMs: 5,
+      algorithmId: 'histogram',
+    };
+
+    it('does not resurrect an active clip deleted meanwhile', async () => {
+      const onComplete = vi.fn();
+      const unsubscribe = on('loading:detection-complete', onComplete);
+      const resolveDetection = await startPendingDetection(createPayload());
+
+      expect(deleteActiveClip()).toBe(true);
+      resolveDetection(staleResult);
+      await vi.waitFor(() => expect(manager.dispose).toHaveBeenCalled());
+
+      expect(getClipPayload()).toBeNull();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(dependencies.navigate).toHaveBeenCalledWith('/editor');
+      unsubscribe();
+    });
+
+    it('does not demote a clip that replaced the active one meanwhile', async () => {
+      const onComplete = vi.fn();
+      const unsubscribe = on('loading:detection-complete', onComplete);
+      const original = createPayload();
+      const resolveDetection = await startPendingDetection(original);
+
+      const replacement = createPayload();
+      setClipPayload(replacement);
+      resolveDetection(staleResult);
+      await vi.waitFor(() => expect(manager.dispose).toHaveBeenCalled());
+
+      expect(getClipPayload()).toBe(replacement);
+      expect(getClipPayload().scenes).toBeUndefined();
+      expect(getClipQueue().map((entry) => entry.frames)).toEqual([original.frames]);
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(dependencies.navigate).toHaveBeenCalledWith('/editor');
+      unsubscribe();
+    });
   });
 
   it('does not let cleanup from an old mount dispose the current manager', async () => {

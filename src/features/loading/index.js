@@ -99,6 +99,17 @@ async function runSceneDetection(container, clipPayload, session) {
       return;
     }
 
+    // The active clip was deleted or replaced (header queue popover, live
+    // monitor) while detection ran — writing the captured payload back would
+    // resurrect the deleted clip or demote the new one. Drop the result, but
+    // still leave the spinner: nothing else navigates away after a delete.
+    const current = getClipPayload();
+    if (!current || current.frames !== clipPayload.frames) {
+      console.log('[Loading] Active clip changed during scene detection; discarding result');
+      navigate('/editor');
+      return;
+    }
+
     console.log('[Loading] Scene detection completed:', result.scenes.length, 'scenes');
 
     // Update clipPayload with scenes
