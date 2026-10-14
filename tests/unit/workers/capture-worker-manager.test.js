@@ -147,6 +147,41 @@ describe('CaptureWorkerManager', () => {
     await expect(promise).resolves.toEqual(frames);
   });
 
+  it('resolves both requestFrames calls made before the worker responds (#170)', async () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+    const worker = MockWorker.instances[0];
+
+    // e.g. "Create Clip" and Shift+C firing close together
+    const first = manager.requestFrames();
+    const second = manager.requestFrames();
+    expect(worker.messages.filter((m) => m.message.type === 'GET_FRAMES')).toHaveLength(2);
+
+    // The worker answers each GET_FRAMES in order; the first drains the
+    // buffer, so the second sees only what was captured in between
+    const drained = [{ id: 'a', bitmap: {}, timestamp: 1 }];
+    const refilled = [{ id: 'b', bitmap: {}, timestamp: 2 }];
+    worker._simulateMessage({ type: 'FRAMES_RESPONSE', payload: { frames: drained } });
+    worker._simulateMessage({ type: 'FRAMES_RESPONSE', payload: { frames: refilled } });
+
+    await expect(first).resolves.toEqual(drained);
+    await expect(second).resolves.toEqual(refilled);
+  });
+
+  it('resolves every pending requestFrames with an empty array on worker error (#170)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+    const worker = MockWorker.instances[0];
+
+    const first = manager.requestFrames();
+    const second = manager.requestFrames();
+    worker.onerror?.({ message: 'boom' });
+
+    await expect(first).resolves.toEqual([]);
+    await expect(second).resolves.toEqual([]);
+  });
+
   it('resolves requestFrames with an empty array when not initialized', async () => {
     const manager = new CaptureWorkerManager();
 
@@ -246,6 +281,18 @@ describe('CaptureWorkerManager', () => {
     manager.terminate();
 
     await expect(framesPromise).resolves.toEqual([]);
+  });
+
+  it('terminate() resolves every concurrent frame request with an empty array (#170)', async () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+
+    const first = manager.requestFrames();
+    const second = manager.requestFrames();
+    manager.terminate();
+
+    await expect(first).resolves.toEqual([]);
+    await expect(second).resolves.toEqual([]);
   });
 
   it('terminateWithCleanup posts CLEAR and terminates once the buffer is empty (#40)', async () => {
