@@ -3,6 +3,7 @@ import {
   getDefaultSettings,
   loadSettings,
   onSettingsChange,
+  rememberAiCutoutModel,
   resetCategory,
   resetSettings,
   saveSettings,
@@ -91,7 +92,48 @@ describe('user-settings', () => {
       expect(loadSettings().aiCutout.preloadModels).toBe(false);
       // Settings saved before the option existed get the default
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ capture: {}, export: {} }));
-      expect(loadSettings().aiCutout).toEqual({ preloadModels: true });
+      expect(loadSettings().aiCutout).toEqual({
+        preloadModels: true,
+        lastModel: null,
+        lastModelBySubject: {},
+      });
+    });
+
+    it('remembers the AI cutout model chosen last, overall and per subject', () => {
+      expect(loadSettings().aiCutout.lastModel).toBeNull();
+      const listener = vi.fn();
+      const unsubscribe = onSettingsChange(listener);
+      rememberAiCutoutModel('ben2', 'general');
+      rememberAiCutoutModel('portrait', 'portrait');
+      expect(loadSettings().aiCutout.lastModel).toBe('portrait');
+      expect(loadSettings().aiCutout.lastModelBySubject).toEqual({
+        general: 'ben2',
+        portrait: 'portrait',
+      });
+      // The same choice again writes nothing
+      rememberAiCutoutModel('portrait', 'portrait');
+      expect(listener).toHaveBeenCalledTimes(2);
+      unsubscribe();
+      // Without a subject only the overall choice changes
+      rememberAiCutoutModel('anime');
+      expect(loadSettings().aiCutout.lastModel).toBe('anime');
+      expect(loadSettings().aiCutout.lastModelBySubject.general).toBe('ben2');
+    });
+
+    it('drops remembered models of the wrong shape', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          aiCutout: { lastModel: 42, lastModelBySubject: { general: 'ben2', portrait: 7 } },
+        }),
+      );
+      expect(loadSettings().aiCutout).toEqual({
+        preloadModels: true,
+        lastModel: null,
+        lastModelBySubject: { general: 'ben2' },
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ aiCutout: { lastModelBySubject: [] } }));
+      expect(loadSettings().aiCutout.lastModelBySubject).toEqual({});
     });
 
     it('updates thumbnailQuality with a null key', () => {
@@ -121,6 +163,14 @@ describe('user-settings', () => {
       const settings = loadSettings();
       expect(settings.capture.fps).toBe(30);
       expect(settings.export.dithering).toBe(false);
+    });
+
+    it('resets the AI cutout category with fresh remembered models', () => {
+      rememberAiCutoutModel('ben2', 'general');
+      resetCategory('aiCutout');
+      expect(loadSettings().aiCutout).toEqual(getDefaultSettings().aiCutout);
+      rememberAiCutoutModel('portrait', 'portrait');
+      expect(getDefaultSettings().aiCutout.lastModelBySubject).toEqual({});
     });
 
     it('resets everything to defaults', () => {

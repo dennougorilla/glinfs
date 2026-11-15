@@ -637,6 +637,32 @@ describe('AI cutout session: model availability and preload', () => {
     color.session.dispose();
   });
 
+  it('a superseded refresh resolves only after the latest one reported (#187)', async () => {
+    const { session, status, isModelCached } = setup({ cached: { general: true } });
+    /** @type {(() => void)[]} */
+    const gates = [];
+    isModelCached.mockImplementation(
+      (/** @type {string} */ id) =>
+        new Promise((resolve) => gates.push(() => resolve(id === 'general'))),
+    );
+    let firstDone = false;
+    const first = session.refreshModels().then(() => {
+      firstDone = true;
+    });
+    const count = gates.length;
+    const second = session.refreshModels();
+    // The first batch answers first: it is stale and must wait for the second
+    for (const open of gates.splice(0, count)) open();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(firstDone).toBe(false);
+    expect(status.models).toBeUndefined();
+    for (const open of gates.splice(0)) open();
+    await first;
+    expect(status.models?.general).toBe('cached');
+    await second;
+    session.dispose();
+  });
+
   it('reports each model as ready, downloaded or missing', async () => {
     const { session, status } = setup({ cached: { anime: true, general: false } });
     await session.refreshModels();

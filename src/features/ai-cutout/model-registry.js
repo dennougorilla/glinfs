@@ -557,8 +557,18 @@ export const MODEL_REGISTRY = Object.freeze(
   ]),
 );
 
-/** Model of edits that do not name one (everything saved before the general model) */
+/**
+ * Model of edits that do not name one (everything saved before the general
+ * model). Only for reading old edits: a new choice follows
+ * model-preference.js (remembered > downloaded > FIRST_RUN_MODEL_ID).
+ */
 export const DEFAULT_MODEL_ID = ANIME.id;
+
+/**
+ * Model a subject card starts with when the user never chose one of its
+ * models and none of them is downloaded (#187), if the card can use it
+ */
+export const FIRST_RUN_MODEL_ID = BEN2.id;
 
 /** Cache Storage bucket that keeps verified models between visits */
 export const MODEL_CACHE_NAME = 'glinfs-models-v1';

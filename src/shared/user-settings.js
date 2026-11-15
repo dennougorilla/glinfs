@@ -30,6 +30,10 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  * @typedef {Object} AiCutoutPrefs
  * @property {boolean} preloadModels - When the editor opens with the AI
  *   method, prepare its model if it is downloaded already (never downloads)
+ * @property {string | null} lastModel - The AI cutout model the user chose
+ *   last (null: never chose one). New choices start with it (#187)
+ * @property {Record<string, string>} lastModelBySubject - The model the user
+ *   chose last per subject card of the Background tab ('general', ...)
  */
 
 /**
@@ -109,6 +113,8 @@ const DEFAULT_SETTINGS = {
   thumbnailQuality: 'auto', // 'auto' | 'low' | 'standard' | 'high' | 'ultra'
   aiCutout: {
     preloadModels: true,
+    lastModel: null,
+    lastModelBySubject: {},
   },
 };
 
@@ -270,7 +276,32 @@ function cloneDefaults() {
     capture: { ...DEFAULT_SETTINGS.capture },
     export: { ...DEFAULT_SETTINGS.export },
     thumbnailQuality: DEFAULT_SETTINGS.thumbnailQuality,
-    aiCutout: { ...DEFAULT_SETTINGS.aiCutout },
+    aiCutout: decodeStoredAiCutout(undefined),
+  };
+}
+
+/**
+ * Stored AI cutout prefs merged with the defaults. The remembered models are
+ * checked for shape only (strings); whether an id still names a model is up
+ * to the reader, so this module needs no model registry.
+ * @param {any} aiCutout - JSON-parsed stored AI cutout prefs
+ * @returns {AiCutoutPrefs}
+ */
+function decodeStoredAiCutout(aiCutout) {
+  const stored = aiCutout && typeof aiCutout === 'object' ? aiCutout : {};
+  /** @type {Record<string, string>} */
+  const bySubject = {};
+  const storedBySubject = stored.lastModelBySubject;
+  if (storedBySubject && typeof storedBySubject === 'object' && !Array.isArray(storedBySubject)) {
+    for (const [subject, model] of Object.entries(storedBySubject)) {
+      if (typeof model === 'string') bySubject[subject] = model;
+    }
+  }
+  return {
+    ...DEFAULT_SETTINGS.aiCutout,
+    ...stored,
+    lastModel: typeof stored.lastModel === 'string' ? stored.lastModel : null,
+    lastModelBySubject: bySubject,
   };
 }
 
@@ -353,7 +384,7 @@ export function loadSettings() {
       capture: { ...DEFAULT_SETTINGS.capture, ...decodeStoredCapture(parsed.capture) },
       export: { ...DEFAULT_SETTINGS.export, ...parsed.export },
       thumbnailQuality: parsed.thumbnailQuality || DEFAULT_SETTINGS.thumbnailQuality,
-      aiCutout: { ...DEFAULT_SETTINGS.aiCutout, ...parsed.aiCutout },
+      aiCutout: decodeStoredAiCutout(parsed.aiCutout),
     };
   } catch (error) {
     console.error('Failed to load user settings:', error);
@@ -396,6 +427,24 @@ export function updateSetting(category, key, value) {
 }
 
 /**
+ * Remember the AI cutout model the user chose, overall and for its subject
+ * card, so the next clip starts with it (#187)
+ * @param {string} modelId
+ * @param {string | null} [subject] - The subject card it was chosen for
+ */
+export function rememberAiCutoutModel(modelId, subject = null) {
+  const settings = loadSettings();
+  const prefs = settings.aiCutout;
+  const unchanged =
+    prefs.lastModel === modelId && (!subject || prefs.lastModelBySubject[subject] === modelId);
+  if (unchanged) return;
+  prefs.lastModel = modelId;
+  if (subject) prefs.lastModelBySubject = { ...prefs.lastModelBySubject, [subject]: modelId };
+  saveSettings(settings);
+  notifyListeners();
+}
+
+/**
  * Reset all settings to defaults
  */
 export function resetSettings() {
@@ -410,7 +459,7 @@ export function resetSettings() {
 export function resetCategory(category) {
   const settings = loadSettings();
   if (settings[category]) {
-    settings[category] = { ...DEFAULT_SETTINGS[category] };
+    settings[category] = /** @type {any} */ (cloneDefaults())[category];
     saveSettings(settings);
     notifyListeners();
   }
