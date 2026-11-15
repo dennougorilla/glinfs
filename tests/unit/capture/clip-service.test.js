@@ -356,6 +356,27 @@ describe('automatic removal of the oldest clips (#186)', () => {
     removedEvents.off();
   });
 
+  it('shows no toast when the editor Clips banner claims the notice (one surface)', async () => {
+    updateSetting('capture', 'clipQueueLimit', 1);
+    enqueueSized(1, 1);
+    installLiveCapture(1);
+    // Stand-in for the editor: its banner is on screen, so it claims it
+    const off = onBus('clip:auto-removed', ({ markShown }) => markShown());
+    const announced = [];
+    document.body.insertAdjacentHTML('beforeend', '<div id="live-region"></div>');
+
+    const result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    expect(document.querySelector('.app-toast-message')).toBeNull();
+    // Screen readers still hear it
+    announced.push(document.getElementById('live-region')?.textContent);
+    expect(announced[0]).toMatch(
+      /removed the oldest clip .* to make room\. Clip added to queue \(1\/1\)$/,
+    );
+    off();
+  });
+
   it('names an imported clip by its file name', async () => {
     updateSetting('capture', 'clipQueueLimit', 1);
     enqueueClip({

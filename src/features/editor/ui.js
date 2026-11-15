@@ -583,6 +583,31 @@ export function showClipsQueueFullBanner(container, message) {
 }
 
 /**
+ * Whether the Clips banner is actually visible to the user right now: not
+ * inside a hidden pane (e.g. the Scenes tab is open) and, where the browser
+ * can tell, rendered and inside the viewport (#186: the toast for an
+ * automatic removal is shown only when this banner is not).
+ *
+ * @param {HTMLElement} container - The editor screen container
+ * @returns {boolean}
+ */
+export function isClipsQueueBannerOnScreen(container) {
+  const banner = container.querySelector('.clips-queue-banner');
+  if (!(banner instanceof HTMLElement) || !banner.isConnected) return false;
+  if (banner.closest('[hidden]')) return false;
+  // No layout engine (jsdom): the hidden check above is all there is
+  if (typeof banner.checkVisibility !== 'function') return true;
+  if (!banner.checkVisibility({ visibilityProperty: true })) return false;
+  const rect = banner.getBoundingClientRect();
+  return (
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth
+  );
+}
+
+/**
  * Update crop info panel values
  * Clear Crop clicks are handled by a delegated listener registered once in
  * renderEditorPropertiesPanel, so this function never attaches listeners of its own

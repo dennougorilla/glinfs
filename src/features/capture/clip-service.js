@@ -168,6 +168,7 @@ export function checkClipRoom({ needSlot, projection }) {
  * @property {ReturnType<typeof projectClipMemory>} [projection] - The
  *   numbers for a memory-budget refusal, with the REAL frames as incoming
  * @property {import('../../shared/app-store.js').ClipQueueEntry[]} removed
+ * @property {string} [message] - What the user was told, when clips were removed
  */
 
 /**
@@ -215,10 +216,9 @@ export function makeRoomForClip({ needSlot, frames }) {
   if (plan.ids.length === 0) return { ok: true, removed: [] };
 
   const removed = evictQueuedClips(plan.ids);
-  if (removed.length > 0) {
-    announceClipsRemoved(removed, plan.reason ?? 'queue-full');
-  }
-  return { ok: true, removed };
+  if (removed.length === 0) return { ok: true, removed };
+  const message = announceClipsRemoved(removed, plan.reason ?? 'queue-full');
+  return { ok: true, removed, message };
 }
 
 /**
@@ -250,18 +250,32 @@ export function buildClipsRemovedMessage(removed, reason) {
 }
 
 /**
- * Tell the user which clips were removed: the bus (the editor's Clips
- * banner, as for refusals), the live region, and a passive toast — Create
- * Clip leaves the Capture screen right away, so its own error line would
- * never be seen. A passive toast never replaces a pending Undo toast.
+ * Tell the user which clips were removed, on exactly one visible surface:
+ * - the bus first: the editor's Clips banner (the refusal surface) shows
+ *   it and calls markShown() when that banner is really on screen;
+ * - otherwise a passive toast, visible on every route — Create Clip leaves
+ *   the Capture screen right away, so its own error line would never be
+ *   seen. A passive toast never replaces a pending Undo toast.
+ * The live region announces it either way (a caller that announces again
+ * right away must include this message: the newer text replaces it).
  * @param {import('../../shared/app-store.js').ClipQueueEntry[]} removed
  * @param {'queue-full'|'memory-budget'} reason
+ * @returns {string} The message
  */
 function announceClipsRemoved(removed, reason) {
   const message = buildClipsRemovedMessage(removed, reason);
-  emit('clip:auto-removed', { ids: removed.map((entry) => entry.id), reason, message });
+  let shownOnScreen = false;
+  emit('clip:auto-removed', {
+    ids: removed.map((entry) => entry.id),
+    reason,
+    message,
+    markShown: () => {
+      shownOnScreen = true;
+    },
+  });
   announce(message);
-  showToast(message);
+  if (!shownOnScreen) showToast(message);
+  return message;
 }
 
 /**
@@ -338,7 +352,10 @@ export async function clipNow() {
     queueLength: result.queueLength,
     limit: result.limit,
   });
-  announce(`Clip added to queue (${result.queueLength}/${result.limit})`);
+  const queued = `Clip added to queue (${result.queueLength}/${result.limit})`;
+  // One announcement: a second one in the same tick would replace the
+  // removal notice before a screen reader reads it
+  announce(room.message ? `${room.message}. ${queued}` : queued);
   return result;
 }
 
