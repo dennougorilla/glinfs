@@ -39,7 +39,7 @@ import {
 import { announce } from '../../shared/live-region.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
-import { loadSettings } from '../../shared/user-settings.js';
+import { loadSettings, rememberAiCutoutModel } from '../../shared/user-settings.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -71,7 +71,13 @@ import {
   previewDependsOnCrop,
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
-import { getLostFramesInSelection, getSubjectModel } from './panels/background-panel.js';
+import {
+  getLostFramesInSelection,
+  getModelSubject,
+  getRememberedModels,
+  getSubjectModel,
+  getSubjectModels,
+} from './panels/background-panel.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { isBrushActive, setOverlayPickMode, updatePreviewTools } from './panels/preview.js';
 import { updateSidebarTabs } from './panels/properties.js';
@@ -1599,7 +1605,9 @@ function handleSetAiParams(patch, options = {}) {
 
 /**
  * "What do you want to keep?" in the Background tab: Off, Solid color, or
- * an AI subject (its model). A ready AI model starts at once with the frame
+ * an AI subject (its model: the clip's, else the one the user chose last for
+ * it, else a downloaded one, else the first-run default — see
+ * getSubjectModel). A ready AI model starts at once with the frame
  * on screen, then the rest of the selection in the background; a model
  * that still has to download asks first (the panel's inline question),
  * unless the frame on screen is already analyzed with it (then the result
@@ -1613,7 +1621,19 @@ async function handleChooseSubject(subject) {
     handleSetBackgroundChoice(subject === 'none' ? 'off' : 'color');
     return;
   }
-  const modelId = getSubjectModel(subject, store.getState().edits?.background.ai ?? null);
+  const current = store;
+  const known = current.getState().aiCutout.models ?? {};
+  if (aiSession && getSubjectModels(subject).some((id) => known[id] === undefined)) {
+    // Which models are downloaded is not known yet (the cards fill in right
+    // after mount): a downloaded model is preferred over one to download
+    await aiSession.refreshModels();
+    if (store !== current) return;
+  }
+  const state = current.getState();
+  const modelId = getSubjectModel(subject, state.edits?.background.ai ?? null, {
+    remembered: getRememberedModels(),
+    availability: state.aiCutout.models ?? null,
+  });
   if (!modelId) return;
   await handleChooseModel(modelId);
 }
@@ -1653,12 +1673,14 @@ async function handleChooseModel(modelId) {
  * Use an AI model: removal on with the AI cutout and that model (each model
  * keeps its own masks; Fit, smoothing and picks stay), and, when `analyze`,
  * start with the frame on screen. A running analysis with another model is
- * stopped first (its finished frames are kept).
+ * stopped first (its finished frames are kept). The model is remembered in
+ * user settings, so the next clip starts with it (#187).
  * @param {import('../../shared/edits/model.js').AiModel} modelId
  * @param {boolean} analyze
  */
 function applyAiSubject(modelId, analyze) {
   if (!store) return;
+  rememberAiCutoutModel(modelId, getModelSubject(modelId));
   const before = store.getState();
   const sameModel = getAiModelId(before.edits.background.ai) === modelId;
   if (!sameModel) {
