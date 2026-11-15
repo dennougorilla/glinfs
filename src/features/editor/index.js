@@ -551,6 +551,8 @@ export function initEditor() {
         projection?.message ?? 'Memory budget reached — raise Memory Budget in Settings',
       ),
     ),
+    // Oldest clips removed to make room (#186): same surface as a refusal
+    onBus('clip:auto-removed', ({ message }) => showQueueFullBanner(container, message)),
   );
 
   // Start auto-playback if initial state is playing

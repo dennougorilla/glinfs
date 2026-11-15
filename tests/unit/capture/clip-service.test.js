@@ -29,14 +29,22 @@ vi.mock('../../../src/features/capture/index.js', () => ({
 }));
 
 import {
+  checkClipRoom,
   clipNow,
   isCaptureLive,
   registerClipNowHotkey,
 } from '../../../src/features/capture/clip-service.js';
 import { convertBitmapFramesToVideoFrames } from '../../../src/features/capture/index.js';
-import { enqueueClip, getClipQueue, resetAppStore } from '../../../src/shared/app-store.js';
+import {
+  enqueueClip,
+  getClipPayload,
+  getClipQueue,
+  resetAppStore,
+  setClipPayload,
+} from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
-import { updateSetting } from '../../../src/shared/user-settings.js';
+import { hideToast } from '../../../src/shared/toast.js';
+import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
 
 function createMockFrames(count) {
   return Array.from({ length: count }, (_, i) => ({
@@ -65,6 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  hideToast();
   document.body.innerHTML = '';
 });
 
@@ -102,7 +111,8 @@ describe('clipNow', () => {
     unsubscribe();
   });
 
-  it('refuses at the queue limit BEFORE draining the ring buffer', async () => {
+  it('refuses at the queue limit BEFORE draining the ring buffer (auto-remove off)', async () => {
+    updateSetting('capture', 'autoRemoveOldClips', false);
     updateSetting('capture', 'clipQueueLimit', 1);
     enqueueClip({ frames: createMockFrames(1), fps: 30, capturedAt: Date.now() });
     const workerManager = installLiveCapture();
@@ -122,6 +132,7 @@ describe('clipNow', () => {
   });
 
   it('closes converted frames when the enqueue itself is refused (race to full)', async () => {
+    updateSetting('capture', 'autoRemoveOldClips', false);
     updateSetting('capture', 'clipQueueLimit', 1);
     installLiveCapture(2);
 
@@ -170,6 +181,7 @@ describe('memory budget refusal (#96)', () => {
   }
 
   it('refuses BEFORE draining the buffer when the projection exceeds the budget', async () => {
+    // Nothing is queued, so there is nothing automatic removal could free
     updateSetting('capture', 'memoryBudgetMB', 500);
     // 20000 frames x 100*100*4 bytes = ~763 MB projected > 500 MB budget
     const workerManager = installLiveCaptureWithStats(20000);
@@ -188,7 +200,8 @@ describe('memory budget refusal (#96)', () => {
     unsubscribe();
   });
 
-  it('counts frames already held (active + queue) against the budget', async () => {
+  it('counts frames already held (active + queue) against the budget (auto-remove off)', async () => {
+    updateSetting('capture', 'autoRemoveOldClips', false);
     updateSetting('capture', 'memoryBudgetMB', 500);
     // Held: 3000 frames x 200x200 RGBA = ~457 MB; incoming: 2000 x 100x100 = ~76 MB
     enqueueClip({
@@ -218,6 +231,249 @@ describe('memory budget refusal (#96)', () => {
     const result = await clipNow();
 
     expect(result.ok).toBe(true);
+    expect(getClipQueue()).toHaveLength(1);
+  });
+});
+
+describe('automatic removal of the oldest clips (#186)', () => {
+  const MB = 1024 * 1024;
+
+  /** Frames of about `sizeMB` each (raw RGBA accounting) */
+  function createSizedFrames(count, sizeMB) {
+    const side = Math.round(Math.sqrt((sizeMB * MB) / 4));
+    return Array.from({ length: count }, (_, i) => ({
+      id: `s${i}`,
+      frame: { close: vi.fn(), closed: false },
+      timestamp: i,
+      width: side,
+      height: side,
+    }));
+  }
+
+  /** Enqueue a one-frame clip of about `sizeMB`; capturedAt orders them */
+  function enqueueSized(sizeMB, capturedAt) {
+    const result = enqueueClip({ frames: createSizedFrames(1, sizeMB), fps: 30, capturedAt });
+    if (!result.ok) throw new Error('enqueue refused in test setup');
+    return /** @type {NonNullable<typeof result.entry>} */ (result.entry);
+  }
+
+  /**
+   * Live capture whose buffer projects to `frameCount` frames of 1 MB and
+   * whose snapshot is `realCount` such frames (the conversion mock is
+   * overridden once)
+   */
+  function installLiveCaptureOfMB(frameCount, realCount = frameCount) {
+    const side = Math.round(Math.sqrt(MB / 4));
+    const workerManager = {
+      requestFrames: vi
+        .fn()
+        .mockResolvedValue(Array.from({ length: frameCount }, (_, i) => ({ i }))),
+      getEffectiveFrameDimensions: vi.fn(() => ({ width: side, height: side, scaled: false })),
+    };
+    captureContext.current = {
+      workerManager,
+      fps: 30,
+      sceneDetection: false,
+      stats: { frameCount, fps: 30 },
+    };
+    vi.mocked(convertBitmapFramesToVideoFrames).mockImplementationOnce(() =>
+      createSizedFrames(realCount, 1),
+    );
+    return workerManager;
+  }
+
+  function collect(event) {
+    const events = [];
+    const off = onBus(event, (payload) => events.push(payload));
+    return { events, off };
+  }
+
+  it('removes the oldest clip when the queue is full, then enqueues', async () => {
+    updateSetting('capture', 'clipQueueLimit', 2);
+    const oldest = enqueueSized(1, 1);
+    const newer = enqueueSized(1, 2);
+    const oldestFrame = oldest.frames?.[0].frame;
+    installLiveCapture(2);
+    const removedEvents = collect('clip:auto-removed');
+    const fullEvents = collect('clip:queue-full');
+
+    const result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    const queue = getClipQueue();
+    expect(queue).toHaveLength(2);
+    expect(queue[1].id).toBe(newer.id);
+    expect(queue.some((e) => e.id === oldest.id)).toBe(false);
+    expect(oldestFrame?.close).toHaveBeenCalledOnce();
+    expect(fullEvents.events).toEqual([]);
+    expect(removedEvents.events).toEqual([
+      expect.objectContaining({ ids: [oldest.id], reason: 'queue-full' }),
+    ]);
+    expect(removedEvents.events[0].message).toMatch(
+      /^Clip queue full — removed the oldest clip \(.+\) to make room$/,
+    );
+    // Visible on every route (Create Clip leaves the Capture screen at once)
+    expect(document.querySelector('.app-toast-message')?.textContent).toBe(
+      removedEvents.events[0].message,
+    );
+
+    removedEvents.off();
+    fullEvents.off();
+  });
+
+  it('removes as many of the oldest clips as the memory budget needs', async () => {
+    updateSetting('capture', 'clipQueueLimit', 10);
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    const a = enqueueSized(150, 1);
+    const b = enqueueSized(150, 2);
+    const c = enqueueSized(150, 3);
+    // Held 450 MB + new 120 MB = 570 MB: 70 MB over -> only the oldest goes
+    installLiveCaptureOfMB(120);
+    const removedEvents = collect('clip:auto-removed');
+
+    let result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    expect(getClipQueue().map((e) => e.id)).toEqual([expect.any(String), c.id, b.id]);
+    expect(removedEvents.events.map((e) => e.ids)).toEqual([[a.id]]);
+
+    // Held 420 MB + new 300 MB = 720 MB: 220 MB over -> two oldest go
+    installLiveCaptureOfMB(300);
+    result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    expect(removedEvents.events[1]).toEqual(
+      expect.objectContaining({ ids: [b.id, c.id], reason: 'memory-budget' }),
+    );
+    expect(removedEvents.events[1].message).toMatch(
+      /^Memory budget reached — removed the 2 oldest clips \(.+, .+\) to make room$/,
+    );
+    expect(getClipQueue()).toHaveLength(2);
+
+    removedEvents.off();
+  });
+
+  it('names an imported clip by its file name', async () => {
+    updateSetting('capture', 'clipQueueLimit', 1);
+    enqueueClip({
+      frames: createSizedFrames(1, 1),
+      fps: 10,
+      capturedAt: 1,
+      sourceName: 'cat.gif',
+    });
+    installLiveCapture(1);
+    const removedEvents = collect('clip:auto-removed');
+
+    await clipNow();
+
+    expect(removedEvents.events[0].message).toBe(
+      'Clip queue full — removed the oldest clip (cat.gif) to make room',
+    );
+    removedEvents.off();
+  });
+
+  it('refuses as today, removing nothing, when every queued clip is not enough', async () => {
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    setClipPayload({ frames: createSizedFrames(1, 400), fps: 30, capturedAt: 0 });
+    const queued = enqueueSized(50, 1);
+    // Held 450 MB + new 120 MB: even without the queued clip 520 > 500
+    const workerManager = installLiveCaptureOfMB(120);
+    const budgetEvents = collect('clip:memory-budget');
+    const removedEvents = collect('clip:auto-removed');
+
+    const result = await clipNow();
+
+    expect(result).toEqual({ ok: false, reason: 'memory-budget' });
+    expect(workerManager.requestFrames).not.toHaveBeenCalled();
+    expect(getClipQueue().map((e) => e.id)).toEqual([queued.id]);
+    expect(queued.frames?.[0].frame.close).not.toHaveBeenCalled();
+    expect(removedEvents.events).toEqual([]);
+    // Deleting a clip by hand cannot help either, so it is not suggested
+    expect(budgetEvents.events[0].message).toMatch(/raise Memory Budget in Settings/);
+    expect(budgetEvents.events[0].message).not.toMatch(/delete a queued clip/);
+
+    budgetEvents.off();
+    removedEvents.off();
+  });
+
+  it('never removes the active clip, even with nothing queued', async () => {
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    const activeFrames = createSizedFrames(1, 450);
+    setClipPayload({ frames: activeFrames, fps: 30, capturedAt: 0 });
+    installLiveCaptureOfMB(120);
+
+    const result = await clipNow();
+
+    expect(result).toEqual({ ok: false, reason: 'memory-budget' });
+    expect(getClipPayload()?.frames).toBe(activeFrames);
+    expect(activeFrames[0].frame.close).not.toHaveBeenCalled();
+  });
+
+  it('makes room for the queue slot only when the real snapshot is bigger than projected', async () => {
+    updateSetting('capture', 'clipQueueLimit', 3);
+    updateSetting('capture', 'memoryBudgetMB', 500);
+    const a = enqueueSized(100, 1);
+    enqueueSized(100, 2);
+    // Projected 10 MB fits; the real snapshot (600 MB) could never fit
+    const workerManager = installLiveCaptureOfMB(10, 600);
+    workerManager.requestFrames.mockImplementation(async () => {
+      // A racing clip fills the queue while the snapshot is pending
+      enqueueSized(1, 3);
+      return [{ i: 0 }];
+    });
+    const removedEvents = collect('clip:auto-removed');
+
+    const result = await clipNow();
+
+    // The drained buffer is kept: only the slot it needs is made
+    expect(result.ok).toBe(true);
+    expect(removedEvents.events).toEqual([
+      expect.objectContaining({ ids: [a.id], reason: 'queue-full' }),
+    ]);
+    expect(getClipQueue()).toHaveLength(3);
+    removedEvents.off();
+  });
+
+  it('restores the plain refusal when the setting is off', async () => {
+    updateSetting('capture', 'autoRemoveOldClips', false);
+    updateSetting('capture', 'clipQueueLimit', 1);
+    const queued = enqueueSized(1, 1);
+    const workerManager = installLiveCapture(2);
+    const removedEvents = collect('clip:auto-removed');
+
+    const result = await clipNow();
+
+    expect(result).toEqual({ ok: false, reason: 'queue-full' });
+    expect(workerManager.requestFrames).not.toHaveBeenCalled();
+    expect(getClipQueue().map((e) => e.id)).toEqual([queued.id]);
+    expect(removedEvents.events).toEqual([]);
+    removedEvents.off();
+  });
+
+  it('is on by default', () => {
+    expect(loadSettings().capture.autoRemoveOldClips).toBe(true);
+  });
+});
+
+describe('checkClipRoom', () => {
+  const fits = { over: false, projectedMB: 0, budgetMB: 500, heldMB: 0, incomingMB: 0 };
+
+  it('needs no queue slot for Create Clip without an active clip', () => {
+    updateSetting('capture', 'autoRemoveOldClips', false);
+    updateSetting('capture', 'clipQueueLimit', 1);
+    enqueueClip({ frames: createMockFrames(1), fps: 30, capturedAt: 1 });
+    expect(checkClipRoom({ needSlot: false, projection: fits })).toEqual({ ok: true });
+    expect(checkClipRoom({ needSlot: true, projection: fits })).toEqual({
+      ok: false,
+      reason: 'queue-full',
+    });
+  });
+
+  it('allows a full queue when the oldest clip can go (setting on)', () => {
+    updateSetting('capture', 'clipQueueLimit', 1);
+    enqueueClip({ frames: createMockFrames(1), fps: 30, capturedAt: 1 });
+    expect(checkClipRoom({ needSlot: true, projection: fits })).toEqual({ ok: true });
+    // Checking removes nothing
     expect(getClipQueue()).toHaveLength(1);
   });
 });

@@ -26,6 +26,10 @@
  *      decoded copies of a sharedKey group (imported holds) are closed and
  *      replaced by clones of the group's first decoded frame, so holds
  *      share pixels again (restoreSharedFrames).
+ *   6. automatic removal of the oldest queued clips to make room for a new
+ *      clip (evictQueuedClips, #186) — only when the user setting allows
+ *      it, never the active clip, and with no Undo hold (the point is to
+ *      free the memory now).
  *   The one involuntary end is a codec-worker crash mid-encode: frames
  *   already transferred into the dying worker are gone and their entry is
  *   removed as 'compress-lost' (see FAILURE CONTRACT below).
@@ -36,7 +40,9 @@
  * - Queue full => enqueue (and the demote inside setClipPayload) is REFUSED
  *   with a { ok: false, reason: 'queue-full' } result the UI must surface.
  *   Nothing is destroyed on refusal. Refusals are decided BEFORE any
- *   compression starts.
+ *   compression starts. Making room is the CALLER's explicit step
+ *   (planQueueEviction + evictQueuedClips, #186), never a side effect of
+ *   enqueue or demote.
  * - Every queue mutation emits 'queue:changed' on the bus.
  *
  * Compressed queue entries (#92): when a clip codec is registered and
@@ -537,9 +543,10 @@ export function deleteActiveClip() {
 
 /**
  * Notify listeners that the queue changed
- * @param {'enqueue'|'promote'|'delete'|'delete-active'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'compress-lost'|'decode-start'|'decode'|'decode-error'|'codec-ready'} type
- * @param {{ id?: string, error?: string }} [detail] - Entry id/error for
- *   'compress-lost', so listeners can tell a lost clip from a user delete
+ * @param {'enqueue'|'promote'|'delete'|'delete-active'|'demote'|'reset'|'compress-start'|'compress'|'compress-error'|'compress-lost'|'decode-start'|'decode'|'decode-error'|'codec-ready'|'evict'} type
+ * @param {{ id?: string, ids?: string[], error?: string }} [detail] - Entry
+ *   id/error for 'compress-lost', so listeners can tell a lost clip from a
+ *   user delete; the removed ids for 'evict'
  */
 function emitQueueChanged(type, detail = {}) {
   emit('queue:changed', {
@@ -940,6 +947,105 @@ export function deleteQueuedClip(id) {
   holdForUndo(entry, index);
   emitQueueChanged('delete');
   return true;
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ * Automatic removal of the oldest queued clips (#186)
+ * ═══════════════════════════════════════════════════════════════════════
+ * When the queue limit or the memory budget would refuse a new clip, the
+ * capture features may first remove the OLDEST queued clips (as few as
+ * needed) instead. Planning and removal are split so a caller can refuse
+ * BEFORE draining the capture ring buffer when even removing every
+ * candidate would not be enough, and remove only once the new frames are
+ * in hand.
+ *
+ * Candidates: every queue entry except one that is 'decoding' — a promote
+ * is turning that one into the active clip. The active clip is never in
+ * the queue, so it is never a candidate. A clip held for Undo is not queued
+ * either: it is left alone (its Undo keeps working) and its memory keeps
+ * counting until the grace window ends, exactly as for any other request.
+ *
+ * Memory freed per entry is its getClipMemoryEstimateMB share. A
+ * 'compressing' entry counts as freed at once although its raw frames live
+ * in the codec worker until the encode settles: that encode closes them in
+ * the worker (success) or hands them back to be closed here (failure),
+ * because the entry is no longer live (see maybeCompressEntry).
+ */
+
+/**
+ * @typedef {Object} EvictionPlan
+ * @property {boolean} ok - false: even removing every candidate is not enough
+ * @property {'queue-full'|'memory-budget'} [reason] - The constraint that
+ *   needs room (ok) or that cannot be met (refused). 'queue-full' wins when
+ *   both apply.
+ * @property {string[]} ids - Entries to remove, oldest first (empty when
+ *   the new clip already fits, or when refused)
+ */
+
+/**
+ * Plan which queued clips must go for a new clip to fit. Pure: changes
+ * nothing.
+ *
+ * @param {Object} need
+ * @param {boolean} need.needSlot - The new clip takes a queue slot (enqueue,
+ *   or setClipPayload demoting the current active clip)
+ * @param {number} [need.incomingMB=0] - Memory the new clip adds
+ * @param {number} [need.budgetMB=0] - Memory budget; 0 or less = no budget
+ * @returns {EvictionPlan}
+ */
+export function planQueueEviction({ needSlot, incomingMB = 0, budgetMB = 0 }) {
+  const slotsToFree = needSlot ? Math.max(0, state.clipQueue.length + 1 - getClipQueueLimit()) : 0;
+  let overMB = budgetMB > 0 ? getClipMemoryEstimateMB() + incomingMB - budgetMB : 0;
+  /** @type {'queue-full'|'memory-budget'|undefined} */
+  const reason = slotsToFree > 0 ? 'queue-full' : overMB > 0 ? 'memory-budget' : undefined;
+
+  // The queue is newest first: walk it from the back
+  const candidates = state.clipQueue.filter((entry) => entry.status !== 'decoding').reverse();
+  /** @type {string[]} */
+  const ids = [];
+  for (const entry of candidates) {
+    if (ids.length >= slotsToFree && overMB <= 0) break;
+    ids.push(entry.id);
+    overMB -= estimateEntryMemoryMB(entry);
+  }
+
+  if (ids.length < slotsToFree) return { ok: false, reason: 'queue-full', ids: [] };
+  if (overMB > 0) return { ok: false, reason: 'memory-budget', ids: [] };
+  return reason ? { ok: true, reason, ids } : { ok: true, ids };
+}
+
+/**
+ * Remove queued clips for good to make room for a new clip (ownership rule
+ * 6). Raw frames are closed here; a 'compressing' entry's frames are in the
+ * codec worker and end with its encode (see the section comment above); a
+ * 'compressed' entry's chunks are plain buffers left to GC. No Undo hold.
+ *
+ * Ids that are no longer queued, or whose entry started decoding since the
+ * plan was made, are skipped.
+ *
+ * @param {string[]} ids - Usually EvictionPlan.ids
+ * @returns {ClipQueueEntry[]} The removed entries (for telling the user)
+ */
+export function evictQueuedClips(ids) {
+  /** @type {ClipQueueEntry[]} */
+  const removed = [];
+  for (const id of ids) {
+    const index = state.clipQueue.findIndex((entry) => entry.id === id);
+    if (index === -1 || state.clipQueue[index].status === 'decoding') continue;
+    const [entry] = state.clipQueue.splice(index, 1);
+    if (entry.status === 'raw') {
+      closeFrameList(entry.frames);
+      entry.frames = null;
+    }
+    removed.push(entry);
+  }
+  if (removed.length > 0) {
+    const removedIds = removed.map((entry) => entry.id);
+    emitQueueChanged('evict', { ids: removedIds });
+    emitClipsReleased(removedIds);
+  }
+  return removed;
 }
 
 /**

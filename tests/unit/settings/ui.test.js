@@ -90,6 +90,35 @@ describe('renderSettings', () => {
     });
   });
 
+  describe('remove oldest clips when full (#186)', () => {
+    /** @returns {HTMLElement} */
+    function autoRemoveToggle() {
+      const row = [...container.querySelectorAll('.settings-item')].find(
+        (item) =>
+          item.querySelector('.settings-item-label')?.textContent ===
+          'Remove oldest clips when full',
+      );
+      const toggle = row?.querySelector('.btn-toggle');
+      if (!(toggle instanceof HTMLElement)) throw new Error('auto-remove toggle not rendered');
+      return toggle;
+    }
+
+    it('renders as an On toggle by default in the Capture section', () => {
+      renderSettings(container);
+      const toggle = autoRemoveToggle();
+      expect(toggle.closest('.settings-section')?.querySelector('h2')?.textContent).toBe('Capture');
+      expect(toggle.textContent).toBe('On');
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('turning it off persists false (the plain refusal)', () => {
+      renderSettings(container);
+      autoRemoveToggle().click();
+      expect(loadSettings().capture.autoRemoveOldClips).toBe(false);
+      expect(autoRemoveToggle().textContent).toBe('Off');
+    });
+  });
+
   describe('select controls', () => {
     it('marks only the option matching the saved value as selected', () => {
       // Regression for #36: the selected attribute was set even when false,
