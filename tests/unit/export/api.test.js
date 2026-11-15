@@ -158,6 +158,92 @@ describe('getFrameRGBA', () => {
     expect(result.data).toBe(mockImageData.data);
   });
 
+  it('should fall back to OffscreenCanvas for full-frame extraction when copyTo rejects (issue #169)', async () => {
+    // Arrange: a YUV frame from VideoDecoder whose copyTo cannot convert to RGBA
+    const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = vi
+      .fn()
+      .mockRejectedValue(new DOMException('RGBA conversion unsupported', 'NotSupportedError'));
+
+    const mockImageData = {
+      data: new Uint8ClampedArray(200 * 150 * 4),
+      width: 200,
+      height: 150,
+    };
+
+    const mockCtx = {
+      drawImage: vi.fn(),
+      clearRect: vi.fn(),
+      getImageData: vi.fn().mockReturnValue(mockImageData),
+    };
+
+    global.OffscreenCanvas = class {
+      constructor(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return mockCtx;
+      }
+    };
+
+    // Act
+    const result = await getFrameRGBA(frame, null);
+
+    // Assert: copyTo was tried, then the canvas readback supplied the pixels
+    expect(frame.frame.copyTo).toHaveBeenCalledTimes(1);
+    expect(mockCtx.drawImage).toHaveBeenCalledWith(frame.frame, 0, 0);
+    expect(mockCtx.getImageData).toHaveBeenCalledWith(0, 0, 200, 150);
+    expect(result.width).toBe(200);
+    expect(result.height).toBe(150);
+    expect(result.data).toBe(mockImageData.data);
+  });
+
+  it('should fall back to OffscreenCanvas for an odd crop rect when copyTo rejects (issue #169)', async () => {
+    // Arrange: odd crop offsets on a chroma-subsampled frame
+    const frame = createMockFrame(200, 150);
+    frame.frame.copyTo = vi
+      .fn()
+      .mockRejectedValue(new DOMException('rect not sample-aligned', 'InvalidStateError'));
+    const crop = { x: 11, y: 21, width: 51, height: 41 };
+
+    const mockImageData = {
+      data: new Uint8ClampedArray(51 * 41 * 4),
+      width: 51,
+      height: 41,
+    };
+
+    const mockCtx = {
+      drawImage: vi.fn(),
+      clearRect: vi.fn(),
+      getImageData: vi.fn().mockReturnValue(mockImageData),
+    };
+
+    global.OffscreenCanvas = class {
+      constructor(w, h) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return mockCtx;
+      }
+    };
+
+    // Act
+    const result = await getFrameRGBA(frame, crop);
+
+    // Assert
+    expect(frame.frame.copyTo).toHaveBeenCalledWith(expect.any(Uint8ClampedArray), {
+      rect: { x: 11, y: 21, width: 51, height: 41 },
+      format: 'RGBA',
+    });
+    expect(mockCtx.drawImage).toHaveBeenCalledWith(frame.frame, 11, 21, 51, 41, 0, 0, 51, 41);
+    expect(mockCtx.getImageData).toHaveBeenCalledWith(0, 0, 51, 41);
+    expect(result.width).toBe(51);
+    expect(result.height).toBe(41);
+    expect(result.data).toBe(mockImageData.data);
+  });
+
   it('should throw when OffscreenCanvas context fails and copyTo is unavailable', async () => {
     // Arrange
     const frame = createMockFrame(200, 150);
