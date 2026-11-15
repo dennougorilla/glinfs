@@ -28,6 +28,7 @@ import {
   announceMemoryBudget,
   buildMemoryBudgetMessage,
   checkClipRoom,
+  closeRefusedFrames,
   makeRoomForClip,
   projectClipMemory,
 } from './clip-service.js';
@@ -631,8 +632,22 @@ async function handleCreateClip() {
 
   const settings = store.getState().settings;
 
-  // Remove the oldest queued clips this clip needs room from (setting on)
-  makeRoomForClip({ needSlot: getClipPayload() !== null, frames: videoFrames });
+  // Remove the oldest queued clips this clip needs room from (setting on).
+  // Refused when even removing all of them would not make room for the
+  // real snapshot: nothing was removed and the frames are still ours.
+  const made = makeRoomForClip({ needSlot: getClipPayload() !== null, frames: videoFrames });
+  if (!made.ok) {
+    closeRefusedFrames(videoFrames);
+    if (made.reason === 'memory-budget' && made.projection) {
+      const memoryProjection = made.projection;
+      announceMemoryBudget(memoryProjection);
+      store.setState((state) => setError(state, buildMemoryBudgetMessage(memoryProjection)));
+      render(qsRequired('#main-content'));
+    } else {
+      announceQueueFull();
+    }
+    return false;
+  }
 
   // Store clip payload; the previous active clip (if any) demotes into the
   // clip queue. Scene detection will run in Loading screen if enabled.
@@ -649,13 +664,7 @@ async function handleCreateClip() {
     // this handler). The refused frames never entered the store, so they are
     // still this function's to release — the store's ownership rules only
     // protect frames it owns.
-    for (const frame of videoFrames) {
-      try {
-        if (!frame.frame.closed) frame.frame.close();
-      } catch {
-        // Already closed
-      }
-    }
+    closeRefusedFrames(videoFrames);
     announceQueueFull();
     return false;
   }

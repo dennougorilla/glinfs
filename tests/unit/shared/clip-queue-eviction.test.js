@@ -9,12 +9,14 @@ import {
   hasPendingDeletion,
   planQueueEviction,
   prepareQueuedClipForPromote,
+  promoteQueuedClip,
   registerClipCodec,
   resetAppStore,
   setClipPayload,
   undoDelete,
 } from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
+import { createClipCodecManager } from '../../../src/shared/clip-codec.js';
 import { updateSetting } from '../../../src/shared/user-settings.js';
 
 /**
@@ -102,7 +104,40 @@ beforeEach(() => {
 afterEach(() => {
   registerClipCodec(null);
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
+
+/**
+ * The real ClipCodecManager on a fake worker (as in clip-codec.test.js), so
+ * queued vs running encodes behave exactly as in the app
+ */
+async function registerRealCodecOnFakeWorker() {
+  vi.stubGlobal('VideoEncoder', { isConfigSupported: vi.fn(async () => ({ supported: true })) });
+  const worker = {
+    /** @type {{message: any}[]} */
+    posted: [],
+    onmessage: /** @type {((e: {data: any}) => void) | null} */ (null),
+    onerror: null,
+    terminate: vi.fn(),
+    postMessage(message) {
+      this.posted.push({ message });
+    },
+  };
+  const manager = createClipCodecManager({ createWorker: () => /** @type {any} */ (worker) });
+  await manager.probeSupport();
+  registerClipCodec(manager);
+  /** Finish the running encode the way the worker reports success */
+  const finishRunningEncode = (index) => {
+    const { jobId } = worker.posted[index].message.payload;
+    worker.onmessage?.({
+      data: {
+        type: 'ENCODE_RESULT',
+        payload: { jobId, chunks: [], config: { codec: 'vp8' }, byteLength: 0.1 * MB },
+      },
+    });
+  };
+  return { worker, finishRunningEncode };
+}
 
 describe('planQueueEviction', () => {
   it('plans nothing when the new clip already fits', () => {
@@ -161,6 +196,24 @@ describe('planQueueEviction', () => {
   it('ignores the budget when it is 0 or less', () => {
     enqueueSized(10);
     expect(planQueueEviction({ needSlot: true, incomingMB: 1e6, budgetMB: 0 }).ids).toEqual([]);
+  });
+
+  it('goes by capture age, not queue position, after a promote demoted an older clip', () => {
+    // Regression (PR #191 review): the demoted active clip enters the queue
+    // FRONT, so walking the queue from the back removed a newer capture
+    updateSetting('capture', 'clipQueueLimit', 2);
+    setClipPayload({ frames: [createMockFrame('a')], fps: 30, capturedAt: 1 });
+    const a = /** @type {string} */ (getClipPayload()?.id);
+    const b = enqueueClip({ frames: [createMockFrame('b')], fps: 30, capturedAt: 2 }).entry;
+    const c = enqueueClip({ frames: [createMockFrame('c')], fps: 30, capturedAt: 3 }).entry;
+    expect(promoteQueuedClip(/** @type {any} */ (c).id)).not.toBeNull();
+    expect(getClipQueue().map((e) => e.id)).toEqual([a, b?.id]);
+
+    expect(planQueueEviction({ needSlot: true })).toEqual({
+      ok: true,
+      reason: 'queue-full',
+      ids: [a],
+    });
   });
 
   it('never plans a clip that is decoding for a promote', async () => {
@@ -314,6 +367,77 @@ describe('evictQueuedClips', () => {
       expect(evictQueuedClips([entry.id])).toHaveLength(1);
       expect(getClipQueue()).toEqual([]);
       expect(getClipMemoryEstimateMB()).toBe(0);
+    });
+  });
+
+  describe('memory of a removed clip whose encode has not finished (PR #191 review)', () => {
+    it('withdraws a queued encode and frees its frames at once', async () => {
+      updateSetting('capture', 'clipQueueLimit', 10);
+      await registerRealCodecOnFakeWorker();
+      const running = enqueueSized(10);
+      const queued = enqueueSized(10);
+      const queuedFrame = queued.frames?.[0].frame;
+      expect(running.status).toBe('compressing');
+      expect(queued.status).toBe('compressing');
+
+      // 20 MB held + 15 MB incoming vs 25 MB: only the queued encode can
+      // give its memory back now, so it goes although it is newer
+      const plan = planQueueEviction({ needSlot: false, incomingMB: 15, budgetMB: 25 });
+      expect(plan).toEqual({ ok: true, reason: 'memory-budget', ids: [queued.id] });
+
+      evictQueuedClips(plan.ids);
+
+      expect(queuedFrame?.close).toHaveBeenCalled();
+      expect(getClipMemoryEstimateMB()).toBeCloseTo(10, 0);
+      await flushJobs();
+      expect(getClipQueue().map((e) => e.id)).toEqual([running.id]);
+    });
+
+    it('keeps counting a running encode until it settles, and refuses meanwhile', async () => {
+      // Before the fix each capture removed the previous compressing clip and
+      // was admitted, while the worker kept every set of frames alive
+      updateSetting('capture', 'clipQueueLimit', 1);
+      const { finishRunningEncode } = await registerRealCodecOnFakeWorker();
+      const running = enqueueSized(256);
+      expect(running.status).toBe('compressing');
+
+      // A slot can be made (the queue no longer holds it) ...
+      const slotPlan = planQueueEviction({ needSlot: true, incomingMB: 200, budgetMB: 500 });
+      expect(slotPlan).toEqual({ ok: true, reason: 'queue-full', ids: [running.id] });
+      evictQueuedClips(slotPlan.ids);
+      expect(getClipQueue()).toEqual([]);
+      // ... but its frames are still in the worker, and still counted
+      expect(getClipMemoryEstimateMB()).toBeCloseTo(256, 0);
+      expect(running.frames?.[0].frame.close).not.toHaveBeenCalled();
+
+      // The next 256 MB clip cannot fit until that memory is really back
+      expect(planQueueEviction({ needSlot: true, incomingMB: 256, budgetMB: 500 })).toEqual({
+        ok: false,
+        reason: 'memory-budget',
+        ids: [],
+      });
+
+      finishRunningEncode(0);
+      await flushJobs();
+      expect(getClipMemoryEstimateMB()).toBe(0);
+      expect(planQueueEviction({ needSlot: true, incomingMB: 256, budgetMB: 500 }).ok).toBe(true);
+    });
+
+    it('does not remove a running encode for memory it cannot give back', async () => {
+      updateSetting('capture', 'clipQueueLimit', 10);
+      await registerRealCodecOnFakeWorker();
+      const running = enqueueSized(100);
+      const queued = enqueueSized(1);
+      expect(running.status).toBe('compressing');
+
+      // Over by 50 MB: the running encode frees nothing now and the rest
+      // cannot cover it, so nothing is planned and the clip is refused
+      expect(planQueueEviction({ needSlot: false, incomingMB: 50, budgetMB: 100 })).toEqual({
+        ok: false,
+        reason: 'memory-budget',
+        ids: [],
+      });
+      expect(getClipQueue().map((e) => e.id)).toEqual([queued.id, running.id]);
     });
   });
 

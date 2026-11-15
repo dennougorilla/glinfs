@@ -107,7 +107,7 @@ export function isCaptureLive() {
  * only cover frames it holds.
  * @param {import('./types.js').Frame[]} frames
  */
-function closeRefusedFrames(frames) {
+export function closeRefusedFrames(frames) {
   for (const frame of frames) {
     try {
       if (!frame.frame.closed) frame.frame.close();
@@ -162,43 +162,63 @@ export function checkClipRoom({ needSlot, projection }) {
 }
 
 /**
+ * @typedef {Object} ClipRoomResult
+ * @property {boolean} ok - false: refuse the clip; nothing was removed
+ * @property {'queue-full'|'memory-budget'} [reason] - Present when refused
+ * @property {ReturnType<typeof projectClipMemory>} [projection] - The
+ *   numbers for a memory-budget refusal, with the REAL frames as incoming
+ * @property {import('../../shared/app-store.js').ClipQueueEntry[]} removed
+ */
+
+/**
  * Remove the oldest queued clips the new clip needs room from, and tell
  * the user which ones went (#186). Call right before storing the clip,
- * after checkClipRoom() allowed it and the frames are in hand. No-op with
- * the setting off.
+ * after checkClipRoom() allowed it and the frames are in hand. With the
+ * setting off it removes nothing and always allows (the store's own
+ * queue-full refusal still applies, as before #186).
  *
  * The plan is made again with the real frames: the queue may have changed
- * while requestFrames() was pending, and the real clip may differ from the
- * projection. If the real frames no longer fit the memory budget even
- * after removing every queued clip, only the queue slot is made: the memory
- * gate is the early check, exactly as without this setting (a drained
- * buffer is never thrown away for the budget). If not even a slot can be
- * made, nothing is removed and the store's own refusal applies.
+ * while requestFrames() was pending, and the real clip may be bigger than
+ * the projection. If removing every queued clip that may go would still not
+ * make room, NOTHING is removed and the clip is refused: the caller closes
+ * the frames and surfaces the refusal. Removing clips for a new clip that
+ * is then stored over the budget anyway would lose them for nothing.
  *
  * @param {Object} need
  * @param {boolean} need.needSlot
  * @param {import('./types.js').Frame[]} need.frames - The new clip's frames
- * @returns {import('../../shared/app-store.js').ClipQueueEntry[]} Removed entries
+ * @returns {ClipRoomResult}
  */
 export function makeRoomForClip({ needSlot, frames }) {
   const { autoRemoveOldClips, memoryBudgetMB } = loadSettings().capture;
-  if (!autoRemoveOldClips) return [];
+  if (!autoRemoveOldClips) return { ok: true, removed: [] };
 
-  let plan = planQueueEviction({
-    needSlot,
-    incomingMB: estimateFramesMemoryMB(frames),
-    budgetMB: memoryBudgetMB,
-  });
-  if (!plan.ok && plan.reason === 'memory-budget') {
-    plan = planQueueEviction({ needSlot });
+  const incomingMB = estimateFramesMemoryMB(frames);
+  const plan = planQueueEviction({ needSlot, incomingMB, budgetMB: memoryBudgetMB });
+  if (!plan.ok) {
+    const reason = plan.reason ?? 'queue-full';
+    if (reason === 'queue-full') return { ok: false, reason, removed: [] };
+    const heldMB = getClipMemoryEstimateMB();
+    return {
+      ok: false,
+      reason,
+      removed: [],
+      projection: {
+        over: true,
+        projectedMB: heldMB + incomingMB,
+        budgetMB: memoryBudgetMB,
+        heldMB,
+        incomingMB,
+      },
+    };
   }
-  if (!plan.ok || plan.ids.length === 0) return [];
+  if (plan.ids.length === 0) return { ok: true, removed: [] };
 
   const removed = evictQueuedClips(plan.ids);
   if (removed.length > 0) {
     announceClipsRemoved(removed, plan.reason ?? 'queue-full');
   }
-  return removed;
+  return { ok: true, removed };
 }
 
 /**
@@ -265,14 +285,14 @@ export async function clipNow() {
   // Refuse before draining the ring buffer: a snapshot with nowhere to go
   // would waste the buffered frames for nothing
   const projection = projectClipMemory(context);
-  const room = checkClipRoom({ needSlot: true, projection });
-  if (!room.ok) {
-    if (room.reason === 'queue-full') {
+  const check = checkClipRoom({ needSlot: true, projection });
+  if (!check.ok) {
+    if (check.reason === 'queue-full') {
       announceQueueFull();
     } else {
       announceMemoryBudget(projection);
     }
-    return { ok: false, reason: room.reason };
+    return { ok: false, reason: check.reason };
   }
 
   const imageBitmapFrames = await context.workerManager.requestFrames();
@@ -286,7 +306,18 @@ export async function clipNow() {
     return { ok: false, reason: 'no-frames' };
   }
 
-  makeRoomForClip({ needSlot: true, frames: videoFrames });
+  const room = makeRoomForClip({ needSlot: true, frames: videoFrames });
+  if (!room.ok) {
+    // The real snapshot does not fit even after removing every queued clip
+    // that may go: nothing was removed, and these frames are still ours
+    closeRefusedFrames(videoFrames);
+    if (room.reason === 'memory-budget' && room.projection) {
+      announceMemoryBudget(room.projection);
+    } else {
+      announceQueueFull();
+    }
+    return { ok: false, reason: room.reason ?? 'queue-full' };
+  }
   const result = enqueueClip({
     frames: videoFrames,
     fps: context.fps,

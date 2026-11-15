@@ -289,6 +289,11 @@ function closeVideoFrames(videoFrames) {
  *   re-announces the queue limit once it resolves (the "auto" default moves)
  * @property {(frames: VideoFrame[], options: {fps: number, width: number, height: number}) => Promise<import('./clip-codec.js').EncodeResult>} encode
  * @property {(compressed: {chunks: import('./clip-codec.js').SerializedChunk[], config: import('./clip-codec.js').EncodedClipConfig}) => Promise<import('./clip-codec.js').DecodeResult>} decode
+ * @property {(frames: VideoFrame[]) => boolean} [isEncodeQueued] - Whether the
+ *   encode of exactly this input array has not been dispatched yet (#186)
+ * @property {(frames: VideoFrame[]) => boolean} [cancelEncode] - Withdraw a
+ *   not-yet-dispatched encode: true = the frames are the caller's again and
+ *   the job resolves as a recoverable failure; false = already running (#186)
  */
 
 /** @type {ClipCodecLike|null} */
@@ -301,6 +306,24 @@ let clipCodec = null;
  * @type {Map<string, Promise<void>>}
  */
 const pendingEncodeJobs = new Map();
+
+/**
+ * Input VideoFrame arrays of unsettled encodes, by entry (#186). The exact
+ * array handed to codec.encode() identifies the job for isEncodeQueued /
+ * cancelEncode.
+ * @type {Map<ClipQueueEntry, VideoFrame[]>}
+ */
+const encodeInputs = new Map();
+
+/**
+ * Entries removed by evictQueuedClips while their encode was already
+ * RUNNING in the worker (#186): the worker still holds their raw frames, so
+ * they keep counting in getClipMemoryEstimateMB until the encode settles
+ * (success closes them in the worker, failure hands them back to be closed).
+ * Value: the raw MB still held.
+ * @type {Map<ClipQueueEntry, number>}
+ */
+const evictedEncodesMB = new Map();
 
 /**
  * Register the clip codec service (called once at app startup from main.js).
@@ -607,6 +630,10 @@ function maybeCompressEntry(entry) {
     })
     .then((result) => {
       pendingEncodeJobs.delete(entry.id);
+      encodeInputs.delete(entry);
+      // An evicted entry's frames are released below (closed in the worker on
+      // success, closed here on failure): stop counting them
+      evictedEncodesMB.delete(entry);
       // An entry held for Undo is still owned: Undo puts it back, so it must
       // receive the result like a queued one (#167)
       const held = pendingDeletion?.entry === entry;
@@ -679,6 +706,7 @@ function maybeCompressEntry(entry) {
     });
 
   pendingEncodeJobs.set(entry.id, job);
+  encodeInputs.set(entry, videoFrames);
 }
 
 /**
@@ -961,16 +989,23 @@ export function deleteQueuedClip(id) {
  * in hand.
  *
  * Candidates: every queue entry except one that is 'decoding' — a promote
- * is turning that one into the active clip. The active clip is never in
- * the queue, so it is never a candidate. A clip held for Undo is not queued
- * either: it is left alone (its Undo keeps working) and its memory keeps
- * counting until the grace window ends, exactly as for any other request.
+ * is turning that one into the active clip — taken OLDEST CAPTURE FIRST
+ * (capturedAt, as the clip list orders them). Queue position is not age: a
+ * demoted active clip and an Undo restore re-enter at arbitrary positions.
+ * The active clip is never in the queue, so it is never a candidate. A clip
+ * held for Undo is not queued either: it is left alone (its Undo keeps
+ * working) and its memory keeps counting until the grace window ends,
+ * exactly as for any other request.
  *
- * Memory freed per entry is its getClipMemoryEstimateMB share. A
- * 'compressing' entry counts as freed at once although its raw frames live
- * in the codec worker until the encode settles: that encode closes them in
- * the worker (success) or hands them back to be closed here (failure),
- * because the entry is no longer live (see maybeCompressEntry).
+ * Memory freed per entry is what removing it releases NOW:
+ * - raw: its frames (closed on removal); compressed: its chunks.
+ * - compressing, encode still queued in the codec: its frames — the job is
+ *   withdrawn (codec.cancelEncode) and the frames closed on removal.
+ * - compressing, encode already running in the worker: nothing. The worker
+ *   holds the frames until the encode settles, so they keep counting
+ *   (evictedEncodesMB) and removing the entry frees only its queue slot.
+ *   Such an entry is taken only when a slot is needed; when memory cannot
+ *   be reclaimed yet the request is refused.
  */
 
 /**
@@ -1000,14 +1035,22 @@ export function planQueueEviction({ needSlot, incomingMB = 0, budgetMB = 0 }) {
   /** @type {'queue-full'|'memory-budget'|undefined} */
   const reason = slotsToFree > 0 ? 'queue-full' : overMB > 0 ? 'memory-budget' : undefined;
 
-  // The queue is newest first: walk it from the back
-  const candidates = state.clipQueue.filter((entry) => entry.status !== 'decoding').reverse();
+  // Oldest capture first. The queue is newest first, so reversing it before
+  // the (stable) sort keeps the old order for equal timestamps.
+  const candidates = state.clipQueue
+    .filter((entry) => entry.status !== 'decoding')
+    .reverse()
+    .sort((a, b) => (a.capturedAt ?? 0) - (b.capturedAt ?? 0));
   /** @type {string[]} */
   const ids = [];
   for (const entry of candidates) {
     if (ids.length >= slotsToFree && overMB <= 0) break;
+    const freedMB = reclaimableMemoryMB(entry);
+    // Only the budget is still short: an entry that frees nothing now would
+    // be removed for nothing
+    if (ids.length >= slotsToFree && freedMB <= 0) continue;
     ids.push(entry.id);
-    overMB -= estimateEntryMemoryMB(entry);
+    overMB -= freedMB;
   }
 
   if (ids.length < slotsToFree) return { ok: false, reason: 'queue-full', ids: [] };
@@ -1016,10 +1059,26 @@ export function planQueueEviction({ needSlot, incomingMB = 0, budgetMB = 0 }) {
 }
 
 /**
+ * Memory that removing this queue entry releases right away (see the
+ * section comment above)
+ * @param {ClipQueueEntry} entry
+ * @returns {number} MB
+ */
+function reclaimableMemoryMB(entry) {
+  if (entry.status === 'compressing') {
+    const inputs = encodeInputs.get(entry);
+    if (!inputs || clipCodec?.isEncodeQueued?.(inputs) !== true) return 0;
+  }
+  return estimateEntryMemoryMB(entry);
+}
+
+/**
  * Remove queued clips for good to make room for a new clip (ownership rule
- * 6). Raw frames are closed here; a 'compressing' entry's frames are in the
- * codec worker and end with its encode (see the section comment above); a
- * 'compressed' entry's chunks are plain buffers left to GC. No Undo hold.
+ * 6). Raw frames are closed here. A 'compressing' entry's queued encode is
+ * withdrawn and its frames closed here; a running one keeps its frames in
+ * the worker until it settles and keeps counting until then (see the
+ * section comment above). A 'compressed' entry's chunks are plain buffers
+ * left to GC. No Undo hold.
  *
  * Ids that are no longer queued, or whose entry started decoding since the
  * plan was made, are skipped.
@@ -1037,6 +1096,16 @@ export function evictQueuedClips(ids) {
     if (entry.status === 'raw') {
       closeFrameList(entry.frames);
       entry.frames = null;
+    } else if (entry.status === 'compressing') {
+      const inputs = encodeInputs.get(entry);
+      if (inputs && clipCodec?.cancelEncode?.(inputs) === true) {
+        // The withdrawn frames are ours again: release them now (the
+        // settling job's not-live branch closes them again, guarded)
+        closeVideoFrames(inputs);
+      } else {
+        // Running in the worker: its frames are alive until it settles
+        evictedEncodesMB.set(entry, estimateEntryMemoryMB(entry));
+      }
     }
     removed.push(entry);
   }
@@ -1138,7 +1207,8 @@ export function undoDelete() {
  * compressed entries count at their ACTUAL compressed byteLength (#92) —
  * 'compressing' entries still count raw, since the real frames are alive in
  * the codec worker until the encode finishes. A clip held for Undo counts
- * too: its resources stay alive until the grace window ends (#167).
+ * too: its resources stay alive until the grace window ends (#167), and so
+ * does a removed clip whose encode is still running in the worker (#186).
  * @returns {number} Estimated MB
  */
 export function getClipMemoryEstimateMB() {
@@ -1148,6 +1218,9 @@ export function getClipMemoryEstimateMB() {
   }
   if (pendingDeletion) {
     total += estimateEntryMemoryMB(pendingDeletion.entry);
+  }
+  for (const mb of evictedEncodesMB.values()) {
+    total += mb;
   }
   return total;
 }
@@ -1504,6 +1577,8 @@ export function resetAppStore() {
     clearTimeout(pendingDeletion.timer);
     pendingDeletion = null;
   }
+  encodeInputs.clear();
+  evictedEncodesMB.clear();
   exportResult = null;
   clearScreenCaptureState();
 }

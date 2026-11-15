@@ -69,6 +69,9 @@ beforeEach(() => {
   resetAppStore();
   localStorage.clear();
   captureContext.current = null;
+  // Drop one-shot implementations a refused test never consumed, so they
+  // cannot leak into the next test (restores the pass-through conversion)
+  vi.mocked(convertBitmapFramesToVideoFrames).mockReset();
 });
 
 afterEach(() => {
@@ -409,29 +412,34 @@ describe('automatic removal of the oldest clips (#186)', () => {
     expect(activeFrames[0].frame.close).not.toHaveBeenCalled();
   });
 
-  it('makes room for the queue slot only when the real snapshot is bigger than projected', async () => {
-    updateSetting('capture', 'clipQueueLimit', 3);
+  it('removes nothing and refuses when the real snapshot does not fit after all', async () => {
+    // Regression (PR #191 review): the final check used to fall back to
+    // making only the queue slot, closing a clip and then storing the new
+    // one over the budget anyway
+    updateSetting('capture', 'clipQueueLimit', 1);
     updateSetting('capture', 'memoryBudgetMB', 500);
-    const a = enqueueSized(100, 1);
-    enqueueSized(100, 2);
-    // Projected 10 MB fits; the real snapshot (600 MB) could never fit
-    const workerManager = installLiveCaptureOfMB(10, 600);
-    workerManager.requestFrames.mockImplementation(async () => {
-      // A racing clip fills the queue while the snapshot is pending
-      enqueueSized(1, 3);
-      return [{ i: 0 }];
-    });
+    setClipPayload({ frames: createSizedFrames(1, 400), fps: 30, capturedAt: 0 });
+    const queued = enqueueSized(50, 1);
+    // Projected 96 MB: removing the queued clip leaves 496 MB, so it may
+    // start. The buffer grew to 104 MB meanwhile: 504 MB even without it.
+    installLiveCaptureOfMB(96, 104);
     const removedEvents = collect('clip:auto-removed');
+    const budgetEvents = collect('clip:memory-budget');
 
     const result = await clipNow();
 
-    // The drained buffer is kept: only the slot it needs is made
-    expect(result.ok).toBe(true);
-    expect(removedEvents.events).toEqual([
-      expect.objectContaining({ ids: [a.id], reason: 'queue-full' }),
-    ]);
-    expect(getClipQueue()).toHaveLength(3);
+    expect(result).toEqual({ ok: false, reason: 'memory-budget' });
+    expect(getClipQueue().map((e) => e.id)).toEqual([queued.id]);
+    expect(queued.frames?.[0].frame.close).not.toHaveBeenCalled();
+    expect(removedEvents.events).toEqual([]);
+    expect(budgetEvents.events).toHaveLength(1);
+    expect(budgetEvents.events[0].incomingMB).toBeCloseTo(104, 0);
+    // The refused snapshot never entered the store: its frames were closed
+    const refused = vi.mocked(convertBitmapFramesToVideoFrames).mock.results[0].value;
+    expect(refused).toHaveLength(104);
+    for (const frame of refused) expect(frame.frame.close).toHaveBeenCalledOnce();
     removedEvents.off();
+    budgetEvents.off();
   });
 
   it('restores the plain refusal when the setting is off', async () => {
