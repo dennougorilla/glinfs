@@ -213,6 +213,11 @@ let cropDragging = false;
  * @type {ReturnType<typeof createAiCutoutSession> | null}
  */
 let aiSession = null;
+/**
+ * Bumped by every subject or model choice: a choice that waited for the
+ * model availability does nothing when a later choice came meanwhile (#187)
+ */
+let modelChoiceSeq = 0;
 
 /** @type {(() => void) | null} Unsubscribes the AI session's edits watcher */
 let aiEditsUnsubscribe = null;
@@ -1616,6 +1621,7 @@ function handleSetAiParams(patch, options = {}) {
  */
 async function handleChooseSubject(subject) {
   if (!store) return;
+  const seq = ++modelChoiceSeq;
   store.setState((s) => setDownloadPrompt(s, null));
   if (subject === 'none' || subject === 'color') {
     handleSetBackgroundChoice(subject === 'none' ? 'off' : 'color');
@@ -1627,7 +1633,7 @@ async function handleChooseSubject(subject) {
     // Which models are downloaded is not known yet (the cards fill in right
     // after mount): a downloaded model is preferred over one to download
     await aiSession.refreshModels();
-    if (store !== current) return;
+    if (store !== current || seq !== modelChoiceSeq) return;
   }
   const state = current.getState();
   const modelId = getSubjectModel(subject, state.edits?.background.ai ?? null, {
@@ -1646,13 +1652,14 @@ async function handleChooseSubject(subject) {
  */
 async function handleChooseModel(modelId) {
   if (!store || !isModelId(modelId)) return;
+  const seq = ++modelChoiceSeq;
   store.setState((s) => setDownloadPrompt(s, null));
   const current = store;
   let availability = current.getState().aiCutout.models?.[modelId];
   if (availability === undefined && aiSession) {
     // Not checked yet (the cards fill in right after mount)
     await aiSession.refreshModels();
-    if (store !== current) return;
+    if (store !== current || seq !== modelChoiceSeq) return;
     availability = current.getState().aiCutout.models?.[modelId];
   }
   const ready = availability === 'ready' || availability === 'cached';
