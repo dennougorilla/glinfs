@@ -383,15 +383,40 @@ export const MODEL_SUBJECTS = /** @type {const} */ ({
  * Choose an AI subject card in the Background tab ("What do you want to
  * keep?"). A model that is not downloaded yet asks first: `download`
  * (default) confirms, which starts the analysis with the frame on screen;
- * false leaves the question open. A ready model starts at once.
+ * false leaves the question open. A ready model starts at once. The model
+ * is remembered for its card first, so a card with several models (Anything:
+ * General or BEN2) uses `modelId` rather than its first-run default.
  * @param {import('@playwright/test').Page} page
  * @param {keyof typeof MODEL_SUBJECTS} [modelId]
  * @param {{ download?: boolean }} [options]
  */
 export async function chooseAiModel(page, modelId = 'anime', { download = true } = {}) {
   await openSidebarTab(page, 'background');
-  await page.locator(`label[for="subject-${MODEL_SUBJECTS[modelId]}"]`).click();
-  await expect(page.locator(`#subject-${MODEL_SUBJECTS[modelId]}`)).toBeChecked();
+  const subject = MODEL_SUBJECTS[modelId];
+  // A card with several models starts with the one the user chose last for
+  // it, else a downloaded one, else the first-run default (BEN2 on
+  // Anything, #187): remember this model for the card, as choosing it in
+  // an earlier visit does, so the card resolves to it
+  await page.evaluate(
+    ({ key, model, card }) => {
+      const stored = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {};
+      const aiCutout = stored.aiCutout ?? {};
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...stored,
+          aiCutout: {
+            ...aiCutout,
+            lastModel: model,
+            lastModelBySubject: { ...aiCutout.lastModelBySubject, [card]: model },
+          },
+        }),
+      );
+    },
+    { key: 'glinfs_user_settings', model: modelId, card: subject },
+  );
+  await page.locator(`label[for="subject-${subject}"]`).click();
+  await expect(page.locator(`#subject-${subject}`)).toBeChecked();
   const confirm = page.locator('#background-download-confirm');
   // The question shows when the model still has to download
   await expect
