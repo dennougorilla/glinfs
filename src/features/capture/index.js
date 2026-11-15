@@ -275,8 +275,13 @@ async function handleStart() {
   // worker together with its full frame buffer (up to maxFrames ImageBitmaps),
   // because dedicated workers are not garbage collected (#40).
   if (workerManager) {
-    await workerManager.terminateWithCleanup();
-    workerManager = null;
+    const previousManager = workerManager;
+    await previousManager.terminateWithCleanup();
+    // Leaving the screen during this teardown hands the module state to
+    // cleanup() and to whatever screen is mounted next: a start there may
+    // already own `workerManager`, so this one must not touch it.
+    if (store !== sessionStore) return;
+    if (workerManager === previousManager) workerManager = null;
   }
 
   // Clear any existing saved capture state when starting fresh, and wait

@@ -223,6 +223,39 @@ describe('leaving the Capture screen while a start is in flight (#168)', () => {
     }
   });
 
+  it('keeps the new worker when the screen is left during the previous worker teardown', async () => {
+    vi.mocked(createVideoElement).mockImplementation(
+      async () => /** @type {any} */ (createFakeVideoElement()),
+    );
+    vi.mocked(startScreenCapture).mockResolvedValue(/** @type {any} */ (createFakeStream()));
+    const { captureModule, cleanup, handlers } = await mountCapture();
+    await handlers.onStart();
+    uiCapture.handlers.onStop(); // "Stop sharing" keeps the worker around
+
+    // Select Screen again; the old worker's teardown is still pending
+    const teardown = deferred();
+    const oldManager = managerInstances[0];
+    oldManager.terminateWithCleanup.mockReturnValue(teardown.promise);
+    const staleStart = uiCapture.handlers.onStart();
+    expect(oldManager.terminateWithCleanup).toHaveBeenCalled();
+
+    cleanup(); // navigate away...
+    captureModule.initCapture(); // ...and back, starting a fresh capture
+    vi.mocked(startScreenCapture).mockResolvedValue(/** @type {any} */ (createFakeStream()));
+    await uiCapture.handlers.onStart();
+    const freshManager = managerInstances[1];
+    expect(captureModule.getLiveCaptureContext()?.workerManager).toBe(freshManager);
+
+    teardown.resolve(undefined); // the old teardown settles last
+    await expect(staleStart).resolves.toBeUndefined();
+
+    expect(captureModule.getCaptureState()?.isSharing).toBe(true);
+    expect(captureModule.getLiveCaptureContext()?.workerManager).toBe(freshManager);
+    expect(freshManager.terminate).not.toHaveBeenCalled();
+    expect(freshManager.terminateWithCleanup).not.toHaveBeenCalled();
+    expect(startScreenCapture).toHaveBeenCalledTimes(2);
+  });
+
   it('still reports a failed start and stops the stream while the screen is mounted', async () => {
     const stream = createFakeStream();
     vi.mocked(startScreenCapture).mockResolvedValue(/** @type {any} */ (stream));
