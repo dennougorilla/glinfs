@@ -139,17 +139,24 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     const N = 6;
     const requests = await openDiscClip(page, { count: N, allowWasm: true });
 
-    // The subjects: what each is for, and each model's download size
+    // The subjects: what each is for, and each model's download size. With
+    // nothing chosen or downloaded, Anything starts with the first-run
+    // default BEN2 (#187)
     await expect(page.getByRole('radio', { name: /^Anime/ })).not.toBeChecked();
     await expect(page.locator('#subject-status-anime')).toContainText('88 MB');
-    await expect(page.locator('#subject-status-general')).toContainText('90 MB');
+    await expect(page.locator('#subject-status-general')).toContainText('223 MB');
+    await expect(page.locator('label[for="subject-general"]')).toHaveAttribute(
+      'title',
+      /BEN2 \(base\)/,
+    );
+    // General chosen for Anything (remembered from an earlier choice)
+    await chooseAiModel(page, 'general', { download: false });
+    await expect(page.locator('#background-download-title')).toHaveText('Download 90 MB?');
+    await expect(page.locator('#background-download-detail')).toContainText('Anything model');
     await expect(page.locator('label[for="subject-general"]')).toHaveAttribute(
       'title',
       /ISNet \(general-use\)/,
     );
-    await chooseAiModel(page, 'general', { download: false });
-    await expect(page.locator('#background-download-title')).toHaveText('Download 90 MB?');
-    await expect(page.locator('#background-download-detail')).toContainText('Anything model');
     await page.locator('#background-download-confirm').click();
     await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
       timeout: 60_000,
@@ -226,6 +233,23 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
         bg: gifPixel(frame, 5, 5)[3],
       }).toEqual({ a: 255, b: 255, bg: 0 });
     });
+  });
+
+  test('on a first run Anything starts with BEN2 and downloads nothing until confirmed', async ({
+    page,
+  }) => {
+    const requests = await openDiscClip(page, { count: 2, allowWasm: true });
+    await expect(page.locator('#subject-status-general')).toContainText('223 MB');
+    await page.locator('label[for="subject-general"]').click();
+    await expect(page.locator('#background-download-title')).toHaveText('Download 223 MB?');
+    await page.locator('#background-download-cancel').click();
+    await expect(page.locator('#background-download')).toBeHidden();
+    expect(requests.count).toBe(0);
+    // Not applied, so not remembered
+    const remembered = await page.evaluate(
+      () => JSON.parse(localStorage.getItem('glinfs_user_settings') ?? '{}').aiCutout ?? {},
+    );
+    expect(remembered.lastModel ?? null).toBeNull();
   });
 
   test('the export analyzes the frames the general model has not analyzed yet', async ({
@@ -407,7 +431,8 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     await remountEditor(page);
     await expect(page.locator('#subject-anime')).toBeChecked();
     await expect(page.locator('#subject-status-anime')).toContainText('Ready');
-    await expect(page.locator('#subject-status-general')).toContainText('90 MB');
+    // Anything (never chosen, nothing of it downloaded): the first-run BEN2
+    await expect(page.locator('#subject-status-general')).toContainText('223 MB');
     await expect
       .poll(() => page.evaluate(() => window.__TEST_HOOKS__.aiCutout.getManagerState()), {
         timeout: 60_000,

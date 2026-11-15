@@ -42,6 +42,7 @@ import {
   setClipPayload,
 } from '../../../src/shared/app-store.js';
 import { normalizeEdits } from '../../../src/shared/edits/model.js';
+import { loadSettings, rememberAiCutoutModel } from '../../../src/shared/user-settings.js';
 
 const fake = /** @type {any} */ (segmentation).__fake;
 
@@ -276,14 +277,15 @@ describe('AI cutout in the mounted editor', () => {
     });
     await settle();
 
-    // Anything: a running analysis with it, then Person mid-run
+    // Anything (nothing downloaded or remembered: the first-run BEN2): a
+    // running analysis with it, then Person mid-run
     const held = holdNextAnalysis();
     await chooseAi('general');
     expect(getEditorState()?.edits.background.ai).toMatchObject({
-      model: 'general',
+      model: 'ben2',
       threshold: 0.3,
     });
-    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'general' });
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'ben2' });
     expect($('#ai-status').dataset.kind).toBe('running');
     expect($('#ai-cancel').hidden).toBe(false);
 
@@ -354,6 +356,19 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-wasm-note').hidden).toBe(false);
   });
 
+  it('starts a subject with the model chosen last and remembers a new choice (#187)', async () => {
+    rememberAiCutoutModel('general', 'general');
+    mount(2);
+    await chooseAi('general');
+    expect(getEditorState()?.edits.background.ai.model).toBe('general');
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'general' });
+    await chooseAi('portrait');
+    expect(loadSettings().aiCutout).toMatchObject({
+      lastModel: 'portrait',
+      lastModelBySubject: { general: 'general', portrait: 'portrait' },
+    });
+  });
+
   it('a model that fails on WebGPU asks for the slow choice for that model only', async () => {
     fake.getCapabilities.mockResolvedValue({ webgpu: true });
     mount(2);
@@ -372,7 +387,7 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-error').hidden).toBe(true);
     expect($('#ai-webgpu-warning').hidden).toBe(false);
     const text = $('#ai-webgpu-warning-text').textContent ?? '';
-    expect(text).toContain('The General model could not run on WebGPU in this browser');
+    expect(text).toContain('The Hair & detail model could not run on WebGPU in this browser');
     expect(text).not.toContain('does not provide');
 
     // The anime model is not affected: switching clears the choice and runs it

@@ -332,30 +332,42 @@ export function createAiCutoutSession(options) {
 
   /** Bumped by every refreshModels call: only the latest one reports */
   let modelsSeq = 0;
+  /** @type {Promise<void>} The latest refreshModels call */
+  let latestModels = Promise.resolve();
 
   /**
    * Report per model whether it is ready (session loaded), downloaded or
-   * still to download
+   * still to download. A call that a later one supersedes resolves only
+   * when the latest one has reported, so `await refreshModels()` always
+   * means the status holds the current availability (#187).
    * @returns {Promise<void>}
    */
-  const refreshModels = async () => {
-    if (disposed) return;
+  const refreshModels = () => {
+    if (disposed) return Promise.resolve();
     const seq = ++modelsSeq;
-    const ids = getModelIds();
-    const cached = await Promise.all(ids.map((id) => isModelCached(id).catch(() => null)));
-    if (disposed || seq !== modelsSeq) return;
-    /** @type {Record<string, import('./types.js').ModelAvailability>} */
-    const models = {};
-    ids.forEach((id, i) => {
-      models[id] = manager.getReadyInfo?.(id)
-        ? 'ready'
-        : cached[i] === null
-          ? 'unknown'
-          : cached[i]
-            ? 'cached'
-            : 'missing';
-    });
-    report({ models });
+    const run = (async () => {
+      const ids = getModelIds();
+      const cached = await Promise.all(ids.map((id) => isModelCached(id).catch(() => null)));
+      if (disposed) return;
+      if (seq !== modelsSeq) {
+        await latestModels;
+        return;
+      }
+      /** @type {Record<string, import('./types.js').ModelAvailability>} */
+      const models = {};
+      ids.forEach((id, i) => {
+        models[id] = manager.getReadyInfo?.(id)
+          ? 'ready'
+          : cached[i] === null
+            ? 'unknown'
+            : cached[i]
+              ? 'cached'
+              : 'missing';
+      });
+      report({ models });
+    })();
+    latestModels = run;
+    return run;
   };
 
   const unsubscribeModels = manager.onModelStateChange?.(() => void refreshModels()) ?? (() => {});

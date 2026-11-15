@@ -41,8 +41,10 @@ import {
   createDefaultEdits,
   EDIT_LIMITS,
 } from '../../../shared/edits/model.js';
+import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
+import { pickPreferredModel } from '../../ai-cutout/model-preference.js';
 import { getModelEntry } from '../../ai-cutout/model-registry.js';
 import {
   describeAnalysisProgress,
@@ -115,6 +117,15 @@ const CARD_BY_MODEL = Object.fromEntries(
 );
 
 /**
+ * The subject card that uses a model, or null for an unknown id
+ * @param {string} modelId
+ * @returns {Exclude<Subject, 'none' | 'color'> | null}
+ */
+export function getModelSubject(modelId) {
+  return /** @type {any} */ (CARD_BY_MODEL[modelId]?.value ?? null);
+}
+
+/**
  * The subject the background settings amount to
  * @param {import('../../../shared/edits/model.js').BackgroundRemoval} background
  * @returns {Subject}
@@ -126,18 +137,45 @@ export function getSubject(background) {
 }
 
 /**
+ * What getSubjectModel weighs besides the clip's own model (#187)
+ * @typedef {Object} SubjectModelPrefs
+ * @property {import('../../ai-cutout/model-preference.js').RememberedModels | null} [remembered]
+ *   - The models the user chose last (user settings)
+ * @property {Readonly<Record<string, string>> | null} [availability] - Per
+ *   model: downloaded or not (the editor's `aiCutout.models`)
+ */
+
+/**
  * The AI model of a subject, or null (Off, Solid color): the model of
- * `ai` when the subject can use it (the last choice stays), else the
- * subject's default
+ * `ai` when the subject can use it (the clip's choice stays; edits that
+ * name no model mean the anime one), else the model the user chose last for the
+ * subject, else one of its models that is downloaded already, else the
+ * first-run default (see model-preference.js)
  * @param {Subject} subject
  * @param {{ model?: unknown } | null} [ai]
+ * @param {SubjectModelPrefs} [prefs]
  * @returns {string | null}
  */
-export function getSubjectModel(subject, ai = null) {
+export function getSubjectModel(subject, ai = null, prefs = {}) {
   const card = SUBJECT_CARDS.find((c) => c.value === subject);
   if (!card?.model) return null;
   const current = ai ? getAiModelId(ai) : null;
-  return current && card.models.includes(current) ? current : card.model;
+  if (current && card.models.includes(current)) return current;
+  return pickPreferredModel(card.models, {
+    subject: card.value,
+    remembered: prefs.remembered,
+    availability: prefs.availability,
+    fallback: card.model,
+  });
+}
+
+/**
+ * The models the user chose last, from user settings (#187)
+ * @returns {import('../../ai-cutout/model-preference.js').RememberedModels}
+ */
+export function getRememberedModels() {
+  const { lastModel, lastModelBySubject } = loadSettings().aiCutout;
+  return { last: lastModel, bySubject: lastModelBySubject };
 }
 
 /**
@@ -1202,6 +1240,8 @@ export function updateBackgroundPanel(container, state, fps) {
   const prompt = state.downloadPrompt ?? null;
   const promptCard = prompt ? CARD_BY_MODEL[prompt]?.value : null;
   const shown = /** @type {Subject} */ (promptCard ?? subject);
+  /** @type {SubjectModelPrefs} */
+  const modelPrefs = { remembered: getRememberedModels(), availability: status?.models ?? null };
 
   // Subject radios (the card being asked about looks chosen while asked)
   for (const value of ['none', ...SUBJECT_CARDS.map((c) => c.value)]) {
@@ -1213,7 +1253,7 @@ export function updateBackgroundPanel(container, state, fps) {
     const model =
       promptCard === card.value && prompt
         ? prompt
-        : /** @type {string} */ (getSubjectModel(card.value, background.ai));
+        : /** @type {string} */ (getSubjectModel(card.value, background.ai, modelPrefs));
     const readiness = getModelReadiness(model, status?.models?.[model]);
     const option = q(root, `label[data-subject="${card.value}"]`);
     const tooltip = getModelTooltip(model);

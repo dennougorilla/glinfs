@@ -118,7 +118,8 @@ describe('subjects', () => {
     }
     // Without a choice for it (or another subject's model): the default
     expect(getSubjectModel('portrait')).toBe('portrait');
-    expect(getSubjectModel('general', { model: 'video-person' })).toBe('general');
+    // (nothing remembered or downloaded: the first-run default, BEN2, where the card has it)
+    expect(getSubjectModel('general', { model: 'video-person' })).toBe('ben2');
     expect(getSubjectModel('anime', { model: 'ben2' })).toBe('anime');
     expect(getSubjectModel('color')).toBeNull();
     expect(getSubjectModel('none')).toBeNull();
@@ -131,6 +132,37 @@ describe('subjects', () => {
     for (const card of SUBJECT_CARDS) {
       expect(card.models[0] ?? null).toBe(card.model);
     }
+  });
+
+  it('starts a subject with the remembered, else a downloaded, else the first-run model (#187)', () => {
+    const anime = { model: 'anime' };
+    // The clip's own model wins when the card can use it
+    expect(getSubjectModel('general', { model: 'general' }, { remembered: { last: 'ben2' } })).toBe(
+      'general',
+    );
+    // Remembered: per subject, then the last choice overall
+    expect(
+      getSubjectModel('general', anime, {
+        remembered: { last: 'ben2', bySubject: { general: 'general' } },
+        availability: { ben2: 'cached' },
+      }),
+    ).toBe('general');
+    expect(getSubjectModel('general', anime, { remembered: { last: 'ben2' } })).toBe('ben2');
+    expect(getSubjectModel('portrait', anime, { remembered: { last: 'ben2' } })).toBe('portrait');
+    // Downloaded before not downloaded
+    expect(
+      getSubjectModel('general', anime, { availability: { general: 'ready', ben2: 'missing' } }),
+    ).toBe('general');
+    expect(
+      getSubjectModel('portrait', anime, {
+        availability: { portrait: 'missing', 'video-person': 'cached' },
+      }),
+    ).toBe('video-person');
+    // Nothing downloaded: BEN2 on its card, else the card's default
+    expect(getSubjectModel('general', anime, { availability: { general: 'missing' } })).toBe(
+      'ben2',
+    );
+    expect(getSubjectModel('portrait', anime, { availability: {} })).toBe('portrait');
   });
 
   it('is one labelled radio group: Off and the five cards', () => {
