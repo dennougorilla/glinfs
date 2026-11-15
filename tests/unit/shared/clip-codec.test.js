@@ -204,6 +204,43 @@ describe('job scheduling', () => {
   });
 });
 
+describe('cancelEncode (#186)', () => {
+  it('withdraws a queued encode, handing its frames back, and keeps the queue moving', async () => {
+    const { manager, worker } = await createProbedManager();
+    const runningFrames = fakeFrames(1);
+    const queuedFrames = fakeFrames(2);
+    const nextFrames = fakeFrames(1);
+    void manager.encode(runningFrames, { fps: 30, width: 10, height: 10 });
+    const queued = manager.encode(queuedFrames, { fps: 30, width: 10, height: 10 });
+    void manager.encode(nextFrames, { fps: 30, width: 10, height: 10 });
+
+    expect(manager.isEncodeQueued(runningFrames)).toBe(false);
+    expect(manager.isEncodeQueued(queuedFrames)).toBe(true);
+    expect(manager.cancelEncode(queuedFrames)).toBe(true);
+    expect(manager.isEncodeQueued(queuedFrames)).toBe(false);
+    await expect(queued).resolves.toEqual({ ok: false, error: 'cancelled', frames: queuedFrames });
+
+    worker.emit({
+      type: 'ENCODE_RESULT',
+      payload: { jobId: worker.posted[0].message.payload.jobId, chunks: [], config: {} },
+    });
+    // The withdrawn job never dispatches; the next one does
+    await vi.waitFor(() => {
+      expect(worker.posted).toHaveLength(2);
+    });
+    expect(worker.posted[1].transfer).toBe(nextFrames);
+  });
+
+  it('cannot withdraw the running encode (its frames are in the worker)', async () => {
+    const { manager } = await createProbedManager();
+    const runningFrames = fakeFrames(1);
+    void manager.encode(runningFrames, { fps: 30, width: 10, height: 10 });
+
+    expect(manager.cancelEncode(runningFrames)).toBe(false);
+    expect(manager.cancelEncode(fakeFrames(1))).toBe(false);
+  });
+});
+
 describe('worker crash', () => {
   it('fails the active job and recycles the worker for the next one', async () => {
     vi.stubGlobal('VideoEncoder', {

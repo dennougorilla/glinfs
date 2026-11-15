@@ -9,7 +9,6 @@ import {
   getClipQueueLimit,
   getScreenCaptureState,
   hasActiveScreenCapture,
-  isClipQueueFull,
   setClipPayload,
   setScreenCaptureState,
 } from '../../shared/app-store.js';
@@ -28,6 +27,9 @@ import { createVideoElement, startScreenCapture, stopScreenCapture } from './api
 import {
   announceMemoryBudget,
   buildMemoryBudgetMessage,
+  checkClipRoom,
+  closeRefusedFrames,
+  makeRoomForClip,
   projectClipMemory,
 } from './clip-service.js';
 import { calculateEffectiveMaxFrames } from './core.js';
@@ -580,7 +582,8 @@ function announceQueueFull() {
  *   frames while a queue exists (see app-store ownership rules)
  * - A full queue REFUSES the demote, so this checks up front — before
  *   draining the worker's ring buffer for frames that would have nowhere
- *   to go
+ *   to go. With the autoRemoveOldClips setting on, the oldest queued clips
+ *   are removed instead when that makes room (#186)
  * - Scene detection runs in Loading screen (if enabled)
  *
  * @returns {Promise<boolean>} true if a clip payload was stored — the UI
@@ -589,18 +592,22 @@ function announceQueueFull() {
 async function handleCreateClip() {
   if (!store || !workerManager) return false;
 
-  // A new active clip demotes the current one into the queue; refuse early
-  // while the ring buffer is still intact instead of after draining it
-  if (getClipPayload() && isClipQueueFull()) {
+  // A new active clip demotes the current one into the queue, so it needs a
+  // queue slot only when there is an active clip. Refuse early while the
+  // ring buffer is still intact instead of after draining it; with the
+  // autoRemoveOldClips setting on, only when removing the oldest queued
+  // clips could not make room either (#186).
+  const needSlot = getClipPayload() !== null;
+  // The memory budget (#96): materializing the buffer as VideoFrames must
+  // not push held-frame memory past the budget. The user sees the same
+  // visible surfaces as a queue-full refusal.
+  const projection = projectClipMemory(getLiveCaptureContext());
+  const room = checkClipRoom({ needSlot, projection });
+  if (!room.ok && room.reason === 'queue-full') {
     announceQueueFull();
     return false;
   }
-
-  // Same early-refusal for the memory budget (#96): materializing the
-  // buffer as VideoFrames must not push held-frame memory past the budget.
-  // The user sees the same visible surfaces as a queue-full refusal.
-  const projection = projectClipMemory(getLiveCaptureContext());
-  if (projection.over) {
+  if (!room.ok) {
     announceMemoryBudget(projection);
     if (store) {
       store.setState((state) => setError(state, buildMemoryBudgetMessage(projection)));
@@ -625,6 +632,23 @@ async function handleCreateClip() {
 
   const settings = store.getState().settings;
 
+  // Remove the oldest queued clips this clip needs room from (setting on).
+  // Refused when even removing all of them would not make room for the
+  // real snapshot: nothing was removed and the frames are still ours.
+  const made = makeRoomForClip({ needSlot: getClipPayload() !== null, frames: videoFrames });
+  if (!made.ok) {
+    closeRefusedFrames(videoFrames);
+    if (made.reason === 'memory-budget' && made.projection) {
+      const memoryProjection = made.projection;
+      announceMemoryBudget(memoryProjection);
+      store.setState((state) => setError(state, buildMemoryBudgetMessage(memoryProjection)));
+      render(qsRequired('#main-content'));
+    } else {
+      announceQueueFull();
+    }
+    return false;
+  }
+
   // Store clip payload; the previous active clip (if any) demotes into the
   // clip queue. Scene detection will run in Loading screen if enabled.
   const stored = setClipPayload({
@@ -640,13 +664,7 @@ async function handleCreateClip() {
     // this handler). The refused frames never entered the store, so they are
     // still this function's to release — the store's ownership rules only
     // protect frames it owns.
-    for (const frame of videoFrames) {
-      try {
-        if (!frame.frame.closed) frame.frame.close();
-      } catch {
-        // Already closed
-      }
-    }
+    closeRefusedFrames(videoFrames);
     announceQueueFull();
     return false;
   }

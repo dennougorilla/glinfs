@@ -32,7 +32,7 @@ import { crashNextEncodeForTest, createClipCodecManager } from './shared/clip-co
 import { renderClipEntries } from './shared/clip-entries.js';
 import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { registerHotkey } from './shared/hotkeys.js';
-import { announce } from './shared/live-region.js';
+import { announce, mountLiveRegion } from './shared/live-region.js';
 import { initRangeFill } from './shared/range-fill.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import { initTabStatus } from './shared/tab-status.js';
@@ -333,14 +333,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Filled range tracks (form-controls.css paints them from --range-fill)
   initRangeFill();
 
-  // Create live region for screen reader announcements
-  const liveRegion = document.createElement('div');
-  liveRegion.setAttribute('role', 'status');
-  liveRegion.setAttribute('aria-live', 'polite');
-  liveRegion.setAttribute('aria-atomic', 'true');
-  liveRegion.className = 'live-region';
-  liveRegion.id = 'live-region';
-  document.body.appendChild(liveRegion);
+  // Live region for screen reader announcements (visually hidden)
+  mountLiveRegion();
 
   // Clip Now header button, queue badge popover and global Shift+C (#95)
   setupClipQueueHeader();

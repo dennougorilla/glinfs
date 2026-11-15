@@ -132,6 +132,7 @@ import {
 import { renderTimeline, updatePlayheadPosition, updateTimelineRange } from './timeline.js';
 import { attachTimelineAiMarks } from './timeline-ai-marks.js';
 import {
+  isClipsQueueBannerOnScreen,
   renderEditorScreen,
   showClipsQueueFullBanner,
   updateClipsMemoryFooter,
@@ -562,6 +563,13 @@ export function initEditor() {
         projection?.message ?? 'Memory budget reached — raise Memory Budget in Settings',
       ),
     ),
+    // Oldest clips removed to make room (#186): same surface as a refusal.
+    // Claim the notice when the banner is really in view, so the sender
+    // skips its toast: one message, one surface.
+    onBus('clip:auto-removed', ({ message, markShown }) => {
+      showQueueFullBanner(container, message);
+      if (isClipsQueueBannerOnScreen(container)) markShown?.();
+    }),
   );
 
   // Start auto-playback if initial state is playing

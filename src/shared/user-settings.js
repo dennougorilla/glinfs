@@ -60,6 +60,10 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  *   (ring buffer + active clip + queue), conservatively estimated at raw
  *   RGBA w*h*4. The buffer is clamped to a share of it and clip creation is
  *   refused beyond it (#96).
+ * @property {boolean} autoRemoveOldClips - When the clip queue limit or the
+ *   memory budget would refuse a new clip, remove the oldest queued clips
+ *   (as few as needed, never the active clip, no Undo) and create it
+ *   anyway (#186, default true). Off restores the plain refusal.
  */
 
 /**
@@ -92,6 +96,7 @@ const DEFAULT_SETTINGS = {
     clipQueueLimit: null,
     captureResolutionLimit: 1920,
     memoryBudgetMB: 4000,
+    autoRemoveOldClips: true,
   },
   export: {
     quality: 0.8,
@@ -173,6 +178,10 @@ export const SETTINGS_METADATA = {
         max: 16000,
         step: 500,
         format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} GB` : `${v} MB`),
+      },
+      autoRemoveOldClips: {
+        label: 'Remove oldest clips when full',
+        type: 'boolean',
       },
     },
   },

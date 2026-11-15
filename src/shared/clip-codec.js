@@ -207,6 +207,35 @@ export class ClipCodecManager {
   }
 
   /**
+   * Whether the encode submitted with exactly this frames array is still
+   * waiting in the queue (not dispatched to the worker yet) (#186)
+   * @param {VideoFrame[]} frames - The array passed to encode()
+   * @returns {boolean}
+   */
+  isEncodeQueued(frames) {
+    return this.#pending.some((p) => p.kind === 'encode' && p.transfer === frames);
+  }
+
+  /**
+   * Withdraw a queued encode before it dispatches (#186: its clip was
+   * removed to make room). Nothing was transferred, so the job resolves as
+   * a RECOVERABLE failure carrying the submitted frames — ownership is the
+   * caller's again. A job already running in the worker cannot be withdrawn
+   * (its frames are there until it settles): returns false.
+   * @param {VideoFrame[]} frames - The array passed to encode()
+   * @returns {boolean} true if the job was withdrawn
+   */
+  cancelEncode(frames) {
+    const index = this.#pending.findIndex((p) => p.kind === 'encode' && p.transfer === frames);
+    if (index === -1) return false;
+    const [p] = this.#pending.splice(index, 1);
+    const job = this.#jobs.get(p.jobId);
+    this.#jobs.delete(p.jobId);
+    job?.resolve({ ok: false, error: 'cancelled', frames });
+    return true;
+  }
+
+  /**
    * Decode compressed chunks back into VideoFrames (transferred to main).
    *
    * Jumps ahead of pending ENCODE jobs. The chunk buffers are structured-
