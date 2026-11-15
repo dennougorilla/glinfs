@@ -367,16 +367,33 @@ test('codec worker crash during an Undo window keeps the Undo: the deleted clip 
   await expect(undo).toBeVisible();
   await undo.click();
 
-  // Restored to the queue with live frames, and still alive after the
-  // original grace window (nothing was finalized behind the user's back)
+  // Still in the queue after the original grace window (nothing was
+  // finalized behind the user's back)
   await page.waitForTimeout(5500);
-  const restored = await page.evaluate(async (id) => {
+  const queuedStatus = (id) =>
+    page.evaluate(async (clipId) => {
+      const store = await import('/glinfs/shared/app-store.js');
+      return store.getClipQueue().find((e) => e.id === clipId)?.status ?? null;
+    }, id);
+  expect(await queuedStatus(deletedId)).not.toBeNull();
+
+  // Undo puts the restored clip through compression (#92: only the active
+  // clip holds raw frames), so its raw frames are gone by design. The clip
+  // data must survive that lifecycle: compressed -> decode -> promote.
+  await expect.poll(() => queuedStatus(deletedId), { timeout: 30000 }).toBe('compressed');
+  const promoted = await page.evaluate(async (id) => {
     const store = await import('/glinfs/shared/app-store.js');
-    const entry = store.getClipQueue().find((e) => e.id === id);
-    return entry ? { width: entry.frames?.[0]?.frame?.codedWidth ?? 0 } : null;
+    const prepared = await store.prepareQueuedClipForPromote(id);
+    const payload = prepared.ok ? store.promoteQueuedClip(id) : null;
+    return {
+      prepared,
+      activeId: store.getClipPayload()?.id ?? null,
+      width: payload ? (store.getClipPayload()?.frames?.[0]?.frame?.codedWidth ?? 0) : 0,
+    };
   }, deletedId);
-  expect(restored).not.toBeNull();
-  expect(restored?.width).toBeGreaterThan(0);
+  expect(promoted.prepared).toEqual({ ok: true });
+  expect(promoted.activeId).toBe(deletedId);
+  expect(promoted.width).toBeGreaterThan(0);
 });
 
 test('digit shortcuts switch and delete clips by their list position (#100 r7)', async ({
