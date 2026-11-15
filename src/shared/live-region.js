@@ -19,3 +19,26 @@ export function announce(message) {
     liveRegion.textContent = message;
   }
 }
+
+/**
+ * Create the app's one live region (called once from main.js; a second call
+ * returns the existing element).
+ *
+ * Visually hidden with the shared .sr-only rule (global.css): it is for
+ * screen readers only. Without it every announcement was printed as plain
+ * text under the app and made the page taller than the viewport.
+ *
+ * @returns {HTMLElement}
+ */
+export function mountLiveRegion() {
+  const existing = document.getElementById('live-region');
+  if (existing) return existing;
+  const liveRegion = document.createElement('div');
+  liveRegion.setAttribute('role', 'status');
+  liveRegion.setAttribute('aria-live', 'polite');
+  liveRegion.setAttribute('aria-atomic', 'true');
+  liveRegion.className = 'live-region sr-only';
+  liveRegion.id = 'live-region';
+  document.body.appendChild(liveRegion);
+  return liveRegion;
+}
