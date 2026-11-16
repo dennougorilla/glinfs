@@ -127,6 +127,9 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
       click: 0,
       ben2: 0,
       'video-person': 0,
+      'birefnet-general': 0,
+      'birefnet-lite': 0,
+      'birefnet-toonout': 0,
     });
 
     // ±1 normalization round trip through the stub, stretched to 512² and back
@@ -161,7 +164,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     expect(requests.byModel).toEqual({ anime: 0, general: 0, portrait: 1 });
   });
 
-  test('Settings → AI models lists six models, with the note on General', async ({ page }) => {
+  test('Settings → AI models lists nine models, with the note on General', async ({ page }) => {
     await serveStubModel(page, ANIME_STUB, { general: GENERAL_STUB, portrait: PORTRAIT_STUB });
     await gotoCaptureWithStubModel(page, { models: STUBS, allowWasm: true });
     await page.evaluate(() => {
@@ -172,7 +175,17 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     const ids = await section
       .locator('[data-model-id]')
       .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-model-id')));
-    expect(ids).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
+    expect(ids).toEqual([
+      'general',
+      'portrait',
+      'anime',
+      'click',
+      'ben2',
+      'video-person',
+      'birefnet-general',
+      'birefnet-lite',
+      'birefnet-toonout',
+    ]);
     const ben2 = section.locator('[data-model-id="ben2"]');
     await expect(ben2.locator('h3')).toHaveText('Hair & detailBEN2 (base)');
     await expect(ben2).toContainText('223 MB');

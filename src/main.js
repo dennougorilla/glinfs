@@ -3,6 +3,7 @@
  * @module main
  */
 
+import { loadCustomModels } from './features/ai-cutout/custom-model-store.js';
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
 import { clipNow, isCaptureLive, registerClipNowHotkey } from './features/capture/clip-service.js';
 import { initCapture } from './features/capture/index.js';
@@ -339,8 +340,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Clip Now header button, queue badge popover and global Shift+C (#95)
   setupClipQueueHeader();
 
-  // Initialize router
-  initRouter(routes);
+  // Initialize router once the user's custom models are in the registry
+  // (an edit that names one finds it; loadCustomModels never rejects and
+  // gives up waiting after a few seconds)
+  void loadCustomModels().then(() => initRouter(routes));
 });
 
 // ============================================================

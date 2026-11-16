@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  normalizeCustomModelDefinition,
+  toModelEntry,
+} from '../../../src/features/ai-cutout/custom-models.js';
 import {
   deleteCachedFile,
   deleteDownloadedModel,
@@ -8,6 +12,7 @@ import {
 import {
   MODEL_CACHE_NAME,
   MODEL_REGISTRY,
+  setCustomModelEntries,
 } from '../../../src/features/ai-cutout/model-registry.js';
 
 const BASE = 'https://example.test/glinfs/editor';
@@ -291,5 +296,81 @@ describe('isModelCached', () => {
     await expect(isModelCached('general', { cacheStorage: storage, ...DEPS })).resolves.toBe(true);
     await expect(isModelCached('anime', { cacheStorage: storage, ...DEPS })).resolves.toBe(false);
     await expect(isModelCached('anime', { cacheStorage: undefined })).resolves.toBe(false);
+  });
+});
+
+describe('models that share a file (review #196, finding 1)', () => {
+  const SHA = 'dd67588b7b3fe3d4b311a5f30d4298f3a3b5e2bd513c0c72c0e41c29fcb8e05e';
+  /** @param {object} overrides */
+  const custom = (overrides) => {
+    const result = normalizeCustomModelDefinition({
+      format: 'glinfs-custom-model',
+      version: 1,
+      label: 'Mine',
+      source: 'file',
+      fileName: 'birefnet-lite-fp16.onnx',
+      bytes: 122_466_609,
+      sha256: SHA,
+      inputName: 'input_image',
+      outputName: 'output_image',
+      inputSize: 1024,
+      resize: 'stretch',
+      normalization: 'imagenet',
+      output: 'logits',
+      subjects: ['anime'],
+      ...overrides,
+    });
+    if (!result.ok) throw new Error(result.error);
+    return result.definition;
+  };
+  afterEach(() => setCustomModelEntries([]));
+
+  it('deleting one custom model keeps the file another custom model of the same file loads', async () => {
+    const imagenet = custom({ normalization: 'imagenet' });
+    const unit = custom({ normalization: 'unit' });
+    expect(imagenet.id).not.toBe(unit.id);
+    setCustomModelEntries([toModelEntry(imagenet), toModelEntry(unit)]);
+    const key = `${MODELS}/custom/${SHA}.onnx?sha256=${SHA}`;
+    const { storage, buckets } = fakeCaches({ [key]: 1, [ANIME_KEY]: 1 });
+    const deps = { cacheStorage: storage, ...DEPS };
+    await expect(isModelCached(imagenet.id, deps)).resolves.toBe(true);
+    await expect(isModelCached(unit.id, deps)).resolves.toBe(true);
+    // Neither model counts the shared key as the other's older copy
+    const { models } = await listDownloadedModels(deps);
+    expect(models.find((m) => m.id === unit.id)).toMatchObject({ cached: true, staleUrls: [] });
+
+    await expect(deleteDownloadedModel(imagenet.id, deps)).resolves.toBe(false);
+    await expect(isModelCached(unit.id, deps)).resolves.toBe(true);
+    // Once the other model is gone too, the file goes with the last one
+    setCustomModelEntries([toModelEntry(unit)]);
+    await expect(deleteDownloadedModel(unit.id, deps)).resolves.toBe(true);
+    expect([...(buckets.get(MODEL_CACHE_NAME)?.keys() ?? [])]).toEqual([ANIME_KEY]);
+  });
+
+  it('deleting a custom model of a hosted BiRefNet URL keeps the built-in model’s copy', async () => {
+    const lite = /** @type {any} */ (MODEL_REGISTRY.find((e) => e.id === 'birefnet-lite'));
+    const mirror = custom({ source: 'url', url: lite.url });
+    setCustomModelEntries([toModelEntry(mirror)]);
+    const builtInKey = `${lite.url}?sha256=${lite.sha256}`;
+    const { storage, buckets } = fakeCaches({ [builtInKey]: 1, [ANIME_KEY]: 1 });
+    const deps = { cacheStorage: storage, ...DEPS };
+    await expect(isModelCached(mirror.id, deps)).resolves.toBe(true);
+    // The shared file counts once, and both models know they share it
+    const listing = await listDownloadedModels(deps);
+    expect(listing.models.find((m) => m.id === mirror.id)).toMatchObject({ sharedFile: true });
+    expect(listing.models.find((m) => m.id === 'birefnet-lite')).toMatchObject({
+      cached: true,
+      sharedFile: true,
+      webgpuOnly: true,
+    });
+    expect(listing.cachedBytes).toBe(lite.bytes + ANIME.bytes);
+    await expect(deleteDownloadedModel(mirror.id, deps)).resolves.toBe(false);
+    expect([...(buckets.get(MODEL_CACHE_NAME)?.keys() ?? [])]).toEqual([builtInKey, ANIME_KEY]);
+    // A built-in model still drops its own older pins
+    const older = `${lite.url}?sha256=${'0'.repeat(64)}`;
+    buckets.get(MODEL_CACHE_NAME)?.set(older, 1);
+    setCustomModelEntries([]);
+    await expect(deleteDownloadedModel('birefnet-lite', deps)).resolves.toBe(true);
+    expect([...(buckets.get(MODEL_CACHE_NAME)?.keys() ?? [])]).toEqual([ANIME_KEY]);
   });
 });

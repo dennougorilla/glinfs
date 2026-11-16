@@ -38,9 +38,9 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
-    // The suite checks the release's model lists: keep the development-only
-    // models (devOnly in model-registry.js) out of this dev server. A reused
-    // server started without it lists them too.
+    // The suite checks the production model lists: keep any development-only
+    // model (devOnly in model-registry.js, none while every model is hosted)
+    // out of this dev server. A reused server started without it lists them.
     env: { VITE_HIDE_DEV_MODELS: '1' },
   },
 });

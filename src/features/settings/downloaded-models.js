@@ -28,20 +28,32 @@
  * ships, like the fp32 isnetis.onnx of the first AI cutout release) is
  * listed below as an "Old model file" with its own Delete button: nothing
  * the app stored stays out of reach.
+ *
+ * "Add model" opens the Add model dialog (custom-model-dialog.js). The
+ * models the user added follow the built-in ones under "Your models", each
+ * with Rename (in place), Export (its definition as JSON, saved by the
+ * browser: nothing is uploaded) and Delete (the definition and the file).
  */
 
 import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
+import {
+  deleteCustomModel,
+  getCustomModelDefinition,
+  renameCustomModel,
+} from '../ai-cutout/custom-model-store.js';
+import { exportDefinition } from '../ai-cutout/custom-models.js';
 import {
   deleteCachedFile,
   deleteDownloadedModel,
   listDownloadedModels,
 } from '../ai-cutout/model-cache.js';
 import { getModelDownloads } from '../ai-cutout/model-downloads.js';
-import { formatModelSize, getModelIds } from '../ai-cutout/model-registry.js';
+import { formatModelSize, getModelIds, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { estimateStorageUsage, isStoragePersistent } from '../ai-cutout/model-storage.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import { getSegmentationManager, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
+import { openAddModelDialog } from './custom-model-dialog.js';
 
 /** @typedef {import('../ai-cutout/model-cache.js').DownloadedModelInfo} DownloadedModelInfo */
 /** @typedef {import('../ai-cutout/model-cache.js').OldModelFile} OldModelFile */
@@ -56,6 +68,7 @@ import { getSegmentationManager, resolveModelSpec } from '../ai-cutout/segmentat
  * @property {(listener: () => void) => () => void} onBusyChange
  * @property {(listener: () => void) => () => void} [onModelStateChange]
  * @property {(id: string) => unknown} [getReadyInfo]
+ * @property {() => Promise<{ webgpu: boolean }>} [getCapabilities]
  * @property {(id: string) => boolean} unloadModel
  */
 
@@ -79,6 +92,12 @@ import { getSegmentationManager, resolveModelSpec } from '../ai-cutout/segmentat
  * @property {() => Promise<number | null>} [estimateUsage]
  * @property {(message: string) => boolean} [confirm]
  * @property {{ get: () => boolean, set: (value: boolean) => void }} [preloadSetting]
+ * @property {(modelId: string) => Promise<boolean>} [removeCustom] - Deletes a
+ *   custom model (definition and file)
+ * @property {(modelId: string, label: string) => Promise<unknown>} [renameCustom]
+ * @property {(modelId: string) => string | null} [exportCustom] - The JSON of
+ *   a custom model's definition
+ * @property {(options: { onSaved: (definition: { label: string }, updated: boolean) => void }) => unknown} [openAddDialog]
  */
 
 /**
@@ -106,7 +125,7 @@ function renderLicenseNote(note) {
 export const OLD_FILE_LABEL = 'Old model file';
 
 /**
- * @typedef {'not-downloaded' | 'downloading' | 'downloaded' | 'loaded' | 'update-available' | 'unknown'} ModelStatusKind
+ * @typedef {'not-downloaded' | 'downloading' | 'downloaded' | 'loaded' | 'update-available' | 'unknown' | 'missing-file'} ModelStatusKind
  */
 
 /**
@@ -117,6 +136,7 @@ export const OLD_FILE_LABEL = 'Old model file';
  * @returns {{ kind: ModelStatusKind, text: string }}
  */
 export function deriveModelStatus(model, { busy = false, loaded = false, download = null } = {}) {
+  const localOnly = /** @type {{ localOnly?: boolean }} */ (model).localOnly;
   const inUse = busy ? ' In use by a running analysis; it can be deleted when it ends.' : '';
   if (download) {
     if (download.phase === 'verifying') {
@@ -134,9 +154,42 @@ export function deriveModelStatus(model, { busy = false, loaded = false, downloa
   if (model.updateAvailable) {
     return { kind: 'update-available', text: 'Update available. The downloaded file is older.' };
   }
+  if (!model.cached && localOnly) {
+    return {
+      kind: 'missing-file',
+      text: 'The file is no longer in this browser. Add it again from the file.',
+    };
+  }
   return model.cached
     ? { kind: 'downloaded', text: 'Downloaded' }
     : { kind: 'not-downloaded', text: 'Not downloaded' };
+}
+
+/**
+ * Save text as a file through the browser (nothing is uploaded)
+ * @param {string} fileName
+ * @param {string} text
+ */
+function saveTextFile(fileName, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const link = createElement('a', { href: url, download: fileName });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * File name of an exported definition ("My model" → "my-model.glinfs-model.json")
+ * @param {string} label
+ * @returns {string}
+ */
+export function definitionFileName(label) {
+  const base = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `${base || 'model'}.glinfs-model.json`;
 }
 
 /**
@@ -198,6 +251,17 @@ export function renderAiModelsSection(cleanups, deps = {}) {
     get: () => loadSettings().aiCutout.preloadModels !== false,
     set: (/** @type {boolean} */ value) => updateSetting('aiCutout', 'preloadModels', value),
   };
+  const removeCustom = deps.removeCustom ?? ((id) => deleteCustomModel(id));
+  const renameCustom = deps.renameCustom ?? ((id, label) => renameCustomModel(id, label));
+  const exportCustom =
+    deps.exportCustom ??
+    ((id) => {
+      const definition = getCustomModelDefinition(id);
+      return definition ? exportDefinition(definition) : null;
+    });
+  const openAddDialog = deps.openAddDialog ?? ((options) => openAddModelDialog(options));
+  /** The custom model whose name is being edited @type {string | null} */
+  let renaming = null;
 
   let disposed = false;
   /** @type {DownloadedModelsListing | null} */
@@ -205,6 +269,14 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   /** Rows being deleted, by row key @type {Set<string>} */
   const deleting = new Set();
   let downloadingAll = false;
+  /** Whether this browser has WebGPU (null until known) @type {boolean | null} */
+  let webgpu = null;
+  /**
+   * A WebGPU-only model (BiRefNet) cannot run in a browser without WebGPU:
+   * Settings does not download it there (the bytes would be unusable)
+   * @param {DownloadedModelInfo} model
+   */
+  const cannotRunHere = (model) => Boolean(model.webgpuOnly) && webgpu === false;
   /** Models seen downloading at the last downloads change @type {Set<string>} */
   const activeDownloads = () => new Set(getModelIds().filter((id) => downloads.get(id)));
   let downloadsSeen = activeDownloads();
@@ -225,9 +297,23 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       ['Download all'],
     )
   );
+  const addModelBtn = /** @type {HTMLButtonElement} */ (
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'btn btn-secondary btn-sm settings-models-add',
+        id: 'settings-models-add',
+      },
+      ['Add model'],
+    )
+  );
   const header = createElement('div', { className: 'settings-section-header' }, [
     createElement('h2', { className: 'settings-section-title', id: titleId }, ['AI models']),
-    downloadAllBtn,
+    createElement('div', { className: 'settings-models-header-actions' }, [
+      addModelBtn,
+      downloadAllBtn,
+    ]),
   ]);
   const intro = createElement('p', { className: 'settings-models-intro' }, [
     'AI cutout models run in this browser. Download them here ahead of time, or the first analysis with a model downloads it. They stay until you delete them.',
@@ -371,7 +457,14 @@ export function renderAiModelsSection(cleanups, deps = {}) {
     const busy = manager.isModelBusy(model.id);
     const loaded = Boolean(manager.getReadyInfo?.(model.id));
     const download = downloads.get(model.id);
-    const state = deriveModelStatus(model, { busy, loaded, download });
+    const blocked = cannotRunHere(model) && !download;
+    const state =
+      blocked && model.cached !== true
+        ? {
+            kind: 'needs-webgpu',
+            text: 'Needs WebGPU, which this browser does not provide (too large to run on the CPU), so it is not downloaded here.',
+          }
+        : deriveModelStatus(model, { busy, loaded, download });
     const licenseLink = createElement(
       'a',
       {
@@ -395,7 +488,7 @@ export function renderAiModelsSection(cleanups, deps = {}) {
           () => downloads.cancel(model.id),
         ),
       );
-    } else if (model.cached !== true || model.updateAvailable) {
+    } else if ((model.cached !== true || model.updateAvailable) && !model.localOnly && !blocked) {
       actions.push(
         button(
           model.updateAvailable ? 'Update' : 'Download',
@@ -409,7 +502,28 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       );
     }
     const hasFile = model.cached === true || model.staleUrls.length > 0;
-    if (hasFile && !download) {
+    if (model.custom && !download) {
+      actions.push(
+        button(
+          'Rename',
+          { 'aria-label': `Rename the ${model.label} model`, 'data-model-rename': model.id },
+          () => {
+            renaming = model.id;
+            render();
+          },
+          { disabled: deleting.has(key) },
+        ),
+        button(
+          'Export',
+          {
+            'aria-label': `Export the ${model.label} model's definition`,
+            'data-model-export': model.id,
+          },
+          () => handleExport(model),
+        ),
+      );
+    }
+    if ((hasFile || model.custom) && !download) {
       actions.push(
         button(
           deleting.has(key) ? 'Deleting…' : 'Delete',
@@ -419,6 +533,9 @@ export function renderAiModelsSection(cleanups, deps = {}) {
         ),
       );
     }
+    if (model.custom && renaming === model.id) {
+      return renderRenameRow(model, index);
+    }
     return renderRow({
       key,
       index,
@@ -426,11 +543,13 @@ export function renderAiModelsSection(cleanups, deps = {}) {
         model.label,
         createElement('span', { className: 'settings-models-name' }, [model.modelName]),
       ],
-      notes: [
-        [model.description],
-        [`${formatModelSize(model.bytes)} · License: `, licenseLink],
-        ...(model.licenseNote ? [[renderLicenseNote(model.licenseNote)]] : []),
-      ],
+      notes: model.custom
+        ? [[`${formatModelSize(model.bytes)} · ${model.description}`]]
+        : [
+            [model.description],
+            [`${formatModelSize(model.bytes)} · License: `, licenseLink],
+            ...(model.licenseNote ? [[renderLicenseNote(model.licenseNote)]] : []),
+          ],
       status: state.text,
       statusKind: state.kind,
       progress:
@@ -440,6 +559,83 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       actions,
       attrs: { 'data-model-id': model.id, 'data-model-status': state.kind },
     });
+  };
+
+  /**
+   * A custom model's row while its name is edited: a text field, Save and
+   * Cancel (Enter saves, Escape cancels)
+   * @param {DownloadedModelInfo} model
+   * @param {number} index
+   * @returns {HTMLElement}
+   */
+  const renderRenameRow = (model, index) => {
+    const inputId = `settings-model-rename-${index}`;
+    const input = /** @type {HTMLInputElement} */ (
+      createElement('input', {
+        type: 'text',
+        id: inputId,
+        className: 'settings-models-rename',
+        maxlength: '60',
+        'aria-label': `New name of the ${model.label} model`,
+      })
+    );
+    input.value = model.label;
+    const finish = async (/** @type {boolean} */ save) => {
+      const label = input.value.trim();
+      renaming = null;
+      if (save && label && label !== model.label) {
+        try {
+          await renameCustom(model.id, label);
+          status.textContent = `Renamed to ${label}.`;
+        } catch {
+          status.textContent = `The ${model.label} model could not be renamed.`;
+        }
+        await refresh();
+      } else {
+        render();
+      }
+      /** @type {HTMLElement | null} */ (
+        listEl.querySelector(`[data-model-rename="${model.id}"]`)
+      )?.focus();
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') void finish(true);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        void finish(false);
+      }
+    });
+    const item = createElement(
+      'li',
+      { className: 'settings-item settings-models-item', 'data-model-id': model.id },
+      [
+        createElement('div', { className: 'settings-item-text' }, [input]),
+        createElement('div', { className: 'settings-models-actions' }, [
+          button('Save', { 'data-model-rename-save': model.id }, () => void finish(true), {
+            primary: true,
+          }),
+          button('Cancel', {}, () => void finish(false)),
+        ]),
+      ],
+    );
+    item.dataset.rowKey = `model:${model.id}`;
+    queueMicrotask(() => {
+      input.focus();
+      input.select();
+    });
+    return item;
+  };
+
+  /** @param {DownloadedModelInfo} model */
+  const handleExport = (model) => {
+    const json = exportCustom(model.id);
+    if (!json) {
+      status.textContent = `The ${model.label} model could not be exported.`;
+      return;
+    }
+    saveTextFile(definitionFileName(model.label), json);
+    status.textContent = `The ${model.label} model's definition was saved as a file (its .onnx file is not included).`;
   };
 
   /**
@@ -475,7 +671,11 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   const render = () => {
     if (disposed || !listing) return;
     const pending = listing.models.filter(
-      (model) => (model.cached !== true || model.updateAvailable) && !downloads.get(model.id),
+      (model) =>
+        (model.cached !== true || model.updateAvailable) &&
+        !model.localOnly &&
+        !cannotRunHere(model) &&
+        !downloads.get(model.id),
     );
     downloadAllBtn.disabled = downloadingAll || pending.length === 0;
     // The row that holds focus keeps it across the rebuild (the same
@@ -489,8 +689,20 @@ export function renderAiModelsSection(cleanups, deps = {}) {
     const focusedKey = focusedRow?.dataset.rowKey;
     const focusedLabel = focused instanceof HTMLElement ? focused.getAttribute('aria-label') : null;
     const focusedIndex = focusedRow ? [...listEl.children].indexOf(focusedRow) : -1;
+    const builtIn = listing.models.filter((model) => !model.custom);
+    const custom = listing.models.filter((model) => model.custom);
     const rows = [
-      ...listing.models.map(renderModelRow),
+      ...builtIn.map(renderModelRow),
+      ...(custom.length > 0
+        ? [
+            createElement(
+              'li',
+              { className: 'settings-models-group', 'data-row-key': 'group:custom' },
+              [createElement('h3', { className: 'settings-models-group-title' }, ['Your models'])],
+            ),
+          ]
+        : []),
+      ...custom.map((model, i) => renderModelRow(model, builtIn.length + i)),
       ...listing.oldFiles.map((file, i) => renderOldFileRow(file, listing.models.length + i)),
     ];
     listEl.replaceChildren(...rows);
@@ -561,7 +773,8 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       // until it is verified
       for (const model of listing.models) {
         if (disposed) return;
-        if (model.cached === true && !model.updateAvailable) continue;
+        if ((model.cached === true && !model.updateAvailable) || model.localOnly) continue;
+        if (cannotRunHere(model)) continue;
         const result = await handleDownload(model);
         if (result.outcome !== 'done') break;
       }
@@ -571,6 +784,17 @@ export function renderAiModelsSection(cleanups, deps = {}) {
     }
   };
   downloadAllBtn.addEventListener('click', () => void handleDownloadAll());
+  addModelBtn.addEventListener('click', () => {
+    openAddDialog({
+      onSaved: (definition, updated) => {
+        if (disposed) return;
+        status.textContent = updated
+          ? `The custom model ${definition.label} was updated.`
+          : `The custom model ${definition.label} was added.`;
+        void refresh().then(() => addModelBtn.focus());
+      },
+    });
+  });
 
   /**
    * Run a delete for one row, then say how it went and list again
@@ -601,6 +825,26 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       render();
       return;
     }
+    if (model.custom) {
+      if (
+        !confirmAction(
+          `Delete the custom model ${model.label} (${formatModelSize(model.bytes)})? Clips that use it can only be analyzed again once it is added again.`,
+        )
+      ) {
+        return;
+      }
+      await deleteRow(
+        key,
+        async () => {
+          manager.unloadModel(model.id);
+          return (await removeCustom(model.id))
+            ? `The custom model ${model.label} was deleted.`
+            : `The custom model ${model.label} was already gone.`;
+        },
+        `The custom model ${model.label} could not be deleted.`,
+      );
+      return;
+    }
     if (
       !confirmAction(
         `Delete the ${model.label} model (${formatModelSize(model.bytes)})? It downloads again the next time you use it.`,
@@ -613,8 +857,9 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       async () => {
         const deleted = await remove(model.id);
         manager.unloadModel(model.id);
-        return deleted
-          ? `The ${model.label} model was deleted.`
+        if (deleted) return `The ${model.label} model was deleted.`;
+        return model.sharedFile && model.cached
+          ? `The ${model.label} model's file was kept: a custom model uses the same file.`
           : `The ${model.label} model was not in this browser’s cache.`;
       },
       `The ${model.label} model could not be deleted.`,
@@ -636,6 +881,8 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   };
 
   const unsubscribers = [
+    // A model added, renamed or deleted (also in another tab)
+    onCustomModelsChange(() => void refresh()),
     manager.onBusyChange(() => render()),
     manager.onModelStateChange?.(() => render()) ?? (() => undefined),
     downloads.subscribe(() => {
@@ -655,5 +902,13 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   });
 
   void refresh();
+  // Whether WebGPU-only models can be offered for download here
+  void Promise.resolve(manager.getCapabilities?.())
+    .then((capabilities) => {
+      if (disposed || !capabilities) return;
+      webgpu = Boolean(capabilities.webgpu);
+      render();
+    })
+    .catch(() => undefined);
   return section;
 }

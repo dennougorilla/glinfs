@@ -363,6 +363,13 @@ async function initialize(entry, allowWasm, cacheOnly) {
   const { spec } = entry;
   const modelId = spec.id;
   const adapter = await getAdapter();
+  if (!adapter && spec.webgpuOnly) {
+    // Fail before downloading a model that cannot run here at all
+    throw new SegmentationError(
+      SegmentationErrorCode.WEBGPU_REQUIRED,
+      `${spec.label ?? 'This model'} needs WebGPU, which this browser does not provide, and is too large to run on the CPU. Choose another model.`,
+    );
+  }
   if (!adapter && !allowWasm) {
     // Fail before downloading a model (about 90 MB) the user cannot run
     throw new SegmentationError(

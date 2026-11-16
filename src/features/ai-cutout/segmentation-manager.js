@@ -642,7 +642,15 @@ export class SegmentationManager {
     }
     if (this.#busy.size > 0) return false;
     if ([...this.#slots.values()].some((slot) => slot.info?.backend === 'wasm')) return false;
-    const resolved = applyDevOverride(this.#getModelSpec(modelId), allowWasm);
+    /** @type {ModelSpec} */
+    let spec;
+    try {
+      spec = this.#getModelSpec(modelId);
+    } catch {
+      // A custom model that is gone: the analysis says so
+      return false;
+    }
+    const resolved = applyDevOverride(spec, allowWasm);
     if (!resolved.allowWasm && !(await this.getCapabilities()).webgpu) return false;
     // Re-checked: an analysis may have started or loaded it meanwhile
     if (this.#slots.has(modelId) || this.#busy.size > 0) return false;

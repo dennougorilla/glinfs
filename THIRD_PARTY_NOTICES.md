@@ -176,7 +176,7 @@ SOFTWARE.
   the browser runs it locally. It is not stored in this repository. The
   preprocessing (RGB / 255) follows upstream's `documentation/inference.md`.
 
-## BiRefNet models (`birefnet-general-fp16.onnx`, `birefnet-lite-fp16.onnx`, `birefnet-toonout-fp16.onnx`; development builds only)
+## BiRefNet models (`birefnet-general-fp16.onnx`, `birefnet-lite-fp16.onnx`, `birefnet-toonout-fp16.onnx`; downloaded from Hugging Face)
 
 - Source: https://github.com/ZhengPeng7/BiRefNet; the checkpoints
   https://huggingface.co/ZhengPeng7/BiRefNet `model.safetensors` at commit
@@ -201,9 +201,12 @@ SOFTWARE.
   Split/Concat split, Sum as Add, index arithmetic in float32, pooling in
   float32); the computed values are unchanged apart from float16 rounding.
   The modified files are under the same MIT License.
-- Use in Glinfs: development builds only (`npm run dev`), served from
-  `public/models/` where they are placed by hand; they are not in the
-  `models-v1` release, not deployed and not stored in this repository.
+- Use in Glinfs: hosted at https://huggingface.co/dennougorilla/glinfs-models
+  (pinned commit `d4b06cb3e2d551d954cd9fd748abc14a79f1618c`); the browser
+  downloads a file only when the user analyzes with that model (or
+  downloads it in Settings) and checks its size and SHA-256. They are not in
+  the `models-v1` release, not deployed with the site and not stored in
+  this repository.
 
 ```
 MIT License

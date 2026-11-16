@@ -26,9 +26,10 @@
  * imports); tests/unit/ai-cutout/model-config.test.js checks that the Pages
  * deploy workflow uses the same hashes and file names.
  *
- * Development-only models (`devOnly` in the registry: the BiRefNet ones)
- * are not in the release: they are never downloaded or required. A copy
- * placed in public/models by hand is kept and verified against its pin (a
+ * The models that are not in the release (the BiRefNet ones, which the
+ * browser downloads from their own `url` on Hugging Face, and any
+ * `devOnly` one) are never downloaded or required. A copy placed in
+ * public/models by hand is kept and verified against its pin (a
  * mismatching copy is deleted and fails the run, like a release model).
  */
 
@@ -78,8 +79,9 @@ function pinsOf(entries) {
 export const MODELS = pinsOf(getReleaseModels());
 
 /**
- * Files of the development-only models: kept and verified when present,
- * never downloaded
+ * Files of the models that are not in the release: the development-only
+ * ones and the ones the browser downloads from their own `url` (another
+ * host). Kept and verified when present, never downloaded
  * @type {ModelPin[]}
  */
 export const DEV_MODELS = pinsOf(
@@ -247,7 +249,9 @@ export async function main(argv, { outDir = DEFAULT_OUT_DIR } = {}) {
       if (await hashFile(resolve(outDir, pin.fileName))) {
         await ensureModel(pin, { outDir, checkOnly: true });
       } else {
-        console.log(`${pin.fileName}: development-only model, not downloaded (place it by hand)`);
+        console.log(
+          `${pin.fileName}: not in the models-v1 release, not downloaded (development-only: place it by hand; hosted elsewhere: the browser downloads it)`,
+        );
       }
     }
     return 0;
