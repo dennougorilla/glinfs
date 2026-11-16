@@ -10,7 +10,7 @@ import {
   SegmentationError,
   SegmentationErrorCode,
 } from '../../../src/features/ai-cutout/protocol.js';
-import { clearObjectRuns, setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
+import { getObjectSignature, setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
 import {
   ANALYSIS_REBUILD_INTERVAL_MS,
   BUILDING_STATUS_DELAY_MS,
@@ -718,11 +718,16 @@ describe('AI cutout session: tracked objects', () => {
         }
         const lost = [];
         for (let f = options.range.start; f <= options.range.end; f++) {
+          // Like the manager: masks tagged with the object's signature,
+          // frames it could not reach marked with it
+          const key = `object:${options.objectId}:${frames[f].id}`;
+          const group = `object:${options.objectId}`;
           if (manager.lostAt.has(f)) {
             lost.push(f);
+            maskStore.mark(key, options.tag, options.clipId, group);
             continue;
           }
-          maskStore.set(`object:${options.objectId}:${frames[f].id}`, prob(), options.clipId);
+          maskStore.set(key, prob(), options.clipId, group, options.tag);
           options.onProgress?.({ phase: 'analyzing', framesDone: 1, framesTotal: 4 });
         }
         return { tracked: 4 - lost.length, lost, anchors: 1, backend: 'webgpu' };
@@ -753,7 +758,6 @@ describe('AI cutout session: tracked objects', () => {
   afterEach(() => {
     session.dispose();
     setWasmAllowed(false);
-    clearObjectRuns();
     vi.useRealTimers();
   });
 
@@ -801,8 +805,11 @@ describe('AI cutout session: tracked objects', () => {
   });
 
   it('leaves a remounted object with all its masks alone', async () => {
-    for (const f of state.clip.frames) maskStore.set(`object:o1:${f.id}`, prob(), 'clip-1');
     setObjects([{ id: 'o1', mode: 'add', clicks: [click()] }]);
+    const tag = getObjectSignature(state.edits.background.ai.objects[0]);
+    for (const f of state.clip.frames) {
+      maskStore.set(`object:o1:${f.id}`, prob(), 'clip-1', 'object:o1', tag);
+    }
     session.syncObjects();
     await settle();
     expect(manager.calls).toHaveLength(0);

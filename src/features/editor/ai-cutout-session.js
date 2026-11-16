@@ -72,7 +72,6 @@ import {
   isWasmAllowed,
   isWasmChoiceError,
   peekClipMaskSource,
-  recordObjectRun,
   setWasmAllowed,
 } from './ai-cutout.js';
 
@@ -692,6 +691,7 @@ export function createAiCutoutSession(options) {
         currentFrame: state.currentFrame,
         clicks: object.clicks,
         scope: object.scope,
+        tag: signature,
         superseded: () => objectQueue.includes(id),
         onProgress: (progress) => {
           if (disposed || objectController !== controller) return;
@@ -715,7 +715,6 @@ export function createAiCutoutSession(options) {
         },
       });
       objectRuns.set(id, runKey);
-      recordObjectRun(clipId, object, range);
       reportLost({ ...objectLost, [id]: result.lost });
     } catch (error) {
       if (!isAbortError(error)) {
@@ -791,8 +790,9 @@ export function createAiCutoutSession(options) {
       const running = objectRun?.id === object.id;
       if (running && objectRun?.runKey === runKey && !force) continue;
       const untracked =
-        countUntrackedObjectFrames(state.clip.frames, state.selectedRange, object.id, maskStore) >
-        0;
+        countUntrackedObjectFrames(state.clip.frames, state.selectedRange, object, maskStore, {
+          retryLost: force,
+        }) > 0;
       const tried = objectRuns.get(object.id) === runKey;
       if (!changed && !(untracked && (force || !tried))) continue;
       if (changed) {

@@ -54,12 +54,12 @@ import {
   describeAnalysisError,
   estimateRemainingMs,
   getAiModelId,
+  getObjectSignature,
   getObjectsToTrack,
   isAbortError,
   isWasmAllowed,
   isWasmChoiceError,
   peekClipMaskSource,
-  recordObjectRun,
   setWasmAllowed,
 } from '../editor/ai-cutout.js';
 import {
@@ -695,13 +695,14 @@ function showAiPrep(next) {
 }
 
 /**
- * Tracked objects (removed from / added to the cutout) with frames of the
- * export range still to track are tracked over it first, like click to
- * select: an object whose tracking is still running in the editor, was
- * cancelled, or never ran (the manager runs one job at a time, so a run in
- * flight finishes before this one). Only a finished run of the object as
- * it is now leaves frames without a mask: tracking lost it there, and
- * would only lose it again (those frames keep the base mask).
+ * Tracked objects (removed from / added to the cutout) are tracked over the
+ * export range first, like click to select, unless every frame has a mask
+ * or an unreachable mark of the object as it is now (its clicks and scope;
+ * see getObjectsToTrack). Masks of older clicks or scope, a cancelled run
+ * or evicted masks do not count. The run queues behind any analysis in
+ * flight (one at a time) and does nothing if that one covered it. Frames
+ * marked unreachable keep the base mask: tracking would only lose the
+ * object there again.
  * @param {import('../../shared/edits/model.js').AiCutout} ai
  * @param {AbortSignal} signal
  */
@@ -709,7 +710,7 @@ async function prepareObjectMasks(ai, signal) {
   const start = rangeStart;
   const end = rangeStart + frames.length - 1;
   const range = { start, end };
-  for (const object of getObjectsToTrack(clipFrames, range, ai.objects ?? [], clipId)) {
+  for (const object of getObjectsToTrack(clipFrames, range, ai.objects ?? [])) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: frames.length });
     let analyzingSince = /** @type {number | null} */ (null);
     await getSegmentationManager().analyzeObject(clipFrames, {
@@ -721,6 +722,8 @@ async function prepareObjectMasks(ai, signal) {
       currentFrame: object.clicks.find((c) => c.frame >= start && c.frame <= end)?.frame ?? start,
       clicks: object.clicks,
       scope: object.scope,
+      tag: getObjectSignature(object),
+      onlyIfStale: true,
       onProgress: (progress) => {
         if (signal.aborted) return;
         if (progress.phase === 'analyzing' && analyzingSince === null) {
@@ -745,7 +748,6 @@ async function prepareObjectMasks(ai, signal) {
         });
       },
     });
-    recordObjectRun(clipId, object, range);
   }
 }
 

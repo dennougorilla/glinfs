@@ -25,7 +25,7 @@ import { DEFAULT_MODEL_ID, formatModelSize, getModelEntry } from '../ai-cutout/m
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
 import {
   collectPendingFrames,
-  frameKey,
+  getStaleObjectFrames,
   maskKey,
   objectMaskKey,
 } from '../ai-cutout/segmentation-manager.js';
@@ -126,29 +126,27 @@ export function getClipObjectSources(frames, ai, maskStore) {
 }
 
 /**
- * Selection frames a tracked object has no mask on, deduped by pixel
- * identity (holds share one mask)
- * @param {Frame[]} frames - The whole clip
- * @param {{ start: number, end: number }} range - Inclusive
- * @param {string} objectId
- * @param {MaskStore} [maskStore]
- * @returns {number} Distinct frames without the object's mask
+ * Frames of `range` an object still has to be tracked on: with no mask or
+ * unreachable mark of its current clicks and scope (see
+ * getStaleObjectFrames). A mask of older clicks or scope does not count,
+ * and what eviction or a clear dropped is gone with its marks.
+ * @param {Frame[]} frames
+ * @param {{ start: number, end: number }} range
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {import('../ai-cutout/mask-store.js').MaskStore} [maskStore]
+ * @param {{ retryLost?: boolean }} [options] - retryLost: frames marked
+ *   unreachable count too
+ * @returns {number}
  */
 export function countUntrackedObjectFrames(
   frames,
   range,
-  objectId,
+  object,
   maskStore = getSharedMaskStore(),
+  options = {},
 ) {
-  const seen = new Set();
-  let missing = 0;
-  for (let f = Math.max(0, range.start); f <= Math.min(frames.length - 1, range.end); f++) {
-    const key = frameKey(frames[f]);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (!maskStore.has(objectMaskKey(frames[f], objectId))) missing++;
-  }
-  return missing;
+  const tag = getObjectSignature(object);
+  return getStaleObjectFrames(frames, range, object.id, tag, maskStore, options).length;
 }
 
 /**
@@ -162,75 +160,20 @@ export function getObjectSignature(object) {
 }
 
 /**
- * Object tracking runs that finished (editor or export), per clip and
- * object: the signature they tracked and the selection they covered. A
- * frame without a mask inside such a run is one tracking could not reach
- * (lost); anywhere else it is a frame still to track.
- * @type {Map<string, { signature: string, start: number, end: number }>}
- */
-const completedObjectRuns = new Map();
-
-/**
- * Remember a finished tracking run of an object
- * @param {string | undefined} clipId
- * @param {import('../../shared/edits/model.js').CutoutObject} object
- * @param {{ start: number, end: number }} range
- */
-export function recordObjectRun(clipId, object, range) {
-  completedObjectRuns.set(`${clipId}|${object.id}`, {
-    signature: getObjectSignature(object),
-    start: range.start,
-    end: range.end,
-  });
-}
-
-/**
- * Whether a finished run tracked this object, as it is now, over all of
- * `range`
- * @param {string | undefined} clipId
- * @param {import('../../shared/edits/model.js').CutoutObject} object
- * @param {{ start: number, end: number }} range
- * @returns {boolean}
- */
-export function isObjectRunComplete(clipId, object, range) {
-  const run = completedObjectRuns.get(`${clipId}|${object.id}`);
-  return (
-    run !== undefined &&
-    run.signature === getObjectSignature(object) &&
-    run.start <= range.start &&
-    run.end >= range.end
-  );
-}
-
-/** Forget every finished run (tests) */
-export function clearObjectRuns() {
-  completedObjectRuns.clear();
-}
-
-/**
  * The objects an export must track before it builds: those with a frame
- * of `range` that has no mask, unless a finished run of the object as it
- * is now covered `range` (those frames were lost, and would only be lost
- * again). A run in flight or cancelled has not finished, so its object is
- * tracked again.
+ * of `range` that has neither a mask nor an unreachable mark of the object
+ * as it is now (a run still in flight, cancelled, of older clicks or
+ * scope, or evicted). The export queues their tracking behind any run in
+ * flight, which it skips if that run covered them.
  * @param {Frame[]} frames
  * @param {{ start: number, end: number }} range
  * @param {import('../../shared/edits/model.js').CutoutObject[]} objects
- * @param {string | undefined} clipId
  * @param {import('../ai-cutout/mask-store.js').MaskStore} [maskStore]
  * @returns {import('../../shared/edits/model.js').CutoutObject[]}
  */
-export function getObjectsToTrack(
-  frames,
-  range,
-  objects,
-  clipId,
-  maskStore = getSharedMaskStore(),
-) {
+export function getObjectsToTrack(frames, range, objects, maskStore = getSharedMaskStore()) {
   return objects.filter(
-    (object) =>
-      countUntrackedObjectFrames(frames, range, object.id, maskStore) > 0 &&
-      !isObjectRunComplete(clipId, object, range),
+    (object) => countUntrackedObjectFrames(frames, range, object, maskStore) > 0,
   );
 }
 

@@ -11,7 +11,7 @@ import {
 import {
   buildClipMaskSource,
   buildClipMaskSourceSettled,
-  clearObjectRuns,
+  countUntrackedObjectFrames,
   describeAnalysisError,
   describeAnalysisProgress,
   estimateRemainingMs,
@@ -22,16 +22,15 @@ import {
   getBuildParamsKey,
   getClipProbSource,
   getModelSizeLabel,
+  getObjectSignature,
   getObjectsToTrack,
   getSharedFinalMaskCache,
   isAbortError,
   isFrameAnalyzed,
-  isObjectRunComplete,
   isWasmAllowed,
   peekClipMaskSource,
   pickFindsCharacter,
   RUNTIME_SIZE_LABEL,
-  recordObjectRun,
   setWasmAllowed,
   TYPICAL_FRAME_MS,
 } from '../../../src/features/editor/ai-cutout.js';
@@ -343,39 +342,70 @@ describe('getObjectsToTrack (export with tracked objects)', () => {
     Array.from({ length: 4 }, (_, i) => ({ id: `f${i}`, width: 4, height: 2 }))
   );
   const range = { start: 0, end: 3 };
-  const object = /** @type {any} */ ({
+  const whole = /** @type {any} */ ({
     id: 'o1',
     mode: 'remove',
     scope: 'whole',
     clicks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }],
   });
+  const part = /** @type {any} */ ({ ...whole, scope: 'part' });
   const mask = () => ({ data: new Uint8Array(8).fill(255), width: 4, height: 2 });
+  /**
+   * A finished run of `object`: masks on `tracked`, the rest marked unreachable
+   * @param {ReturnType<typeof createMaskStore>} store
+   * @param {any} object
+   * @param {number[]} tracked
+   */
+  const finishRun = (store, object, tracked) => {
+    const tag = getObjectSignature(object);
+    for (const [f, frame] of frames.entries()) {
+      const key = `object:o1:${frame.id}`;
+      if (tracked.includes(f)) store.set(key, mask(), 'clip', 'object:o1', tag);
+      else store.mark(key, tag, 'clip', 'object:o1');
+    }
+  };
 
-  afterEach(() => clearObjectRuns());
-
-  it('tracks an object that has a mask on only some frames (tracking in flight or cancelled)', () => {
+  it('tracks an object with a mask on only some frames (a run in flight or cancelled)', () => {
     const store = createMaskStore();
-    store.set('object:o1:f0', mask(), 'clip');
-    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([object]);
+    store.set('object:o1:f0', mask(), 'clip', 'object:o1', getObjectSignature(whole));
+    expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([whole]);
   });
 
-  it('skips an object with every frame tracked', () => {
+  it('skips an object whose frames all have a mask or an unreachable mark of it as it is now', () => {
     const store = createMaskStore();
-    for (const f of frames) store.set(`object:o1:${f.id}`, mask(), 'clip');
-    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([]);
+    finishRun(store, whole, [0, 1]);
+    expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([]);
+    // An explicit retry counts the marked frames
+    expect(countUntrackedObjectFrames(frames, range, whole, store, { retryLost: true })).toBe(2);
   });
 
-  it('accepts missing frames only after a finished run of the object as it is now', () => {
+  it('tracks again after eviction drops a finished run’s masks and marks', () => {
+    // Room for the object's masks, then a base-model group evicts them
+    const store = createMaskStore({ capBytes: 40 });
+    finishRun(store, whole, [0, 1, 2]);
+    expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([]);
+    for (const frame of frames) {
+      store.set(`general:${frame.id}`, mask(), 'clip', 'general');
+    }
+    expect(store.has('object:o1:f0')).toBe(false);
+    expect(store.getMark('object:o1:f3')).toBeUndefined();
+    expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([whole]);
+  });
+
+  it('tracks during a Whole to Part retrack, though every frame still has a (Whole) mask', () => {
     const store = createMaskStore();
-    store.set('object:o1:f0', mask(), 'clip');
-    store.set('object:o1:f1', mask(), 'clip');
-    recordObjectRun('clip', object, range);
-    expect(isObjectRunComplete('clip', object, range)).toBe(true);
-    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([]);
-    // Another clip, a wider range or other clicks: not that run
-    expect(getObjectsToTrack(frames, range, [object], 'other', store)).toEqual([object]);
-    expect(isObjectRunComplete('clip', object, { start: 0, end: 5 })).toBe(false);
-    const part = { ...object, scope: 'part' };
-    expect(getObjectsToTrack(frames, range, [part], 'clip', store)).toEqual([part]);
+    finishRun(store, whole, [0, 1, 2, 3]);
+    expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([]);
+    // Part chosen; its run has not replaced the Whole masks yet
+    expect(getObjectsToTrack(frames, range, [part], store)).toEqual([part]);
+    finishRun(store, part, [0, 1]);
+    expect(getObjectsToTrack(frames, range, [part], store)).toEqual([]);
+  });
+
+  it('is lost with a clear of the store', () => {
+    const store = createMaskStore();
+    finishRun(store, whole, [0]);
+    store.clear();
+    expect(countUntrackedObjectFrames(frames, range, whole, store)).toBe(4);
   });
 });

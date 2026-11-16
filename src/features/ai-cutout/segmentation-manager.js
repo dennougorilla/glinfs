@@ -134,6 +134,12 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {string} [clipId]
  * @property {string} [modelId] - The SAM model that tracks it (default 'click')
  * @property {() => boolean} [superseded] - See trackClicks
+ * @property {string} [tag] - The object's clicks and scope (see
+ *   getObjectSignature): each mask is stored with it, and each frame of the
+ *   selection a finished run could not reach is marked with it
+ * @property {boolean} [onlyIfStale] - Once its turn comes, do nothing when
+ *   every frame of the selection already has a mask or mark with `tag` (a
+ *   run ahead in the queue tracked it)
  */
 
 /**
@@ -313,6 +319,34 @@ export function objectMaskGroup(objectId) {
  */
 export function objectMaskKey(frame, objectId) {
   return maskKey(frame, objectMaskGroup(objectId));
+}
+
+/**
+ * Frames of `range` (one per frame key) a tracked object still has to be
+ * tracked on: those with neither a mask nor an unreachable mark made with
+ * `tag` (the object's clicks and scope). A mask of older clicks or scope,
+ * or nothing at all (never tracked, cancelled, evicted), is still to track.
+ * @param {Frame[]} frames - The whole clip
+ * @param {{ start: number, end: number }} range
+ * @param {string} objectId
+ * @param {string} tag
+ * @param {{ getTag: (key: string) => string | undefined, getMark: (key: string) => string | undefined }} maskStore
+ * @param {{ retryLost?: boolean }} [options] - retryLost: a frame marked
+ *   unreachable is still to track too (an explicit retry)
+ * @returns {number[]}
+ */
+export function getStaleObjectFrames(frames, range, objectId, tag, maskStore, options = {}) {
+  const { retryLost = false } = options;
+  const seen = new Set();
+  const stale = [];
+  for (let f = Math.max(0, range.start); f <= Math.min(frames.length - 1, range.end); f++) {
+    const key = objectMaskKey(frames[f], objectId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (maskStore.getTag(key) === tag) continue;
+    if (retryLost || maskStore.getMark(key) !== tag) stale.push(f);
+  }
+  return stale;
 }
 
 /**
@@ -701,18 +735,49 @@ export class SegmentationManager {
     const group = objectMaskGroup(options.objectId);
     this.#markBusy(modelId, 1);
     const previous = this.#tail;
-    const run = raceAbort(previous, options.signal).then(() =>
-      this.#analyzeClick(frames, {
+    const { tag, onlyIfStale = false, objectId, range } = options;
+    const run = raceAbort(previous, options.signal).then(async () => {
+      if (
+        tag !== undefined &&
+        onlyIfStale &&
+        getStaleObjectFrames(frames, range, objectId, tag, this.#maskStore).length === 0
+      ) {
+        // Lost where a marked frame borders a tracked one (as trackClicks reports)
+        const start = Math.max(0, range.start);
+        const end = Math.min(frames.length - 1, range.end);
+        const hasMask = (/** @type {number} */ f) =>
+          f >= start && f <= end && this.#maskStore.has(objectMaskKey(frames[f], objectId));
+        const lost = [];
+        for (let f = start; f <= end; f++) {
+          if (!hasMask(f) && (hasMask(f - 1) || hasMask(f + 1))) lost.push(f);
+        }
+        return { tracked: 0, lost, anchors: 0, backend: this.#lastReady?.backend ?? null };
+      }
+      const result = await this.#analyzeClick(frames, {
         ...options,
         picks: options.clicks,
         modelId,
         group,
-        keyOf: (frame) => objectMaskKey(frame, options.objectId),
+        tag,
+        keyOf: (frame) => objectMaskKey(frame, objectId),
         maskSizeOf: (frame) => getObjectMaskSize(frame.width, frame.height),
         minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
         wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
-      }),
-    );
+      });
+      // Finished: the frames it could not reach are marked as tried
+      if (
+        tag !== undefined &&
+        !(options.clipId !== undefined && this.#releasedClips.has(options.clipId))
+      ) {
+        const start = Math.max(0, range.start);
+        const end = Math.min(frames.length - 1, range.end);
+        for (let f = start; f <= end; f++) {
+          const key = objectMaskKey(frames[f], objectId);
+          if (!this.#maskStore.has(key)) this.#maskStore.mark(key, tag, options.clipId, group);
+        }
+      }
+      return result;
+    });
     this.#tail = Promise.allSettled([previous, run]);
     const settle = () => this.#markBusy(modelId, -1);
     run.then(settle, settle);
@@ -721,7 +786,7 @@ export class SegmentationManager {
 
   /**
    * @param {Frame[]} frames
-   * @param {ClickAnalyzeOptions & { modelId: string, group: string, keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
+   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
    *   group: mask store group of the masks; keyOf: their store key;
    *   maskSizeOf: the size the decoder answers at; minScoreRatio and
    *   wholeMinScoreRatio: see trackClicks
@@ -772,7 +837,7 @@ export class SegmentationManager {
         },
         store: (f, mask) => {
           if (released()) return;
-          this.#maskStore.set(keyOf(frames[f]), mask, clipId, group);
+          this.#maskStore.set(keyOf(frames[f]), mask, clipId, group, options.tag);
         },
         clear: (f) => {
           this.#maskStore.delete(keyOf(frames[f]));

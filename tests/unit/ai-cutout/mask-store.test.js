@@ -205,3 +205,38 @@ describe('getSharedMaskStore', () => {
     expect(getSharedMaskStore()).toBe(getSharedMaskStore());
   });
 });
+
+describe('mask provenance (tags and unreachable marks)', () => {
+  it('keeps the tag a mask was set with; a mark replaces the mask and a mask the mark', () => {
+    const store = createMaskStore();
+    store.set('object:o1:a', mask(4), 'clip', 'object:o1', 'whole|x');
+    expect(store.getTag('object:o1:a')).toBe('whole|x');
+    store.set('object:o1:a', mask(4), 'clip', 'object:o1');
+    expect(store.getTag('object:o1:a')).toBe('');
+    store.mark('object:o1:a', 'part|x', 'clip', 'object:o1');
+    expect(store.has('object:o1:a')).toBe(false);
+    expect(store.getMark('object:o1:a')).toBe('part|x');
+    store.set('object:o1:a', mask(4), 'clip', 'object:o1', 'part|x');
+    expect(store.getMark('object:o1:a')).toBeUndefined();
+    store.mark('object:o1:b', 'part|x', 'clip', 'object:o1');
+    expect(store.delete('object:o1:b')).toBe(false);
+    expect(store.getMark('object:o1:b')).toBeUndefined();
+  });
+
+  it('drops marks with their group on eviction, deleteClip and clear', () => {
+    const store = createMaskStore({ capBytes: 10 });
+    store.set('object:o1:a', mask(4), 'clip', 'object:o1', 't');
+    store.mark('object:o1:b', 't', 'clip', 'object:o1');
+    // Another group over the cap evicts the object's group, marks too
+    store.set('general:a', mask(8), 'clip', 'general');
+    expect(store.has('object:o1:a')).toBe(false);
+    expect(store.getMark('object:o1:b')).toBeUndefined();
+
+    store.mark('object:o2:a', 't', 'other', 'object:o2');
+    store.deleteClip('other');
+    expect(store.getMark('object:o2:a')).toBeUndefined();
+    store.mark('object:o3:a', 't', 'clip', 'object:o3');
+    store.clear();
+    expect(store.getMark('object:o3:a')).toBeUndefined();
+  });
+});

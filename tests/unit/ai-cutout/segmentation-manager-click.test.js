@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import { getModelSpec } from '../../../src/features/ai-cutout/model-config.js';
 import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.js';
-import { createSegmentationManager } from '../../../src/features/ai-cutout/segmentation-manager.js';
+import {
+  createSegmentationManager,
+  getStaleObjectFrames,
+} from '../../../src/features/ai-cutout/segmentation-manager.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -12,7 +15,10 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
  * the object (a 40% box around the point), and the whole frame.
  */
 class FakeSamWorker {
-  constructor({ fail = false } = {}) {
+  constructor({ fail = false, blankAfter = Number.POSITIVE_INFINITY } = {}) {
+    /** Prompts answered with masks; later ones get empty masks (object lost) */
+    this.blankAfter = blankAfter;
+    this.answered = 0;
     /** @type {Function[]} */
     this.handlers = [];
     /** @type {any[]} */
@@ -58,6 +64,23 @@ class FakeSamWorker {
     }
     const w = msg.maskWidth;
     const h = msg.maskHeight;
+    if (this.answered++ >= this.blankAfter) {
+      const empty = () => new Uint8Array(w * h).buffer;
+      this.emit({
+        type: 'prompt-result',
+        requestId: msg.requestId,
+        width: w,
+        height: h,
+        masks: [empty(), empty(), empty(), empty()],
+        scores: [0.9, 0.8, 0.95, 0.2],
+        lowRes: null,
+        cached: false,
+        encodeMs: 1,
+        decodeMs: 1,
+        totalMs: 2,
+      });
+      return;
+    }
     // Centre of the prompt in mask pixels (coords are encoder pixels)
     const cx = (msg.coords[0] / msg.encoderWidth) * w;
     const cy = (msg.coords[1] / msg.encoderHeight) * h;
@@ -260,5 +283,39 @@ describe('SegmentationManager.analyzeObject', () => {
     expect(workers[0].posted.filter((m) => m.type === 'init')).toHaveLength(1);
     expect(maskStore.get('click:g1')).toMatchObject({ width: 1024, height: 512 });
     expect(maskStore.has('object:o2:g1')).toBe(true);
+  });
+
+  it('tags each mask with the object signature, marks unreachable frames, and skips a run already covered', async () => {
+    // The anchor (frame 1) and one more frame answer; then the object is lost
+    const { manager, maskStore, workers, frames } = harness({ blankAfter: 2 });
+    const clicks = [{ frame: 1, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const options = {
+      objectId: 'o1',
+      range: { start: 0, end: 5 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+      tag: 'whole|a',
+    };
+    const result = await manager.analyzeObject(frames, options);
+    const tracked = frames.filter((f) => maskStore.has(`object:o1:${f.id}`)).map((f) => f.id);
+    expect(tracked.length).toBe(result.tracked);
+    expect(result.lost.length).toBeGreaterThan(0);
+    for (const f of frames) {
+      const key = `object:o1:${f.id}`;
+      if (maskStore.has(key)) expect(maskStore.getTag(key)).toBe('whole|a');
+      else expect(maskStore.getMark(key)).toBe('whole|a');
+    }
+    expect(getStaleObjectFrames(frames, options.range, 'o1', 'whole|a', maskStore)).toEqual([]);
+
+    // Queued again for the same tag (an export behind the editor's run): nothing to do
+    const prompts = workers[0].prompts.length;
+    const again = await manager.analyzeObject(frames, { ...options, onlyIfStale: true });
+    expect(workers[0].prompts.length).toBe(prompts);
+    expect(again.lost).toEqual(result.lost);
+    // Another tag (Part chosen): the Whole masks are stale, so it tracks
+    expect(getStaleObjectFrames(frames, options.range, 'o1', 'part|a', maskStore)).toHaveLength(6);
+    await manager.analyzeObject(frames, { ...options, tag: 'part|a', onlyIfStale: true });
+    expect(workers[0].prompts.length).toBeGreaterThan(prompts);
   });
 });
