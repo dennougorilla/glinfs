@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { chooseFixUp } from '../../../../src/features/editor/ai-cutout.js';
 import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
 import {
   BUILD_SLICE_MS,
@@ -569,6 +570,42 @@ describe('getPickedPieceRole after the picks (review #195)', () => {
     });
     const at = (/** @type {any} */ m, /** @type {number} */ x) => unpackMask(m)[10 * W2 + x];
     expect(built?.masks.map((m) => at(m, 30))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('with Remove picks only, Remove on another separate blob stays an instant pick (review #195 r3)', async () => {
+    const W3 = 80;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 24, 16], // subject
+      [34, 6, 8, 8], // B, removed by a pick
+      [50, 6, 8, 8], // C
+      [66, 6, 8, 8], // D
+    ];
+    const options = {
+      frameCount: 4,
+      getProb: () => probOf(W3, H, pieces),
+      ai: aiOf({ picks: [{ frame: 0, x: 38 / W3, y: 10 / H, mode: 'remove' }] }),
+    };
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    const at = (/** @type {number} */ x) => ({ frame: 2, x: x / W3, y: 10 / H });
+    // C and D overlap the survivor, but no Keep pick is in effect
+    expect(getPickedPieceRole(options, at(54), survivor)).toBe('separate');
+    expect(getPickedPieceRole(options, at(70), survivor)).toBe('separate');
+    expect(chooseFixUp(getPickedPieceRole(options, at(54), survivor), 'remove')).toBe(
+      'remove-pick',
+    );
+    // The subject is still the subject
+    expect(getPickedPieceRole(options, at(12), survivor)).toBe('main');
+    // Add a Keep pick on the subject: now the overlap rule holds (C and D are
+    // dropped by it, so they are outside the survivor and stay separate; the
+    // subject is main)
+    const kept = {
+      ...options,
+      ai: aiOf({ picks: [...options.ai.picks, { frame: 0, x: 12 / W3, y: 10 / H, mode: 'keep' }] }),
+    };
+    const keptSurvivor = await getSurvivingMask({ ...kept, ...noYield }, 2);
+    expect(getPickedPieceRole(kept, at(54), keptSurvivor)).toBe('separate');
+    expect(getPickedPieceRole(kept, at(12), keptSurvivor)).toBe('main');
   });
 
   it('without picks the largest raw piece is the subject', async () => {

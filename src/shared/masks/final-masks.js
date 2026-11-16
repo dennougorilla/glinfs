@@ -409,13 +409,17 @@ export async function createPreEdgeMaskSource(options) {
  * build tracks picks on is under it or within the snap radius), 'main'
  * (the subject) or 'separate' (another piece).
  *
- * With picks, the subject is what is left after them (and clean-up):
- * `survivor`, the frame's pre-edge mask (see getSurvivingMask). A clicked
- * piece that overlaps it at all is 'main': a remove pick there would take
- * out something the picks keep (a kept character, even a smaller one, or
- * one of several), so Remove must track instead. Only a piece already
- * outside the survivor is 'separate'. Without `survivor` (no picks) the
- * largest raw piece is the subject.
+ * With picks, the subject is judged on what is left after them (and
+ * clean-up): `survivor`, the frame's pre-edge mask (see getSurvivingMask).
+ * - A Keep pick in effect: the survivor is what the user kept, so a clicked
+ *   piece that overlaps it at all is 'main' (a remove pick there would
+ *   take out a kept character, even a smaller one or one of several). Only
+ *   a piece outside it is 'separate'.
+ * - Remove picks only: everything but the removed pieces survives, so the
+ *   subject is the survivor's largest piece and the clicked piece is
+ *   'main' when it holds most of it. Other blobs stay 'separate' and get
+ *   instant remove picks.
+ * Without `survivor` (no picks) the largest raw piece is the subject.
  * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
  * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
  * @param {Uint8Array | null} [survivor] - 0/1 pre-edge mask of the frame, at
@@ -431,10 +435,19 @@ export function getPickedPieceRole(options, pick, survivor = null) {
   const picked = findPickedComponent(comps, width, height, pick);
   if (picked === 0) return 'none';
   if (survivor && survivor.length === width * height && survivor.includes(1)) {
-    for (let i = 0; i < survivor.length; i++) {
-      if (survivor[i] && comps.labels[i] === picked) return 'main';
+    if (getRegionPicks(options.ai).some((p) => p.mode === 'keep')) {
+      for (let i = 0; i < survivor.length; i++) {
+        if (survivor[i] && comps.labels[i] === picked) return 'main';
+      }
+      return 'separate';
     }
-    return 'separate';
+    const kept = labelComponents(survivor, width, height);
+    const subject = largestComponent(kept.areas, kept.count);
+    let inside = 0;
+    for (let i = 0; i < kept.labels.length; i++) {
+      if (kept.labels[i] === subject && comps.labels[i] === picked) inside++;
+    }
+    return inside * 2 > kept.areas[subject] ? 'main' : 'separate';
   }
   return picked === largestComponent(comps.areas, comps.count) ? 'main' : 'separate';
 }
