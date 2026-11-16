@@ -322,6 +322,27 @@ export function objectMaskKey(frame, objectId) {
 }
 
 /**
+ * The frames a tracked object's run covers: the selection, widened to the
+ * nearest click when no click is inside it (tracking starts at a click, so
+ * a selection without one would otherwise track nothing)
+ * @param {{ start: number, end: number }} range
+ * @param {{ frame: number }[]} clicks
+ * @returns {{ start: number, end: number }}
+ */
+export function getObjectTrackRange(range, clicks) {
+  if (clicks.length === 0 || clicks.some((c) => c.frame >= range.start && c.frame <= range.end)) {
+    return range;
+  }
+  const distance = (/** @type {number} */ f) => (f < range.start ? range.start - f : f - range.end);
+  let nearest = clicks[0].frame;
+  for (const { frame } of clicks) {
+    const d = distance(frame);
+    if (d < distance(nearest) || (d === distance(nearest) && frame < nearest)) nearest = frame;
+  }
+  return { start: Math.min(range.start, nearest), end: Math.max(range.end, nearest) };
+}
+
+/**
  * Frames of `range` (one per frame key) a tracked object still has to be
  * tracked on: those with neither a mask nor an unreachable mark made with
  * `tag` (the object's clicks and scope). A mask of older clicks or scope,
@@ -753,8 +774,11 @@ export class SegmentationManager {
         }
         return { tracked: 0, lost, anchors: 0, backend: this.#lastReady?.backend ?? null };
       }
+      // A selection without a click tracks from the nearest one outside it
+      const trackRange = getObjectTrackRange(range, options.clicks);
       const result = await this.#analyzeClick(frames, {
         ...options,
+        range: trackRange,
         picks: options.clicks,
         modelId,
         group,
@@ -764,13 +788,15 @@ export class SegmentationManager {
         minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
         wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
       });
-      // Finished: the frames it could not reach are marked as tried
+      // Finished: the frames it could not reach from an anchor are marked
+      // as tried (a run that started from no anchor tried nothing)
       if (
         tag !== undefined &&
+        result.anchors > 0 &&
         !(options.clipId !== undefined && this.#releasedClips.has(options.clipId))
       ) {
-        const start = Math.max(0, range.start);
-        const end = Math.min(frames.length - 1, range.end);
+        const start = Math.max(0, trackRange.start);
+        const end = Math.min(frames.length - 1, trackRange.end);
         for (let f = start; f <= end; f++) {
           const key = objectMaskKey(frames[f], objectId);
           if (!this.#maskStore.has(key)) this.#maskStore.mark(key, tag, options.clipId, group);

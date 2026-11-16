@@ -4,6 +4,7 @@ import { getModelSpec } from '../../../src/features/ai-cutout/model-config.js';
 import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.js';
 import {
   createSegmentationManager,
+  getObjectTrackRange,
   getStaleObjectFrames,
 } from '../../../src/features/ai-cutout/segmentation-manager.js';
 
@@ -317,5 +318,80 @@ describe('SegmentationManager.analyzeObject', () => {
     expect(getStaleObjectFrames(frames, options.range, 'o1', 'part|a', maskStore)).toHaveLength(6);
     await manager.analyzeObject(frames, { ...options, tag: 'part|a', onlyIfStale: true });
     expect(workers[0].prompts.length).toBeGreaterThan(prompts);
+  });
+
+  it('a selection without a click tracks from the nearest click and marks only what it tried (review r3)', async () => {
+    const { manager, maskStore, workers, frames } = harness();
+    const clicks = [{ frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const base = { objectId: 'o1', clicks, clipId: 'clip', tag: 'whole|a' };
+    // Remove object at frame 0 over 0-3, cancelled after its first mask
+    const controller = new AbortController();
+    await expect(
+      manager.analyzeObject(frames, {
+        ...base,
+        range: { start: 0, end: 3 },
+        currentFrame: 0,
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.framesDone >= 1) controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(maskStore.getTag('object:o1:f0')).toBe('whole|a');
+    expect(['f1', 'f2', 'f3'].some((id) => maskStore.has(`object:o1:${id}`))).toBe(false);
+
+    // The selection narrowed to 1-3 (no click in it): tracked from frame 0
+    const narrowed = await manager.analyzeObject(frames, {
+      ...base,
+      range: { start: 1, end: 3 },
+      currentFrame: 1,
+    });
+    expect(narrowed.anchors).toBe(1);
+    for (const id of ['f0', 'f1', 'f2', 'f3']) {
+      expect(maskStore.getTag(`object:o1:${id}`)).toBe('whole|a');
+      expect(maskStore.getMark(`object:o1:${id}`)).toBeUndefined();
+    }
+
+    // Back to 0-3 for export: covered by real masks, nothing to redo
+    const prompts = workers[0].prompts.length;
+    await manager.analyzeObject(frames, {
+      ...base,
+      range: { start: 0, end: 3 },
+      currentFrame: 0,
+      onlyIfStale: true,
+    });
+    expect(workers[0].prompts.length).toBe(prompts);
+    expect(getStaleObjectFrames(frames, { start: 0, end: 3 }, 'o1', 'whole|a', maskStore)).toEqual(
+      [],
+    );
+  });
+
+  it('marks nothing when a run had no anchor to start from', async () => {
+    const { manager, maskStore, frames } = harness();
+    const result = await manager.analyzeObject(frames, {
+      objectId: 'o1',
+      clicks: [],
+      clipId: 'clip',
+      tag: 'whole|',
+      range: { start: 1, end: 3 },
+      currentFrame: 1,
+    });
+    expect(result).toMatchObject({ tracked: 0, anchors: 0 });
+    for (const f of frames) expect(maskStore.getMark(`object:o1:${f.id}`)).toBeUndefined();
+    expect(
+      getStaleObjectFrames(frames, { start: 1, end: 3 }, 'o1', 'whole|', maskStore),
+    ).toHaveLength(3);
+  });
+});
+
+describe('getObjectTrackRange', () => {
+  const at = (/** @type {number[]} */ ...frames) => frames.map((frame) => ({ frame }));
+  it('keeps a selection with a click, widens one without to the nearest click', () => {
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(3))).toEqual({ start: 2, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(0, 9))).toEqual({ start: 0, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(0, 6))).toEqual({ start: 2, end: 6 });
+    // A tie goes to the earlier click
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(8, 0))).toEqual({ start: 0, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, [])).toEqual({ start: 2, end: 5 });
   });
 });
