@@ -287,6 +287,20 @@ describe('Colour fix-ups', () => {
     expect(state.edits.background.ai.objects[0]).toMatchObject({ scope: 'part', tolerance: 47 });
   });
 
+  it('refuses Colour for a fix-up with no point to sample (a box alone; review r3)', () => {
+    const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
+    let state = addAiObject(makeState(), 'remove', { box }, 'b');
+    expect(setAiObjectScope(state, 'b', 'colour')).toBe(state);
+    // A protect point alone samples nothing to remove either
+    state = addAiObjectClick(state, 'b', { frame: 1, x: 0.2, y: 0.2, mode: 'remove' });
+    expect(setAiObjectScope(state, 'b', 'colour')).toBe(state);
+    expect(state.aiRemoveScope).toBe('part');
+    // With a point on what to remove it can be Colour
+    state = addAiObjectClick(state, 'b', { frame: 1, x: 0.25, y: 0.25, mode: 'keep' });
+    state = setAiObjectScope(state, 'b', 'colour');
+    expect(state.edits.background.ai.objects[0].scope).toBe('colour');
+  });
+
   it('the next Remove fix-up starts in the scope chosen last (Colour: never tracked first)', () => {
     let state = makeState();
     expect(state.aiRemoveScope).toBe('part');

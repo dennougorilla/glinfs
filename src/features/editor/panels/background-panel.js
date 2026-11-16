@@ -43,6 +43,7 @@
  */
 
 import {
+  canBeColourObject,
   createDefaultAiCutout,
   createDefaultEdits,
   EDIT_LIMITS,
@@ -1881,9 +1882,11 @@ export function updateBackgroundPanel(container, state, fps) {
   setChecked(q(root, '#ai-object-scope-whole'), scopeOf === 'whole');
   setChecked(q(root, '#ai-object-scope-part'), scopeOf === 'part');
   setChecked(q(root, '#ai-object-scope-colour'), scopeOf === 'colour');
-  // Colour removes only
+  // Colour removes only, and needs a point to sample (a box alone has none)
   const colourSegment = q(root, '#ai-object-scope-colour')?.closest('.editor-cutout-segment');
   setHidden(/** @type {HTMLElement} */ (colourSegment), selected?.mode !== 'remove');
+  /** @type {HTMLInputElement} */ (q(root, '#ai-object-scope-colour')).disabled =
+    !selected || !canBeColourObject(selected);
   const colourSelected = selected?.scope === 'colour' && selected.mode === 'remove';
   setHidden(q(root, '#ai-object-tolerance-row'), !colourSelected);
   if (selected && colourSelected) {

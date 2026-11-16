@@ -637,6 +637,14 @@ describe('AiCutout.objects', () => {
     expect(fallback.tolerance).toBe(32);
   });
 
+  it('a saved Colour fix-up with no point to sample (a box alone) loads as Whole', () => {
+    const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
+    const [boxOnly] = objectsOf([
+      { id: 'a', mode: 'remove', scope: 'colour', clicks: [], boxes: [box] },
+    ]);
+    expect(boxOnly.scope).toBe('whole');
+  });
+
   it('gives fix-ups saved before Colour existed the default tolerance', () => {
     const [object] = objectsOf([{ id: 'a', mode: 'remove', scope: 'part', clicks: [keep()] }]);
     expect(object).toMatchObject({ scope: 'part', tolerance: 32 });

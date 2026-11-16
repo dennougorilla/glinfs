@@ -209,6 +209,17 @@ export const CLICK_SCOPES = /** @type {const} */ (['whole', 'part']);
 /** @type {readonly ObjectScope[]} */
 export const OBJECT_SCOPES = /** @type {const} */ (['whole', 'part', 'colour']);
 
+/**
+ * Whether a fix-up can be Colour: a Remove one with a point to sample the
+ * colours under (a fix-up made by a box, or with only protect points, has
+ * none and would remove nothing)
+ * @param {{ mode: ObjectMode, clicks: { mode: PickMode }[] }} object
+ * @returns {boolean}
+ */
+export function canBeColourObject(object) {
+  return object.mode === 'remove' && object.clicks.some((click) => click.mode === 'keep');
+}
+
 /** @type {readonly AiModel[]} */
 export const AI_MODELS = /** @type {const} */ ([
   'anime',
@@ -582,13 +593,14 @@ function normalizeObject(object, frameCount) {
   if (first < 0) return null;
   const mode = normalizeEnum(o.mode, OBJECT_MODES, 'remove');
   const scope = normalizeEnum(o.scope, OBJECT_SCOPES, 'whole');
+  const kept = clicks.slice(first, first + EDIT_LIMITS.aiObjectClicks.max);
   return {
     id: typeof o.id === 'string' && o.id ? o.id : createLayerId(),
     mode,
-    clicks: clicks.slice(first, first + EDIT_LIMITS.aiObjectClicks.max),
+    clicks: kept,
     boxes,
-    // Colour removes only: an Add fix-up is always tracked
-    scope: scope === 'colour' && mode !== 'remove' ? 'whole' : scope,
+    // Colour removes only and needs a point to sample: otherwise tracked
+    scope: scope === 'colour' && !canBeColourObject({ mode, clicks: kept }) ? 'whole' : scope,
     tolerance: Math.round(
       clampNumber(
         o.tolerance,

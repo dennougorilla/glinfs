@@ -941,6 +941,26 @@ describe('tracked objects', () => {
     expect($('#ai-object-lost').hidden).toBe(true);
   });
 
+  it('turns Colour off for a Remove fix-up with no point to sample (a box alone; review r3)', () => {
+    const boxOnly = {
+      ...object('a', 'remove', 3),
+      clicks: [],
+      boxes: [{ frame: 3, x0: 0, y0: 0, x1: 0.5, y1: 0.5 }],
+    };
+    updateBackgroundPanel(
+      root,
+      stateWith([boxOnly], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    expect($('#ai-object-scope-colour').disabled).toBe(true);
+    updateBackgroundPanel(
+      root,
+      stateWith([object('a', 'remove', 3)], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    expect($('#ai-object-scope-colour').disabled).toBe(false);
+  });
+
   it('offers Colour beside Whole / Part for a selected Remove fix-up, with its tolerance', () => {
     const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 44 };
     updateBackgroundPanel(

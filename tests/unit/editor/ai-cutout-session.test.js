@@ -829,6 +829,25 @@ describe('AI cutout session: tracked objects', () => {
     expect(maskStore.get(`object:o1:${state.clip.frames[0].id}`)).not.toBeNull();
   });
 
+  it('keeps lost frames through Colour, so they come back on a return to Part (review r3)', async () => {
+    manager.lostAt = new Set([3]);
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'part', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(status.objectLost).toEqual({ o1: [3] });
+    // Colour: not tracked; the lost frames stay (the panel and overlay skip them)
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'colour', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(status.objectLost).toEqual({ o1: [3] });
+    // Back to Part with the same points: no new run, and frame 3 is still reported lost
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'part', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(status.objectLost).toEqual({ o1: [3] });
+  });
+
   it('tracks a new object through the selection and reports its lost frames', async () => {
     manager.lostAt = new Set([3]);
     setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);

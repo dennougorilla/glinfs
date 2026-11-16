@@ -852,14 +852,11 @@ export function createAiCutoutSession(options) {
     if (!isAiCutoutActive(state.edits.background)) return;
     for (const object of objects) {
       if (isColourObject(object)) {
-        // Not tracked: a run of it stops; its tracked masks stay for a
-        // return to Whole / Part
+        // Not tracked: a run of it stops; its tracked masks and lost frames
+        // stay for a return to Whole / Part (readers skip a Colour fix-up's
+        // lost frames)
         objectQueue = objectQueue.filter((queued) => queued !== object.id);
         if (objectRun?.id === object.id) objectController?.abort();
-        if (object.id in objectLost) {
-          const { [object.id]: _colour, ...rest } = objectLost;
-          reportLost(rest);
-        }
         continue;
       }
       const signature = getObjectSignature(object);

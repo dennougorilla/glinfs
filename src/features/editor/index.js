@@ -22,6 +22,7 @@ import {
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
 import {
+  canBeColourObject,
   createDefaultAiCutout,
   createDefaultEdits,
   createLayerId,
@@ -1186,7 +1187,10 @@ function updateAiPreviewNote(container, state) {
  */
 function isObjectLostOnFrame(state, frame) {
   const lost = state.aiCutout.objectLost ?? {};
-  return (state.edits.background.ai.objects ?? []).some((o) => lost[o.id]?.includes(frame));
+  // A Colour fix-up is not tracked: its lost frames wait for Whole / Part
+  return (state.edits.background.ai.objects ?? []).some(
+    (o) => !isColourObject(o) && lost[o.id]?.includes(frame),
+  );
 }
 
 /**
@@ -2332,6 +2336,10 @@ function handleSetAiObjectScope(scope) {
   if (!store) return;
   const object = getActiveAiObject(store.getState());
   if (!object) return;
+  if (scope === 'colour' && !canBeColourObject(object)) {
+    announce('Colour needs a point: click the colour to remove first');
+    return;
+  }
   store.setState((state) => setAiObjectScope(state, object.id, scope));
   if (object.mode === 'remove') rememberRemoveScope(scope);
 }

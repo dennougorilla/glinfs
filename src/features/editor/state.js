@@ -5,6 +5,7 @@
 
 import {
   areTouchUpsActive,
+  canBeColourObject,
   createDefaultEdits,
   createLayerId,
   createTextLayer,
@@ -621,7 +622,8 @@ export function addAiObjectClick(state, id, click) {
 }
 
 /**
- * Whole / Part / Colour of a fix-up (Colour: Remove only)
+ * Whole / Part / Colour of a fix-up (Colour: Remove only, with a point to
+ * sample; see canBeColourObject)
  * @param {import('./types.js').EditorState} state
  * @param {string} id
  * @param {import('../../shared/edits/model.js').ObjectScope} scope
@@ -630,8 +632,8 @@ export function addAiObjectClick(state, id, click) {
 export function setAiObjectScope(state, id, scope) {
   const object = state.edits.background.ai.objects?.find((o) => o.id === id);
   if (!object || object.scope === scope) return state;
-  // Colour removes only
-  if (scope === 'colour' && object.mode !== 'remove') return state;
+  // Colour removes only, by the colours under a point: a box alone has none
+  if (scope === 'colour' && !canBeColourObject(object)) return state;
   const next = updateAiObject(state, id, (o) => ({ ...o, scope }));
   // The next Remove fix-up starts in it
   return object.mode === 'remove' ? setAiRemoveScope(next, scope) : next;
