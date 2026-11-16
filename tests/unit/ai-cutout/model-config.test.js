@@ -45,8 +45,11 @@ import {
   MODEL_RELEASE_URL,
 } from '../../../src/features/ai-cutout/model-config.js';
 import {
+  BIREFNET_HOST,
   formatModelSize,
   getModelFiles,
+  hostedFile,
+  isEntryOffered,
   isSamEntry,
   isSamModelId,
 } from '../../../src/features/ai-cutout/model-registry.js';
@@ -220,7 +223,7 @@ describe('model registry', () => {
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
     // UI order: General left/top, Portrait, Anime, Click to select, then
-    // the larger alternatives, then the development-only BiRefNet models
+    // the larger alternatives, then the BiRefNet models (hosted on Hugging Face)
     expect(ids).toEqual([
       'general',
       'portrait',
@@ -237,8 +240,13 @@ describe('model registry', () => {
     for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
       if (entry.id.startsWith('birefnet-')) {
         // Exported from a PyTorch checkpoint, not converted from an ONNX
-        // file: no size relation to the upstream file. Not in the release.
-        expect(entry.devOnly).toBe(true);
+        // file: no size relation to the upstream file. Not in the release:
+        // downloaded from the pinned Hugging Face commit
+        expect('devOnly' in entry).toBe(false);
+        expect(entry.url).toBe(`${BIREFNET_HOST}/${entry.fileName}`);
+        expect(entry.url).toMatch(
+          /^https:\/\/huggingface\.co\/dennougorilla\/glinfs-models\/resolve\/[0-9a-f]{40}\/birefnet-[a-z]+-fp16\.onnx$/,
+        );
         expect(entry.license.name).toBe('MIT');
       }
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
@@ -383,13 +391,23 @@ describe('model registry', () => {
     ]);
   });
 
-  it('offers the development-only models in development builds only', () => {
+  it('keeps the hosted models out of the release and offers them in every build', () => {
     const release = getReleaseModels().map((e) => e.id);
     expect(release).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
     for (const id of ['birefnet-general', 'birefnet-lite', 'birefnet-toonout']) {
       expect(isModelOffered(id, true)).toBe(true);
-      expect(isModelOffered(id, false)).toBe(false);
+      expect(isModelOffered(id, false)).toBe(true);
+      // Fetched from Hugging Face, not from the site
+      expect(getModelSpec(id, '/glinfs/').url).toBe(getModelEntry(id).url);
+      expect(getModelUrl(id, '/glinfs/')).toBe(getModelEntry(id).url);
     }
+    // A model that is not hosted yet would be development-only
+    expect(hostedFile(null, 'x.onnx')).toEqual({ devOnly: true });
+    expect(hostedFile('https://huggingface.co/o/r/resolve/abc/', 'a b.onnx')).toEqual({
+      url: 'https://huggingface.co/o/r/resolve/abc/a%20b.onnx',
+    });
+    expect(isEntryOffered({ ...getModelEntry('anime'), devOnly: true }, false)).toBe(false);
+    expect(isEntryOffered({ ...getModelEntry('anime'), devOnly: true }, true)).toBe(true);
     for (const id of release) {
       expect(isModelOffered(id, false)).toBe(true);
       expect(isModelOffered(id, true)).toBe(true);
@@ -408,7 +426,8 @@ describe('model-config', () => {
     const files = getReleaseModels().flatMap((entry) => getModelFiles(entry));
     expect(MODELS).toHaveLength(files.length);
     expect(MODELS).toHaveLength(getReleaseModels().length + 1); // MobileSAM has two files
-    // The development-only models are never downloaded, only kept
+    // The models that are not in the release (hosted elsewhere) are never
+    // downloaded into public/models, only kept and verified when present
     expect(DEV_MODELS.map((m) => m.fileName)).toEqual([
       'birefnet-general-fp16.onnx',
       'birefnet-lite-fp16.onnx',
@@ -507,6 +526,7 @@ describe('model-config', () => {
   it('describes each model for the worker', () => {
     expect(getModelSpec('anime', '/glinfs/')).toEqual({
       id: 'anime',
+      label: 'Anime',
       url: '/glinfs/models/isnetis-fp16.onnx',
       bytes: 88_070_957,
       sha256: ANIME_SHA256,

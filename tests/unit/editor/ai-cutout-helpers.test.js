@@ -315,11 +315,21 @@ describe('AI cutout helpers', () => {
 
   it('turns failures into user copy', () => {
     for (const code of Object.values(SegmentationErrorCode)) {
+      if (code === SegmentationErrorCode.MODEL_UNAVAILABLE) continue;
       const described = describeAnalysisError(new SegmentationError(code, 'internal'));
       expect(described.code).toBe(code);
       expect(described.message).not.toContain('internal');
       expect(described.message.length).toBeGreaterThan(10);
     }
+    // A missing custom model: its own message says which one and what to do
+    const gone = 'The file of the custom model "Mine" is no longer in this browser.';
+    expect(
+      describeAnalysisError(new SegmentationError(SegmentationErrorCode.MODEL_UNAVAILABLE, gone)),
+    ).toEqual({ code: SegmentationErrorCode.MODEL_UNAVAILABLE, message: gone });
+    expect(
+      describeAnalysisError(new SegmentationError(SegmentationErrorCode.MODEL_UNAVAILABLE, ''))
+        .message,
+    ).toMatch(/Settings → AI models/);
     expect(describeAnalysisError(new Error('boom'))).toEqual({
       code: 'unknown',
       message: 'The analysis failed: boom',

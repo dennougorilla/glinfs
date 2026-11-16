@@ -16,7 +16,7 @@
 
 import { getModelSpec, getModelUrl, getSpecFiles, isModelOffered } from './model-config.js';
 import { modelCacheKey } from './model-loader.js';
-import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
+import { getCustomModelEntries, MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
 
 /**
  * @typedef {Object} DownloadedModelInfo
@@ -33,6 +33,11 @@ import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
  * @property {string[]} staleUrls - Keys of its files under earlier pins
  * @property {boolean} updateAvailable - Not cached under its current pin, but
  *   an older copy of its file is (the pinned file changed since)
+ * @property {boolean} [custom] - A model the user added (Settings lists it
+ *   under "Your models", with Rename, Export and Delete)
+ * @property {boolean} [localOnly] - Custom model from a local file (no URL
+ *   to download it from again)
+ * @property {string} [url] - Where the file is downloaded from (another origin)
  */
 
 /**
@@ -180,28 +185,39 @@ export async function listDownloadedModels(deps = {}) {
       urls = null;
     }
   }
-  const keys = new Map(MODEL_REGISTRY.map((entry) => [entry.id, currentKeys(entry.id, resolved)]));
+  // The built-in models, then the ones the user added
+  const entries = [...MODEL_REGISTRY, ...getCustomModelEntries()];
+  const keys = new Map(entries.map((entry) => [entry.id, currentKeys(entry.id, resolved)]));
   const allUrls = cache && urls ? [...urls] : [];
-  // Development-only models are listed by development builds only
-  const models = MODEL_REGISTRY.filter((entry) => isModelOffered(entry.id)).map((entry) => {
-    const own = /** @type {string[]} */ (keys.get(entry.id));
-    const files = new Set(own.map(withoutSearch));
-    const cached = urls ? own.every((key) => urls.has(key)) : null;
-    const staleUrls = allUrls.filter((url) => !own.includes(url) && files.has(withoutSearch(url)));
-    return {
-      id: entry.id,
-      label: entry.label,
-      modelName: entry.modelName,
-      description: entry.description,
-      bytes: entry.bytes,
-      license: entry.license,
-      upstream: entry.upstream,
-      licenseNote: entry.licenseNote ?? null,
-      cached,
-      staleUrls,
-      updateAvailable: cached === false && staleUrls.length > 0,
-    };
-  });
+  // Development-only models (none while every model is hosted) are listed
+  // by development builds only
+  const models = entries
+    .filter((entry) => isModelOffered(entry.id))
+    .map((entry) => {
+      const own = /** @type {string[]} */ (keys.get(entry.id));
+      const files = new Set(own.map(withoutSearch));
+      const cached = urls ? own.every((key) => urls.has(key)) : null;
+      const staleUrls = allUrls.filter(
+        (url) => !own.includes(url) && files.has(withoutSearch(url)),
+      );
+      return {
+        id: entry.id,
+        label: entry.label,
+        modelName: entry.modelName,
+        description: entry.description,
+        bytes: entry.bytes,
+        license: entry.license,
+        upstream: entry.upstream,
+        licenseNote: entry.licenseNote ?? null,
+        cached,
+        staleUrls,
+        updateAvailable: cached === false && staleUrls.length > 0,
+        ...('custom' in entry && entry.custom
+          ? { custom: true, localOnly: Boolean(entry.localOnly) }
+          : {}),
+        ...('url' in entry && entry.url ? { url: entry.url } : {}),
+      };
+    });
   const known = new Set(
     models.flatMap((model) => [
       .../** @type {string[]} */ (keys.get(model.id)),

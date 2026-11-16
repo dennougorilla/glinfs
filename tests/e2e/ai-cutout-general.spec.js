@@ -171,6 +171,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       click: 0,
       ben2: 0,
       'video-person': 0,
+      'birefnet-general': 0,
+      'birefnet-lite': 0,
+      'birefnet-toonout': 0,
     });
 
     // Stretch preprocessing and the stub's mean-0.5 round trip land every
@@ -206,6 +209,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       click: 0,
       ben2: 0,
       'video-person': 0,
+      'birefnet-general': 0,
+      'birefnet-lite': 0,
+      'birefnet-toonout': 0,
     });
 
     // Back to general: downloaded now (Ready, no question) and its masks
@@ -279,6 +285,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
       click: 0,
       ben2: 0,
       'video-person': 0,
+      'birefnet-general': 0,
+      'birefnet-lite': 0,
+      'birefnet-toonout': 0,
     });
     const frames = await decodeExportedGif(page);
     expect(gifPixel(frames[0], 5, 5)[3]).toBe(0);

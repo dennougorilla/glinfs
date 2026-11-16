@@ -20,11 +20,18 @@
  * downloads one ahead of use through downloadModelToCache on the main
  * thread — the same download, verification and storage code.
  *
+ * A model hosted on another origin (a registry entry's `url`, a custom
+ * model added by URL) is fetched with CORS, without credentials or a
+ * referrer, and only from the hosts model-hosts.js allows. A custom model
+ * added from a local file (`localOnly`) is never downloaded: when its
+ * cached copy is gone the load fails with MODEL_UNAVAILABLE.
+ *
  * Every browser API is injectable so the logic is unit-tested without a
  * browser.
  */
 
 import { MODEL_CACHE_NAME } from './model-config.js';
+import { checkModelUrl } from './model-hosts.js';
 import { createAbortError, SegmentationError, SegmentationErrorCode } from './protocol.js';
 
 /** @typedef {import('./model-config.js').ModelSpec} ModelSpec */
@@ -110,7 +117,7 @@ export function looksLikeHtml(bytes) {
  */
 function modelNotFound(spec, reason) {
   console.warn(
-    `[ai-cutout] The model file ${spec.url} was not found (${reason}). In a local build, run \`npm run models:fetch\` to download the models.`,
+    `[ai-cutout] The model file ${spec.url} was not found (${reason}). In a local build, run \`npm run models:fetch\` to download the models (a development-only model is placed in public/models by hand).`,
   );
   return new SegmentationError(
     SegmentationErrorCode.MODEL_NOT_FOUND,
@@ -280,6 +287,54 @@ function requireSubtle(subtle) {
 }
 
 /**
+ * The fetch of a model file: same-origin as it always was; another origin
+ * with CORS, no credentials and no referrer, and only from an allowed host
+ * (model-hosts.js). A model that only exists in Cache Storage (custom,
+ * from a local file) is never fetched.
+ * @param {{ url: string, localOnly?: boolean, label?: string }} spec
+ * @param {Object} options
+ * @param {typeof fetch} options.fetchImpl
+ * @param {string} options.baseHref
+ * @param {AbortSignal | undefined} options.signal
+ * @returns {Promise<Response>}
+ */
+export async function fetchModelFile(spec, { fetchImpl, baseHref, signal }) {
+  if (spec.localOnly) {
+    throw new SegmentationError(
+      SegmentationErrorCode.MODEL_UNAVAILABLE,
+      `The file of the custom model${spec.label ? ` "${spec.label}"` : ''} is no longer in this browser's storage, and it has no URL to download it from. Add the file again in Settings → AI models.`,
+    );
+  }
+  const checked = checkModelUrl(spec.url, baseHref);
+  if (!checked.ok) {
+    throw new SegmentationError(SegmentationErrorCode.DOWNLOAD_FAILED, checked.reason);
+  }
+  const crossOrigin = new URL(checked.url).origin !== new URL(baseHref).origin;
+  try {
+    // no-store: the verified copy lives in Cache Storage; keeping a second
+    // copy of the model (about 90 MB) in the HTTP cache would only waste disk
+    return crossOrigin
+      ? await fetchImpl(checked.url, {
+          cache: 'no-store',
+          signal,
+          mode: 'cors',
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+        })
+      : await fetchImpl(spec.url, { cache: 'no-store', signal });
+  } catch (error) {
+    throwIfAborted(signal);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SegmentationError(
+      SegmentationErrorCode.DOWNLOAD_FAILED,
+      crossOrigin
+        ? `The model download from ${new URL(checked.url).hostname} failed: ${reason} (the network failed, or the server does not allow downloads from other sites: CORS)`
+        : `The model download failed: ${reason}`,
+    );
+  }
+}
+
+/**
  * Download a model, verify its size and SHA-256 and store the verified
  * bytes in Cache Storage (removing its copies under earlier pins). Never
  * reads the cache: callers check it first.
@@ -294,18 +349,7 @@ export async function downloadModelToCache(spec, deps = {}) {
   throwIfAborted(signal);
   const verifier = requireSubtle(subtle);
 
-  let response;
-  try {
-    // no-store: the verified copy lives in Cache Storage; keeping a second
-    // copy of the model (about 90 MB) in the HTTP cache would only waste disk
-    response = await fetchImpl(spec.url, { cache: 'no-store', signal });
-  } catch (error) {
-    throwIfAborted(signal);
-    throw new SegmentationError(
-      SegmentationErrorCode.DOWNLOAD_FAILED,
-      `The model download failed: ${error instanceof Error ? error.message : error}`,
-    );
-  }
+  const response = await fetchModelFile(spec, { fetchImpl, baseHref, signal });
   const rejected = classifyModelResponse(response, spec);
   if (rejected) throw rejected;
 
@@ -474,4 +518,127 @@ export async function loadModelBytes(spec, deps = {}) {
   }
   const { bytes, cached } = await downloadModelToCache(spec, deps);
   return { bytes, fromCache: false, cached };
+}
+
+/**
+ * @typedef {Object} UnpinnedDownload
+ * @property {Uint8Array} bytes
+ * @property {string} sha256 - Lowercase hex SHA-256 of `bytes`
+ */
+
+/**
+ * Download a model file nothing pins yet (a model the user adds by URL):
+ * the same fetch rules as a registry model (fetchModelFile), the size from
+ * Content-Length when the server sends one, at most `maxBytes`. Before the
+ * body is read, `confirmSize` sees the announced size and can refuse it
+ * (a file above 1 GB is only read after the user confirms).
+ * @param {string} url
+ * @param {Object} options
+ * @param {number} options.maxBytes
+ * @param {(totalBytes: number | null) => boolean | Promise<boolean>} [options.confirmSize]
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {SubtleCrypto} [options.subtle]
+ * @param {string} [options.baseHref]
+ * @param {AbortSignal} [options.signal]
+ * @param {(progress: { loadedBytes: number, totalBytes: number | null }) => void} [options.onProgress]
+ * @returns {Promise<UnpinnedDownload | null>} null when confirmSize refused
+ */
+export async function downloadUnpinnedModel(url, options) {
+  const { maxBytes, confirmSize, onProgress } = options;
+  const { fetchImpl, subtle, baseHref, signal } = resolveDeps(options);
+  throwIfAborted(signal);
+  const verifier = requireSubtle(subtle);
+  const response = await fetchModelFile({ url }, { fetchImpl, baseHref, signal });
+  const spec = /** @type {ModelSpec} */ ({ url, bytes: 0, sha256: '', files: [] });
+  const rejected = classifyModelResponse(response, spec);
+  if (rejected) throw rejected;
+  const length = Number(response.headers?.get('content-length'));
+  const totalBytes = Number.isSafeInteger(length) && length > 0 ? length : null;
+  if (totalBytes !== null && totalBytes > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new SegmentationError(
+      SegmentationErrorCode.DOWNLOAD_FAILED,
+      `The file has ${totalBytes} bytes, more than the ${maxBytes} this app can read`,
+    );
+  }
+  if (confirmSize && !(await confirmSize(totalBytes))) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  onProgress?.({ loadedBytes: 0, totalBytes });
+  /** @type {Uint8Array} */
+  let bytes;
+  try {
+    if (totalBytes !== null) {
+      bytes = await readBody(
+        response,
+        totalBytes,
+        (loaded) => onProgress?.({ loadedBytes: loaded, totalBytes }),
+        signal,
+      );
+    } else {
+      bytes = await readUnsizedBody(
+        response,
+        maxBytes,
+        (loaded) => onProgress?.({ loadedBytes: loaded, totalBytes: null }),
+        signal,
+      );
+    }
+  } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof SegmentationError) throw error;
+    throw new SegmentationError(
+      SegmentationErrorCode.DOWNLOAD_FAILED,
+      `The download was interrupted: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+  if (looksLikeHtml(bytes)) throw modelNotFound(spec, 'the server sent a web page');
+  const sha256 = toHex(await verifier.digest('SHA-256', bytes));
+  throwIfAborted(signal);
+  return { bytes, sha256 };
+}
+
+/**
+ * Stream a body of unknown size, at most `maxBytes`
+ * @param {Response} response
+ * @param {number} maxBytes
+ * @param {(loaded: number) => void} onChunk
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Uint8Array>}
+ */
+async function readUnsizedBody(response, maxBytes, onChunk, signal) {
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    onChunk(bytes.byteLength);
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (signal?.aborted) {
+      await reader.cancel().catch(() => undefined);
+      throw createAbortError('Download cancelled');
+    }
+    loaded += value.byteLength;
+    if (loaded > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new SegmentationError(
+        SegmentationErrorCode.DOWNLOAD_FAILED,
+        `The file is larger than the ${maxBytes} bytes this app can read`,
+      );
+    }
+    chunks.push(value);
+    onChunk(loaded);
+  }
+  const bytes = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }

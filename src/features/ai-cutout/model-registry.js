@@ -26,10 +26,18 @@
  * converted file from the `models-v1` GitHub Release of this repository
  * (asset name = `fileName`) into public/models/<fileName>, and the browser
  * fetches it same-origin only when the user analyzes with that model.
- * The exception is a `devOnly` model (the BiRefNet ones): not in the
- * release yet, offered only by development builds, which serve whatever
- * file was placed in public/models by hand (verified against the same
- * pins).
+ * The exceptions:
+ * - a model with a `url` is downloaded by the browser from that URL (another
+ *   origin, with CORS: see model-hosts.js) instead of the site, so it is not
+ *   in the Pages artifact (GitHub Pages artifacts must stay under 1 GB);
+ * - a `devOnly` model (none now; the BiRefNet ones if BIREFNET_HOST were
+ *   null): not hosted anywhere, offered only by development builds, which
+ *   serve whatever file was placed in public/models by hand (verified
+ *   against the same pins).
+ *
+ * Models the user adds in Settings (custom-models.js) join the registry at
+ * run time (setCustomModelEntries): getModelIds, isModelId and
+ * getModelEntry know them; MODEL_REGISTRY stays the built-in models.
  *
  * One model is made of two files: "Click to select" (MobileSAM) runs an
  * image encoder once per frame and a small prompt decoder per click. Its
@@ -108,6 +116,16 @@
  * @property {ModelPreprocess} preprocess
  * @property {readonly ModelRecurrentPair[]} [recurrent] - A video model's
  *   state, carried from frame to frame by the worker
+ * @property {string} [url] - Absolute URL the browser downloads the file
+ *   from (another origin, fetched with CORS) instead of public/models; the
+ *   file is then not in the `models-v1` release nor in the Pages artifact
+ * @property {true} [custom] - A model the user added (custom-models.js)
+ * @property {boolean} [localOnly] - Custom model from a local file: it
+ *   exists only in Cache Storage and is never downloaded
+ * @property {readonly string[]} [subjects] - Custom model: the subject
+ *   cards that list it
+ * @property {true} [missing] - A custom model id that no longer names a
+ *   model (getModelEntry's placeholder; it cannot be loaded)
  * @property {true} [devOnly] - Offered only in development builds
  *   (`npm run dev`): its file is not in the `models-v1` release, so
  *   `npm run models:fetch` and the Pages deploy leave it out, and it is
@@ -555,17 +573,40 @@ const VIDEO_PERSON = {
  * per frame with a peak of about 7.7 GB GPU memory (lite: 260 ms, 5.8 GB).
  * Too heavy for weak GPUs, and untested on Apple and Intel GPUs.
  *
- * Development builds only (`devOnly`): the files are not in the `models-v1`
- * release, and the two large ones cannot ship with the Pages site next to
- * the other models (GitHub Pages artifacts must stay under 1 GB).
+ * Not in the `models-v1` release: the two large ones cannot ship with the
+ * Pages site next to the other models (GitHub Pages artifacts must stay
+ * under 1 GB). They are downloaded from BIREFNET_HOST (Hugging Face).
  */
 const BIREFNET_COMMON = /** @type {const} */ ({
   license: MIT,
   inputName: 'input_image',
   outputName: 'output_image',
   inputSize: 1024,
-  devOnly: true,
 });
+
+/**
+ * Where the BiRefNet files are downloaded from: a base URL that each
+ * entry's `fileName` is appended to, here the Hugging Face repository
+ * dennougorilla/glinfs-models at a pinned commit (`resolve/<commit>`; its
+ * files have the pinned sizes and SHA-256, and it sends CORS headers, see
+ * model-hosts.js). null would make the BiRefNet models development-only
+ * again (not hosted: development builds serve them from public/models).
+ * @type {string | null}
+ */
+export const BIREFNET_HOST =
+  'https://huggingface.co/dennougorilla/glinfs-models/resolve/d4b06cb3e2d551d954cd9fd748abc14a79f1618c';
+
+/**
+ * Where a hosted file comes from: `{ url }` under `host`, or `{ devOnly }`
+ * when `host` is null (not hosted yet)
+ * @param {string | null} host - Base URL
+ * @param {string} fileName
+ * @returns {{ url: string } | { devOnly: true }}
+ */
+export function hostedFile(host, fileName) {
+  if (!host) return { devOnly: true };
+  return { url: `${host.replace(/\/+$/, '')}/${encodeURIComponent(fileName)}` };
+}
 
 /** @returns {ModelPreprocess} */
 function birefnetPreprocess() {
@@ -593,6 +634,7 @@ const BIREFNET_GENERAL = {
   description: 'Characters, people and objects, cleanest on busy backgrounds (needs a strong GPU)',
   finds: 'the characters, people and objects',
   fileName: 'birefnet-general-fp16.onnx',
+  ...hostedFile(BIREFNET_HOST, 'birefnet-general-fp16.onnx'),
   bytes: 519_348_204,
   sha256: '809c204052cb841141fb261e4beefd313dd8035587246940bd73aa3c6d20207e',
   convertedFrom: {
@@ -622,6 +664,7 @@ const BIREFNET_LITE = {
   description: 'Like Busy backgrounds, about twice as fast and a smaller download',
   finds: 'the characters, people and objects',
   fileName: 'birefnet-lite-fp16.onnx',
+  ...hostedFile(BIREFNET_HOST, 'birefnet-lite-fp16.onnx'),
   bytes: 122_466_609,
   sha256: 'dd67588b7b3fe3d4b311a5f30d4298f3a3b5e2bd513c0c72c0e41c29fcb8e05e',
   convertedFrom: {
@@ -653,6 +696,7 @@ const BIREFNET_TOONOUT = {
   description: 'Anime characters, best on hair and edges; may keep parts of a busy background',
   finds: 'the characters',
   fileName: 'birefnet-toonout-fp16.onnx',
+  ...hostedFile(BIREFNET_HOST, 'birefnet-toonout-fp16.onnx'),
   bytes: 519_348_204,
   sha256: 'dd9c9fbc1a831b34aa8e2b7f9e28d42d44ac2debc37eedea85df33d1abbf038e',
   convertedFrom: {
@@ -726,11 +770,12 @@ export function isEntryOffered(entry, dev) {
 
 /**
  * The models of the `models-v1` release, which `npm run models:fetch`
- * downloads and the Pages deploy ships (every model but the `devOnly` ones)
+ * downloads and the Pages deploy ships (every model but the `devOnly` ones
+ * and the ones downloaded from their own `url`)
  * @returns {readonly Readonly<ModelEntry | SamModelEntry>[]}
  */
 export function getReleaseModels() {
-  return MODEL_REGISTRY.filter((entry) => isEntryOffered(entry, false));
+  return MODEL_REGISTRY.filter((entry) => isEntryOffered(entry, false) && !('url' in entry));
 }
 
 /**
@@ -749,29 +794,128 @@ export const FIRST_RUN_MODEL_ID = BEN2.id;
 /** Cache Storage bucket that keeps verified models between visits */
 export const MODEL_CACHE_NAME = 'glinfs-models-v1';
 
-/** @returns {string[]} Every model id */
+/**
+ * Models the user added (custom-models.js), in the order Settings lists them
+ * @type {readonly Readonly<ModelEntry>[]}
+ */
+let customEntries = Object.freeze([]);
+
+/** @type {Set<() => void>} */
+const customListeners = new Set();
+
+/**
+ * Replace the user-added models (custom-model-store.js calls this when
+ * the stored definitions are read or change). Listeners run afterwards.
+ * @param {readonly ModelEntry[]} entries - Each with `custom: true`
+ */
+export function setCustomModelEntries(entries) {
+  const builtIn = new Set(MODEL_REGISTRY.map((entry) => entry.id));
+  customEntries = Object.freeze(
+    entries.filter((entry) => !builtIn.has(entry.id)).map((entry) => Object.freeze({ ...entry })),
+  );
+  for (const listener of [...customListeners]) listener();
+}
+
+/** @returns {readonly Readonly<ModelEntry>[]} The user-added models */
+export function getCustomModelEntries() {
+  return customEntries;
+}
+
+/**
+ * Run `listener` whenever the user-added models change
+ * @param {() => void} listener
+ * @returns {() => void} Unsubscribe
+ */
+export function onCustomModelsChange(listener) {
+  customListeners.add(listener);
+  return () => {
+    customListeners.delete(listener);
+  };
+}
+
+/** @returns {string[]} Every model id: the built-in ones, then the user-added ones */
 export function getModelIds() {
-  return MODEL_REGISTRY.map((entry) => entry.id);
+  return [...MODEL_REGISTRY, ...customEntries].map((entry) => entry.id);
+}
+
+/**
+ * @param {string} id
+ * @returns {Readonly<ModelEntry | SamModelEntry> | undefined}
+ */
+function findEntry(id) {
+  return MODEL_REGISTRY.find((e) => e.id === id) ?? customEntries.find((e) => e.id === id);
 }
 
 /**
  * @param {unknown} id
- * @returns {boolean} `id` names a registered model
+ * @returns {boolean} `id` names a registered model (built in or user-added)
  */
 export function isModelId(id) {
-  return MODEL_REGISTRY.some((entry) => entry.id === id);
+  return typeof id === 'string' && findEntry(id) !== undefined;
+}
+
+/** Ids of user-added models (custom-models.js isCustomModelId) */
+const CUSTOM_ID = /^custom-[0-9a-f]{16}-[0-9a-f]{8}$/;
+
+/**
+ * Whether an id has the form of a user-added model's id (present or not)
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+export function isCustomEntryId(id) {
+  return typeof id === 'string' && CUSTOM_ID.test(id);
 }
 
 /**
- * The registry entry of a model.
+ * The entry a custom model id gets once the model is gone (deleted, or
+ * never added in this browser): labels still render, loading it fails with
+ * MODEL_UNAVAILABLE (model-config.js getModelSpec)
+ * @param {string} id
+ * @returns {Readonly<ModelEntry>}
+ */
+function missingCustomEntry(id) {
+  return Object.freeze({
+    id,
+    custom: true,
+    missing: true,
+    label: 'Missing custom model',
+    modelName: 'Not in this browser',
+    shortModelName: 'Missing',
+    description: 'A model that was added in Settings and is no longer there',
+    finds: 'the subject',
+    fileName: `custom/${id}.onnx`,
+    localOnly: true,
+    bytes: 0,
+    sha256: '',
+    convertedFrom: { repo: '', revision: '', path: '', bytes: 0, sha256: '' },
+    license: { name: 'Added by you', url: '' },
+    upstream: '',
+    inputName: '',
+    outputName: '',
+    inputSize: 1024,
+    preprocess: {
+      resize: 'stretch',
+      scale: 1 / 255,
+      mean: [0, 0, 0],
+      std: [1, 1, 1],
+      output: 'probability',
+    },
+  });
+}
+
+/**
+ * The registry entry of a model. A custom model id that names no model
+ * (anymore) gets a `missing` placeholder, so the clip that uses it still
+ * renders and its analysis fails with a clear message.
  * @param {string} id
  * @returns {Readonly<ModelEntry | SamModelEntry> & Record<string, any>}
  * @throws {RangeError} for an unknown id
  */
 export function getModelEntry(id) {
-  const entry = MODEL_REGISTRY.find((e) => e.id === id);
-  if (!entry) throw new RangeError(`Unknown AI cutout model "${id}"`);
-  return entry;
+  const entry = findEntry(id);
+  if (entry) return entry;
+  if (isCustomEntryId(id)) return missingCustomEntry(id);
+  throw new RangeError(`Unknown AI cutout model "${id}"`);
 }
 
 /**

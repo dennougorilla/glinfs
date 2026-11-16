@@ -12,18 +12,22 @@ import {
   getModelEntry,
   getModelFiles,
   isEntryOffered,
+  isModelId,
   isSamEntry,
   MODEL_REGISTRY,
 } from './model-registry.js';
+import { SegmentationError, SegmentationErrorCode } from './protocol.js';
 
 export {
   DEFAULT_MODEL_ID,
+  getCustomModelEntries,
   getModelDownloadUrl,
   getModelEntry,
   getModelFiles,
   getModelIds,
   getReleaseModels,
   getUpstreamModelUrl,
+  isCustomEntryId,
   isModelId,
   isSamModelId,
   MODEL_CACHE_NAME,
@@ -45,15 +49,18 @@ export function devModelsEnabled(env = import.meta.env) {
 
 /**
  * Whether this build offers a model: a development build offers every
- * model (see devModelsEnabled), a production build only the `models-v1`
- * release ones (the `devOnly` BiRefNet models are not in the release yet)
+ * model (see devModelsEnabled), a production build every model that is
+ * not `devOnly` (the release ones and the ones hosted at their own `url`),
+ * and every model the user added
  * @param {string} modelId
  * @param {boolean} [dev] - Defaults to devModelsEnabled()
  * @returns {boolean}
  */
 export function isModelOffered(modelId, dev = devModelsEnabled()) {
   const entry = MODEL_REGISTRY.find((e) => e.id === modelId);
-  return entry ? isEntryOffered(entry, dev) : false;
+  if (entry) return isEntryOffered(entry, dev);
+  // A model the user added is offered wherever it was added
+  return isModelId(modelId);
 }
 
 /** Default model input side (the IS-Net models; each model has its own `inputSize`) */
@@ -84,16 +91,21 @@ export function getModelFileUrl(fileName, baseUrl = import.meta.env?.BASE_URL ??
  * @returns {string}
  */
 export function getModelUrl(modelId, baseUrl) {
-  return getModelFileUrl(getModelFiles(getModelEntry(modelId))[0].fileName, baseUrl);
+  const entry = getModelEntry(modelId);
+  if ('url' in entry && entry.url) return entry.url;
+  return getModelFileUrl(getModelFiles(entry)[0].fileName, baseUrl);
 }
 
 /**
  * One file the worker fetches and verifies.
  * @typedef {Object} ModelFileSpec
  * @property {string} role - 'model', or 'encoder' / 'decoder' of a SAM model
- * @property {string} url - Same-origin URL to fetch
+ * @property {string} url - URL to fetch: same-origin, or a hosted model's
+ *   URL on another origin (fetched with CORS)
  * @property {number} bytes - Expected byte size
  * @property {string} sha256 - Expected lowercase hex SHA-256
+ * @property {boolean} [localOnly] - Never downloaded: the file exists only
+ *   in Cache Storage (a custom model added from a local file)
  */
 
 /**
@@ -102,10 +114,12 @@ export function getModelUrl(modelId, baseUrl) {
  * is always the total of `files`).
  * @typedef {Object} ModelSpec
  * @property {string} id - Registry id
+ * @property {string} [label] - What the UI calls it (messages)
  * @property {'sam'} [kind] - A click-to-select model (encoder + decoder)
- * @property {string} [url] - Same-origin URL to fetch (single-file models)
+ * @property {string} [url] - URL to fetch (single-file models; see ModelFileSpec)
  * @property {number} bytes - Expected byte size (all files)
  * @property {string} [sha256] - Expected lowercase hex SHA-256 (single-file models)
+ * @property {boolean} [localOnly] - Never downloaded (see ModelFileSpec)
  * @property {ModelFileSpec[]} files - Every file, in load order
  * @property {string} [inputName]
  * @property {string} [outputName]
@@ -144,11 +158,21 @@ export function getSpecFiles(spec) {
  */
 export function getModelSpec(modelId, baseUrl) {
   const entry = getModelEntry(modelId);
+  if (entry.missing) {
+    throw new SegmentationError(
+      SegmentationErrorCode.MODEL_UNAVAILABLE,
+      'This clip uses a custom model that is not in this browser (it was deleted, or added on another device). Add it again in Settings → AI models, or choose another model.',
+    );
+  }
+  // A model hosted elsewhere is fetched from its own URL (with CORS)
+  const remoteUrl = 'url' in entry && entry.url ? entry.url : null;
+  const localOnly = Boolean(entry.localOnly);
   const files = getModelFiles(entry).map((file) => ({
     role: file.role,
-    url: getModelFileUrl(file.fileName, baseUrl),
+    url: remoteUrl ?? getModelFileUrl(file.fileName, baseUrl),
     bytes: file.bytes,
     sha256: file.sha256,
+    ...(localOnly ? { localOnly } : {}),
   }));
   if (isSamEntry(entry)) {
     return {
@@ -162,9 +186,11 @@ export function getModelSpec(modelId, baseUrl) {
   }
   return {
     id: entry.id,
+    label: entry.label,
     url: files[0].url,
     bytes: entry.bytes,
     sha256: entry.sha256,
+    ...(localOnly ? { localOnly } : {}),
     files,
     inputName: entry.inputName,
     outputName: entry.outputName,

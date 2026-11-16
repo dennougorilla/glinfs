@@ -338,6 +338,8 @@ const ERROR_COPY = {
   [SegmentationErrorCode.INFERENCE_FAILED]: 'Analyzing a frame failed.',
   [SegmentationErrorCode.INVALID_OUTPUT]:
     'The model returned an invalid result for a frame, so the analysis stopped instead of saving an empty cutout. Try another model.',
+  [SegmentationErrorCode.MODEL_UNAVAILABLE]:
+    'This custom model is not in this browser. Add it again in Settings → AI models, or choose another model.',
   [SegmentationErrorCode.WORKER_CRASHED]:
     'The analysis stopped unexpectedly (the browser may be low on memory).',
   [SegmentationErrorCode.FRAME_UNAVAILABLE]:
@@ -354,6 +356,8 @@ export function describeAnalysisError(error) {
   const code = typeof e?.code === 'string' ? e.code : 'unknown';
   const copy = /** @type {Record<string, string>} */ (ERROR_COPY)[code];
   const detail = e instanceof Error ? e.message : String(error ?? '');
+  // Says which custom model is gone and what to do: shown as it is
+  if (code === SegmentationErrorCode.MODEL_UNAVAILABLE && detail) return { code, message: detail };
   if (copy) return { code, message: copy };
   return { code, message: detail ? `The analysis failed: ${detail}` : 'The analysis failed.' };
 }
