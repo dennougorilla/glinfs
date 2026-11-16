@@ -4,6 +4,7 @@ import {
   loadSettings,
   onSettingsChange,
   rememberAiCutoutModel,
+  rememberRemoveScope,
   resetCategory,
   resetSettings,
   saveSettings,
@@ -96,7 +97,24 @@ describe('user-settings', () => {
         preloadModels: true,
         lastModel: null,
         lastModelBySubject: {},
+        lastRemoveScope: 'part',
       });
+    });
+
+    it('remembers the scope chosen last for a Remove fix-up', () => {
+      expect(loadSettings().aiCutout.lastRemoveScope).toBe('part');
+      const listener = vi.fn();
+      const unsubscribe = onSettingsChange(listener);
+      rememberRemoveScope('colour');
+      expect(loadSettings().aiCutout.lastRemoveScope).toBe('colour');
+      rememberRemoveScope('colour');
+      rememberRemoveScope('everything');
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      expect(loadSettings().aiCutout.lastRemoveScope).toBe('colour');
+      // A stored value of the wrong kind reads as the default
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ aiCutout: { lastRemoveScope: 7 } }));
+      expect(loadSettings().aiCutout.lastRemoveScope).toBe('part');
     });
 
     it('remembers the AI cutout model chosen last, overall and per subject', () => {
@@ -131,6 +149,7 @@ describe('user-settings', () => {
         preloadModels: true,
         lastModel: null,
         lastModelBySubject: { general: 'ben2' },
+        lastRemoveScope: 'part',
       });
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ aiCutout: { lastModelBySubject: [] } }));
       expect(loadSettings().aiCutout.lastModelBySubject).toEqual({});

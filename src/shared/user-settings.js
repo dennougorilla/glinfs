@@ -34,7 +34,13 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  *   last (null: never chose one). New choices start with it (#187)
  * @property {Record<string, string>} lastModelBySubject - The model the user
  *   chose last per subject card of the Background tab ('general', ...)
+ * @property {'whole' | 'part' | 'colour'} lastRemoveScope - Whole / Part /
+ *   Colour the user chose last for a Remove fix-up: the next one starts in
+ *   it, so Colour never first downloads and runs a tracking model
  */
+
+/** Scopes a Remove fix-up can start in */
+const REMOVE_SCOPES = ['whole', 'part', 'colour'];
 
 /**
  * @typedef {Object} CaptureSettingsPrefs
@@ -115,6 +121,7 @@ const DEFAULT_SETTINGS = {
     preloadModels: true,
     lastModel: null,
     lastModelBySubject: {},
+    lastRemoveScope: 'part',
   },
 };
 
@@ -302,6 +309,9 @@ function decodeStoredAiCutout(aiCutout) {
     ...stored,
     lastModel: typeof stored.lastModel === 'string' ? stored.lastModel : null,
     lastModelBySubject: bySubject,
+    lastRemoveScope: REMOVE_SCOPES.includes(stored.lastRemoveScope)
+      ? stored.lastRemoveScope
+      : DEFAULT_SETTINGS.aiCutout.lastRemoveScope,
   };
 }
 
@@ -440,6 +450,20 @@ export function rememberAiCutoutModel(modelId, subject = null) {
   if (unchanged) return;
   prefs.lastModel = modelId;
   if (subject) prefs.lastModelBySubject = { ...prefs.lastModelBySubject, [subject]: modelId };
+  saveSettings(settings);
+  notifyListeners();
+}
+
+/**
+ * Remember Whole / Part / Colour chosen for a Remove fix-up: the next one
+ * starts in it (unknown values are ignored)
+ * @param {string} scope
+ */
+export function rememberRemoveScope(scope) {
+  if (!REMOVE_SCOPES.includes(scope)) return;
+  const settings = loadSettings();
+  if (settings.aiCutout.lastRemoveScope === scope) return;
+  settings.aiCutout.lastRemoveScope = /** @type {AiCutoutPrefs['lastRemoveScope']} */ (scope);
   saveSettings(settings);
   notifyListeners();
 }

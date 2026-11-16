@@ -20,8 +20,10 @@ import {
   removeAiPick,
   setActiveAiObject,
   setAiObjectScope,
+  setAiObjectTolerance,
   setAiParams,
   setAiPickTool,
+  setAiRemoveScope,
   setBackgroundMethod,
   setBrush,
   setPickingKeyColor,
@@ -177,8 +179,8 @@ describe('tracked objects', () => {
     let state = addAiObject(makeState(), 'remove', { click: { ...click(), mode: 'remove' } }, 'o1');
     state = addAiObject(state, 'add', { box: box() }, 'o2');
     expect(state.edits.background.ai.objects).toEqual([
-      { id: 'o1', mode: 'remove', scope: 'part', clicks: [click()], boxes: [] },
-      { id: 'o2', mode: 'add', scope: 'whole', clicks: [], boxes: [box()] },
+      { id: 'o1', mode: 'remove', scope: 'part', clicks: [click()], boxes: [], tolerance: 32 },
+      { id: 'o2', mode: 'add', scope: 'whole', clicks: [], boxes: [box()], tolerance: 32 },
     ]);
     // The next click of a tool adds another fix-up
     expect(state.aiActiveObjectId).toBeNull();
@@ -264,5 +266,74 @@ describe('tracked objects', () => {
     const [object] = state.edits.background.ai.objects;
     expect(getObjectTool(object)).toBe('keep');
     expect(getObjectTool({ ...object, mode: 'remove' })).toBe('remove');
+  });
+});
+
+describe('Colour fix-ups', () => {
+  const click = { frame: 1, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') };
+
+  it('Colour is a scope of Remove fix-ups only, with a clamped whole tolerance', () => {
+    let state = addAiObject(makeState(), 'remove', { click }, 'r');
+    state = addAiObject(state, 'add', { click }, 'a');
+    state = setAiObjectScope(state, 'r', 'colour');
+    expect(setAiObjectScope(state, 'a', 'colour')).toBe(state);
+    expect(state.edits.background.ai.objects[0]).toMatchObject({ scope: 'colour', tolerance: 32 });
+    state = setAiObjectTolerance(state, 'r', 47.4);
+    expect(state.edits.background.ai.objects[0].tolerance).toBe(47);
+    expect(setAiObjectTolerance(state, 'r', 500).edits.background.ai.objects[0].tolerance).toBe(96);
+    expect(setAiObjectTolerance(state, 'r', 47)).toBe(state);
+    // Back to Part keeps the tolerance for later
+    state = setAiObjectScope(state, 'r', 'part');
+    expect(state.edits.background.ai.objects[0]).toMatchObject({ scope: 'part', tolerance: 47 });
+  });
+
+  it('refuses Colour for a fix-up with no point to sample (a box alone; review r3)', () => {
+    const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
+    let state = addAiObject(makeState(), 'remove', { box }, 'b');
+    expect(setAiObjectScope(state, 'b', 'colour')).toBe(state);
+    // A protect point alone samples nothing to remove either
+    state = addAiObjectClick(state, 'b', { frame: 1, x: 0.2, y: 0.2, mode: 'remove' });
+    expect(setAiObjectScope(state, 'b', 'colour')).toBe(state);
+    expect(state.aiRemoveScope).toBe('part');
+    // With a point on what to remove it can be Colour
+    state = addAiObjectClick(state, 'b', { frame: 1, x: 0.25, y: 0.25, mode: 'keep' });
+    state = setAiObjectScope(state, 'b', 'colour');
+    expect(state.edits.background.ai.objects[0].scope).toBe('colour');
+  });
+
+  it('the next Remove fix-up starts in the scope chosen last (Colour: never tracked first)', () => {
+    let state = makeState();
+    expect(state.aiRemoveScope).toBe('part');
+    state = addAiObject(state, 'remove', { click }, 'r1');
+    state = setAiObjectScope(state, 'r1', 'colour');
+    expect(state.aiRemoveScope).toBe('colour');
+    state = addAiObject(state, 'remove', { click }, 'r2');
+    expect(state.edits.background.ai.objects[1].scope).toBe('colour');
+    // An Add fix-up's scope is not remembered, and an Add never starts in Colour
+    state = addAiObject(state, 'add', { click }, 'a');
+    expect(state.edits.background.ai.objects[2].scope).toBe('whole');
+    state = setAiObjectScope(state, 'a', 'part');
+    expect(state.aiRemoveScope).toBe('colour');
+    // A box is Whole: Colour needs points
+    const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
+    state = addAiObject(state, 'remove', { box }, 'b');
+    expect(state.edits.background.ai.objects[3].scope).toBe('whole');
+    // Restored from the user setting; unknown values are ignored
+    const restored = setAiRemoveScope(makeState(), 'whole');
+    expect(restored.aiRemoveScope).toBe('whole');
+    expect(setAiRemoveScope(restored, 'everything')).toBe(restored);
+  });
+
+  it('a Colour fix-up takes keep (sample) and remove (protect) points like a tracked one', () => {
+    let state = addAiObject(makeState(), 'remove', { click }, 'r');
+    state = setAiObjectScope(state, 'r', 'colour');
+    state = addAiObjectClick(state, 'r', { frame: 3, x: 0.2, y: 0.2, mode: 'keep' });
+    state = addAiObjectClick(state, 'r', { frame: 3, x: 0.7, y: 0.1, mode: 'remove' });
+    expect(state.edits.background.ai.objects[0].clicks.map((c) => c.mode)).toEqual([
+      'keep',
+      'keep',
+      'remove',
+    ]);
+    expect(removeAiObject(state, 'r').edits.background.ai.objects).toEqual([]);
   });
 });

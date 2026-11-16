@@ -116,6 +116,9 @@
  *   selected: while a tool is on, clicks and drags correct it instead of
  *   adding a fix-up, and Whole / Part applies to it. Leaving the tool
  *   deselects it.
+ * @property {import('../../shared/edits/model.js').ObjectScope} [aiRemoveScope] -
+ *   The scope a new Remove fix-up starts in: the one chosen last (saved in
+ *   the user settings)
  * @property {string | null} [aiHighlightObjectId] - The tracked fix-up whose chip
  *   is hovered or focused: its region stands out in Show mask (view only)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
@@ -209,6 +212,9 @@
  *   where its last tracking lost it, sorted
  * @property {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion[]} cleanupSuggestions
  *   One-tap clean-ups found in the last full build (at most 4)
+ * @property {Record<string, number[]>} colourLevels - Per Colour fix-up, from
+ *   the last full build: the notice's level per frame (1 or more: Colour
+ *   removes more there; -1: not run there)
  */
 
 /**

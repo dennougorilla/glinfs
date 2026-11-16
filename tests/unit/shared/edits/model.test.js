@@ -611,10 +611,43 @@ describe('AiCutout.objects', () => {
       scope: 'part',
       clicks: [{ frame: 9, x: 1, y: 0, mode: 'keep' }],
       boxes: [],
+      tolerance: 32,
     });
     const [fallback] = objectsOf([{ id: 'b', mode: 'x', scope: 'y', clicks: [keep()] }]);
     expect(fallback.mode).toBe('remove');
     expect(fallback.scope).toBe('whole');
+  });
+
+  it('keeps Colour for Remove fix-ups only, with a clamped whole tolerance', () => {
+    const objects = objectsOf([
+      { id: 'a', mode: 'remove', scope: 'colour', tolerance: 41.6, clicks: [keep()] },
+      { id: 'b', mode: 'add', scope: 'colour', tolerance: 20, clicks: [keep()] },
+      { id: 'c', mode: 'remove', scope: 'colour', tolerance: 999, clicks: [keep()] },
+      { id: 'd', mode: 'remove', scope: 'colour', tolerance: -3, clicks: [keep()] },
+    ]);
+    expect(objects.map((o) => [o.id, o.scope, o.tolerance])).toEqual([
+      ['a', 'colour', 42],
+      ['b', 'whole', 20],
+      ['c', 'colour', 96],
+      ['d', 'colour', 4],
+    ]);
+    const [fallback] = objectsOf([
+      { id: 'e', mode: 'remove', scope: 'colour', tolerance: 'x', clicks: [keep()] },
+    ]);
+    expect(fallback.tolerance).toBe(32);
+  });
+
+  it('a saved Colour fix-up with no point to sample (a box alone) loads as Whole', () => {
+    const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
+    const [boxOnly] = objectsOf([
+      { id: 'a', mode: 'remove', scope: 'colour', clicks: [], boxes: [box] },
+    ]);
+    expect(boxOnly.scope).toBe('whole');
+  });
+
+  it('gives fix-ups saved before Colour existed the default tolerance', () => {
+    const [object] = objectsOf([{ id: 'a', mode: 'remove', scope: 'part', clicks: [keep()] }]);
+    expect(object).toMatchObject({ scope: 'part', tolerance: 32 });
   });
 
   it('drops objects without a keep click and clicks before the first one', () => {

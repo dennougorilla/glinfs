@@ -23,6 +23,15 @@
 
 import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
+  COLOUR_NEAR,
+  createColourMatcher,
+  fillColourRegion,
+  getColourGuardLevels,
+  getDiscPixels,
+  getSampleRadius,
+  samplePoint,
+} from './colour-fill.js';
+import {
   createPickTracker,
   fillSmallHoles,
   findPickedComponent,
@@ -49,11 +58,23 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
 /**
  * A tracked object's masks, as a build reads them
  * @typedef {Object} ObjectMaskInput
+ * @property {string} [id] - The fix-up's id (the guard's results are keyed by it)
  * @property {'remove' | 'add'} mode
  * @property {(frameIndex: number) => ProbMask | null} getMask - The object's
  *   probability mask on a frame (any size), or null where it was not
  *   tracked (that frame keeps the base mask). Read once per frame when a
  *   build starts, like getProb.
+ * @property {{ clicks: import('../edits/model.js').CutoutPick[], tolerance: number }} [colour] -
+ *   A Colour fix-up (not tracked: getMask is not read): its keep points
+ *   sample the colours to remove, its remove points the colours to protect
+ *   (see shared/masks/colour-fill)
+ */
+
+/**
+ * The frame's pixels at the mask's size, RGBA (null: not available, a
+ * Colour fix-up then changes nothing on that frame). frameKey, when set,
+ * names the frame's content (its id), so what points sample is memoized.
+ * @typedef {((frameIndex: number, width: number, height: number) => Uint8ClampedArray | Uint8Array | null) & { frameKey?: (frameIndex: number) => string | number | null | undefined }} PixelSource
  */
 
 /**
@@ -62,6 +83,9 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  *   mask of an absolute clip frame (covering the whole source frame), or
  *   null when that frame has no analysis yet
  * @property {number} version - Unique per build; equal versions mean equal masks
+ * @property {Record<string, number[]>} [colourLevels] - Full builds: per
+ *   Colour fix-up id, the notice's level per frame (1 or more: Colour
+ *   removes more there; -1 where it did not run; see getColourGuardLevels)
  */
 
 /**
@@ -80,6 +104,7 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  * @property {AiCutout} ai - Normalized AI cutout parameters
  * @property {ObjectMaskInput[]} [objects] - The tracked objects of `ai.objects`,
  *   in the same order (applied after the edge, a later one wins)
+ * @property {PixelSource} [getPixels] - Frame pixels for Colour fix-ups
  * @property {number} [sourceWidth] - Source frame width in pixels (edge is
  *   in source pixels); defaults to the mask width
  * @property {AbortSignal} [signal]
@@ -143,7 +168,14 @@ export function getAiParamsKey(ai) {
   const click = isClickModel(ai) ? '|click' : '';
   // Like the click model's picks, an object's clicks change its masks (the
   // store version), not the build: only which objects apply, and how
-  const objects = (ai.objects ?? []).map((o) => `${o.id}:${o.mode}`).join(',');
+  // A Colour fix-up is not tracked: its points and tolerance change the build
+  const objects = (ai.objects ?? [])
+    .map((o) =>
+      o.scope === 'colour' && o.mode === 'remove'
+        ? `${o.id}:${o.mode}:colour:${o.tolerance}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
+        : `${o.id}:${o.mode}`,
+    )
+    .join(',');
   const cleanup = `${ai.cleanup?.minIslandArea ?? 0}:${ai.cleanup?.maxHoleArea ?? 0}`;
   return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}|${cleanup}`;
 }
@@ -498,6 +530,220 @@ export async function getSurvivingMask(options, frame) {
 }
 
 /**
+ * What the points of one Colour fix-up sampled
+ * @typedef {{ samples: number[], protects: number[], seeds: number[] }} ColourSampling
+ */
+
+/** Samplings kept (Show mask re-reads them on every frame change otherwise) */
+const SAMPLING_CACHE_SIZE = 8;
+
+/** @type {Map<string, ColourSampling>} */
+const samplingCache = new Map();
+
+/** @type {{ size: number, region: Uint8Array, queue: Int32Array } | null} */
+let fillScratch = null;
+
+/**
+ * Scratch arrays of the fill, shared: a fill runs synchronously and is done
+ * with them when it returns
+ * @param {number} size
+ */
+function getFillScratch(size) {
+  if (fillScratch?.size !== size) {
+    fillScratch = { size, region: new Uint8Array(size), queue: new Int32Array(size) };
+  }
+  return fillScratch;
+}
+
+/**
+ * Sample the points of a Colour fix-up on the frames they were placed on.
+ * Memoized by the frames' identity (PixelSource.frameKey), the points and
+ * the size (not the tolerance: a drag of Similar colors re-samples nothing).
+ * @param {NonNullable<ObjectMaskInput['colour']>} colour
+ * @param {PixelSource} getPixels
+ * @param {(f: number) => Uint8ClampedArray | Uint8Array | null} pixelsOf
+ * @param {number} width
+ * @param {number} height
+ * @param {number} radius
+ * @returns {ColourSampling}
+ */
+function sampleColourPoints(colour, getPixels, pixelsOf, width, height, radius) {
+  const frameKey = getPixels.frameKey;
+  let key = '';
+  if (frameKey) {
+    const frames = colour.clicks.map((c) => frameKey(c.frame));
+    if (frames.every((k) => k !== null && k !== undefined)) {
+      key = `${width}x${height}:${radius}:${colour.clicks
+        .map((c, n) => `${frames[n]}:${c.x}:${c.y}:${c.mode}`)
+        .join(';')}`;
+      const hit = samplingCache.get(key);
+      if (hit) {
+        samplingCache.delete(key);
+        samplingCache.set(key, hit);
+        return hit;
+      }
+    }
+  }
+  const near = COLOUR_NEAR;
+  /** @type {number[]} */
+  const samples = [];
+  /** @type {number[]} */
+  const protects = [];
+  /** @type {Set<number>} */
+  const seeds = new Set();
+  for (const click of colour.clicks) {
+    const rgba = pixelsOf(click.frame);
+    if (!rgba || rgba.length < width * height * 4) continue;
+    const point = samplePoint(rgba, width, height, click, radius, near);
+    if (click.mode === 'keep') {
+      samples.push(...point.colours);
+      // The whole disc seeds: a pixel of a colour not sampled stops the fill
+      for (const i of getDiscPixels(width, height, click, radius)) seeds.add(i);
+    } else {
+      protects.push(...point.colours);
+    }
+  }
+  const sampling = { samples, protects, seeds: [...seeds] };
+  if (key) {
+    samplingCache.set(key, sampling);
+    while (samplingCache.size > SAMPLING_CACHE_SIZE) {
+      samplingCache.delete(/** @type {string} */ (samplingCache.keys().next().value));
+    }
+  }
+  return sampling;
+}
+
+/** Forget the samplings (a clip's frames were closed) */
+export function clearColourSamplings() {
+  samplingCache.clear();
+  fillScratch = null;
+}
+
+/**
+ * The Colour fix-ups of a build or draft, at one mask size: their seeds
+ * and colours (sampled once, on the frames their points were placed on),
+ * and what the guard records
+ * @param {ObjectMaskInput[]} objects
+ * @param {PixelSource | undefined} getPixels
+ * @param {number} width - mask size
+ * @param {number} height
+ * @param {number | undefined} sourceWidth
+ * @param {{ guard?: boolean }} [options] - guard: record what each fill takes
+ */
+function createColourStage(objects, getPixels, width, height, sourceWidth, options = {}) {
+  const size = width * height;
+  const radius = getSampleRadius(width, sourceWidth);
+  /** @type {Map<number, Uint8ClampedArray | Uint8Array | null>} */
+  const sampled = new Map();
+  const pixelsOf = (/** @type {number} */ f) => {
+    if (!sampled.has(f)) sampled.set(f, getPixels?.(f, width, height) ?? null);
+    return sampled.get(f) ?? null;
+  };
+  const layers = objects.map((object) => {
+    if (!object.colour || !getPixels) return null;
+    const { samples, protects, seeds } = sampleColourPoints(
+      object.colour,
+      getPixels,
+      pixelsOf,
+      width,
+      height,
+      radius,
+    );
+    if (samples.length === 0) return null;
+    return {
+      id: object.id ?? '',
+      seeds,
+      pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
+      matches: createColourMatcher(samples, protects, object.colour.tolerance),
+      /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
+      stats: options.guard ? new Map() : null,
+    };
+  });
+  sampled.clear();
+  const active = layers.some(Boolean);
+
+  return {
+    active,
+    /**
+     * The layer fill of object `k` on frame `f` (null: not a Colour fix-up,
+     * or nothing to sample)
+     * @param {number} k
+     * @param {number} f
+     * @param {() => Uint8ClampedArray | Uint8Array | null} framePixels
+     * @returns {((out: Uint8Array) => void) | null}
+     */
+    fillFor(k, f, framePixels) {
+      const layer = layers[k];
+      if (!layer) return null;
+      return (out) => {
+        const rgba = framePixels();
+        if (!rgba || rgba.length < size * 4) return;
+        const { region, queue } = getFillScratch(size);
+        const { count, far } = fillColourRegion(
+          out,
+          width,
+          height,
+          rgba,
+          layer.seeds,
+          layer.matches,
+          region,
+          queue,
+        );
+        if (layer.stats) {
+          // The guard's measure: the cutout this fill is applied to
+          let mask = 0;
+          for (let i = 0; i < size; i++) if (out[i]) mask++;
+          layer.stats.set(f, { mask, removed: count, far });
+        }
+        if (count > 0) for (let i = 0; i < size; i++) if (region[i]) out[i] = 0;
+      };
+    },
+    /**
+     * The notice's level per frame of each Colour fix-up (full builds)
+     * @param {number} frameCount
+     * @returns {Record<string, number[]>}
+     */
+    levels(frameCount) {
+      /** @type {Record<string, number[]>} */
+      const out = {};
+      for (const layer of layers) {
+        if (!layer?.stats) continue;
+        const levels = getColourGuardLevels(layer.stats, layer.pointFrames);
+        const perFrame = new Array(frameCount).fill(-1);
+        for (const [f, level] of levels) perFrame[f] = Math.round(level * 1000) / 1000;
+        out[layer.id] = perFrame;
+        layer.stats.clear();
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * The region a Colour fix-up takes on one frame, for Show mask: filled
+ * within the frame's thresholded mask (before picks, clean-up and the
+ * edge, so it can show a little more than the build takes)
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, getPixels: PixelSource, sourceWidth?: number }} options
+ * @param {ObjectMaskInput} object - with `colour`
+ * @param {number} frameIndex
+ * @returns {ProbMask | null} 0 / 255
+ */
+export function getColourRegion(options, object, frameIndex) {
+  const frameBinary = createFrameBinarySource(options);
+  const bin = frameBinary?.binaryAt(frameIndex);
+  if (!frameBinary || !bin || !object.colour) return null;
+  const { width, height } = frameBinary;
+  const stage = createColourStage([object], options.getPixels, width, height, options.sourceWidth);
+  const fill = stage.fillFor(0, frameIndex, () => options.getPixels(frameIndex, width, height));
+  if (!fill) return null;
+  const out = bin.slice();
+  fill(out);
+  const data = new Uint8Array(width * height);
+  for (let i = 0; i < data.length; i++) data[i] = bin[i] && !out[i] ? 255 : 0;
+  return { data, width, height };
+}
+
+/**
  * Build the final masks of a clip.
  *
  * Without picks every frame is independent (one pass). With picks, the
@@ -506,7 +752,7 @@ export async function getSurvivingMask(options, frame) {
  * work on one snapshot of the probability masks (createFrameBinarySource).
  *
  * @param {BuildOptions} options
- * @returns {Promise<{ masks: (PackedMask | null)[], width: number, height: number, bytes: number }>}
+ * @returns {Promise<{ masks: (PackedMask | null)[], width: number, height: number, bytes: number, colourLevels: Record<string, number[]> }>}
  * @throws {DOMException} AbortError when cancelled
  */
 export async function buildFinalMasks(options) {
@@ -515,6 +761,7 @@ export async function buildFinalMasks(options) {
     getProb,
     ai,
     objects = [],
+    getPixels,
     signal,
     onProgress,
     sliceMs = BUILD_SLICE_MS,
@@ -538,6 +785,9 @@ export async function buildFinalMasks(options) {
     const masks = [];
     for (let f = 0; f < frameCount; f++) masks.push(object.getMask(f) ?? null);
     return { mode: object.mode, masks };
+  });
+  const colour = createColourStage(objects, getPixels, width, height, options.sourceWidth, {
+    guard: true,
   });
 
   const size = width * height;
@@ -573,7 +823,17 @@ export async function buildFinalMasks(options) {
         mask = morphMask(mask, width, height, radius, morphed);
       }
       if (objectScratch) {
-        const layers = objectMasks.map((o) => ({ mode: o.mode, mask: o.masks[f] }));
+        /** @type {Uint8ClampedArray | Uint8Array | null | undefined} */
+        let rgba;
+        const framePixels = () => {
+          if (rgba === undefined) rgba = getPixels?.(f, width, height) ?? null;
+          return rgba;
+        };
+        const layers = objectMasks.map((o, k) => ({
+          mode: o.mode,
+          mask: objects[k].colour ? null : o.masks[f],
+          fill: colour.fillFor(k, f, framePixels),
+        }));
         mask = applyObjectMasks(mask, width, height, layers, objectScratch);
       }
       const packed = packMask(mask, width, height);
@@ -583,7 +843,7 @@ export async function buildFinalMasks(options) {
     await stepDone();
   }
 
-  return { masks, width, height, bytes };
+  return { masks, width, height, bytes, colourLevels: colour.levels(frameCount) };
 }
 
 /**
@@ -599,12 +859,14 @@ export function nextMaskVersion() {
 /**
  * Wrap built masks as a MaskSource with a fresh version
  * @param {(PackedMask | null)[]} masks
+ * @param {Record<string, number[]>} [colourLevels]
  * @returns {MaskSource}
  */
-function createMaskSource(masks) {
+function createMaskSource(masks, colourLevels = {}) {
   return {
     version: nextMaskVersion(),
     getFinalMask: (frameIndex) => masks[frameIndex] ?? null,
+    colourLevels,
   };
 }
 
@@ -652,7 +914,7 @@ function keepOverlappingComponents(binary, width, height, previous, labels, out)
  *
  * Tracked objects apply exactly as in a build (they are per frame).
  *
- * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, objects?: ObjectMaskInput[], sourceWidth?: number, base?: MaskSource | null, cacheFrames?: number }} options
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, objects?: ObjectMaskInput[], getPixels?: PixelSource, sourceWidth?: number, base?: MaskSource | null, cacheFrames?: number }} options
  * @returns {MaskSource & { draft: true }}
  */
 export function createDraftMaskSource({
@@ -660,10 +922,13 @@ export function createDraftMaskSource({
   getProb,
   ai,
   objects = [],
+  getPixels,
   sourceWidth,
   base = null,
   cacheFrames = DRAFT_CACHE_FRAMES,
 }) {
+  /** @type {ReturnType<typeof createColourStage> | null} */
+  let colour = null;
   const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
   const picks = getRegionPicks(ai);
   /** @type {Map<number, PackedMask | null>} */
@@ -704,7 +969,19 @@ export function createDraftMaskSource({
     const radius = edgeRadiusInMaskPixels(ai.edge, width, sourceWidth ?? width);
     if (radius !== 0) mask = morphMask(mask, width, height, radius, scratch.morphed);
     if (scratch.objects) {
-      const layers = objects.map((o) => ({ mode: o.mode, mask: o.getMask(frameIndex) ?? null }));
+      colour ??= createColourStage(objects, getPixels, width, height, sourceWidth);
+      const stage = colour;
+      /** @type {Uint8ClampedArray | Uint8Array | null | undefined} */
+      let rgba;
+      const framePixels = () => {
+        if (rgba === undefined) rgba = getPixels?.(frameIndex, width, height) ?? null;
+        return rgba;
+      };
+      const layers = objects.map((o, k) => ({
+        mode: o.mode,
+        mask: o.colour ? null : (o.getMask(frameIndex) ?? null),
+        fill: stage.fillFor(k, frameIndex, framePixels),
+      }));
       mask = applyObjectMasks(mask, width, height, layers, scratch.objects);
     }
     return packMask(mask, width, height);
@@ -790,7 +1067,7 @@ export function createFinalMaskCache() {
         },
       });
       throwIfAborted(entry.controller.signal);
-      const source = createMaskSource(result.masks);
+      const source = createMaskSource(result.masks, result.colourLevels);
       current = { key: entry.key, clipId: entry.clipId, source, bytes: result.bytes };
       return source;
     } finally {

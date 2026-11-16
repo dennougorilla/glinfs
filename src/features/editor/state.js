@@ -5,15 +5,18 @@
 
 import {
   areTouchUpsActive,
+  canBeColourObject,
   createDefaultEdits,
   createLayerId,
   createTextLayer,
   DEFAULT_TOUCH_UP_RADIUS,
   EDIT_LIMITS,
   normalizeEdits,
+  OBJECT_SCOPES,
   TOUCH_UP_MODES,
 } from '../../shared/edits/model.js';
 import { removeTouchUpsFromFrame } from '../../shared/edits/touch-ups.js';
+import { COLOUR_TOLERANCE } from '../../shared/masks/colour-fill.js';
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
 import { clampCropArea, createClip, setFrameRange } from './core.js';
@@ -43,6 +46,7 @@ export function initEditorState(clip) {
     pickingKeyColor: false,
     aiPickTool: null,
     aiActiveObjectId: null,
+    aiRemoveScope: 'part',
     aiHighlightObjectId: null,
     aiCutout: createAiCutoutStatus(),
     brush: createBrushState(),
@@ -171,6 +175,7 @@ export function createAiCutoutStatus() {
     lostFrames: [],
     objectTracking: null,
     objectLost: {},
+    colourLevels: {},
     cleanupSuggestions: [],
   };
 }
@@ -543,9 +548,11 @@ export function clearAiPicks(state) {
 /**
  * Add a tracked object selected by a click or a box (ignored once
  * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
- * a tool adds another fix-up. A click with Remove starts at Part: what is
- * removed is mostly a patch on or beside the subject, and Whole answers
- * with the subject too (measured live, see PR 3).
+ * a tool adds another fix-up. A click with Remove starts in the scope
+ * chosen last for a Remove fix-up (state.aiRemoveScope), Part at first:
+ * what is removed is mostly a patch on or beside the subject, and Whole
+ * answers with the subject too (measured live, see PR 3). A box is Whole
+ * (Colour needs points).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
  * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
@@ -560,7 +567,11 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
   const object = {
     id,
     mode,
-    scope: mode === 'remove' && selection.click && !selection.box ? 'part' : 'whole',
+    scope:
+      mode === 'remove' && selection.click && !selection.box
+        ? (state.aiRemoveScope ?? 'part')
+        : 'whole',
+    tolerance: COLOUR_TOLERANCE.default,
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
   };
@@ -611,16 +622,54 @@ export function addAiObjectClick(state, id, click) {
 }
 
 /**
- * Whole / Part of a tracked object
+ * Whole / Part / Colour of a fix-up (Colour: Remove only, with a point to
+ * sample; see canBeColourObject)
  * @param {import('./types.js').EditorState} state
  * @param {string} id
- * @param {import('../../shared/edits/model.js').ClickScope} scope
+ * @param {import('../../shared/edits/model.js').ObjectScope} scope
  * @returns {import('./types.js').EditorState}
  */
 export function setAiObjectScope(state, id, scope) {
   const object = state.edits.background.ai.objects?.find((o) => o.id === id);
   if (!object || object.scope === scope) return state;
-  return updateAiObject(state, id, (o) => ({ ...o, scope }));
+  // Colour removes only, by the colours under a point: a box alone has none
+  if (scope === 'colour' && !canBeColourObject(object)) return state;
+  const next = updateAiObject(state, id, (o) => ({ ...o, scope }));
+  // The next Remove fix-up starts in it
+  return object.mode === 'remove' ? setAiRemoveScope(next, scope) : next;
+}
+
+/**
+ * The scope a new Remove fix-up starts in (unknown values are ignored)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} scope
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiRemoveScope(state, scope) {
+  if (!OBJECT_SCOPES.includes(/** @type {any} */ (scope)) || state.aiRemoveScope === scope) {
+    return state;
+  }
+  return {
+    ...state,
+    aiRemoveScope: /** @type {import('../../shared/edits/model.js').ObjectScope} */ (scope),
+  };
+}
+
+/**
+ * Tolerance of a Colour fix-up (clamped and rounded like normalization)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {number} tolerance
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiObjectTolerance(state, id, tolerance) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || !Number.isFinite(tolerance)) return state;
+  const value = Math.round(
+    Math.min(COLOUR_TOLERANCE.max, Math.max(COLOUR_TOLERANCE.min, tolerance)),
+  );
+  if (object.tolerance === value) return state;
+  return updateAiObject(state, id, (o) => ({ ...o, tolerance: value }));
 }
 
 /**

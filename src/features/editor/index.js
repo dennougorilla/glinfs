@@ -22,6 +22,7 @@ import {
 } from '../../shared/app-store.js';
 import { emit, on as onBus } from '../../shared/bus.js';
 import {
+  canBeColourObject,
   createDefaultAiCutout,
   createDefaultEdits,
   createLayerId,
@@ -37,9 +38,14 @@ import {
   startStrokePath,
 } from '../../shared/edits/touch-ups.js';
 import { announce } from '../../shared/live-region.js';
+import { getAiParamsKey } from '../../shared/masks/final-masks.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
-import { loadSettings, rememberAiCutoutModel } from '../../shared/user-settings.js';
+import {
+  loadSettings,
+  rememberAiCutoutModel,
+  rememberRemoveScope,
+} from '../../shared/user-settings.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -51,11 +57,14 @@ import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
   classifyFixUp,
+  clearPixelCache,
   getAiModelId,
+  getClipColourRegion,
   getClipObjectSources,
   getModelSizeLabel,
   getSharedFinalMaskCache,
   isAbortError,
+  isColourObject,
   isFrameAnalyzed,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
@@ -119,8 +128,10 @@ import {
   selectTextLayer,
   setActiveAiObject,
   setAiObjectScope,
+  setAiObjectTolerance,
   setAiParams,
   setAiPickTool,
+  setAiRemoveScope,
   setBackground,
   setBackgroundMethod,
   setBrush,
@@ -303,6 +314,18 @@ const AI_LIVE_IDLE_MS = 800;
  * @type {import('./types.js').SidebarTab}
  */
 let lastSidebarTab = 'frame';
+
+/**
+ * Whole / Part / Colour chosen last for a Remove fix-up (user setting)
+ * @returns {string}
+ */
+function getRememberedRemoveScope() {
+  try {
+    return loadSettings().aiCutout.lastRemoveScope;
+  } catch {
+    return 'part';
+  }
+}
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -536,6 +559,8 @@ export function initEditor() {
 
   // The sidebar reopens on the tab chosen last in this page session
   store.setState((state) => setSidebarTab(state, lastSidebarTab));
+  // A Remove fix-up starts in the scope chosen last (Colour: no tracking model first)
+  store.setState((state) => setAiRemoveScope(state, getRememberedRemoveScope()));
 
   previewRenderer = createEditorFrameRenderer();
   cropDragging = false;
@@ -991,6 +1016,8 @@ function render(container) {
       onGoToLostFrame: handleGoToLostFrame,
       onGoToObject: handleGoToObject,
       onGoToObjectLost: handleGoToObjectLost,
+      onGoToColourGuard: handleGoToColourGuard,
+      onSetAiObjectTolerance: handleSetAiObjectTolerance,
       onRemoveAiObject: handleRemoveAiObject,
       onSetAiObjectScope: handleSetAiObjectScope,
       onApplyCleanup: handleApplyCleanup,
@@ -1066,7 +1093,9 @@ function drawObjectRegions(ctx, state, frame) {
   const regions = [];
   let highlight = -1;
   objects.forEach((object, index) => {
-    const mask = sources[index].getMask(state.currentFrame);
+    const mask = isColourObject(object)
+      ? getColourOverlayRegion(state, object)
+      : sources[index].getMask(state.currentFrame);
     if (!mask) return;
     if (object.id === (state.aiHighlightObjectId ?? state.aiActiveObjectId)) {
       highlight = regions.length;
@@ -1074,6 +1103,35 @@ function drawObjectRegions(ctx, state, frame) {
     regions.push({ mode: object.mode, color: getObjectColor(objects, object.id), mask });
   });
   drawRegions(ctx, frame.width, frame.height, regions, highlight);
+}
+
+/** The last Colour region drawn in Show mask (redraws reuse it) */
+let colourOverlay = {
+  key: '',
+  mask: /** @type {import('../../shared/masks/final-masks.js').ProbMask | null} */ (null),
+};
+
+/**
+ * The region a Colour fix-up takes on the frame on screen, for Show mask
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ */
+function getColourOverlayRegion(state, object) {
+  if (!state.clip) return null;
+  const { ai } = state.edits.background;
+  const key = `${state.clip.id}|${state.currentFrame}|${getSharedMaskStore().version}|${getAiParamsKey(ai)}|${object.id}`;
+  if (colourOverlay.key !== key) {
+    colourOverlay = {
+      key,
+      mask: getClipColourRegion({
+        frames: state.clip.frames,
+        ai,
+        object,
+        frameIndex: state.currentFrame,
+      }),
+    };
+  }
+  return colourOverlay.mask;
 }
 
 /**
@@ -1129,7 +1187,10 @@ function updateAiPreviewNote(container, state) {
  */
 function isObjectLostOnFrame(state, frame) {
   const lost = state.aiCutout.objectLost ?? {};
-  return (state.edits.background.ai.objects ?? []).some((o) => lost[o.id]?.includes(frame));
+  // A Colour fix-up is not tracked: its lost frames wait for Whole / Part
+  return (state.edits.background.ai.objects ?? []).some(
+    (o) => !isColourObject(o) && lost[o.id]?.includes(frame),
+  );
 }
 
 /**
@@ -2141,8 +2202,11 @@ function addObjectFixUp(mode, selection) {
     return;
   }
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
+  const added = store.getState().edits.background.ai.objects?.at(-1);
   announce(
-    `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
+    added && isColourObject(added)
+      ? 'Removed by colour on every frame. Select its chip to add points or Alt-click what to keep.'
+      : `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
   );
 }
 
@@ -2231,14 +2295,53 @@ function handleRemoveAiObject(id) {
 }
 
 /**
- * Whole / Part of the active tracked object
- * @param {import('../../shared/edits/model.js').ClickScope} scope
+ * A Colour fix-up removes more on a frame than expected: go there with it
+ * selected, so its tolerance and a protect point (Alt-click) are at hand
+ * if what it removes there is the subject
+ * @param {string} id
+ * @param {number} frame
+ */
+function handleGoToColourGuard(id, frame) {
+  if (!store) return;
+  const object = store.getState().edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object) return;
+  store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
+  handleFrameChange(frame);
+  announce('Colour removes more here. If it is the subject, lower Similar colors or Alt-click it.');
+}
+
+/**
+ * Tolerance of the active Colour fix-up
+ * @param {number} tolerance
+ * @param {{ live?: boolean }} [options] - live: the slider is being dragged
+ */
+function handleSetAiObjectTolerance(tolerance, options = {}) {
+  if (!store) return;
+  const state = store.getState();
+  const object = getActiveAiObject(state);
+  if (!object) return;
+  const next = setAiObjectTolerance(state, object.id, tolerance);
+  if (next === state) {
+    if (!options.live) aiSession?.setInteractive(false);
+    return;
+  }
+  handleSetAiParams({ objects: next.edits.background.ai.objects }, options);
+}
+
+/**
+ * Whole / Part / Colour of the active fix-up
+ * @param {import('../../shared/edits/model.js').ObjectScope} scope
  */
 function handleSetAiObjectScope(scope) {
   if (!store) return;
   const object = getActiveAiObject(store.getState());
   if (!object) return;
+  if (scope === 'colour' && !canBeColourObject(object)) {
+    announce('Colour needs a point: click the colour to remove first');
+    return;
+  }
   store.setState((state) => setAiObjectScope(state, object.id, scope));
+  if (object.mode === 'remove') rememberRemoveScope(scope);
 }
 
 /**
@@ -3144,6 +3247,9 @@ function cleanup() {
   // A Keep / Remove click still being judged belongs to this mount
   fixUpClick?.abort();
   fixUpClick = null;
+  // Frame pixels read for Colour fix-ups
+  clearPixelCache();
+  colourOverlay = { key: '', mask: null };
   // The Export dialog lives over this editor: close it first (aborting a
   // running export) so nothing of it outlives the mount
   if (exportDialog) {

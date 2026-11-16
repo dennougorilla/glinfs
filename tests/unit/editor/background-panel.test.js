@@ -17,6 +17,7 @@ import {
   FIT_STEPS,
   fitFromAi,
   getCleanupChips,
+  getColourGuard,
   getDownloadPrompt,
   getLostFramesInSelection,
   getLostFramesText,
@@ -99,6 +100,8 @@ beforeEach(() => {
     onGoToObjectLost: vi.fn(),
     onRemoveAiObject: vi.fn(),
     onSetAiObjectScope: vi.fn(),
+    onSetAiObjectTolerance: vi.fn(),
+    onGoToColourGuard: vi.fn(),
     onApplyCleanup: vi.fn(),
     onClearCleanup: vi.fn(),
   };
@@ -936,6 +939,130 @@ describe('tracked objects', () => {
     expect(handlers.onGoToObjectLost).toHaveBeenCalledWith('a');
     updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)]), 10);
     expect($('#ai-object-lost').hidden).toBe(true);
+  });
+
+  it('turns Colour off for a Remove fix-up with no point to sample (a box alone; review r3)', () => {
+    const boxOnly = {
+      ...object('a', 'remove', 3),
+      clicks: [],
+      boxes: [{ frame: 3, x0: 0, y0: 0, x1: 0.5, y1: 0.5 }],
+    };
+    updateBackgroundPanel(
+      root,
+      stateWith([boxOnly], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    expect($('#ai-object-scope-colour').disabled).toBe(true);
+    updateBackgroundPanel(
+      root,
+      stateWith([object('a', 'remove', 3)], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    expect($('#ai-object-scope-colour').disabled).toBe(false);
+  });
+
+  it('offers Colour beside Whole / Part for a selected Remove fix-up, with its tolerance', () => {
+    const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 44 };
+    updateBackgroundPanel(
+      root,
+      stateWith([colour, object('b', 'add', 0)], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    const segment = (/** @type {string} */ v) =>
+      /** @type {HTMLElement} */ ($(`#ai-object-scope-${v}`).closest('.editor-cutout-segment'));
+    expect(segment('colour').hidden).toBe(false);
+    expect($('#ai-object-scope-colour').checked).toBe(true);
+    expect($('#ai-object-scope-whole').checked).toBe(false);
+    expect($('#ai-object-tolerance-row').hidden).toBe(false);
+    expect($('#ai-object-tolerance').value).toBe('44');
+    $('#ai-object-tolerance').value = '20';
+    fire($('#ai-object-tolerance'), 'input');
+    expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20, { live: true });
+    fire($('#ai-object-tolerance'), 'change');
+    expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20);
+    $('#ai-object-scope-part').click();
+    expect(handlers.onSetAiObjectScope).toHaveBeenLastCalledWith('part');
+    // An Add fix-up: no Colour, no tolerance
+    updateBackgroundPanel(
+      root,
+      stateWith([colour, object('b', 'add', 0)], { aiActiveObjectId: 'b', aiPickTool: 'keep' }),
+      10,
+    );
+    expect(segment('colour').hidden).toBe(true);
+    expect($('#ai-object-tolerance-row').hidden).toBe(true);
+  });
+
+  it('says where a Colour fix-up removes more (its worst frame), with a button that goes there', () => {
+    const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
+    // Levels: 1 or more is the notice
+    const shares = new Array(40).fill(0.2);
+    shares[25] = 3.8;
+    shares[30] = 1.2;
+    shares[12] = 1;
+    const status = {
+      ...createAiCutoutStatus(),
+      colourLevels: { a: shares },
+    };
+    updateBackgroundPanel(root, stateWith([colour], { aiCutout: status }), 10);
+    expect($('#ai-object-lost').hidden).toBe(false);
+    expect($('#ai-object-lost').textContent).toContain('Colour removes more at 02:05.');
+    expect($('#ai-object-lost').textContent).not.toMatch(/%|subject/);
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenCalledWith('a', 25);
+    // Outside the selection does not count; a level of 1 or less is quiet
+    expect(getColourGuard([colour], { a: shares }, { start: 26, end: 39 })).toMatchObject({
+      frame: 30,
+    });
+    expect(getColourGuard([colour], { a: shares }, { start: 0, end: 20 })).toBeNull();
+    expect(
+      getColourGuard([{ ...colour, scope: 'part' }], { a: shares }, { start: 0, end: 39 }),
+    ).toBeNull();
+    // Nothing to warn about: the notice goes (a tracked object's lost note would show)
+    updateBackgroundPanel(
+      root,
+      stateWith([colour], { aiCutout: { ...status, colourLevels: { a: new Array(40).fill(0) } } }),
+      10,
+    );
+    expect($('#ai-object-lost').textContent).not.toContain('Colour removes');
+  });
+
+  it('shows a lost tracked fix-up and a Colour warning together; Go there takes turns (C)', () => {
+    // A bystander that left the shot stays lost to the end of the selection:
+    // the Colour warning must not hide behind it
+    const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
+    const tracked = object('b', 'remove', 5);
+    const shares = new Array(40).fill(0);
+    shares[25] = 3.8;
+    const lostToEnd = Array.from({ length: 28 }, (_, i) => 12 + i);
+    const status = {
+      ...createAiCutoutStatus(),
+      colourLevels: { a: shares },
+      objectLost: { a: [4], b: lostToEnd },
+    };
+    updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
+    const text = $('#ai-object-lost').textContent;
+    expect(text).toContain('What you removed was lost at 28 places, first at 01:02.');
+    expect(text).toContain('Colour removes more at 02:05.');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToObjectLost).toHaveBeenLastCalledWith('b');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenLastCalledWith('a', 25);
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToObjectLost).toHaveBeenCalledTimes(2);
+    // The same notice again does not restart the turns; a new one does
+    updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenCalledTimes(2);
+    // Found again: only the Colour warning (the Colour fix-up's own lost frames never count)
+    updateBackgroundPanel(
+      root,
+      stateWith([colour, tracked], { aiCutout: { ...status, objectLost: { a: [4] } } }),
+      10,
+    );
+    expect($('#ai-object-lost').textContent).not.toContain('was lost');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenLastCalledWith('a', 25);
+    expect(handlers.onGoToObjectLost).toHaveBeenCalledTimes(2);
   });
 
   it('says when the tracked fix-ups are full; Keep / Remove stay on for picks', () => {
