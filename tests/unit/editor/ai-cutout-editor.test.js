@@ -262,6 +262,38 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.edits.background.ai.model).toBe('portrait');
   });
 
+  it('a model on two cards (BiRefNet: Anime and Anything) stays on the card it was chosen with', async () => {
+    mount(2);
+    await chooseAi('general');
+    const select = /** @type {HTMLSelectElement} */ ($('#ai-model'));
+    select.value = 'birefnet-general';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    await settle();
+    // Not downloaded: asked on the Anything card, then used there
+    expect($('#background-download').hidden).toBe(false);
+    expect(/** @type {HTMLInputElement} */ ($('#subject-general')).checked).toBe(true);
+    $('#background-download-confirm').click();
+    await settle();
+    await settle();
+    expect(getEditorState()?.edits.background.ai).toMatchObject({
+      model: 'birefnet-general',
+      subject: 'general',
+    });
+    expect(/** @type {HTMLInputElement} */ ($('#subject-general')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#subject-anime')).checked).toBe(false);
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'birefnet-general' });
+
+    // The Anime card can use the same model: the clip keeps it, on Anime now
+    await chooseAi('anime');
+    expect(getEditorState()?.edits.background.ai).toMatchObject({
+      model: 'birefnet-general',
+      subject: 'anime',
+    });
+    expect(/** @type {HTMLInputElement} */ ($('#subject-anime')).checked).toBe(true);
+    expect(/** @type {HTMLInputElement} */ ($('#subject-general')).checked).toBe(false);
+  });
+
   it('switching subjects restarts the analysis with the new model; each model keeps its masks', async () => {
     mount(4);
     await chooseAi('anime');

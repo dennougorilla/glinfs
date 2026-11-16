@@ -614,6 +614,9 @@ describe('AI cutout session: model availability and preload', () => {
         click: 'missing',
         ben2: 'missing',
         'video-person': 'missing',
+        'birefnet-general': 'missing',
+        'birefnet-lite': 'missing',
+        'birefnet-toonout': 'missing',
       }),
     );
     session.dispose();
@@ -673,6 +676,9 @@ describe('AI cutout session: model availability and preload', () => {
       click: 'missing',
       ben2: 'missing',
       'video-person': 'missing',
+      'birefnet-general': 'missing',
+      'birefnet-lite': 'missing',
+      'birefnet-toonout': 'missing',
     });
     session.dispose();
   });

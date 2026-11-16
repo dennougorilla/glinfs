@@ -97,7 +97,8 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs one of six models in the browser with
+The AI cutout runs one of six models (nine in a development build, see
+below) in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
@@ -121,7 +122,9 @@ The AI cutout runs one of six models in the browser with
   backend.
 - **Hair & detail** (Anything's alternative): [BEN2](https://github.com/PramaLLC/BEN2)
   base (`ben2-base-fp16.onnx`, MIT, 223 MB): about 430 ms per frame on an
-  RTX 3080 Ti with WebGPU
+  RTX 3080 Ti with WebGPU. Its input is normalized with ImageNet mean/std, as
+  upstream's PyTorch code does (better on every measure than plain `/ 255`
+  in a browser comparison on anime clips)
 - **Video person** (Person's alternative): [Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting)
   ResNet-50 (`rvm-resnet50-fp16.onnx`, GPL-3.0 like this app, 54 MB): people
   only, a recurrent network whose state the worker carries from frame to
@@ -215,6 +218,44 @@ live-action photo for the other models; `E2E_REAL_IMAGE` takes several comma-sep
 `E2E_REAL_MODEL_UNPINNED=1` runs whatever file `public/models/` holds, to try a conversion
 before pinning it; `E2E_REAL_MODEL_CHANNEL=chrome` uses the installed Chrome).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
+
+#### BiRefNet (development builds only)
+
+`npm run dev` also offers three [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)
+models (MIT): **Busy backgrounds** (BiRefNet general, 519 MB) and **Busy
+backgrounds, faster** (BiRefNet lite, 122 MB) on the Anime and Anything cards,
+and **Anime hair** ([BiRefNet ToonOut](https://huggingface.co/joelseytre/toonout),
+519 MB) on the Anime card. They need WebGPU and a strong GPU (about 485 ms
+per frame and 7.7 GB of GPU memory at peak on an RTX 3080 Ti; lite 260 ms and
+5.8 GB). Production builds leave them out: the files are not in the
+`models-v1` release yet, and the two large ones cannot ship next to the
+other models on GitHub Pages (artifacts must stay under 1 GB). They are
+`devOnly` in the registry; `npm run models:fetch` keeps and verifies a copy
+in `public/models/` but never downloads one. To try them, put the three files
+in `public/models/` by hand (they are checked against the registry's SHA-256
+when first used) or export them:
+
+```bash
+python3.12 -m venv .venv-birefnet
+.venv-birefnet/bin/pip install -r scripts/requirements-birefnet.txt
+.venv-birefnet/bin/python scripts/export-birefnet-onnx.py --src /path/to/downloads --out public/models
+```
+
+The upstream checkpoints are PyTorch files (444, 178 and 885 MB, downloaded
+into `--src` from pinned Hugging Face commits and checked by SHA-256). The
+script exports each one to ONNX (TorchScript, opset 17, deformable
+convolutions decomposed), converts it to float16 like the other models, and
+rewrites four things so ONNX Runtime Web 1.30 runs it on WebGPU, computing the
+same values: Splits and Concats with more than 7 tensors (WebGPU's
+storage-buffer limit), Sum as a chain of Add, the deformable convolutions'
+index arithmetic in float32 (int64 ran on the CPU), and GlobalAveragePool /
+ReduceMean in float32 (in float16 WebGPU's pooling overflows and the mask
+turns to NaN). The output is byte-for-byte identical to the registry's pins
+(`--only birefnet-lite` exports one model).
+
+The worker fails an analysis with "The model returned an invalid result"
+when a model's output contains NaN, instead of turning the frame into an
+empty mask.
 
 ### Architecture
 

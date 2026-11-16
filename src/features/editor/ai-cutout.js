@@ -413,6 +413,8 @@ const ERROR_COPY = {
     'The downloaded model is damaged or not the expected file, so it was not used. Try again.',
   [SegmentationErrorCode.MODEL_INIT_FAILED]: 'The model could not be started in this browser.',
   [SegmentationErrorCode.INFERENCE_FAILED]: 'Analyzing a frame failed.',
+  [SegmentationErrorCode.INVALID_OUTPUT]:
+    'The model returned an invalid result for a frame, so the analysis stopped instead of saving an empty cutout. Try another model.',
   [SegmentationErrorCode.WORKER_CRASHED]:
     'The analysis stopped unexpectedly (the browser may be low on memory).',
   [SegmentationErrorCode.FRAME_UNAVAILABLE]:

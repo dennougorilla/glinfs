@@ -11,6 +11,7 @@
 
 import { getClipPayload } from '../../shared/app-store.js';
 import { getSharedMaskStore } from './mask-store.js';
+import { isModelOffered } from './model-config.js';
 import { DEFAULT_MODEL_ID, getModelIds } from './model-registry.js';
 import { getSegmentationManager, maskKey, setDevModelOverride } from './segmentation-manager.js';
 
@@ -238,7 +239,8 @@ export function installAiCutoutTestHooks(hooks) {
       const clip = getClipPayload();
       /** @type {Record<string, number>} */
       const byModel = {};
-      for (const modelId of getModelIds()) {
+      // The models this build offers (see isModelOffered)
+      for (const modelId of getModelIds().filter((id) => isModelOffered(id))) {
         byModel[modelId] = clip
           ? new Set(clip.frames.map((frame) => maskKey(frame, modelId)).filter((k) => store.has(k)))
               .size
@@ -252,7 +254,7 @@ export function installAiCutoutTestHooks(hooks) {
       const manager = getSegmentationManager();
       return {
         loadedModelIds: manager.loadedModelIds,
-        busy: getModelIds().filter((id) => manager.isModelBusy(id)),
+        busy: getModelIds().filter((id) => isModelOffered(id) && manager.isModelBusy(id)),
       };
     },
 

@@ -49,6 +49,7 @@ import {
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
+import { isModelOffered } from '../../ai-cutout/model-config.js';
 import { pickPreferredModel } from '../../ai-cutout/model-preference.js';
 import { getModelEntry } from '../../ai-cutout/model-registry.js';
 import {
@@ -71,7 +72,10 @@ import { getActiveAiObject } from '../state.js';
  * model a card uses by default and `models` every model it can use (the
  * default first; the AI settings show a Model choice when there are
  * several); the color card uses the color key. `name` is how the
- * download question names the model.
+ * download question names the model. A model may be on several cards (the
+ * BiRefNet ones: Anime and Anything); the edits keep the card it was
+ * chosen with (`ai.subject`). Models this build does not offer (the
+ * development-only BiRefNet ones in a production build) are left out.
  * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, models: readonly string[], name?: string, icon: string }[]}
  */
 export const SUBJECT_CARDS = Object.freeze([
@@ -80,7 +84,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anime',
     hint: 'Characters, art',
     model: 'anime',
-    models: Object.freeze(['anime']),
+    models: offered(['anime', 'birefnet-general', 'birefnet-lite', 'birefnet-toonout']),
     icon: '<path d="M12 3l2.4 5.1 5.6.7-4.1 3.9 1 5.5L12 15.6 7.1 18.2l1-5.5L4 8.8l5.6-.7z"/>',
   },
   {
@@ -96,7 +100,7 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anything',
     hint: 'People, pets, objects',
     model: 'general',
-    models: Object.freeze(['general', 'ben2']),
+    models: offered(['general', 'ben2', 'birefnet-general', 'birefnet-lite']),
     icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="3.5"/>',
   },
   {
@@ -118,17 +122,30 @@ export const SUBJECT_CARDS = Object.freeze([
   },
 ]);
 
-/** The AI subject card of a model */
+/**
+ * The models of a card that this build offers
+ * @param {string[]} ids
+ * @returns {readonly string[]}
+ */
+function offered(ids) {
+  return Object.freeze(ids.filter((id) => isModelOffered(id)));
+}
+
+/** The first AI subject card that lists a model (in SUBJECT_CARDS order) */
 const CARD_BY_MODEL = Object.fromEntries(
-  SUBJECT_CARDS.flatMap((card) => card.models.map((model) => [model, card])),
+  [...SUBJECT_CARDS].reverse().flatMap((card) => card.models.map((model) => [model, card])),
 );
 
 /**
- * The subject card that uses a model, or null for an unknown id
+ * The subject card of a model: `subject` when that card lists the model,
+ * else the first card that does; null for a model on no card
  * @param {string} modelId
+ * @param {unknown} [subject] - The card it was chosen with (`ai.subject`)
  * @returns {Exclude<Subject, 'none' | 'color'> | null}
  */
-export function getModelSubject(modelId) {
+export function getModelSubject(modelId, subject = null) {
+  const chosen = SUBJECT_CARDS.find((c) => c.value === subject);
+  if (chosen?.models.includes(modelId)) return /** @type {any} */ (chosen.value);
   return /** @type {any} */ (CARD_BY_MODEL[modelId]?.value ?? null);
 }
 
@@ -140,7 +157,7 @@ export function getModelSubject(modelId) {
 export function getSubject(background) {
   if (!background.enabled) return 'none';
   if (background.method !== 'ai') return 'color';
-  return /** @type {Subject} */ (CARD_BY_MODEL[getAiModelId(background.ai)]?.value ?? 'anime');
+  return getModelSubject(getAiModelId(background.ai), background.ai.subject) ?? 'anime';
 }
 
 /**
@@ -308,13 +325,16 @@ export function getModelTooltip(modelId) {
 /**
  * The inline download question of a model
  * @param {string} modelId
+ * @param {unknown} [subject] - The card it is asked for
  * @returns {{ title: string, detail: string }}
  */
-export function getDownloadPrompt(modelId) {
+export function getDownloadPrompt(modelId, subject = null) {
   const entry = getModelEntry(modelId);
+  const card = SUBJECT_CARDS.find((c) => c.value === getModelSubject(modelId, subject));
+  const name = card?.name ?? card?.label ?? entry.label;
   return {
     title: `Download ${getModelSizeLabel(modelId)}?`,
-    detail: `The ${CARD_BY_MODEL[modelId]?.name ?? CARD_BY_MODEL[modelId]?.label ?? entry.label} model (${entry.shortModelName}) runs in this browser. It downloads once and stays on this device; your frames never leave it.`,
+    detail: `The ${name} model (${entry.shortModelName}) runs in this browser. It downloads once and stays on this device; your frames never leave it.`,
   };
 }
 
@@ -501,7 +521,7 @@ export function describeAiStatus({ running, pending, analyzed, total, status }) 
 /** What the About (i) disclosure says */
 const ABOUT_TEXT = [
   'Pick what to keep and the rest turns transparent in the GIF.',
-  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, or RVM (steadier in video, GPL-3.0); Anything is ISNet, or BEN2 (finer hair and edges, a larger download, MIT); Something else is MobileSAM. The others are Apache-2.0. Manage them in Settings.`,
+  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, or RVM (steadier in video, GPL-3.0); Anything is ISNet, or BEN2 (finer hair and edges, a larger download, MIT); Something else is MobileSAM. The others are Apache-2.0.${isModelOffered('birefnet-general') ? ' This development build also offers BiRefNet and BiRefNet lite (Anime and Anything) and BiRefNet ToonOut (Anime): MIT, large downloads that need a strong GPU.' : ''} Manage them in Settings.`,
   'Something else: click the thing you want to keep. It is followed through the clip; Keep and Remove add points to fix it.',
   'Solid color removes one backdrop color, such as a green screen.',
   'Hold \\ (or Hold to compare) to see the original; Show mask tints what is removed.',
@@ -1480,7 +1500,7 @@ export function updateBackgroundPanel(container, state, fps) {
   const status = state.aiCutout;
   const subject = getSubject(background);
   const prompt = state.downloadPrompt ?? null;
-  const promptCard = prompt ? CARD_BY_MODEL[prompt]?.value : null;
+  const promptCard = prompt ? getModelSubject(prompt, state.downloadPromptSubject) : null;
   const shown = /** @type {Subject} */ (promptCard ?? subject);
   /** @type {SubjectModelPrefs} */
   const modelPrefs = { remembered: getRememberedModels(), availability: status?.models ?? null };
@@ -1510,7 +1530,7 @@ export function updateBackgroundPanel(container, state, fps) {
   const download = q(root, '#background-download');
   setHidden(download, !prompt);
   if (prompt) {
-    const copy = getDownloadPrompt(prompt);
+    const copy = getDownloadPrompt(prompt, promptCard);
     setText(q(root, '#background-download-title'), copy.title);
     setText(q(root, '#background-download-detail'), copy.detail);
   }

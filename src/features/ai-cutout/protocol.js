@@ -67,6 +67,11 @@ export const SegmentationErrorCode = Object.freeze({
   MODEL_INIT_FAILED: 'model-init-failed',
   /** Running the model on a frame failed */
   INFERENCE_FAILED: 'inference-failed',
+  /**
+   * The model ran but its mask output contains NaN (e.g. a float16
+   * overflow on WebGPU): failing beats an empty mask
+   */
+  INVALID_OUTPUT: 'invalid-output',
   /** The worker crashed or could not start */
   WORKER_CRASHED: 'worker-crashed',
   /** A frame's pixels are gone (closed VideoFrame) */

@@ -62,6 +62,7 @@ import {
   computeInputGeometry,
   probabilityToMask,
   rgbaToChw,
+  toProbabilities,
 } from '../features/ai-cutout/preprocess.js';
 import {
   createAbortError,
@@ -571,6 +572,9 @@ async function segment(request) {
     return { probability: output, inferenceMs: performance.now() - inferenceStart };
   });
 
+  // A sigmoid for a logits output; NaN fails the analysis (INVALID_OUTPUT)
+  // instead of becoming an empty mask
+  toProbabilities(probability, preprocess.output);
   const mask = probabilityToMask(probability, geometry, request.maskWidth, request.maskHeight);
   post(
     {
@@ -678,6 +682,8 @@ async function prompt(request) {
     });
   });
   const decodeMs = performance.now() - decodeStart;
+  // Logits: only scanned here (a NaN would read as "not selected")
+  toProbabilities(result.logits, 'probability');
   const candidates = toCandidates(result, request.maskWidth, request.maskHeight);
   const buffers = candidates.map((c) => c.data.buffer);
   post(
