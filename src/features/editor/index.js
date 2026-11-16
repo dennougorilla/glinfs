@@ -84,6 +84,8 @@ import { updateSidebarTabs } from './panels/properties.js';
 import { updateDeleteHint } from './panels/status-bar.js';
 import { TOUCH_UP_NEEDS_REMOVAL, updateTouchUpSection } from './panels/touch-up-panel.js';
 import {
+  addAiObject,
+  addAiObjectClick,
   addAiPick,
   addTextLayer,
   addTouchUps,
@@ -95,15 +97,21 @@ import {
   completeSceneDetection,
   createEditorStore,
   createEditorStoreFromClip,
+  getActiveAiObject,
   getBrushStrokeRange,
   getEffectivePreviewView,
   goToFrame,
+  isCurrentFrameOutsideSelection,
+  isObjectTool,
   moveTextLayer,
   PICK_NEEDS_ANALYSIS_NOTICE,
   PICK_NO_CHARACTER_NOTICE,
+  removeAiObject,
   removeAiPick,
   removeTextLayer,
   selectTextLayer,
+  setActiveAiObject,
+  setAiObjectScope,
   setAiParams,
   setAiPickTool,
   setBackground,
@@ -603,6 +611,8 @@ export function initEditor() {
     selectedTextId: initialState.selectedTextId,
     pickingKeyColor: initialState.pickingKeyColor,
     aiPickTool: initialState.aiPickTool,
+    aiObjectTarget: initialState.aiObjectTarget,
+    aiActiveObjectId: initialState.aiActiveObjectId,
     aiCutout: initialState.aiCutout,
     brush: initialState.brush,
     sidebarTab: initialState.sidebarTab,
@@ -655,7 +665,10 @@ export function initEditor() {
     const editsChanged = state.edits !== lastRendered.edits;
     const textSelectionChanged = state.selectedTextId !== lastRendered.selectedTextId;
     const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
-    const pickToolChanged = state.aiPickTool !== lastRendered.aiPickTool;
+    const pickToolChanged =
+      state.aiPickTool !== lastRendered.aiPickTool ||
+      state.aiObjectTarget !== lastRendered.aiObjectTarget ||
+      state.aiActiveObjectId !== lastRendered.aiActiveObjectId;
     const aiChanged = state.aiCutout !== lastRendered.aiCutout;
     const brushChanged = state.brush !== lastRendered.brush;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
@@ -751,6 +764,8 @@ export function initEditor() {
       lastRendered.selectedTextId = state.selectedTextId;
       lastRendered.pickingKeyColor = state.pickingKeyColor;
       lastRendered.aiPickTool = state.aiPickTool;
+      lastRendered.aiObjectTarget = state.aiObjectTarget;
+      lastRendered.aiActiveObjectId = state.aiActiveObjectId;
       lastRendered.aiCutout = state.aiCutout;
       lastRendered.brush = state.brush;
       lastRendered.downloadPrompt = state.downloadPrompt;
@@ -959,6 +974,10 @@ function render(container) {
       onAiPick: handleAiPick,
       onRemoveAiPick: handleRemoveAiPick,
       onGoToLostFrame: handleGoToLostFrame,
+      onGoToObject: handleGoToObject,
+      onGoToObjectLost: handleGoToObjectLost,
+      onRemoveAiObject: handleRemoveAiObject,
+      onSetAiObjectScope: handleSetAiObjectScope,
       onClearAiPicks: handleClearAiPicks,
       onSetBrush: handleSetBrush,
       onBrushStrokeStart: handleBrushStrokeStart,
@@ -1036,10 +1055,24 @@ function updateAiPreviewNote(container, state) {
       text = 'Not analyzed yet';
     } else if (!aiSession?.maskSource?.getFinalMask(state.currentFrame)) {
       text = 'Updating the cutout\u2026';
+    } else if (isObjectLostOnFrame(state, state.currentFrame)) {
+      text = 'Object lost here. Click it to keep going.';
     }
   }
   if (note.textContent !== text) note.textContent = text;
   note.hidden = text === '';
+}
+
+/**
+ * Whether tracking lost a tracked object on this frame (it has no mask
+ * there; the frame keeps the base mask)
+ * @param {import('./types.js').EditorState} state
+ * @param {number} frame
+ * @returns {boolean}
+ */
+function isObjectLostOnFrame(state, frame) {
+  const lost = state.aiCutout.objectLost ?? {};
+  return (state.edits.background.ai.objects ?? []).some((o) => lost[o.id]?.includes(frame));
 }
 
 /**
@@ -1788,17 +1821,24 @@ function handleResetBackground() {
 }
 
 /**
- * @param {import('../../shared/edits/model.js').PickMode | null} tool
- * @param {{ fromKeyboard?: boolean }} [options] - fromKeyboard: the toggle
- *   was switched with the keyboard, so the keyboard pick target (the
- *   preview) takes focus
+ * @param {import('./types.js').AiPickTool | null} tool
+ * @param {{ fromKeyboard?: boolean, target?: string | null }} [options] -
+ *   fromKeyboard: the toggle was switched with the keyboard, so the keyboard
+ *   pick target (the preview) takes focus; target: an object tool's click
+ *   re-anchors this tracked object
  */
 function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
-  store.setState((state) => setAiPickTool(state, tool));
+  store.setState((state) => setAiPickTool(state, tool, options.target ?? null));
   if (tool && options.fromKeyboard && overlayCanvas) {
     setOverlayPickMode(overlayCanvas, true);
     overlayCanvas.focus();
+  } else if (isObjectTool(tool)) {
+    announce(
+      options.target
+        ? 'Click the object in the preview to find it again'
+        : `Click the thing in the preview to ${tool === 'remove-object' ? 'remove it from' : 'add it to'} every frame`,
+    );
   } else if (tool) {
     announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
   }
@@ -1810,15 +1850,21 @@ function handleSetAiPickTool(tool, options = {}) {
  * pick was placed, or Escape), focus goes back to the tool's toggle
  * instead of staying on a control that is no longer focusable.
  * @param {ParentNode} container
- * @param {import('../../shared/edits/model.js').PickMode | null} tool
- * @param {import('../../shared/edits/model.js').PickMode | null} previousTool
+ * @param {import('./types.js').AiPickTool | null} tool
+ * @param {import('./types.js').AiPickTool | null} previousTool
  */
 function updateOverlayPickMode(container, tool, previousTool) {
   if (!overlayCanvas) return;
   const hadFocus = document.activeElement === overlayCanvas;
   setOverlayPickMode(overlayCanvas, tool !== null);
   if (tool === null && hadFocus && previousTool) {
-    const toggle = container.querySelector(`#ai-pick-${previousTool}`);
+    const toggle = container.querySelector(
+      previousTool === 'remove-object'
+        ? '#ai-object-remove'
+        : previousTool === 'add-object'
+          ? '#ai-object-add'
+          : `#ai-pick-${previousTool}`,
+    );
     if (toggle instanceof HTMLElement) toggle.focus();
   }
 }
@@ -1834,6 +1880,10 @@ function handleAiPick(point) {
   const state = store.getState();
   const mode = state.aiPickTool;
   if (!mode) return;
+  if (isObjectTool(mode)) {
+    handleObjectPoint(point, mode);
+    return;
+  }
   if (getAiModelId(state.edits.background.ai) === 'click') {
     handleClickSelectPoint(point, mode);
     return;
@@ -1892,6 +1942,100 @@ function handleClickSelectPoint(point, tool) {
       ? 'Selected. It is tracked through the clip. Choose Whole or Part, or add Keep and Remove points.'
       : `${mode === 'keep' ? 'Keep' : 'Remove'} point added. Tracking again.`,
   );
+}
+
+/** Notice shown when an object click lands outside the selection */
+const OBJECT_OUTSIDE_SELECTION_NOTICE =
+  'Objects are tracked through the selection. Click it on a frame inside it.';
+
+/**
+ * An object tool clicked the preview: a new tracked object (Remove object /
+ * Add object), or a click that re-anchors the object the tool is aimed at
+ * (a frame where tracking lost it). The store subscription then tracks it
+ * (see startAiCutoutSession); the tool goes off.
+ * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ * @param {'remove-object' | 'add-object'} tool
+ */
+function handleObjectPoint(point, tool) {
+  if (!store) return;
+  const state = store.getState();
+  if (isCurrentFrameOutsideSelection(state)) {
+    announce(OBJECT_OUTSIDE_SELECTION_NOTICE);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: OBJECT_OUTSIDE_SELECTION_NOTICE }));
+    return;
+  }
+  const objects = state.edits.background.ai.objects ?? [];
+  const target = objects.find((o) => o.id === state.aiObjectTarget);
+  const click = { frame: state.currentFrame, x: point.x, y: point.y };
+  if (target) {
+    if (target.clicks.length >= EDIT_LIMITS.aiObjectClicks.max) {
+      announce(`The limit of ${EDIT_LIMITS.aiObjectClicks.max} points is reached`);
+      return;
+    }
+    store.setState((s) =>
+      setAiPickTool(addAiObjectClick(s, target.id, { ...click, mode: 'keep' }), null),
+    );
+    announce('Point added. Tracking again.');
+    return;
+  }
+  if (objects.length >= EDIT_LIMITS.aiObjects.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiObjects.max} objects is reached`);
+    return;
+  }
+  const mode = tool === 'remove-object' ? 'remove' : 'add';
+  store.setState((s) => setAiPickTool(addAiObject(s, mode, click), null));
+  announce(
+    `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
+  );
+}
+
+/**
+ * Tracked object: go to its first click and make it the one Whole / Part
+ * applies to
+ * @param {string} id
+ */
+function handleGoToObject(id) {
+  if (!store) return;
+  const object = store.getState().edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object) return;
+  store.setState((s) => setActiveAiObject(s, id));
+  handleFrameChange(object.clicks[0].frame);
+}
+
+/**
+ * Tracked object: go to the first frame in the selection where tracking
+ * lost it, with its object tool aimed at it (the next click re-anchors it)
+ * @param {string} id
+ */
+function handleGoToObjectLost(id) {
+  if (!store) return;
+  const state = store.getState();
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object) return;
+  const { start, end } = state.selectedRange;
+  const frame = (state.aiCutout.objectLost?.[id] ?? []).find((f) => f >= start && f <= end);
+  if (frame === undefined) return;
+  store.setState((s) => setActiveAiObject(s, id));
+  handleFrameChange(frame);
+  handleSetAiPickTool(object.mode === 'remove' ? 'remove-object' : 'add-object', { target: id });
+}
+
+/** @param {string} id */
+function handleRemoveAiObject(id) {
+  if (!store) return;
+  store.setState((state) => removeAiObject(state, id));
+  announce('Object removed');
+}
+
+/**
+ * Whole / Part of the active tracked object
+ * @param {import('../../shared/edits/model.js').ClickScope} scope
+ */
+function handleSetAiObjectScope(scope) {
+  if (!store) return;
+  const object = getActiveAiObject(store.getState());
+  if (!object) return;
+  store.setState((state) => setAiObjectScope(state, object.id, scope));
 }
 
 /** Click to select: go to the first frame that lost the object, Keep tool on */
@@ -1954,15 +2098,30 @@ function startAiCutoutSession() {
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight
   // for old parameters is aborted right away.
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let selectionSyncTimer = null;
   aiEditsUnsubscribe = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
       session.requestBuild();
       followClickSelection(session, state, prevState);
+      session.syncObjects();
+    } else if (
+      state.selectedRange !== prevState.selectedRange &&
+      (state.edits.background.ai.objects?.length ?? 0) > 0
+    ) {
+      // Tracked objects follow the selection, once it stops changing
+      if (selectionSyncTimer !== null) clearTimeout(selectionSyncTimer);
+      selectionSyncTimer = setTimeout(() => {
+        selectionSyncTimer = null;
+        if (isCurrent()) session.syncObjects();
+      }, OBJECT_SELECTION_SYNC_MS);
     }
   });
 
   // Masks from an earlier visit are memoized: the first draw is keyed
   session.requestBuild();
+  // Tracked objects whose masks are gone (a reload, eviction) track again
+  session.syncObjects();
   // The subject cards say which models are ready or still to download
   void session.refreshModels();
   if (sessionStore.getState().edits.background.method === 'ai') {
@@ -1972,6 +2131,9 @@ function startAiCutoutSession() {
     void session.preload();
   }
 }
+
+/** Wait after the last selection change before tracked objects follow it */
+const OBJECT_SELECTION_SYNC_MS = 400;
 
 /**
  * Click to select: the clicks (picks) or Whole / Part changed — track again
@@ -2866,6 +3028,8 @@ function registerTestHooks() {
         pickingKeyColor: state.pickingKeyColor,
         hasAlpha: state.clip?.hasAlpha === true,
         aiPickTool: state.aiPickTool,
+        aiObjectTarget: state.aiObjectTarget,
+        aiActiveObjectId: state.aiActiveObjectId,
         aiCutout: state.aiCutout,
         brush: state.brush,
         sidebarTab: state.sidebarTab,

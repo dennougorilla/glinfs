@@ -26,6 +26,11 @@
  * @typedef {'whole'|'part'} ClickScope
  */
 /** @typedef {'erase'|'restore'} TouchUpMode */
+/**
+ * What a tracked object does to the base model's mask: 'remove' subtracts
+ * it on every frame, 'add' adds it
+ * @typedef {'remove'|'add'} ObjectMode
+ */
 
 /**
  * @typedef {Object} TextLayer
@@ -60,6 +65,20 @@
  */
 
 /**
+ * A thing clicked on the preview that is tracked through the selection by
+ * the click-to-select model (MobileSAM) and then subtracted from (or added
+ * to) the base model's mask on every frame, so the base model keeps its
+ * own edges. Works with any AI model, including click to select.
+ * @typedef {Object} CutoutObject
+ * @property {string} id
+ * @property {ObjectMode} mode
+ * @property {CutoutPick[]} clicks - at most EDIT_LIMITS.aiObjectClicks.max,
+ *   in the order they were made; the first is a keep click (the object)
+ *   and later ones re-anchor it on frames where tracking lost it
+ * @property {ClickScope} scope - the whole clicked thing or the part under the click
+ */
+
+/**
  * AI cutout parameters (used when BackgroundRemoval.method is 'ai')
  * @typedef {Object} AiCutout
  * @property {AiModel} model     - which segmentation model's masks to use.
@@ -75,6 +94,8 @@
  * @property {CutoutPick[]} picks - at most 16, in the order they were made
  * @property {ClickScope} clickScope - click to select only: keep the whole
  *   clicked thing or the part under the click
+ * @property {CutoutObject[]} objects - at most EDIT_LIMITS.aiObjects.max
+ *   tracked objects removed from / added to the mask, applied in order
  */
 
 /**
@@ -147,6 +168,9 @@ export const AI_MODELS = /** @type {const} */ ([
   'video-person',
 ]);
 
+/** @type {readonly ObjectMode[]} */
+export const OBJECT_MODES = /** @type {const} */ (['remove', 'add']);
+
 /** @type {readonly TouchUpMode[]} */
 export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);
 
@@ -160,6 +184,8 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiThreshold: { min: 0.05, max: 0.95 },
   aiEdge: { min: -8, max: 8 },
   aiPicks: { max: 16 },
+  aiObjects: { max: 4 },
+  aiObjectClicks: { max: 16 },
   touchUpRadius: { min: 0.0025, max: 0.15 },
   touchUps: { max: 200 },
   touchUpPoints: { max: 500 },
@@ -184,7 +210,7 @@ const TEXT_LAYER_DEFAULTS = /** @type {const} */ ({
   boxOpacity: 0.6,
 });
 
-/** Defaults for the AI cutout parameters (picks default to none) */
+/** Defaults for the AI cutout parameters (picks and objects default to none) */
 const AI_DEFAULTS = /** @type {const} */ ({
   model: 'anime',
   threshold: 0.5,
@@ -312,7 +338,7 @@ export function createDefaultEdits() {
  * @returns {AiCutout}
  */
 export function createDefaultAiCutout() {
-  return { ...AI_DEFAULTS, picks: [] };
+  return { ...AI_DEFAULTS, picks: [], objects: [] };
 }
 
 /**
@@ -402,6 +428,55 @@ function normalizePick(pick, frameCount) {
 }
 
 /**
+ * Normalize one tracked object; null when it has no usable keep click (an
+ * object is what its first keep click selected). Clicks are normalized
+ * like picks and limited to EDIT_LIMITS.aiObjectClicks.max; clicks before
+ * the first keep click are dropped (remove points alone select nothing).
+ * @param {unknown} object
+ * @param {number} frameCount
+ * @returns {CutoutObject | null}
+ */
+function normalizeObject(object, frameCount) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return null;
+  const o = /** @type {Record<string, unknown>} */ (object);
+  const raw = Array.isArray(o.clicks) ? o.clicks : [];
+  const clicks = raw
+    .map((click) => normalizePick(click, frameCount))
+    .filter((click) => click !== null);
+  const first = clicks.findIndex((click) => click.mode === 'keep');
+  if (first < 0) return null;
+  return {
+    id: typeof o.id === 'string' && o.id ? o.id : createLayerId(),
+    mode: normalizeEnum(o.mode, OBJECT_MODES, 'remove'),
+    clicks: clicks.slice(first, first + EDIT_LIMITS.aiObjectClicks.max),
+    scope: normalizeEnum(o.scope, CLICK_SCOPES, 'whole'),
+  };
+}
+
+/**
+ * Normalize the tracked objects: unusable ones and repeated ids are
+ * dropped, only the first EDIT_LIMITS.aiObjects.max are kept. Input without
+ * the field (edits saved before objects existed) has none.
+ * @param {unknown} objects
+ * @param {number} frameCount
+ * @returns {CutoutObject[]}
+ */
+function normalizeObjects(objects, frameCount) {
+  if (!Array.isArray(objects)) return [];
+  const seen = new Set();
+  /** @type {CutoutObject[]} */
+  const kept = [];
+  for (const object of objects) {
+    const normalized = normalizeObject(object, frameCount);
+    if (!normalized || seen.has(normalized.id)) continue;
+    seen.add(normalized.id);
+    kept.push(normalized);
+    if (kept.length >= EDIT_LIMITS.aiObjects.max) break;
+  }
+  return kept;
+}
+
+/**
  * Normalize AI cutout parameters. Picks without a finite frame/x/y are
  * dropped, the rest are clamped (frame into the clip, x/y into 0..1) and
  * only the first EDIT_LIMITS.aiPicks.max are kept.
@@ -424,6 +499,7 @@ function normalizeAiCutout(ai, frameCount) {
       .filter((pick) => pick !== null)
       .slice(0, aiPicks.max),
     clickScope: normalizeEnum(a.clickScope, CLICK_SCOPES, AI_DEFAULTS.clickScope),
+    objects: normalizeObjects(a.objects, frameCount),
   };
 }
 

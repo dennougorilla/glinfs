@@ -23,7 +23,12 @@ import {
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { DEFAULT_MODEL_ID, formatModelSize, getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { collectPendingFrames, maskKey } from '../ai-cutout/segmentation-manager.js';
+import {
+  collectPendingFrames,
+  frameKey,
+  maskKey,
+  objectMaskKey,
+} from '../ai-cutout/segmentation-manager.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
 /** @typedef {import('../ai-cutout/mask-store.js').MaskStore} MaskStore */
@@ -103,6 +108,50 @@ export function getClipProbSource(frames, maskStore, modelId = DEFAULT_MODEL_ID)
 }
 
 /**
+ * The tracked objects' mask lookups by clip frame index, in `ai.objects`
+ * order (what a final-mask build composes on top of the base masks)
+ * @param {Frame[]} frames - The whole clip
+ * @param {AiCutout} ai
+ * @param {MaskStore} maskStore
+ * @returns {import('../../shared/masks/final-masks.js').ObjectMaskInput[]}
+ */
+export function getClipObjectSources(frames, ai, maskStore) {
+  return (ai.objects ?? []).map((object) => ({
+    mode: object.mode,
+    getMask: (frameIndex) => {
+      const frame = frames[frameIndex];
+      return frame ? maskStore.get(objectMaskKey(frame, object.id)) : null;
+    },
+  }));
+}
+
+/**
+ * Selection frames a tracked object has no mask on, deduped by pixel
+ * identity (holds share one mask)
+ * @param {Frame[]} frames - The whole clip
+ * @param {{ start: number, end: number }} range - Inclusive
+ * @param {string} objectId
+ * @param {MaskStore} [maskStore]
+ * @returns {number} Distinct frames without the object's mask
+ */
+export function countUntrackedObjectFrames(
+  frames,
+  range,
+  objectId,
+  maskStore = getSharedMaskStore(),
+) {
+  const seen = new Set();
+  let missing = 0;
+  for (let f = Math.max(0, range.start); f <= Math.min(frames.length - 1, range.end); f++) {
+    const key = frameKey(frames[f]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!maskStore.has(objectMaskKey(frames[f], objectId))) missing++;
+  }
+  return missing;
+}
+
+/**
  * What a clip's final masks depend on besides the probability masks. The
  * cache is shared by every clip and screen, so the clip id is part of the
  * key: two clips of the same shape and parameters must never share
@@ -122,6 +171,7 @@ function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
     ...paramsInputs({ frames, ai, clipId }),
     storeVersion: maskStore.version,
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+    objects: getClipObjectSources(frames, ai, maskStore),
   };
 }
 
@@ -184,6 +234,7 @@ export function createClipDraftMaskSource({
     frameCount: frames.length,
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
     ai,
+    objects: getClipObjectSources(frames, ai, maskStore),
     sourceWidth: frames[0]?.width,
     base,
   });

@@ -4,7 +4,8 @@
  * Turns a clip's probability masks (one per analyzed frame, from the
  * segmentation model) and the AI cutout parameters into the final 1-bit
  * mask of every frame: threshold (optionally averaged with the neighbouring
- * frames), follow the picks, grow/shrink by the edge, bit-pack.
+ * frames), follow the picks, grow/shrink by the edge, subtract / add the
+ * tracked objects (see object-masks.js), bit-pack.
  *
  * Building runs on the main thread in slices: it yields to the event loop
  * between frames whenever a slice has run for BUILD_SLICE_MS, reports
@@ -30,6 +31,7 @@ import {
   smoothTemporal,
   thresholdMask,
 } from './mask-ops.js';
+import { applyObjectMasks, createObjectScratch } from './object-masks.js';
 
 /** @typedef {import('./mask-ops.js').PackedMask} PackedMask */
 /** @typedef {import('../edits/model.js').AiCutout} AiCutout */
@@ -39,6 +41,16 @@ import {
  * @property {Uint8Array} data - 0..255 foreground probability, width * height
  * @property {number} width
  * @property {number} height
+ */
+
+/**
+ * A tracked object's masks, as a build reads them
+ * @typedef {Object} ObjectMaskInput
+ * @property {'remove' | 'add'} mode
+ * @property {(frameIndex: number) => ProbMask | null} getMask - The object's
+ *   probability mask on a frame (any size), or null where it was not
+ *   tracked (that frame keeps the base mask). Read once per frame when a
+ *   build starts, like getProb.
  */
 
 /**
@@ -63,6 +75,8 @@ import {
  *   mask of a frame, or null when it was not analyzed. Read once per frame
  *   when the build starts; the returned masks must not be mutated afterwards.
  * @property {AiCutout} ai - Normalized AI cutout parameters
+ * @property {ObjectMaskInput[]} [objects] - The tracked objects of `ai.objects`,
+ *   in the same order (applied after the edge, a later one wins)
  * @property {number} [sourceWidth] - Source frame width in pixels (edge is
  *   in source pixels); defaults to the mask width
  * @property {AbortSignal} [signal]
@@ -124,7 +138,10 @@ export function getAiParamsKey(ai) {
   // The click model's picks and scope change its probability masks (the
   // store version), not the build.
   const click = isClickModel(ai) ? '|click' : '';
-  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}`;
+  // Like the click model's picks, an object's clicks change its masks (the
+  // store version), not the build: only which objects apply, and how
+  const objects = (ai.objects ?? []).map((o) => `${o.id}:${o.mode}`).join(',');
+  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}`;
 }
 
 /**
@@ -265,6 +282,7 @@ export async function buildFinalMasks(options) {
     frameCount,
     getProb,
     ai,
+    objects = [],
     signal,
     onProgress,
     sliceMs = BUILD_SLICE_MS,
@@ -281,6 +299,14 @@ export async function buildFinalMasks(options) {
     return { masks, width: 0, height: 0, bytes: 0 };
   }
   const { width, height, binaryAt } = frameBinary;
+  // Snapshot, like the probability masks: the store may change while the
+  // build yields
+  const objectMasks = objects.map((object) => {
+    /** @type {(ProbMask | null)[]} */
+    const masks = [];
+    for (let f = 0; f < frameCount; f++) masks.push(object.getMask(f) ?? null);
+    return { mode: object.mode, masks };
+  });
 
   const size = width * height;
   const radius = edgeRadiusInMaskPixels(ai.edge, width, options.sourceWidth ?? width);
@@ -293,6 +319,7 @@ export async function buildFinalMasks(options) {
   const labels = new Int32Array(size);
   const selected = new Uint8Array(size);
   const morphed = new Uint8Array(size);
+  const objectScratch = objectMasks.length > 0 ? createObjectScratch(size) : null;
 
   let done = 0;
   let sliceStart = now();
@@ -327,6 +354,10 @@ export async function buildFinalMasks(options) {
       }
       if (radius !== 0) {
         mask = morphMask(mask, width, height, radius, morphed);
+      }
+      if (objectScratch) {
+        const layers = objectMasks.map((o) => ({ mode: o.mode, mask: o.masks[f] }));
+        mask = applyObjectMasks(mask, width, height, layers, objectScratch);
       }
       const packed = packMask(mask, width, height);
       masks[f] = packed;
@@ -402,13 +433,16 @@ function keepOverlappingComponents(binary, width, height, previous, labels, out)
  * full build, which followed the picks); frames `base` has no mask for keep
  * every component. The full build replaces the draft once the drag ends.
  *
- * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, sourceWidth?: number, base?: MaskSource | null, cacheFrames?: number }} options
+ * Tracked objects apply exactly as in a build (they are per frame).
+ *
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, objects?: ObjectMaskInput[], sourceWidth?: number, base?: MaskSource | null, cacheFrames?: number }} options
  * @returns {MaskSource & { draft: true }}
  */
 export function createDraftMaskSource({
   frameCount,
   getProb,
   ai,
+  objects = [],
   sourceWidth,
   base = null,
   cacheFrames = DRAFT_CACHE_FRAMES,
@@ -417,7 +451,7 @@ export function createDraftMaskSource({
   const picks = getRegionPicks(ai);
   /** @type {Map<number, PackedMask | null>} */
   const computed = new Map();
-  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array } | null} */
+  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array, objects: import('./object-masks.js').ObjectScratch | null } | null} */
   let scratch = null;
 
   /**
@@ -434,6 +468,7 @@ export function createDraftMaskSource({
       labels: new Int32Array(size),
       selected: new Uint8Array(size),
       morphed: new Uint8Array(size),
+      objects: objects.length > 0 ? createObjectScratch(size) : null,
     };
     let mask = bin;
     const previous = picks.length > 0 ? (base?.getFinalMask(frameIndex) ?? null) : null;
@@ -449,6 +484,10 @@ export function createDraftMaskSource({
     }
     const radius = edgeRadiusInMaskPixels(ai.edge, width, sourceWidth ?? width);
     if (radius !== 0) mask = morphMask(mask, width, height, radius, scratch.morphed);
+    if (scratch.objects) {
+      const layers = objects.map((o) => ({ mode: o.mode, mask: o.getMask(frameIndex) ?? null }));
+      mask = applyObjectMasks(mask, width, height, layers, scratch.objects);
+    }
     return packMask(mask, width, height);
   };
 

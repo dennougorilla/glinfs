@@ -41,6 +41,15 @@
  *   change (a running tracking stops and starts over; embeddings the
  *   worker already has make that cheap), and clearClickMasks when the
  *   last click goes.
+ * - Tracked objects (the edits' `ai.objects`, any model): syncObjects()
+ *   tracks every object whose clicks or Whole / Part changed, or that has
+ *   selection frames without a mask (a new mount, evicted masks), one at a
+ *   time through manager.analyzeObject, and drops the masks of deleted
+ *   objects. A change to the object being tracked stops that run and
+ *   starts it over. An object is tracked automatically at most once per
+ *   (clicks, selection): frames where tracking lost it stay without a mask
+ *   until a click re-anchors it, instead of being retried in a loop.
+ *   Progress goes to `objectTracking`, lost frames to `objectLost`.
  */
 
 import { isAiCutoutActive } from '../../shared/edits/model.js';
@@ -48,9 +57,10 @@ import { loadSettings } from '../../shared/user-settings.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { maskKey, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
+import { maskKey, objectMaskKey, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
+  countUntrackedObjectFrames,
   createClipDraftMaskSource,
   describeAnalysisError,
   estimateRemainingMs,
@@ -84,6 +94,16 @@ export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
  * that flashes on and off with every change reads as flicker
  */
 export const BUILDING_STATUS_DELAY_MS = 300;
+
+/**
+ * What a tracked object's masks depend on: its clicks and Whole / Part
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @returns {string}
+ */
+export function getObjectSignature(object) {
+  const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
+  return `${object.scope}|${clicks}`;
+}
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -551,7 +571,12 @@ export function createAiCutoutSession(options) {
       void refreshModels();
       const next = queuedFrames;
       queuedFrames = null;
-      if (next && !disposed) void analyze(next);
+      if (next && !disposed) {
+        void analyze(next);
+      } else if (!disposed) {
+        // The selection's frames have their base masks: the objects' next
+        syncObjects();
+      }
     }
   };
 
@@ -592,11 +617,209 @@ export function createAiCutoutSession(options) {
     void analyze(frames);
   };
 
+  // ------------------------------------------------------------------
+  // Tracked objects
+  // ------------------------------------------------------------------
+
+  /** @type {AbortController | null} */
+  let objectController = null;
+  /** The object being tracked @type {{ id: string, signature: string, runKey: string } | null} */
+  let objectRun = null;
+  /** Objects to track after the running one, in order @type {string[]} */
+  let objectQueue = [];
+  /** Per object: the signature its masks were made with @type {Map<string, string>} */
+  const objectSignatures = new Map();
+  /**
+   * Per object: the (signature, selection) of its last finished run, so a
+   * lost frame does not make it track again by itself
+   * @type {Map<string, string>}
+   */
+  const objectRuns = new Map();
+  /** @type {Record<string, number[]>} */
+  let objectLost = {};
+
+  /**
+   * @param {import('../../shared/edits/model.js').CutoutObject} object
+   * @param {{ start: number, end: number }} range
+   * @returns {string}
+   */
+  const runKeyOf = (object, range) => `${getObjectSignature(object)}|${range.start}-${range.end}`;
+
+  /**
+   * @param {string} id
+   * @returns {import('../../shared/edits/model.js').CutoutObject | undefined}
+   */
+  const findObject = (id) => getState()?.edits.background.ai.objects?.find((o) => o.id === id);
+
+  /** @param {Record<string, number[]>} next */
+  const reportLost = (next) => {
+    objectLost = next;
+    report({ objectLost: next });
+  };
+
+  /**
+   * Drop every mask of an object (it was deleted)
+   * @param {string} id
+   */
+  const dropObjectMasks = (id) => {
+    for (const frame of getState()?.clip?.frames ?? []) maskStore.delete(objectMaskKey(frame, id));
+  };
+
+  /** Track the next queued object that still exists (one at a time) */
+  const runNextObject = async () => {
+    if (disposed || objectController) return;
+    let object;
+    while (objectQueue.length > 0 && !object)
+      object = findObject(/** @type {string} */ (objectQueue.shift()));
+    const state = getState();
+    if (!object || !state?.clip || !isAiCutoutActive(state.edits.background)) {
+      report({ objectTracking: null });
+      return;
+    }
+    const controller = new AbortController();
+    objectController = controller;
+    const signature = getObjectSignature(object);
+    const range = state.selectedRange;
+    const runKey = runKeyOf(object, range);
+    const { id } = object;
+    objectRun = { id, signature, runKey };
+    objectSignatures.set(id, signature);
+    const clipId = getClipId();
+    report({ objectTracking: { id, phase: 'starting', framesDone: 0, framesTotal: 0 } });
+    let firstMaskShown = false;
+    try {
+      const result = await manager.analyzeObject(state.clip.frames, {
+        objectId: id,
+        signal: controller.signal,
+        clipId,
+        allowWasm: isWasmAllowed(),
+        range,
+        // The frame on screen first when it is in the selection
+        currentFrame: state.currentFrame,
+        clicks: object.clicks,
+        scope: object.scope,
+        superseded: () => objectQueue.includes(id),
+        onProgress: (progress) => {
+          if (disposed || objectController !== controller) return;
+          if (!firstMaskShown && progress.framesDone > 0) {
+            // The clicked frame's object: show it now
+            firstMaskShown = true;
+            clearCooldown();
+            requestBuild();
+          }
+          report({
+            objectTracking: {
+              id,
+              phase: progress.phase,
+              framesDone: progress.framesDone,
+              framesTotal: progress.framesTotal,
+              loadedBytes: progress.loadedBytes,
+              totalBytes: progress.totalBytes,
+              fromCache: progress.fromCache,
+            },
+          });
+        },
+      });
+      objectRuns.set(id, runKey);
+      reportLost({ ...objectLost, [id]: result.lost });
+    } catch (error) {
+      if (!isAbortError(error)) {
+        // Not again by itself for these clicks and this selection
+        objectRuns.set(id, runKey);
+        if (isWasmChoiceError(error) && !isWasmAllowed()) {
+          const modelFailed =
+            /** @type {any} */ (error).code === SegmentationErrorCode.WEBGPU_MODEL_FAILED;
+          report({
+            needsWasmChoice: true,
+            webgpuModelFailed: modelFailed,
+            ...(modelFailed ? {} : { webgpu: false }),
+          });
+        } else {
+          report({ phase: 'error', error: describeAnalysisError(error) });
+        }
+      }
+    } finally {
+      if (objectController === controller) {
+        objectController = null;
+        objectRun = null;
+      }
+      clearCooldown();
+      requestBuild();
+      void refreshModels();
+      if (!disposed) {
+        if (objectQueue.length > 0) {
+          void runNextObject();
+        } else {
+          report({ objectTracking: null });
+        }
+      }
+    }
+  };
+
+  /**
+   * Bring the tracked objects' masks in line with the edits: track each
+   * object whose clicks or Whole / Part changed (stopping its run in
+   * flight), or that has selection frames without a mask and was not
+   * tracked for these clicks and this selection yet (`force`: also then,
+   * e.g. the Track button); drop deleted objects' masks.
+   * @param {{ force?: boolean }} [options]
+   */
+  const syncObjects = ({ force = false } = {}) => {
+    if (disposed) return;
+    const state = getState();
+    if (!state?.clip) return;
+    const objects = state.edits.background.ai.objects ?? [];
+    const ids = new Set(objects.map((o) => o.id));
+    // Deleted objects
+    for (const id of [...objectSignatures.keys()]) {
+      if (ids.has(id)) continue;
+      objectSignatures.delete(id);
+      objectRuns.delete(id);
+      objectQueue = objectQueue.filter((queued) => queued !== id);
+      if (objectRun?.id === id) objectController?.abort();
+      dropObjectMasks(id);
+      if (id in objectLost) {
+        const { [id]: _gone, ...rest } = objectLost;
+        reportLost(rest);
+      }
+    }
+    if (!isAiCutoutActive(state.edits.background)) return;
+    for (const object of objects) {
+      const signature = getObjectSignature(object);
+      const known = objectSignatures.get(object.id);
+      // A new mount: the stored masks were made with these clicks
+      if (known === undefined) objectSignatures.set(object.id, signature);
+      const changed = known !== undefined && known !== signature;
+      const runKey = runKeyOf(object, state.selectedRange);
+      const running = objectRun?.id === object.id;
+      if (running && objectRun?.runKey === runKey && !force) continue;
+      const untracked =
+        countUntrackedObjectFrames(state.clip.frames, state.selectedRange, object.id, maskStore) >
+        0;
+      const tried = objectRuns.get(object.id) === runKey;
+      if (!changed && !(untracked && (force || !tried))) continue;
+      if (changed) {
+        objectSignatures.set(object.id, signature);
+        if (object.id in objectLost) {
+          const { [object.id]: _old, ...rest } = objectLost;
+          reportLost(rest);
+        }
+      }
+      if (!objectQueue.includes(object.id)) {
+        // Changed clicks go first: the user is looking at that object
+        objectQueue = changed ? [object.id, ...objectQueue] : [...objectQueue, object.id];
+      }
+      if (running) objectController?.abort();
+    }
+    void runNextObject();
+  };
+
   return {
     analyze,
     analyzeNow,
     checkCapabilities,
     clearClickMasks,
+    syncObjects,
     preload,
     refreshModels,
     requestBuild,
@@ -618,10 +841,17 @@ export function createAiCutoutSession(options) {
       return interactive;
     },
 
-    /** Stop the running analysis (finished masks stay) */
+    /** Stop the running analysis and object tracking (finished masks stay) */
     cancel() {
       queuedFrames = null;
       analysisController?.abort();
+      objectQueue = [];
+      objectController?.abort();
+    },
+
+    /** @returns {boolean} A tracked object is being tracked */
+    get trackingObject() {
+      return objectController !== null;
     },
 
     /**
@@ -648,6 +878,10 @@ export function createAiCutoutSession(options) {
     dispose() {
       queuedFrames = null;
       analysisController?.abort();
+      objectQueue = [];
+      objectController?.abort();
+      objectController = null;
+      objectRun = null;
       analysisController = null;
       analysisModelId = null;
       buildController?.abort();

@@ -805,3 +805,60 @@ describe('click to select (the picks are the model prompts)', () => {
     );
   });
 });
+
+describe('tracked objects', () => {
+  const W = 40;
+  const H = 20;
+  /** Character at x 2..13, a shelf merged with it at x 14..33 */
+  const getProb = () => probOf(W, H, [[2, 4, 32, 12]]);
+  /** The shelf's tracked mask at a quarter of the size, on frames 0 and 1 only */
+  const shelf = (/** @type {number} */ f) => (f < 2 ? probOf(10, 5, [[4, 0, 6, 5]]) : null);
+  const object = (/** @type {'remove' | 'add'} */ mode) => ({
+    id: 'o1',
+    mode,
+    clicks: [{ frame: 0, x: 0.6, y: 0.5, mode: /** @type {const} */ ('keep') }],
+    scope: /** @type {const} */ ('whole'),
+  });
+
+  it('keys the params by which objects apply and how', () => {
+    const base = aiOf();
+    const keys = new Set([
+      getAiParamsKey(base),
+      getAiParamsKey({ ...base, objects: [object('remove')] }),
+      getAiParamsKey({ ...base, objects: [object('add')] }),
+      getAiParamsKey({ ...base, objects: [{ ...object('remove'), id: 'o2' }] }),
+    ]);
+    expect(keys.size).toBe(4);
+  });
+
+  it('subtracts a removed object on the frames it was tracked on, in builds and drafts alike', async () => {
+    const ai = aiOf({ objects: [object('remove')] });
+    const objects = [{ mode: /** @type {const} */ ('remove'), getMask: shelf }];
+    const full = await buildFinalMasks({ frameCount: 3, getProb, ai, objects, ...noYield });
+    const plain = binaryOf(W, H, [[2, 4, 32, 12]]);
+    const removed = unpackMask(/** @type {any} */ (full.masks[0]));
+    // The shelf (x 16.. at full size) and its 1 px grow are gone, the character stays
+    expect(removed[8 * W + 5]).toBe(1);
+    expect(removed[8 * W + 20]).toBe(0);
+    expect(removed.reduce((s, v) => s + v, 0)).toBeLessThan(plain.reduce((s, v) => s + v, 0));
+    // Frame 2 has no object mask: the base mask as is
+    expect(full.masks[2]).toEqual(packMask(plain, W, H));
+    const draft = createDraftMaskSource({ frameCount: 3, getProb, ai, objects });
+    for (let f = 0; f < 3; f++) expect(draft.getFinalMask(f), `frame ${f}`).toEqual(full.masks[f]);
+  });
+
+  it('adds an added object', async () => {
+    const ai = aiOf({ objects: [object('add')] });
+    const empty = () => probOf(W, H, []);
+    const full = await buildFinalMasks({
+      frameCount: 1,
+      getProb: empty,
+      ai,
+      objects: [{ mode: 'add', getMask: shelf }],
+      ...noYield,
+    });
+    const added = unpackMask(/** @type {any} */ (full.masks[0]));
+    expect(added[8 * W + 24]).toBe(1);
+    expect(added[8 * W + 5]).toBe(0);
+  });
+});

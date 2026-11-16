@@ -677,3 +677,143 @@ describe('AI cutout session: model availability and preload', () => {
     session.dispose();
   });
 });
+
+describe('AI cutout session: tracked objects', () => {
+  /** @type {ReturnType<typeof createMaskStore>} */
+  let maskStore;
+  /** @type {any} */
+  let state;
+  /** @type {Record<string, any>} */
+  let status;
+  /** @type {ReturnType<typeof createAiCutoutSession>} */
+  let session;
+  /** @type {{ calls: any[], lostAt: Set<number>, analyzeObject: import('vitest').Mock }} */
+  let manager;
+
+  const click = (frame = 1) => ({ frame, x: 0.5, y: 0.5, mode: 'keep' });
+  /** @param {any[]} objects */
+  function setObjects(objects) {
+    state = {
+      ...state,
+      edits: normalizeEdits(
+        { background: { enabled: true, method: 'ai', ai: { model: 'anime', objects } } },
+        4,
+      ),
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    maskStore = createMaskStore();
+    manager = {
+      calls: [],
+      lostAt: new Set(),
+      analyzeObject: vi.fn(async (frames, options) => {
+        manager.calls.push(options);
+        const lost = [];
+        for (let f = options.range.start; f <= options.range.end; f++) {
+          if (manager.lostAt.has(f)) {
+            lost.push(f);
+            continue;
+          }
+          maskStore.set(`object:${options.objectId}:${frames[f].id}`, prob(), options.clipId);
+          options.onProgress?.({ phase: 'analyzing', framesDone: 1, framesTotal: 4 });
+        }
+        return { tracked: 4 - lost.length, lost, anchors: 1, backend: 'webgpu' };
+      }),
+    };
+    state = {
+      clip: { frames: makeFrames(4) },
+      selectedRange: { start: 0, end: 3 },
+      currentFrame: 1,
+    };
+    setObjects([]);
+    status = {};
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...manager,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeObject: manager.analyzeObject,
+      }),
+      maskStore,
+      cache: createFinalMaskCache(),
+    });
+  });
+
+  afterEach(() => {
+    session.dispose();
+    vi.useRealTimers();
+  });
+
+  /** Let the queued tracking run to the end */
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(10);
+  };
+
+  it('tracks a new object through the selection and reports its lost frames', async () => {
+    manager.lostAt = new Set([3]);
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]).toMatchObject({
+      objectId: 'o1',
+      clipId: 'clip-1',
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      clicks: [click()],
+      scope: 'whole',
+    });
+    expect(status.objectLost).toEqual({ o1: [3] });
+    expect(status.objectTracking).toBeNull();
+  });
+
+  it('does not retry lost frames on its own, but does on force or new clicks', async () => {
+    manager.lostAt = new Set([3]);
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    session.syncObjects({ force: true });
+    await settle();
+    expect(manager.calls).toHaveLength(2);
+    manager.lostAt = new Set();
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(), click(3)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(3);
+    expect(manager.calls[2].clicks).toHaveLength(2);
+    expect(status.objectLost).toEqual({ o1: [] });
+  });
+
+  it('leaves a remounted object with all its masks alone', async () => {
+    for (const f of state.clip.frames) maskStore.set(`object:o1:${f.id}`, prob(), 'clip-1');
+    setObjects([{ id: 'o1', mode: 'add', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(0);
+  });
+
+  it('drops the masks and lost frames of a deleted object', async () => {
+    manager.lostAt = new Set([2]);
+    setObjects([
+      { id: 'o1', mode: 'remove', clicks: [click()] },
+      { id: 'o2', mode: 'add', clicks: [click()] },
+    ]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls.map((c) => c.objectId)).toEqual(['o1', 'o2']);
+    expect(maskStore.has('object:o1:f0')).toBe(true);
+    setObjects([{ id: 'o2', mode: 'add', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(maskStore.has('object:o1:f0')).toBe(false);
+    expect(maskStore.has('object:o2:f0')).toBe(true);
+    expect(status.objectLost).toEqual({ o2: [2] });
+  });
+});

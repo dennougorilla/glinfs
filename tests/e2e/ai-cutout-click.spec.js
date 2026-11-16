@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
+  chooseAiModel,
   decodeExportedGif,
   discClip,
   editorFramePointToViewport,
@@ -232,6 +233,96 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
         a: gifPixel(frame, discA(i).x, discA(i).y)[3],
         bg: gifPixel(frame, 5, 5)[3],
       }).toEqual({ a: 255, bg: 0 });
+    });
+  });
+
+  test('Remove object on another model: tracked, subtracted on every frame and in the export', async ({
+    page,
+  }) => {
+    const N = 6;
+    const SEG = fixture('stub-seg.onnx');
+    await serveSamStubs(page);
+    // Registered last, so it wins over the stubs' 404 for other models
+    await page.route('**/models/isnetis-fp16.onnx', (route) =>
+      route.fulfill({ body: SEG, contentType: 'application/octet-stream' }),
+    );
+    await gotoCaptureWithStubModel(page, {
+      models: { ...OVERRIDE.models, anime: pin(SEG) },
+      allowWasm: true,
+    });
+    await injectDiscClip(page, { count: N });
+    await pauseEditorPlayback(page);
+    await page.evaluate(() => window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 }));
+    // The base model (the brightness stub) keeps both discs
+    await chooseAiModel(page, 'anime', { download: false });
+    await page.locator('#background-download-confirm').click();
+    await expect(page.locator('#ai-status-text')).toHaveText(`${N} of ${N} frames analyzed`, {
+      timeout: 60_000,
+    });
+    await waitForAiMasks(page);
+    await expect.poll(() => editorPreviewAlpha(page, discA(2).x, discA(2).y)).toBe(255);
+    expect(await editorPreviewAlpha(page, discB(2).x, discB(2).y)).toBe(255);
+
+    // Remove object: click disc A on frame 2
+    await page.locator('label[for="ai-object-remove"]').click();
+    await expect(page.locator('#ai-object-remove')).toBeChecked();
+    const target = await editorFramePointToViewport(page, discA(2).x, discA(2).y);
+    await page.mouse.click(target.x, target.y);
+    await expect(page.locator('#ai-object-list [data-object-id]')).toHaveCount(1);
+    await expect(page.locator('#ai-object-list')).toContainText('Remove object at 00:02');
+    const id = await page.evaluate(
+      () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].id,
+    );
+    // Part: only disc A (the stub's Whole is both discs); tracked again
+    await page.locator('label[for="ai-object-scope-part"]').click();
+    const objectAt = (/** @type {number} */ i) =>
+      page.evaluate(
+        ({ i, group, p }) => window.__TEST_HOOKS__.aiCutout.sampleMask(i, p, group)?.values ?? null,
+        {
+          i,
+          group: `object:${id}`,
+          p: [
+            { x: discA(i).x / discClip.width, y: discA(i).y / discClip.height },
+            { x: discB(i).x / discClip.width, y: discB(i).y / discClip.height },
+          ],
+        },
+      );
+    await expect
+      .poll(
+        async () => {
+          const s = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState());
+          const last = await objectAt(N - 1);
+          return s.aiCutout.objectTracking === null && last !== null && last[1] < 10;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    const status = await readAiStatus(page);
+    expect(status.objectLost).toEqual({ [id]: [] });
+    for (let i = 0; i < N; i++) {
+      const [a, b] = /** @type {number[]} */ (await objectAt(i));
+      expect({ i, a: a > 200, b: b < 10 }).toEqual({ i, a: true, b: true });
+    }
+
+    // Preview: disc A gone, disc B kept
+    await waitForAiMasks(page);
+    await expect.poll(() => editorPreviewAlpha(page, discA(2).x, discA(2).y)).toBe(0);
+    expect(await editorPreviewAlpha(page, discB(2).x, discB(2).y)).toBe(255);
+
+    // Export: disc A transparent on every frame, disc B opaque
+    await exportFromEditor(page);
+    const dialog = exportDialog(page);
+    await dialog.locator('#export-start').click();
+    await expect(dialog.locator('#export-result')).toBeVisible({ timeout: 60_000 });
+    const frames = await decodeExportedGif(page);
+    expect(frames).toHaveLength(N);
+    frames.forEach((frame, i) => {
+      expect({
+        i,
+        a: gifPixel(frame, discA(i).x, discA(i).y)[3],
+        b: gifPixel(frame, discB(i).x, discB(i).y)[3],
+        bg: gifPixel(frame, 5, 5)[3],
+      }).toEqual({ i, a: 0, b: 255, bg: 0 });
     });
   });
 

@@ -37,6 +37,7 @@ describe('createDefaultEdits', () => {
           edge: 0,
           picks: [],
           clickScope: 'whole',
+          objects: [],
         },
       },
       touchUps: [],
@@ -568,5 +569,65 @@ describe('click to select', () => {
     expect(isClickModel(ai({ model: 'anime' }))).toBe(false);
     expect(getRegionPicks(ai({ model: 'click', picks }))).toEqual([]);
     expect(getRegionPicks(ai({ model: 'anime', picks }))).toHaveLength(1);
+  });
+});
+
+describe('AiCutout.objects', () => {
+  /** @param {unknown} objects */
+  const objectsOf = (objects) =>
+    normalizeEdits({ background: { ai: { objects } } }, 10).background.ai.objects;
+  const keep = (frame = 2) => ({ frame, x: 0.4, y: 0.6, mode: 'keep' });
+
+  it('has none by default and in edits saved before objects existed', () => {
+    expect(createDefaultEdits().background.ai.objects).toEqual([]);
+    expect(objectsOf(undefined)).toEqual([]);
+    expect(objectsOf('nope')).toEqual([]);
+  });
+
+  it('normalizes mode, scope and clicks like picks', () => {
+    const [object] = objectsOf([
+      { id: 'a', mode: 'add', scope: 'part', clicks: [{ frame: 99, x: 2, y: -1, mode: 'keep' }] },
+    ]);
+    expect(object).toEqual({
+      id: 'a',
+      mode: 'add',
+      scope: 'part',
+      clicks: [{ frame: 9, x: 1, y: 0, mode: 'keep' }],
+    });
+    const [fallback] = objectsOf([{ id: 'b', mode: 'x', scope: 'y', clicks: [keep()] }]);
+    expect(fallback.mode).toBe('remove');
+    expect(fallback.scope).toBe('whole');
+  });
+
+  it('drops objects without a keep click and clicks before the first one', () => {
+    expect(
+      objectsOf([
+        { id: 'a', clicks: [] },
+        { id: 'b', clicks: [{ ...keep(), mode: 'remove' }] },
+      ]),
+    ).toEqual([]);
+    const [object] = objectsOf([
+      {
+        id: 'c',
+        clicks: [{ ...keep(1), mode: 'remove' }, keep(3), { ...keep(4), mode: 'remove' }],
+      },
+    ]);
+    expect(object.clicks.map((c) => c.frame)).toEqual([3, 4]);
+  });
+
+  it('limits objects and clicks, drops repeated ids and fills a missing id', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ id: `o${i}`, clicks: [keep()] }));
+    expect(objectsOf(many).map((o) => o.id)).toEqual(
+      many.slice(0, EDIT_LIMITS.aiObjects.max).map((o) => o.id),
+    );
+    expect(
+      objectsOf([
+        { id: 'x', clicks: [keep()] },
+        { id: 'x', clicks: [keep(5)] },
+      ]),
+    ).toHaveLength(1);
+    const clicks = Array.from({ length: 20 }, (_, i) => keep(i % 10));
+    expect(objectsOf([{ id: 'y', clicks }])[0].clicks).toHaveLength(EDIT_LIMITS.aiObjectClicks.max);
+    expect(typeof objectsOf([{ clicks: [keep()] }])[0].id).toBe('string');
   });
 });

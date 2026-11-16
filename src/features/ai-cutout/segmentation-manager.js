@@ -32,6 +32,13 @@
  * frame), so the rest of the pipeline (Fit, smoothing, touch-ups, export)
  * reads them like any model's.
  *
+ * A tracked object (the edits' `AiCutout.objects`) is driven the same way
+ * by analyzeObject(): its clicks are tracked with the click-to-select model
+ * through the selection, whatever model the clip's cutout uses. Its masks
+ * are decoded at the small object size (see object-masks.js) and stored
+ * under objectMaskKey, in the mask store group (clip, `object:<id>`), so
+ * they evict and clear with the clip like any model's masks.
+ *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
  * resolution for a letterbox model, to the square model input for a stretch
@@ -40,6 +47,11 @@
  * At most MAX_FRAMES_IN_FLIGHT bitmaps exist at a time.
  */
 
+import {
+  getObjectMaskSize,
+  OBJECT_TRACK_MIN_SCORE_RATIO,
+  OBJECT_WHOLE_MIN_SCORE_RATIO,
+} from '../../shared/masks/object-masks.js';
 import { getDrawableSource } from '../../shared/utils/canvas.js';
 import { trackClicks } from './click-tracker.js';
 import { getSharedMaskStore } from './mask-store.js';
@@ -107,6 +119,21 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {string} [modelId] - A SAM model (default 'click')
  * @property {() => boolean} [superseded] - On a cancel: whether a run with
  *   new clicks follows at once (see trackClicks)
+ */
+
+/**
+ * @typedef {Object} ObjectAnalyzeOptions
+ * @property {string} objectId - The tracked object (its masks' key and group)
+ * @property {{ start: number, end: number }} range - Selection (inclusive clip indices)
+ * @property {number} currentFrame - Frame on screen (worked on first)
+ * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} clicks
+ * @property {'whole' | 'part'} [scope]
+ * @property {(progress: AnalysisProgress) => void} [onProgress]
+ * @property {AbortSignal} [signal]
+ * @property {boolean} [allowWasm=false]
+ * @property {string} [clipId]
+ * @property {string} [modelId] - The SAM model that tracks it (default 'click')
+ * @property {() => boolean} [superseded] - See trackClicks
  */
 
 /**
@@ -267,6 +294,25 @@ export function frameKey(frame) {
  */
 export function maskKey(frame, modelId = DEFAULT_MODEL_ID) {
   return `${modelId}:${frameKey(frame)}`;
+}
+
+/**
+ * Mask store group ("model") of a tracked object's masks
+ * @param {string} objectId
+ * @returns {string}
+ */
+export function objectMaskGroup(objectId) {
+  return `object:${objectId}`;
+}
+
+/**
+ * Mask store key of a tracked object's mask on a frame
+ * @param {Frame} frame
+ * @param {string} objectId
+ * @returns {string}
+ */
+export function objectMaskKey(frame, objectId) {
+  return maskKey(frame, objectMaskGroup(objectId));
 }
 
 /**
@@ -628,7 +674,44 @@ export class SegmentationManager {
     this.#markBusy(modelId, 1);
     const previous = this.#tail;
     const run = raceAbort(previous, options.signal).then(() =>
-      this.#analyzeClick(frames, { ...options, modelId }),
+      this.#analyzeClick(frames, {
+        ...options,
+        modelId,
+        group: modelId,
+        keyOf: (frame) => maskKey(frame, modelId),
+        maskSizeOf: (frame) => computeMaskSize(frame.width, frame.height),
+      }),
+    );
+    this.#tail = Promise.allSettled([previous, run]);
+    const settle = () => this.#markBusy(modelId, -1);
+    run.then(settle, settle);
+    return run;
+  }
+
+  /**
+   * Track a tracked object's clicks through the selection with a SAM model
+   * (see trackClicks), storing its masks at the object size under
+   * objectMaskKey. Queued with the other analyses (one at a time).
+   * @param {Frame[]} frames - The whole clip
+   * @param {ObjectAnalyzeOptions} options
+   * @returns {Promise<ClickAnalyzeResult>}
+   */
+  analyzeObject(frames, options) {
+    const modelId = options.modelId ?? 'click';
+    const group = objectMaskGroup(options.objectId);
+    this.#markBusy(modelId, 1);
+    const previous = this.#tail;
+    const run = raceAbort(previous, options.signal).then(() =>
+      this.#analyzeClick(frames, {
+        ...options,
+        picks: options.clicks,
+        modelId,
+        group,
+        keyOf: (frame) => objectMaskKey(frame, options.objectId),
+        maskSizeOf: (frame) => getObjectMaskSize(frame.width, frame.height),
+        minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
+        wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
+      }),
     );
     this.#tail = Promise.allSettled([previous, run]);
     const settle = () => this.#markBusy(modelId, -1);
@@ -638,11 +721,15 @@ export class SegmentationManager {
 
   /**
    * @param {Frame[]} frames
-   * @param {ClickAnalyzeOptions & { modelId: string }} options
+   * @param {ClickAnalyzeOptions & { modelId: string, group: string, keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
+   *   group: mask store group of the masks; keyOf: their store key;
+   *   maskSizeOf: the size the decoder answers at; minScoreRatio and
+   *   wholeMinScoreRatio: see trackClicks
    * @returns {Promise<ClickAnalyzeResult>}
    */
   async #analyzeClick(frames, options) {
     const { onProgress, signal, allowWasm = false, clipId, modelId, range } = options;
+    const { group, keyOf, maskSizeOf } = options;
     if (signal?.aborted) throw createAbortError();
     const start = Math.max(0, range.start);
     const end = Math.min(frames.length - 1, range.end);
@@ -673,9 +760,11 @@ export class SegmentationManager {
         currentFrame: options.currentFrame,
         picks: options.picks,
         scope: options.scope,
+        minScoreRatio: options.minScoreRatio,
+        wholeMinScoreRatio: options.wholeMinScoreRatio,
         keyOf: (f) => frameKey(frames[f]),
         prompt: async (f, prompt) => {
-          const request = this.#submitPrompt(jobId, frames[f], prompt, spec);
+          const request = this.#submitPrompt(jobId, frames[f], prompt, spec, maskSizeOf(frames[f]));
           submitted.push(request);
           const answer = await raceAbort(request, signal);
           lastMs = answer.totalMs;
@@ -683,12 +772,12 @@ export class SegmentationManager {
         },
         store: (f, mask) => {
           if (released()) return;
-          this.#maskStore.set(maskKey(frames[f], modelId), mask, clipId, modelId);
+          this.#maskStore.set(keyOf(frames[f]), mask, clipId, group);
         },
         clear: (f) => {
-          this.#maskStore.delete(maskKey(frames[f], modelId));
+          this.#maskStore.delete(keyOf(frames[f]));
         },
-        peek: (f) => this.#maskStore.get(maskKey(frames[f], modelId)) ?? null,
+        peek: (f) => this.#maskStore.get(keyOf(frames[f])) ?? null,
         superseded: options.superseded,
         onProgress: ({ done }) => report(done, lastMs),
         signal,
@@ -714,9 +803,10 @@ export class SegmentationManager {
    * @param {Frame} frame
    * @param {{ points: import('./sam-prompts.js').SamPoint[], box: import('./sam-prompts.js').SamBox | null, maskInput?: Float32Array | null }} prompt
    * @param {ModelSpec} spec
+   * @param {{ width: number, height: number }} mask - Size the decoder answers at
    * @returns {Promise<PromptResult>}
    */
-  async #submitPrompt(jobId, frame, prompt, spec) {
+  async #submitPrompt(jobId, frame, prompt, spec, mask) {
     const source = getDrawableSource(frame);
     if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
       throw new SegmentationError(
@@ -725,7 +815,6 @@ export class SegmentationManager {
       );
     }
     const encoderSize = getEncoderSize(frame.width, frame.height, spec.inputSize);
-    const mask = computeMaskSize(frame.width, frame.height);
     const { coords, labels } = buildPromptInputs({
       points: prompt.points,
       box: prompt.box,

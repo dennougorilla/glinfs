@@ -315,11 +315,16 @@ function countInside(data, threshold = 128) {
  *   whole (the face), or the whole when nothing smaller is non-empty;
  * - with `previous` (tracked frame): the mask overlapping it most.
  * Empty masks are never chosen while a non-empty one exists.
+ * `wholeMinScoreRatio` replaces WHOLE_MIN_SCORE_RATIO (a stricter one keeps
+ * a half-included neighbour out of the whole).
  * @param {SamCandidate[]} candidates
- * @param {{ scope?: 'whole' | 'part', previous?: Uint8Array | null }} [options]
+ * @param {{ scope?: 'whole' | 'part', previous?: Uint8Array | null, wholeMinScoreRatio?: number }} [options]
  * @returns {SamCandidate}
  */
-export function chooseCandidate(candidates, { scope = 'whole', previous = null } = {}) {
+export function chooseCandidate(
+  candidates,
+  { scope = 'whole', previous = null, wholeMinScoreRatio = WHOLE_MIN_SCORE_RATIO } = {},
+) {
   if (candidates.length === 0) throw new RangeError('No candidate masks');
   const sized = candidates.map((c) => ({ c, area: countInside(c.data) }));
   const nonEmpty = sized.filter((s) => s.area > 0);
@@ -337,7 +342,7 @@ export function chooseCandidate(candidates, { scope = 'whole', previous = null }
     return best.c;
   }
   const topScore = Math.max(...pool.map((s) => s.c.score));
-  const confident = pool.filter((s) => s.c.score >= topScore * WHOLE_MIN_SCORE_RATIO);
+  const confident = pool.filter((s) => s.c.score >= topScore * wholeMinScoreRatio);
   const whole = confident.reduce((a, b) => (b.area > a.area ? b : a));
   if (scope === 'whole') return whole.c;
   const smaller = pool.filter((s) => s.area < whole.area);

@@ -48,7 +48,11 @@ import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import {
+  collectPendingFrames,
+  getSegmentationManager,
+  objectMaskKey,
+} from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSourceSettled,
   describeAnalysisError,
@@ -693,6 +697,64 @@ function showAiPrep(next) {
 }
 
 /**
+ * Tracked objects (removed from / added to the cutout) that have no mask on
+ * any frame of the export range are tracked over it first, like click to
+ * select. An object the editor tracked keeps its masks; the frames where
+ * tracking lost it have none, and would only be lost again, so they are
+ * not tracked again here (those frames keep the base mask).
+ * @param {import('../../shared/edits/model.js').AiCutout} ai
+ * @param {AbortSignal} signal
+ */
+async function prepareObjectMasks(ai, signal) {
+  const maskStore = getSharedMaskStore();
+  const start = rangeStart;
+  const end = rangeStart + frames.length - 1;
+  for (const object of ai.objects ?? []) {
+    let tracked = false;
+    for (let f = start; f <= end && !tracked; f++) {
+      const frame = clipFrames[f];
+      tracked = Boolean(frame) && maskStore.has(objectMaskKey(frame, object.id));
+    }
+    if (tracked) continue;
+    showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: frames.length });
+    let analyzingSince = /** @type {number | null} */ (null);
+    await getSegmentationManager().analyzeObject(clipFrames, {
+      objectId: object.id,
+      signal,
+      clipId,
+      allowWasm: isWasmAllowed(),
+      range: { start, end },
+      currentFrame: object.clicks.find((c) => c.frame >= start && c.frame <= end)?.frame ?? start,
+      clicks: object.clicks,
+      scope: object.scope,
+      onProgress: (progress) => {
+        if (signal.aborted) return;
+        if (progress.phase === 'analyzing' && analyzingSince === null) {
+          analyzingSince = performance.now();
+        }
+        showAiPrep({
+          phase: progress.phase,
+          loadedBytes: progress.loadedBytes,
+          totalBytes: progress.totalBytes,
+          fromCache: progress.fromCache,
+          framesDone: progress.framesDone,
+          framesTotal: progress.framesTotal,
+          remainingMs:
+            analyzingSince === null
+              ? null
+              : estimateRemainingMs({
+                  framesDone: progress.framesDone,
+                  framesTotal: progress.framesTotal,
+                  elapsedMs: performance.now() - analyzingSince,
+                  backend: progress.backend,
+                }),
+        });
+      },
+    });
+  }
+}
+
+/**
  * Final masks for the frames an encode needs: analyze those that have no
  * mask yet (with progress; the manager reuses the loaded model), then build
  * the masks over the whole clip (picks may lie outside the export range).
@@ -777,6 +839,7 @@ async function prepareAiMasks(indices, signal) {
       });
     }
   }
+  await prepareObjectMasks(ai, signal);
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;
   showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });

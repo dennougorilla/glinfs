@@ -216,3 +216,49 @@ describe('SegmentationManager.analyzeClick', () => {
     expect(workers[0].terminated).toBe(true);
   });
 });
+
+describe('SegmentationManager.analyzeObject', () => {
+  it('tracks with the click model, storing small masks under the object, apart from the click masks', async () => {
+    const { manager, maskStore, workers } = harness();
+    const big = Array.from({ length: 4 }, (_, i) => ({
+      ...frame(`g${i}`),
+      width: 1024,
+      height: 512,
+    }));
+    const clicks = [{ frame: 1, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const result = await manager.analyzeObject(big, {
+      objectId: 'o1',
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+    });
+    expect(result).toMatchObject({ tracked: 4, lost: [] });
+    expect(workers).toHaveLength(1);
+    expect(workers[0].posted[0]).toMatchObject({ type: 'init', model: { id: 'click' } });
+    // Decoded at the object size (long side 256), not the frame size
+    expect(workers[0].prompts.every((m) => m.maskWidth === 256 && m.maskHeight === 128)).toBe(true);
+    for (const f of big) {
+      expect(maskStore.get(`object:o1:${f.id}`)).toMatchObject({ width: 256, height: 128 });
+      expect(maskStore.has(`click:${f.id}`)).toBe(false);
+    }
+    // A second object, then the click model, share the loaded model
+    await manager.analyzeObject(big, {
+      objectId: 'o2',
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+    });
+    await manager.analyzeClick(big, {
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      picks: clicks,
+      clipId: 'clip',
+    });
+    expect(workers).toHaveLength(1);
+    expect(workers[0].posted.filter((m) => m.type === 'init')).toHaveLength(1);
+    expect(maskStore.get('click:g1')).toMatchObject({ width: 1024, height: 512 });
+    expect(maskStore.has('object:o2:g1')).toBe(true);
+  });
+});
