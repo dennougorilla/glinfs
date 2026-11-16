@@ -75,6 +75,9 @@ const TRACK_MAX_GAP = 5;
  *   0/1 final mask of a frame (null: none); consumed before the next call
  * @property {(frameIndex: number) => string} [keyOf] - Pixel identity of a
  *   frame (consecutive frames with one key count once)
+ * @property {(frameIndex: number) => void} [visit] - Called for every frame
+ *   in order, held ones included, inside the time slices, before getBinary
+ *   (a source that must see each frame advances here)
  * @property {AbortSignal} [signal]
  * @property {number} [sliceMs]
  * @property {() => number} [now]
@@ -295,6 +298,7 @@ export async function findCleanupSuggestions(options) {
   const {
     frameCount,
     getBinary,
+    visit,
     keyOf = (f) => String(f),
     signal,
     sliceMs = 30,
@@ -331,6 +335,13 @@ export async function findCleanupSuggestions(options) {
   let sliceStart = now();
 
   for (let f = 0; f < frameCount; f++) {
+    // Every frame, held and missing ones too, counts against the slice
+    if (now() - sliceStart >= sliceMs) {
+      await yieldToMain();
+      sliceStart = now();
+    }
+    throwIfAborted();
+    visit?.(f);
     const key = keyOf(f);
     if (key === lastKey) {
       // A hold: the same pixels as the frame before
@@ -396,13 +407,8 @@ export async function findCleanupSuggestions(options) {
     }
     holesPerFrame = Math.max(holesPerFrame, frameHoles);
     /** @type {Tracker} */ (holes).add(step, f, 1, back, isHole, 0);
-
-    if (now() - sliceStart >= sliceMs) {
-      await yieldToMain();
-      sliceStart = now();
-    }
-    throwIfAborted();
   }
+  throwIfAborted();
   if (!pieces || !holes) return [];
 
   const size = width * height;
@@ -514,18 +520,16 @@ export async function suggestCleanups(options) {
   });
   if (!source) return [];
   const { width, height } = source;
-  // The pick tracking must see every frame in order: step through the
-  // frames the pass skips (holds)
-  let next = 0;
+  // The pick tracking must see every frame in order, held ones too: one
+  // frame per visit, inside the pass's time slices
   /** @type {Uint8Array | null} */
   let mask = null;
-  const getBinary = (/** @type {number} */ f) => {
-    while (next <= f) mask = source.maskAt(next++);
-    return mask ? { data: mask, width, height } : null;
-  };
   const suggestions = await findCleanupSuggestions({
     frameCount,
-    getBinary,
+    visit: (f) => {
+      mask = source.maskAt(f);
+    },
+    getBinary: () => (mask ? { data: mask, width, height } : null),
     keyOf,
     signal,
     sliceMs,

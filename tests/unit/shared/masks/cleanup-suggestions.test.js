@@ -272,3 +272,77 @@ describe('suggestCleanups: measured where picks and clean-up act (review #194)',
     for (const m of cleaned.masks) expect(unpackMask(m)[11 * W + 71]).toBe(0);
   });
 });
+
+describe('suggestCleanups over a long hold (review #194 r2)', () => {
+  // 301 frames: 0-299 one held drawing, 300 another; a Keep pick on the
+  // character, so every frame also runs the pick tracking
+  const FRAMES = 301;
+  const probs = Array.from({ length: FRAMES }, (_, f) => {
+    const { data } = frame(f < 300 ? [CHARACTER] : [[12, 10, 30, 40]]);
+    return { data: data.map((v) => (v ? 255 : 10)), width: W, height: H };
+  });
+  const ai = {
+    ...createDefaultAiCutout(),
+    picks: [{ frame: 0, x: 0.25, y: 0.5, mode: /** @type {const} */ ('keep') }],
+  };
+
+  /**
+   * A clock that advances 10 ms per frame visited (keyOf runs once per
+   * frame, right after its pre-edge mask is made)
+   * @param {{ onYield?: (n: number) => void }} [hooks]
+   */
+  const timed = (hooks = {}) => {
+    let clock = 0;
+    let sliceStart = 0;
+    let longest = 0;
+    let yields = 0;
+    let visited = 0;
+    return {
+      options: {
+        frameCount: FRAMES,
+        getProb: (/** @type {number} */ f) => probs[f],
+        ai,
+        keyOf: (/** @type {number} */ f) => {
+          visited++;
+          clock += 10;
+          return f < 300 ? 'held' : 'next';
+        },
+        sliceMs: 30,
+        now: () => clock,
+        yieldToMain: async () => {
+          longest = Math.max(longest, clock - sliceStart);
+          yields++;
+          hooks.onYield?.(yields);
+          sliceStart = clock;
+        },
+      },
+      get longest() {
+        return longest;
+      },
+      get yields() {
+        return yields;
+      },
+      get visited() {
+        return visited;
+      },
+    };
+  };
+
+  it('yields through the hold: no slice runs past the budget', async () => {
+    const run = timed();
+    await suggestCleanups(run.options);
+    expect(run.visited).toBe(FRAMES);
+    // Budget 30 ms: a slice may overrun by the frame in progress at most
+    expect(run.longest).toBeLessThanOrEqual(30 + 10);
+    expect(run.yields).toBeGreaterThanOrEqual(Math.floor((FRAMES * 10) / 40));
+  });
+
+  it('stops on abort in the middle of the hold', async () => {
+    const controller = new AbortController();
+    const run = timed({ onYield: (n) => n === 5 && controller.abort() });
+    await expect(
+      suggestCleanups({ ...run.options, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(run.visited).toBeLessThan(30);
+  });
+});
