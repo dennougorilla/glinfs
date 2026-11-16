@@ -539,6 +539,38 @@ describe('getPickedPieceRole after the picks (review #195)', () => {
     expect(getPickedPieceRole(options, onCharacter, survivor)).toBe('main');
   });
 
+  it('with two Keep picks, Remove on the smaller kept character is tracked too (review #195 r2)', async () => {
+    const W2 = 60;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 20, 16], // A, kept
+      [26, 4, 8, 12], // B, kept, smaller
+      [44, 3, 12, 14], // shelf, dropped by the Keep picks
+    ];
+    const keepA = { frame: 0, x: 12 / W2, y: 10 / H, mode: 'keep' };
+    const keepB = { frame: 0, x: 30 / W2, y: 10 / H, mode: 'keep' };
+    const options = {
+      frameCount: 4,
+      getProb: () => probOf(W2, H, pieces),
+      ai: aiOf({ picks: [keepA, keepB] }),
+    };
+    const onB = { frame: 2, x: 30 / W2, y: 10 / H };
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onB, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 2, x: 12 / W2, y: 10 / H }, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 2, x: 50 / W2, y: 10 / H }, survivor)).toBe(
+      'separate',
+    );
+    // What a remove pick on B would do: B gone on every frame
+    const built = await buildFinalMasks({
+      ...options,
+      ai: aiOf({ picks: [keepA, keepB, { ...onB, mode: 'remove' }] }),
+      ...noYield,
+    });
+    const at = (/** @type {any} */ m, /** @type {number} */ x) => unpackMask(m)[10 * W2 + x];
+    expect(built?.masks.map((m) => at(m, 30))).toEqual([0, 0, 0, 0]);
+  });
+
   it('without picks the largest raw piece is the subject', async () => {
     const options = optionsWith([]);
     const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);

@@ -1953,6 +1953,10 @@ function updateOverlayPickMode(container, tool, previousTool) {
  */
 let fixUpClick = null;
 
+/** Notice when a Keep / Remove click is dropped because the frame or the cutout changed while it was judged */
+const PICK_DROPPED_NOTICE =
+  'The frame or the cutout changed before that click was added. Click again.';
+
 /**
  * Keep or Remove clicked the preview. With a tracked object selected the
  * click corrects it; with click to select it is a prompt point; else it
@@ -1965,9 +1969,16 @@ let fixUpClick = null;
  */
 async function handleAiPick(point, options = {}) {
   if (!store) return;
-  const state = store.getState();
-  const tool = state.aiPickTool;
+  const editorStore = store;
+  const tool = editorStore.getState().aiPickTool;
   if (!tool) return;
+  // A click is for the frame on screen: playback stops (as for the brush),
+  // so the frame cannot move on while the click is judged
+  if (editorStore.getState().isPlaying) {
+    stopPlayback();
+    editorStore.setState((s) => setPlaying(s, false));
+  }
+  const state = editorStore.getState();
   const selected = getSelectedAiObject(state);
   if (selected) {
     handleObjectCorrection(selected, { click: point, alt: options.alt === true });
@@ -2007,15 +2018,16 @@ async function handleAiPick(point, options = {}) {
   } finally {
     if (fixUpClick === click) fixUpClick = null;
   }
-  // Judged on the state of the click: drop it when the frame, the tool or
-  // the cutout changed meanwhile
-  const now = store.getState();
-  if (
-    now.currentFrame !== state.currentFrame ||
-    now.aiPickTool !== tool ||
-    now.edits.background.ai !== ai ||
-    now.aiActiveObjectId
-  ) {
+  // The editor closed (or another one opened) meanwhile
+  if (store !== editorStore) return;
+  // Judged on the state of the click: drop it when the tool or the
+  // selection changed (the user moved on), and say so when the frame or
+  // the cutout changed under it
+  const now = editorStore.getState();
+  if (now.aiPickTool !== tool || now.aiActiveObjectId) return;
+  if (now.currentFrame !== state.currentFrame || now.edits.background.ai !== ai) {
+    announce(PICK_DROPPED_NOTICE);
+    editorStore.setState((s) => updateAiCutoutStatus(s, { notice: PICK_DROPPED_NOTICE }));
     return;
   }
   if (kind === 'none') {
@@ -3119,6 +3131,9 @@ async function startSceneDetectionAsync(frames) {
  * - Frames are only closed when a new clip is created
  */
 function cleanup() {
+  // A Keep / Remove click still being judged belongs to this mount
+  fixUpClick?.abort();
+  fixUpClick = null;
   // The Export dialog lives over this editor: close it first (aborting a
   // running export) so nothing of it outlives the mount
   if (exportDialog) {

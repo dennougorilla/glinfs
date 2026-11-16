@@ -653,6 +653,68 @@ describe('AI cutout in the mounted editor', () => {
     expect(ai()?.objects).toMatchObject([{ mode: 'remove' }]);
   });
 
+  /**
+   * Frame 1 of 3: a big shelf (columns 0-5) and a small character (8-9),
+   * the character Keep-picked; the Remove tool on
+   */
+  async function keptCharacterOnFrame1() {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    const data = new Uint8Array(100);
+    for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 6);
+    for (let y = 2; y < 8; y++) data.fill(255, y * 10 + 8, y * 10 + 10);
+    getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
+    await settle();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    check('ai-pick-keep');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    check('ai-pick-remove');
+    return overlay;
+  }
+
+  it('a Keep / Remove click stops playback, so the frame it is judged on stays (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    window.__TEST_HOOKS__.setEditorState({ isPlaying: true, currentFrame: 1 });
+    clickPreview(overlay, 90, 50);
+    expect(getEditorState()?.isPlaying).toBe(false);
+    await settle();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.objects).toHaveLength(1);
+  });
+
+  it('a click dropped because the frame changed while it was judged says so (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    clickPreview(overlay, 90, 50);
+    // The judgement (picks tracked up to the frame) is still running
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    await settle();
+    await settle();
+    const ai = getEditorState()?.edits.background.ai;
+    expect(ai?.objects).toEqual([]);
+    expect(ai?.picks).toHaveLength(1);
+    expect(getEditorState()?.aiCutout.notice).toBe(
+      'The frame or the cutout changed before that click was added. Click again.',
+    );
+  });
+
+  it('closing the editor while a click is judged does not throw (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    clickPreview(overlay, 90, 50);
+    cleanup?.();
+    cleanup = null;
+    // Before the fix the click went on and read the closed editor's store:
+    // vitest reports that as an unhandled rejection and the run fails
+    for (let i = 0; i < 5; i++) await settle();
+    expect(getEditorState()).toBeFalsy();
+  });
+
   it('a selected fix-up takes corrections: its tool adds, Alt or the other tool takes away, a drag adds a box', async () => {
     mount(3);
     fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
