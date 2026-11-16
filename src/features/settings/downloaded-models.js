@@ -68,6 +68,7 @@ import { openAddModelDialog } from './custom-model-dialog.js';
  * @property {(listener: () => void) => () => void} onBusyChange
  * @property {(listener: () => void) => () => void} [onModelStateChange]
  * @property {(id: string) => unknown} [getReadyInfo]
+ * @property {() => Promise<{ webgpu: boolean }>} [getCapabilities]
  * @property {(id: string) => boolean} unloadModel
  */
 
@@ -268,6 +269,14 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   /** Rows being deleted, by row key @type {Set<string>} */
   const deleting = new Set();
   let downloadingAll = false;
+  /** Whether this browser has WebGPU (null until known) @type {boolean | null} */
+  let webgpu = null;
+  /**
+   * A WebGPU-only model (BiRefNet) cannot run in a browser without WebGPU:
+   * Settings does not download it there (the bytes would be unusable)
+   * @param {DownloadedModelInfo} model
+   */
+  const cannotRunHere = (model) => Boolean(model.webgpuOnly) && webgpu === false;
   /** Models seen downloading at the last downloads change @type {Set<string>} */
   const activeDownloads = () => new Set(getModelIds().filter((id) => downloads.get(id)));
   let downloadsSeen = activeDownloads();
@@ -448,7 +457,14 @@ export function renderAiModelsSection(cleanups, deps = {}) {
     const busy = manager.isModelBusy(model.id);
     const loaded = Boolean(manager.getReadyInfo?.(model.id));
     const download = downloads.get(model.id);
-    const state = deriveModelStatus(model, { busy, loaded, download });
+    const blocked = cannotRunHere(model) && !download;
+    const state =
+      blocked && model.cached !== true
+        ? {
+            kind: 'needs-webgpu',
+            text: 'Needs WebGPU, which this browser does not provide (too large to run on the CPU), so it is not downloaded here.',
+          }
+        : deriveModelStatus(model, { busy, loaded, download });
     const licenseLink = createElement(
       'a',
       {
@@ -472,7 +488,7 @@ export function renderAiModelsSection(cleanups, deps = {}) {
           () => downloads.cancel(model.id),
         ),
       );
-    } else if ((model.cached !== true || model.updateAvailable) && !model.localOnly) {
+    } else if ((model.cached !== true || model.updateAvailable) && !model.localOnly && !blocked) {
       actions.push(
         button(
           model.updateAvailable ? 'Update' : 'Download',
@@ -658,6 +674,7 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       (model) =>
         (model.cached !== true || model.updateAvailable) &&
         !model.localOnly &&
+        !cannotRunHere(model) &&
         !downloads.get(model.id),
     );
     downloadAllBtn.disabled = downloadingAll || pending.length === 0;
@@ -757,6 +774,7 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       for (const model of listing.models) {
         if (disposed) return;
         if ((model.cached === true && !model.updateAvailable) || model.localOnly) continue;
+        if (cannotRunHere(model)) continue;
         const result = await handleDownload(model);
         if (result.outcome !== 'done') break;
       }
@@ -839,8 +857,9 @@ export function renderAiModelsSection(cleanups, deps = {}) {
       async () => {
         const deleted = await remove(model.id);
         manager.unloadModel(model.id);
-        return deleted
-          ? `The ${model.label} model was deleted.`
+        if (deleted) return `The ${model.label} model was deleted.`;
+        return model.sharedFile && model.cached
+          ? `The ${model.label} model's file was kept: a custom model uses the same file.`
           : `The ${model.label} model was not in this browser’s cache.`;
       },
       `The ${model.label} model could not be deleted.`,
@@ -883,5 +902,13 @@ export function renderAiModelsSection(cleanups, deps = {}) {
   });
 
   void refresh();
+  // Whether WebGPU-only models can be offered for download here
+  void Promise.resolve(manager.getCapabilities?.())
+    .then((capabilities) => {
+      if (disposed || !capabilities) return;
+      webgpu = Boolean(capabilities.webgpu);
+      render();
+    })
+    .catch(() => undefined);
   return section;
 }

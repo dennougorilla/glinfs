@@ -38,6 +38,10 @@ import { getCustomModelEntries, MODEL_CACHE_NAME, MODEL_REGISTRY } from './model
  * @property {boolean} [localOnly] - Custom model from a local file (no URL
  *   to download it from again)
  * @property {string} [url] - Where the file is downloaded from (another origin)
+ * @property {boolean} [webgpuOnly] - Runs on WebGPU only (model-registry.js):
+ *   Settings does not download it in a browser without WebGPU
+ * @property {boolean} [sharedFile] - Its current file is also another
+ *   model's current file (a custom twin): deleting it keeps the file
  */
 
 /**
@@ -215,6 +219,10 @@ export async function listDownloadedModels(deps = {}) {
   const allUrls = cache && urls ? [...urls] : [];
   // A key is a model's current file; it is no other model's older copy
   const current = new Set([...keys.values()].flat());
+  // Keys that are the current file of more than one model (twins)
+  const keyCounts = new Map();
+  for (const key of [...keys.values()].flat()) keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
+  const sharedKeys = new Set([...keyCounts].filter(([, n]) => n > 1).map(([key]) => key));
   // Development-only models (none while every model is hosted) are listed
   // by development builds only
   const models = entries
@@ -240,6 +248,8 @@ export async function listDownloadedModels(deps = {}) {
           ? { custom: true, localOnly: Boolean(entry.localOnly) }
           : {}),
         ...('url' in entry && entry.url ? { url: entry.url } : {}),
+        ...('webgpuOnly' in entry && entry.webgpuOnly ? { webgpuOnly: true } : {}),
+        ...(own.some((key) => sharedKeys.has(key)) ? { sharedFile: true } : {}),
       };
     });
   const known = new Set(
@@ -270,8 +280,19 @@ export async function listDownloadedModels(deps = {}) {
       .filter((key) => urls?.has(key))
       .map((key) => cachedFileSize(/** @type {Cache} */ (cache), key)),
   );
+  // A file two models share (a custom twin of a built-in model) counts once
+  /** @type {Set<string>} */
+  const counted = new Set();
+  let modelBytes = 0;
+  for (const model of models) {
+    if (!model.cached) continue;
+    const own = /** @type {string[]} */ (keys.get(model.id));
+    if (own.every((key) => counted.has(key))) continue;
+    for (const key of own) counted.add(key);
+    modelBytes += model.bytes;
+  }
   const cachedBytes =
-    models.reduce((sum, model) => sum + (model.cached ? model.bytes : 0), 0) +
+    modelBytes +
     partSizes.reduce((/** @type {number} */ sum, size) => sum + (size ?? 0), 0) +
     [...staleSizes, ...oldFiles.map((file) => file.bytes)].reduce(
       (/** @type {number} */ sum, size) => sum + (size ?? 0),

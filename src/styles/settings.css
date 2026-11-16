@@ -296,7 +296,8 @@
   color: var(--color-text-secondary);
 }
 
-.settings-screen .settings-models-state--missing-file {
+.settings-screen .settings-models-state--missing-file,
+.settings-screen .settings-models-state--needs-webgpu {
   color: var(--color-warning);
 }
 

@@ -355,6 +355,15 @@ describe('models that share a file (review #196, finding 1)', () => {
     const { storage, buckets } = fakeCaches({ [builtInKey]: 1, [ANIME_KEY]: 1 });
     const deps = { cacheStorage: storage, ...DEPS };
     await expect(isModelCached(mirror.id, deps)).resolves.toBe(true);
+    // The shared file counts once, and both models know they share it
+    const listing = await listDownloadedModels(deps);
+    expect(listing.models.find((m) => m.id === mirror.id)).toMatchObject({ sharedFile: true });
+    expect(listing.models.find((m) => m.id === 'birefnet-lite')).toMatchObject({
+      cached: true,
+      sharedFile: true,
+      webgpuOnly: true,
+    });
+    expect(listing.cachedBytes).toBe(lite.bytes + ANIME.bytes);
     await expect(deleteDownloadedModel(mirror.id, deps)).resolves.toBe(false);
     expect([...(buckets.get(MODEL_CACHE_NAME)?.keys() ?? [])]).toEqual([builtInKey, ANIME_KEY]);
     // A built-in model still drops its own older pins
