@@ -54,6 +54,8 @@ import {
   describeAnalysisError,
   estimateRemainingMs,
   getAiModelId,
+  getObjectSignature,
+  getObjectsToTrack,
   isAbortError,
   isWasmAllowed,
   isWasmChoiceError,
@@ -693,6 +695,63 @@ function showAiPrep(next) {
 }
 
 /**
+ * Tracked objects (removed from / added to the cutout) are tracked over the
+ * export range first, like click to select, unless every frame has a mask
+ * or an unreachable mark of the object as it is now (its clicks and scope;
+ * see getObjectsToTrack). Masks of older clicks or scope, a cancelled run
+ * or evicted masks do not count. The run queues behind any analysis in
+ * flight (one at a time) and does nothing if that one covered it. Frames
+ * marked unreachable keep the base mask: tracking would only lose the
+ * object there again.
+ * @param {import('../../shared/edits/model.js').AiCutout} ai
+ * @param {AbortSignal} signal
+ */
+async function prepareObjectMasks(ai, signal) {
+  const start = rangeStart;
+  const end = rangeStart + frames.length - 1;
+  const range = { start, end };
+  for (const object of getObjectsToTrack(clipFrames, range, ai.objects ?? [])) {
+    showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: frames.length });
+    let analyzingSince = /** @type {number | null} */ (null);
+    await getSegmentationManager().analyzeObject(clipFrames, {
+      objectId: object.id,
+      signal,
+      clipId,
+      allowWasm: isWasmAllowed(),
+      range,
+      currentFrame: object.clicks.find((c) => c.frame >= start && c.frame <= end)?.frame ?? start,
+      clicks: object.clicks,
+      scope: object.scope,
+      tag: getObjectSignature(object),
+      onlyIfStale: true,
+      onProgress: (progress) => {
+        if (signal.aborted) return;
+        if (progress.phase === 'analyzing' && analyzingSince === null) {
+          analyzingSince = performance.now();
+        }
+        showAiPrep({
+          phase: progress.phase,
+          loadedBytes: progress.loadedBytes,
+          totalBytes: progress.totalBytes,
+          fromCache: progress.fromCache,
+          framesDone: progress.framesDone,
+          framesTotal: progress.framesTotal,
+          remainingMs:
+            analyzingSince === null
+              ? null
+              : estimateRemainingMs({
+                  framesDone: progress.framesDone,
+                  framesTotal: progress.framesTotal,
+                  elapsedMs: performance.now() - analyzingSince,
+                  backend: progress.backend,
+                }),
+        });
+      },
+    });
+  }
+}
+
+/**
  * Final masks for the frames an encode needs: analyze those that have no
  * mask yet (with progress; the manager reuses the loaded model), then build
  * the masks over the whole clip (picks may lie outside the export range).
@@ -777,6 +836,7 @@ async function prepareAiMasks(indices, signal) {
       });
     }
   }
+  await prepareObjectMasks(ai, signal);
   const memo = peekClipMaskSource({ frames: clipFrames, ai, clipId });
   if (memo) return memo;
   showAiPrep({ phase: 'building', buildDone: 0, buildTotal: 0 });

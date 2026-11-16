@@ -79,6 +79,14 @@ import {
  * @property {number} currentFrame - Frame on screen (worked on first)
  * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} picks
  * @property {'whole' | 'part'} [scope]
+ * @property {number} [wholeMinScoreRatio] - Whole on a clicked frame: see
+ *   chooseCandidate (default WHOLE_MIN_SCORE_RATIO)
+ * @property {number} [minScoreRatio] - A tracked frame whose chosen mask scores
+ *   below this fraction of the best score so far on its pass is lost too (0:
+ *   off, area changes only). Catches an object that left the frame while the
+ *   box prompt keeps "finding" it in the same place, which the area misses;
+ *   against the best rather than the previous frame, since the score sinks
+ *   over a few frames as the old mask_input fades.
  * @property {(frameIndex: number, prompt: { points: SamPoint[], box: SamBox | null, maskInput?: Float32Array | null }) => Promise<SamCandidate[]>} prompt
  * @property {(frameIndex: number) => string} keyOf - Pixel identity of a frame
  * @property {(frameIndex: number, mask: ClickMask) => void} store
@@ -91,6 +99,26 @@ import {
  * @property {(progress: TrackProgress) => void} [onProgress]
  * @property {AbortSignal} [signal]
  */
+
+/**
+ * @typedef {Object} DoneMask
+ * @property {ClickMask} mask
+ * @property {number} area
+ * @property {Float32Array | null} lowRes
+ * @property {number | null} peak - Best predicted IoU of the pass up to this frame
+ */
+
+/**
+ * Whether a tracked frame's score fell too far below the best of its pass
+ * @param {number | null} peak
+ * @param {number} score
+ * @param {number} minRatio - 0: never
+ * @returns {boolean}
+ */
+export function isScoreDrop(peak, score, minRatio) {
+  if (!(minRatio > 0) || peak === null || !(peak > 0)) return false;
+  return score < peak * minRatio;
+}
 
 /** Closest a mask's inside point may be to a remove point (frame fraction) */
 const REFINE_POINT_CLEARANCE = 0.05;
@@ -158,6 +186,8 @@ export async function trackClicks({
   currentFrame,
   picks,
   scope = 'whole',
+  minScoreRatio = 0,
+  wholeMinScoreRatio,
   prompt,
   keyOf,
   store,
@@ -191,7 +221,8 @@ export async function trackClicks({
   /**
    * Masks of this run, with the decoder's low-res logits of each (the next
    * frame's mask_input)
-   * @type {Map<number, { mask: ClickMask, area: number, lowRes: Float32Array | null }>}
+   * and the best predicted IoU of the pass up to it
+   * @type {Map<number, DoneMask>}
    */
   const done = new Map();
   /** Frame key → the frame of this run holding its mask @type {Map<string, number>} */
@@ -210,9 +241,10 @@ export async function trackClicks({
    * @param {ClickMask} mask
    * @param {number} area
    * @param {Float32Array | null} [lowRes]
+   * @param {number | null} [peak]
    */
-  const record = (frame, mask, area, lowRes = null) => {
-    done.set(frame, { mask, area, lowRes });
+  const record = (frame, mask, area, lowRes = null, peak = null) => {
+    done.set(frame, { mask, area, lowRes, peak });
     doneKeys.set(keyOf(frame), frame);
     store(frame, mask);
     onProgress?.({ done: done.size, total, frame });
@@ -245,7 +277,7 @@ export async function trackClicks({
     const chosen = bestScoring(candidates);
     const { area } = maskStats(chosen.data, chosen.width, chosen.height);
     if (area <= 0) return false;
-    record(frame, toMask(chosen), area, chosen.lowRes ?? null);
+    record(frame, toMask(chosen), area, chosen.lowRes ?? null, chosen.score);
     return true;
   };
 
@@ -256,17 +288,13 @@ export async function trackClicks({
    * @returns {Promise<boolean>}
    */
   const step = async (frame, from) => {
-    const previous = /** @type {{ mask: ClickMask, area: number, lowRes: Float32Array | null }} */ (
-      done.get(from)
-    );
+    const previous = /** @type {DoneMask} */ (done.get(from));
     const removes = refineOnPass.get(frame);
     if (removes) return refine(frame, previous.mask, removes, previous.lowRes);
     const same = doneKeys.get(keyOf(frame));
     if (same !== undefined) {
-      const shared = /** @type {{ mask: ClickMask, area: number, lowRes: Float32Array | null }} */ (
-        done.get(same)
-      );
-      record(frame, shared.mask, shared.area, shared.lowRes);
+      const shared = /** @type {DoneMask} */ (done.get(same));
+      record(frame, shared.mask, shared.area, shared.lowRes, shared.peak);
       return true;
     }
     const { data, width, height } = previous.mask;
@@ -277,7 +305,9 @@ export async function trackClicks({
     const chosen = chooseCandidate(candidates, { previous: data });
     const { area } = maskStats(chosen.data, chosen.width, chosen.height);
     if (isTrackingLost(previous.area, area)) return false;
-    record(frame, toMask(chosen), area, chosen.lowRes ?? null);
+    if (isScoreDrop(previous.peak, chosen.score, minScoreRatio)) return false;
+    const peak = Math.max(previous.peak ?? chosen.score, chosen.score);
+    record(frame, toMask(chosen), area, chosen.lowRes ?? null, peak);
     return true;
   };
 
@@ -313,9 +343,9 @@ export async function trackClicks({
       }
       const candidates = await prompt(anchor.frame, { points: anchor.points, box: null });
       throwIfAborted(signal);
-      const chosen = chooseCandidate(candidates, { scope });
+      const chosen = chooseCandidate(candidates, { scope, wholeMinScoreRatio });
       const { area } = maskStats(chosen.data, chosen.width, chosen.height);
-      record(anchor.frame, toMask(chosen), area, chosen.lowRes ?? null);
+      record(anchor.frame, toMask(chosen), area, chosen.lowRes ?? null, chosen.score);
     }
     for (const anchor of anchors) {
       if (!done.has(anchor.frame)) continue;

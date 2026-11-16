@@ -23,7 +23,12 @@ import {
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { DEFAULT_MODEL_ID, formatModelSize, getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { collectPendingFrames, maskKey } from '../ai-cutout/segmentation-manager.js';
+import {
+  collectPendingFrames,
+  getStaleObjectFrames,
+  maskKey,
+  objectMaskKey,
+} from '../ai-cutout/segmentation-manager.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
 /** @typedef {import('../ai-cutout/mask-store.js').MaskStore} MaskStore */
@@ -103,6 +108,76 @@ export function getClipProbSource(frames, maskStore, modelId = DEFAULT_MODEL_ID)
 }
 
 /**
+ * The tracked objects' mask lookups by clip frame index, in `ai.objects`
+ * order (what a final-mask build composes on top of the base masks)
+ * @param {Frame[]} frames - The whole clip
+ * @param {AiCutout} ai
+ * @param {MaskStore} maskStore
+ * @returns {import('../../shared/masks/final-masks.js').ObjectMaskInput[]}
+ */
+export function getClipObjectSources(frames, ai, maskStore) {
+  return (ai.objects ?? []).map((object) => ({
+    mode: object.mode,
+    getMask: (frameIndex) => {
+      const frame = frames[frameIndex];
+      return frame ? maskStore.get(objectMaskKey(frame, object.id)) : null;
+    },
+  }));
+}
+
+/**
+ * Frames of `range` an object still has to be tracked on: with no mask or
+ * unreachable mark of its current clicks and scope (see
+ * getStaleObjectFrames). A mask of older clicks or scope does not count,
+ * and what eviction or a clear dropped is gone with its marks.
+ * @param {Frame[]} frames
+ * @param {{ start: number, end: number }} range
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {import('../ai-cutout/mask-store.js').MaskStore} [maskStore]
+ * @param {{ retryLost?: boolean }} [options] - retryLost: frames marked
+ *   unreachable count too
+ * @returns {number}
+ */
+export function countUntrackedObjectFrames(
+  frames,
+  range,
+  object,
+  maskStore = getSharedMaskStore(),
+  options = {},
+) {
+  const tag = getObjectSignature(object);
+  return getStaleObjectFrames(frames, range, object.id, tag, maskStore, options).length;
+}
+
+/**
+ * What a tracked object's masks depend on: its clicks and Whole / Part
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @returns {string}
+ */
+export function getObjectSignature(object) {
+  const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
+  return `${object.scope}|${clicks}`;
+}
+
+/**
+ * The objects an export must track before it builds: those with a frame
+ * of `range` that has neither a mask nor an unreachable mark of the object
+ * as it is now (a run still in flight, cancelled, of older clicks or
+ * scope, or evicted). The export queues their tracking behind any run in
+ * flight, which it skips if that run covered them.
+ * @param {Frame[]} frames
+ * @param {{ start: number, end: number }} range
+ * @param {import('../../shared/edits/model.js').CutoutObject[]} objects
+ * @param {import('../ai-cutout/mask-store.js').MaskStore} [maskStore]
+ * @returns {import('../../shared/edits/model.js').CutoutObject[]}
+ */
+export function getObjectsToTrack(frames, range, objects, maskStore = getSharedMaskStore()) {
+  return objects.filter(
+    (object) => countUntrackedObjectFrames(frames, range, object, maskStore) > 0,
+  );
+}
+
+/**
  * What a clip's final masks depend on besides the probability masks. The
  * cache is shared by every clip and screen, so the clip id is part of the
  * key: two clips of the same shape and parameters must never share
@@ -122,6 +197,7 @@ function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
     ...paramsInputs({ frames, ai, clipId }),
     storeVersion: maskStore.version,
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+    objects: getClipObjectSources(frames, ai, maskStore),
   };
 }
 
@@ -184,6 +260,7 @@ export function createClipDraftMaskSource({
     frameCount: frames.length,
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
     ai,
+    objects: getClipObjectSources(frames, ai, maskStore),
     sourceWidth: frames[0]?.width,
     base,
   });

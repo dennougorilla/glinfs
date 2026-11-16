@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { refinePrompt, trackClicks } from '../../../src/features/ai-cutout/click-tracker.js';
+import {
+  isScoreDrop,
+  refinePrompt,
+  trackClicks,
+} from '../../../src/features/ai-cutout/click-tracker.js';
 
 const W = 40;
 const H = 20;
@@ -147,6 +151,16 @@ describe('trackClicks', () => {
     expect(masks.get(3)?.data).toEqual(top);
   });
 
+  it('Whole with a stricter wholeMinScoreRatio leaves out an answer that scores lower', async () => {
+    // The object (0.88) is within 0.8 of the best (0.9) but not within 0.99
+    const { promise, masks } = run({ wholeMinScoreRatio: 0.99 });
+    await promise;
+    expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 10));
+    const plain = run();
+    await plain.promise;
+    expect(plain.masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
   it('stops a pass where the mask area jumps and reports that frame as lost', async () => {
     const segmenter = fakeSegmenter({
       // The object suddenly doubles at frame 6 (e.g. it merged with another)
@@ -159,6 +173,30 @@ describe('trackClicks', () => {
     expect([...masks.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
     // Frames the run did not reach have no stale mask
     for (const f of [6, 7, 8, 9]) expect(cleared.has(f)).toBe(true);
+  });
+
+  it('with minScoreRatio, stops a pass where the score drops while the area holds', async () => {
+    // The object leaves at frame 6, but the box prompt keeps answering the
+    // same box, with a lower score
+    const base = fakeSegmenter();
+    const prompt = vi.fn(async (/** @type {number} */ f, /** @type {any} */ p) => {
+      const candidates = await base.prompt(f, p);
+      return f >= 6 ? candidates.map((c) => ({ ...c, score: c.score * 0.85 })) : candidates;
+    });
+    const scored = await run({ prompt, minScoreRatio: 0.92 }).promise;
+    expect(scored.lost).toEqual([6]);
+    expect(scored.tracked).toBe(6);
+    // A slow fade trips it too: against the best of the pass, not the last frame
+    const fading = vi.fn(async (/** @type {number} */ f, /** @type {any} */ p) => {
+      const candidates = await base.prompt(f, p);
+      const k = 0.96 ** Math.max(0, f - 4);
+      return candidates.map((c) => ({ ...c, score: c.score * k }));
+    });
+    expect((await run({ prompt: fading, minScoreRatio: 0.93 }).promise).lost).toEqual([6]);
+    // Off by default: the same answers track through
+    const plain = await run({ prompt }).promise;
+    expect(plain.lost).toEqual([]);
+    expect(plain.tracked).toBe(10);
   });
 
   it('a click on a later frame re-anchors: tracking fills the gap from both sides', async () => {
@@ -344,5 +382,15 @@ describe('refinePrompt', () => {
 
   it('is null for an empty mask', () => {
     expect(refinePrompt({ data: new Uint8Array(W * H), width: W, height: H }, [])).toBeNull();
+  });
+});
+
+describe('isScoreDrop', () => {
+  it('is a drop below the ratio of the peak score, never when off or unknown', () => {
+    expect(isScoreDrop(1.0, 0.9, 0.93)).toBe(true);
+    expect(isScoreDrop(1.0, 0.95, 0.93)).toBe(false);
+    expect(isScoreDrop(0.96, 0.5, 0)).toBe(false);
+    expect(isScoreDrop(null, 0.5, 0.92)).toBe(false);
+    expect(isScoreDrop(0, 0.5, 0.92)).toBe(false);
   });
 });
