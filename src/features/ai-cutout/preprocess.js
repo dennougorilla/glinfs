@@ -22,6 +22,7 @@
  */
 
 import { MASK_MAX_SIDE, MODEL_INPUT_SIZE } from './model-config.js';
+import { SegmentationError, SegmentationErrorCode } from './protocol.js';
 
 /**
  * Where the source image sits inside the square model input.
@@ -173,6 +174,44 @@ export function rgbaToChw(rgba, width, height, out, normalization = PLAIN_SCALE)
     tensor[bOffset + i] = rgba[p + 2] * bMul + bAdd;
   }
   return tensor;
+}
+
+/**
+ * Turn a model's mask output into [0, 1] probabilities, in place: a
+ * sigmoid for a 'logits' output, nothing for a 'probability' one. Throws
+ * when any value is NaN. probabilityToMask would turn NaN into 0, so a NaN
+ * output would silently become an empty mask (no subject in the frame).
+ * On WebGPU that happens when a float16 graph overflows (the BiRefNet
+ * exports before their pooling ran in float32), so the analysis fails with
+ * a clear error instead.
+ * @param {Float32Array} output - The mask output, overwritten for logits
+ * @param {'probability' | 'logits'} [kind]
+ * @returns {Float32Array} `output`
+ * @throws {SegmentationError} INVALID_OUTPUT when a value is NaN
+ */
+export function toProbabilities(output, kind = 'probability') {
+  if (kind !== 'probability' && kind !== 'logits') {
+    throw new RangeError(`Unknown model output "${kind}"`);
+  }
+  let nan = 0;
+  if (kind === 'logits') {
+    for (let i = 0; i < output.length; i++) {
+      const value = output[i];
+      if (Number.isNaN(value)) nan++;
+      else output[i] = 1 / (1 + Math.exp(-value));
+    }
+  } else {
+    for (let i = 0; i < output.length; i++) {
+      if (Number.isNaN(output[i])) nan++;
+    }
+  }
+  if (nan > 0) {
+    throw new SegmentationError(
+      SegmentationErrorCode.INVALID_OUTPUT,
+      `The model returned NaN for ${nan} of ${output.length} mask values`,
+    );
+  }
+  return output;
 }
 
 /**
