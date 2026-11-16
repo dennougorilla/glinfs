@@ -482,25 +482,45 @@ export function openAddModelDialog(deps = {}) {
    * @param {{ bytes: number, sha256: string }} [expect]
    * @param {boolean} [allowLarge]
    */
+  /** Bumped by every open: only the latest one may fill the dialog */
+  let openSeq = 0;
+
   const openSource = async (source, expect, allowLarge = false) => {
+    const seq = ++openSeq;
+    // A new file or URL replaces whatever is still loading. A fresh worker
+    // for every open: two opens never share its file, hash and session
+    // (a second file dropped while the first was loading could otherwise
+    // pair one file's bytes with the other's graph), and the old session's
+    // memory is freed now
+    probe.cancel();
+    probe.dispose();
+    probe = createProbe();
+    const current = probe;
+    const stale = () => closed || seq !== openSeq;
     state.source = source;
+    state.opened = null;
+    state.form = null;
+    state.test = null;
     say('');
     const size = source.kind === 'file' ? source.file.size : null;
     showProgress(source.kind === 'file' ? 'Reading the file…' : 'Downloading…', size ? 0 : null);
     try {
-      const result = await probe.open(source, {
+      const result = await current.open(source, {
         allowLarge,
         expect,
-        onProgress: ({ loadedBytes, totalBytes }) => updateProgress(loadedBytes, totalBytes),
+        onProgress: ({ loadedBytes, totalBytes }) => {
+          if (!stale()) updateProgress(loadedBytes, totalBytes);
+        },
       });
-      if (closed) return;
+      if (stale()) return;
       if ('needsConfirm' in result) {
         showSizeQuestion(result.needsConfirm, () => {
+          if (stale()) return;
           if (result.downloaded) {
             showProgress('Loading the model…');
-            void probe.confirmDownloaded().then(
-              (opened) => !closed && showSettings(opened),
-              (error) => !closed && showError(describeOpenError(error)),
+            void current.confirmDownloaded().then(
+              (opened) => !stale() && showSettings(opened),
+              (error) => !stale() && showError(describeOpenError(error)),
             );
           } else {
             void openSource(source, expect, true);
@@ -510,7 +530,7 @@ export function openAddModelDialog(deps = {}) {
       }
       showSettings(result);
     } catch (error) {
-      if (closed || /** @type {any} */ (error)?.name === 'AbortError') return;
+      if (stale() || /** @type {any} */ (error)?.name === 'AbortError') return;
       showError(describeOpenError(error));
     }
   };
