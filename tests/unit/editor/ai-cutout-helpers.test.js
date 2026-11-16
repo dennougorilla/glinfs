@@ -11,6 +11,7 @@ import {
 import {
   buildClipMaskSource,
   buildClipMaskSourceSettled,
+  clearObjectRuns,
   describeAnalysisError,
   describeAnalysisProgress,
   estimateRemainingMs,
@@ -21,13 +22,16 @@ import {
   getBuildParamsKey,
   getClipProbSource,
   getModelSizeLabel,
+  getObjectsToTrack,
   getSharedFinalMaskCache,
   isAbortError,
   isFrameAnalyzed,
+  isObjectRunComplete,
   isWasmAllowed,
   peekClipMaskSource,
   pickFindsCharacter,
   RUNTIME_SIZE_LABEL,
+  recordObjectRun,
   setWasmAllowed,
   TYPICAL_FRAME_MS,
 } from '../../../src/features/editor/ai-cutout.js';
@@ -331,5 +335,47 @@ describe('AI cutout helpers', () => {
     expect(isAbortError(new DOMException('x', 'AbortError'))).toBe(true);
     expect(isAbortError(new Error('x'))).toBe(false);
     expect(isAbortError(null)).toBe(false);
+  });
+});
+
+describe('getObjectsToTrack (export with tracked objects)', () => {
+  const frames = /** @type {any[]} */ (
+    Array.from({ length: 4 }, (_, i) => ({ id: `f${i}`, width: 4, height: 2 }))
+  );
+  const range = { start: 0, end: 3 };
+  const object = /** @type {any} */ ({
+    id: 'o1',
+    mode: 'remove',
+    scope: 'whole',
+    clicks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }],
+  });
+  const mask = () => ({ data: new Uint8Array(8).fill(255), width: 4, height: 2 });
+
+  afterEach(() => clearObjectRuns());
+
+  it('tracks an object that has a mask on only some frames (tracking in flight or cancelled)', () => {
+    const store = createMaskStore();
+    store.set('object:o1:f0', mask(), 'clip');
+    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([object]);
+  });
+
+  it('skips an object with every frame tracked', () => {
+    const store = createMaskStore();
+    for (const f of frames) store.set(`object:o1:${f.id}`, mask(), 'clip');
+    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([]);
+  });
+
+  it('accepts missing frames only after a finished run of the object as it is now', () => {
+    const store = createMaskStore();
+    store.set('object:o1:f0', mask(), 'clip');
+    store.set('object:o1:f1', mask(), 'clip');
+    recordObjectRun('clip', object, range);
+    expect(isObjectRunComplete('clip', object, range)).toBe(true);
+    expect(getObjectsToTrack(frames, range, [object], 'clip', store)).toEqual([]);
+    // Another clip, a wider range or other clicks: not that run
+    expect(getObjectsToTrack(frames, range, [object], 'other', store)).toEqual([object]);
+    expect(isObjectRunComplete('clip', object, { start: 0, end: 5 })).toBe(false);
+    const part = { ...object, scope: 'part' };
+    expect(getObjectsToTrack(frames, range, [part], 'clip', store)).toEqual([part]);
   });
 });

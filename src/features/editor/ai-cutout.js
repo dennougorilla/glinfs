@@ -152,6 +152,89 @@ export function countUntrackedObjectFrames(
 }
 
 /**
+ * What a tracked object's masks depend on: its clicks and Whole / Part
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @returns {string}
+ */
+export function getObjectSignature(object) {
+  const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
+  return `${object.scope}|${clicks}`;
+}
+
+/**
+ * Object tracking runs that finished (editor or export), per clip and
+ * object: the signature they tracked and the selection they covered. A
+ * frame without a mask inside such a run is one tracking could not reach
+ * (lost); anywhere else it is a frame still to track.
+ * @type {Map<string, { signature: string, start: number, end: number }>}
+ */
+const completedObjectRuns = new Map();
+
+/**
+ * Remember a finished tracking run of an object
+ * @param {string | undefined} clipId
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {{ start: number, end: number }} range
+ */
+export function recordObjectRun(clipId, object, range) {
+  completedObjectRuns.set(`${clipId}|${object.id}`, {
+    signature: getObjectSignature(object),
+    start: range.start,
+    end: range.end,
+  });
+}
+
+/**
+ * Whether a finished run tracked this object, as it is now, over all of
+ * `range`
+ * @param {string | undefined} clipId
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {{ start: number, end: number }} range
+ * @returns {boolean}
+ */
+export function isObjectRunComplete(clipId, object, range) {
+  const run = completedObjectRuns.get(`${clipId}|${object.id}`);
+  return (
+    run !== undefined &&
+    run.signature === getObjectSignature(object) &&
+    run.start <= range.start &&
+    run.end >= range.end
+  );
+}
+
+/** Forget every finished run (tests) */
+export function clearObjectRuns() {
+  completedObjectRuns.clear();
+}
+
+/**
+ * The objects an export must track before it builds: those with a frame
+ * of `range` that has no mask, unless a finished run of the object as it
+ * is now covered `range` (those frames were lost, and would only be lost
+ * again). A run in flight or cancelled has not finished, so its object is
+ * tracked again.
+ * @param {Frame[]} frames
+ * @param {{ start: number, end: number }} range
+ * @param {import('../../shared/edits/model.js').CutoutObject[]} objects
+ * @param {string | undefined} clipId
+ * @param {import('../ai-cutout/mask-store.js').MaskStore} [maskStore]
+ * @returns {import('../../shared/edits/model.js').CutoutObject[]}
+ */
+export function getObjectsToTrack(
+  frames,
+  range,
+  objects,
+  clipId,
+  maskStore = getSharedMaskStore(),
+) {
+  return objects.filter(
+    (object) =>
+      countUntrackedObjectFrames(frames, range, object.id, maskStore) > 0 &&
+      !isObjectRunComplete(clipId, object, range),
+  );
+}
+
+/**
  * What a clip's final masks depend on besides the probability masks. The
  * cache is shared by every clip and screen, so the clip id is part of the
  * key: two clips of the same shape and parameters must never share

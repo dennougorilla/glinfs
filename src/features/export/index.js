@@ -48,20 +48,18 @@ import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import {
-  collectPendingFrames,
-  getSegmentationManager,
-  objectMaskKey,
-} from '../ai-cutout/segmentation-manager.js';
+import { collectPendingFrames, getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSourceSettled,
   describeAnalysisError,
   estimateRemainingMs,
   getAiModelId,
+  getObjectsToTrack,
   isAbortError,
   isWasmAllowed,
   isWasmChoiceError,
   peekClipMaskSource,
+  recordObjectRun,
   setWasmAllowed,
 } from '../editor/ai-cutout.js';
 import {
@@ -697,25 +695,21 @@ function showAiPrep(next) {
 }
 
 /**
- * Tracked objects (removed from / added to the cutout) that have no mask on
- * any frame of the export range are tracked over it first, like click to
- * select. An object the editor tracked keeps its masks; the frames where
- * tracking lost it have none, and would only be lost again, so they are
- * not tracked again here (those frames keep the base mask).
+ * Tracked objects (removed from / added to the cutout) with frames of the
+ * export range still to track are tracked over it first, like click to
+ * select: an object whose tracking is still running in the editor, was
+ * cancelled, or never ran (the manager runs one job at a time, so a run in
+ * flight finishes before this one). Only a finished run of the object as
+ * it is now leaves frames without a mask: tracking lost it there, and
+ * would only lose it again (those frames keep the base mask).
  * @param {import('../../shared/edits/model.js').AiCutout} ai
  * @param {AbortSignal} signal
  */
 async function prepareObjectMasks(ai, signal) {
-  const maskStore = getSharedMaskStore();
   const start = rangeStart;
   const end = rangeStart + frames.length - 1;
-  for (const object of ai.objects ?? []) {
-    let tracked = false;
-    for (let f = start; f <= end && !tracked; f++) {
-      const frame = clipFrames[f];
-      tracked = Boolean(frame) && maskStore.has(objectMaskKey(frame, object.id));
-    }
-    if (tracked) continue;
+  const range = { start, end };
+  for (const object of getObjectsToTrack(clipFrames, range, ai.objects ?? [], clipId)) {
     showAiPrep({ phase: 'starting', framesDone: 0, framesTotal: frames.length });
     let analyzingSince = /** @type {number | null} */ (null);
     await getSegmentationManager().analyzeObject(clipFrames, {
@@ -723,7 +717,7 @@ async function prepareObjectMasks(ai, signal) {
       signal,
       clipId,
       allowWasm: isWasmAllowed(),
-      range: { start, end },
+      range,
       currentFrame: object.clicks.find((c) => c.frame >= start && c.frame <= end)?.frame ?? start,
       clicks: object.clicks,
       scope: object.scope,
@@ -751,6 +745,7 @@ async function prepareObjectMasks(ai, signal) {
         });
       },
     });
+    recordObjectRun(clipId, object, range);
   }
 }
 

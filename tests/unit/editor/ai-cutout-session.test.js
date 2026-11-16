@@ -10,7 +10,7 @@ import {
   SegmentationError,
   SegmentationErrorCode,
 } from '../../../src/features/ai-cutout/protocol.js';
-import { setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
+import { clearObjectRuns, setWasmAllowed } from '../../../src/features/editor/ai-cutout.js';
 import {
   ANALYSIS_REBUILD_INTERVAL_MS,
   BUILDING_STATUS_DELAY_MS,
@@ -687,7 +687,7 @@ describe('AI cutout session: tracked objects', () => {
   let status;
   /** @type {ReturnType<typeof createAiCutoutSession>} */
   let session;
-  /** @type {{ calls: any[], lostAt: Set<number>, analyzeObject: import('vitest').Mock }} */
+  /** @type {{ calls: any[], lostAt: Set<number>, fail: unknown, analyzeObject: import('vitest').Mock }} */
   let manager;
 
   const click = (frame = 1) => ({ frame, x: 0.5, y: 0.5, mode: 'keep' });
@@ -708,8 +708,14 @@ describe('AI cutout session: tracked objects', () => {
     manager = {
       calls: [],
       lostAt: new Set(),
+      fail: /** @type {unknown} */ (null),
       analyzeObject: vi.fn(async (frames, options) => {
         manager.calls.push(options);
+        if (manager.fail) {
+          const error = manager.fail;
+          manager.fail = null;
+          throw error;
+        }
         const lost = [];
         for (let f = options.range.start; f <= options.range.end; f++) {
           if (manager.lostAt.has(f)) {
@@ -736,6 +742,7 @@ describe('AI cutout session: tracked objects', () => {
       manager: /** @type {any} */ ({
         ...manager,
         getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
         analyzeObject: manager.analyzeObject,
       }),
       maskStore,
@@ -745,6 +752,8 @@ describe('AI cutout session: tracked objects', () => {
 
   afterEach(() => {
     session.dispose();
+    setWasmAllowed(false);
+    clearObjectRuns();
     vi.useRealTimers();
   });
 
@@ -815,5 +824,42 @@ describe('AI cutout session: tracked objects', () => {
     expect(maskStore.has('object:o1:f0')).toBe(false);
     expect(maskStore.has('object:o2:f0')).toBe(true);
     expect(status.objectLost).toEqual({ o2: [2] });
+  });
+
+  it('tracks the object that asked for the CPU choice once the user takes it', async () => {
+    manager.fail = new SegmentationError(SegmentationErrorCode.WEBGPU_UNAVAILABLE, 'no adapter');
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(status.needsWasmChoice).toBe(true);
+    expect(maskStore.has('object:o1:f0')).toBe(false);
+    // Not marked as tried: the choice tracks it
+    await session.allowWasmAndAnalyze(state.clip.frames);
+    await settle();
+    expect(manager.calls).toHaveLength(2);
+    expect(manager.calls[1].allowWasm).toBe(true);
+    for (const f of state.clip.frames) expect(maskStore.has(`object:o1:${f.id}`)).toBe(true);
+  });
+
+  it('drops masks outside the selection when the scope changes, so a wider selection tracks them', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'whole', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    // Narrow the selection, then Part: frames 2-3 keep no Whole mask
+    state = { ...state, selectedRange: { start: 0, end: 1 } };
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'part', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(2);
+    expect(manager.calls[1]).toMatchObject({ scope: 'part', range: { start: 0, end: 1 } });
+    expect(maskStore.has('object:o1:f2')).toBe(false);
+    expect(maskStore.has('object:o1:f3')).toBe(false);
+    // Back to the whole clip: tracked again with Part over all of it
+    state = { ...state, selectedRange: { start: 0, end: 3 } };
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(3);
+    expect(manager.calls[2]).toMatchObject({ scope: 'part', range: { start: 0, end: 3 } });
   });
 });

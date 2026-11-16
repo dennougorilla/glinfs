@@ -66,11 +66,13 @@ import {
   estimateRemainingMs,
   getAiModelId,
   getBuildParamsKey,
+  getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
   isWasmAllowed,
   isWasmChoiceError,
   peekClipMaskSource,
+  recordObjectRun,
   setWasmAllowed,
 } from './ai-cutout.js';
 
@@ -95,15 +97,7 @@ export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
  */
 export const BUILDING_STATUS_DELAY_MS = 300;
 
-/**
- * What a tracked object's masks depend on: its clicks and Whole / Part
- * @param {import('../../shared/edits/model.js').CutoutObject} object
- * @returns {string}
- */
-export function getObjectSignature(object) {
-  const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
-  return `${object.scope}|${clicks}`;
-}
+export { getObjectSignature };
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -721,12 +715,15 @@ export function createAiCutoutSession(options) {
         },
       });
       objectRuns.set(id, runKey);
+      recordObjectRun(clipId, object, range);
       reportLost({ ...objectLost, [id]: result.lost });
     } catch (error) {
       if (!isAbortError(error)) {
-        // Not again by itself for these clicks and this selection
-        objectRuns.set(id, runKey);
-        if (isWasmChoiceError(error) && !isWasmAllowed()) {
+        const choice = isWasmChoiceError(error) && !isWasmAllowed();
+        // Not again by itself for these clicks and this selection, unless
+        // it waits for the CPU choice (taking it tracks the object)
+        if (!choice) objectRuns.set(id, runKey);
+        if (choice) {
           const modelFailed =
             /** @type {any} */ (error).code === SegmentationErrorCode.WEBGPU_MODEL_FAILED;
           report({
@@ -800,6 +797,14 @@ export function createAiCutoutSession(options) {
       if (!changed && !(untracked && (force || !tried))) continue;
       if (changed) {
         objectSignatures.set(object.id, signature);
+        // Frames outside the selection keep no mask of the old clicks or
+        // scope: tracking redoes only the selection, and a later wider
+        // selection must see them as untracked
+        state.clip.frames.forEach((frame, f) => {
+          if (f < state.selectedRange.start || f > state.selectedRange.end) {
+            maskStore.delete(objectMaskKey(frame, object.id));
+          }
+        });
         if (object.id in objectLost) {
           const { [object.id]: _old, ...rest } = objectLost;
           reportLost(rest);
@@ -861,7 +866,10 @@ export function createAiCutoutSession(options) {
     allowWasmAndAnalyze(frames) {
       setWasmAllowed(true);
       report({ wasmAllowed: true, needsWasmChoice: false });
-      return analyze(frames);
+      const done = analyze(frames);
+      // Objects that waited for this choice
+      syncObjects();
+      return done;
     },
 
     /** @returns {boolean} An analysis is running */
