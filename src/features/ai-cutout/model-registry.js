@@ -400,11 +400,19 @@ const CLICK = {
  * float16 output named "17728"), so nothing is converted to fp16: the
  * conversion only appends a Cast to float32 and names the output `mask`.
  *
- * Preprocessing, from upstream's onnx_run.py at the pinned revision:
- * `Resize((1024, 1024))` and ToTensor, i.e. stretch to 1024×1024 and
- * `/ 255` with no mean/std. The graph ends in a sigmoid: the output is a
- * [0, 1] probability. Upstream then min-max normalizes each image; not
- * done here, for the reason given on the general model.
+ * Preprocessing: stretch to 1024×1024, `/ 255`, then ImageNet mean/std
+ * (0.485, 0.456, 0.406 / 0.229, 0.224, 0.225), as upstream's PyTorch
+ * inference (BEN2.py, the code the network was trained with) normalizes.
+ * Upstream's onnx_run.py feeds `/ 255` without mean/std, and the graph has
+ * no normalization inside; the app used that until the browser bake-off
+ * of 2026-11 measured both in Chrome on WebGPU: ImageNet mean/std is
+ * better on every measure (ToonOut test split with ground truth, 126
+ * images: IoU 0.9725 vs 0.9663, edge-band error 0.065 vs 0.078; on a
+ * two-character anime clip the characters vanished on 0 of 63 frames
+ * instead of 45; less flicker on unchanged pixels). The graph ends in a
+ * sigmoid: the output is a [0, 1] probability. Upstream then min-max
+ * normalizes each image; not done here, for the reason given on the
+ * general model.
  *
  * Three fixes make it run on WebGPU (scripts/convert-models-fp16.py): its
  * 68 Pow(x, 2) take a float16 base and a float32 exponent, for which
@@ -443,8 +451,8 @@ const BEN2 = {
   preprocess: {
     resize: 'stretch',
     scale: 1 / 255,
-    mean: [0, 0, 0],
-    std: [1, 1, 1],
+    mean: [0.485, 0.456, 0.406],
+    std: [0.229, 0.224, 0.225],
     output: 'probability',
   },
 };
