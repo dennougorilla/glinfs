@@ -47,6 +47,7 @@ export function initEditorState(clip) {
     previewView: 'result',
     comparing: false,
     downloadPrompt: null,
+    downloadPromptSubject: null,
   };
 }
 
@@ -112,11 +113,19 @@ export function setComparing(state, comparing) {
  * Ask before downloading the model of an AI subject (null: no question)
  * @param {import('./types.js').EditorState} state
  * @param {string | null} modelId
+ * @param {import('../../shared/edits/model.js').AiSubject | null} [subject] - The
+ *   card it is asked for (a model can be on several)
  * @returns {import('./types.js').EditorState}
  */
-export function setDownloadPrompt(state, modelId) {
-  if ((state.downloadPrompt ?? null) === modelId) return state;
-  return { ...state, downloadPrompt: modelId };
+export function setDownloadPrompt(state, modelId, subject = null) {
+  const nextSubject = modelId ? subject : null;
+  if (
+    (state.downloadPrompt ?? null) === modelId &&
+    (state.downloadPromptSubject ?? null) === nextSubject
+  ) {
+    return state;
+  }
+  return { ...state, downloadPrompt: modelId, downloadPromptSubject: nextSubject };
 }
 
 /** @type {readonly import('./types.js').BrushScope[]} */

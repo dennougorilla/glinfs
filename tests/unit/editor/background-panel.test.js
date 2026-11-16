@@ -20,6 +20,7 @@ import {
   getLostFramesText,
   getModelOptionLabel,
   getModelReadiness,
+  getModelSubject,
   getModelTooltip,
   getSubject,
   getSubjectModel,
@@ -123,15 +124,53 @@ describe('subjects', () => {
     expect(getSubjectModel('anime', { model: 'ben2' })).toBe('anime');
     expect(getSubjectModel('color')).toBeNull();
     expect(getSubjectModel('none')).toBeNull();
-    expect(getSubjectModels('general')).toEqual(['general', 'ben2']);
+    // (a development build, as in these tests, also offers the BiRefNet models)
+    expect(getSubjectModels('general')).toEqual([
+      'general',
+      'ben2',
+      'birefnet-general',
+      'birefnet-lite',
+    ]);
+    expect(getSubjectModels('anime')).toEqual([
+      'anime',
+      'birefnet-general',
+      'birefnet-lite',
+      'birefnet-toonout',
+    ]);
     expect(getSubjectModels('portrait')).toEqual(['portrait', 'video-person']);
     expect(getSubjectModels('color')).toEqual([]);
-    // Every registered model belongs to exactly one card, its default first
+    // Every registered model is on a card, each card's default first; only
+    // BiRefNet general and lite are on two cards (Anime and Anything)
     const cardModels = SUBJECT_CARDS.flatMap((card) => card.models);
-    expect([...cardModels].sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
+    expect([...new Set(cardModels)].sort()).toEqual(MODEL_REGISTRY.map((entry) => entry.id).sort());
+    expect(cardModels.filter((id, i) => cardModels.indexOf(id) !== i).sort()).toEqual([
+      'birefnet-general',
+      'birefnet-lite',
+    ]);
     for (const card of SUBJECT_CARDS) {
       expect(card.models[0] ?? null).toBe(card.model);
     }
+  });
+
+  it('keeps the card a shared model was chosen with', () => {
+    const background = (/** @type {Record<string, unknown>} */ ai) =>
+      normalizeEdits({ background: { enabled: true, method: 'ai', ai } }, 1).background;
+    // Chosen on Anything, it stays on Anything; edits without a card use the first card
+    expect(getSubject(background({ model: 'birefnet-general', subject: 'general' }))).toBe(
+      'general',
+    );
+    expect(getSubject(background({ model: 'birefnet-lite', subject: 'anime' }))).toBe('anime');
+    expect(getSubject(background({ model: 'birefnet-general' }))).toBe('anime');
+    // A card that does not list the model is ignored
+    expect(getSubject(background({ model: 'birefnet-toonout', subject: 'general' }))).toBe('anime');
+    expect(getSubject(background({ model: 'ben2', subject: 'anime' }))).toBe('general');
+    expect(getModelSubject('birefnet-lite', 'general')).toBe('general');
+    expect(getModelSubject('birefnet-lite')).toBe('anime');
+    expect(getModelSubject('nope')).toBeNull();
+    // The clip's shared model is the model of both cards
+    const ai = background({ model: 'birefnet-general', subject: 'general' }).ai;
+    expect(getSubjectModel('anime', ai)).toBe('birefnet-general');
+    expect(getSubjectModel('general', ai)).toBe('birefnet-general');
   });
 
   it('starts a subject with the remembered, else a downloaded, else the first-run model (#187)', () => {
@@ -266,10 +305,19 @@ describe('model choice', () => {
     expect($('#subject-general').checked).toBe(true);
     expect($('#ai-model-row').hidden).toBe(false);
     const select = $('#ai-model');
-    expect([...select.options].map((o) => o.value)).toEqual(['general', 'ben2']);
+    expect([...select.options].map((o) => o.value)).toEqual([
+      'general',
+      'ben2',
+      'birefnet-general',
+      'birefnet-lite',
+    ]);
     expect(select.value).toBe('ben2');
     expect(select.options[0].textContent).toBe('General · ISNet · 90 MB');
     expect(select.options[1].textContent).toBe('Hair & detail · BEN2 · 223 MB (download)');
+    expect(select.options[2].textContent).toBe('Busy backgrounds · BiRefNet · 519 MB (download)');
+    expect(select.options[3].textContent).toBe(
+      'Busy backgrounds, faster · BiRefNet lite · 122 MB (download)',
+    );
     expect($('#ai-model-hint').textContent).toContain('MIT');
     expect($('label[for="ai-model"]').textContent).toBe('Model');
     // The card says what its current model needs
@@ -283,10 +331,24 @@ describe('model choice', () => {
   it('is hidden for a subject with one model', () => {
     updateBackgroundPanel(
       root,
-      makeState({ enabled: true, method: 'ai', ai: { model: 'anime' } }),
+      makeState({ enabled: true, method: 'ai', ai: { model: 'click' } }),
       10,
     );
     expect($('#ai-model-row').hidden).toBe(true);
+    // Anime offers BiRefNet in a development build, ToonOut on Anime only
+    updateBackgroundPanel(
+      root,
+      makeState({ enabled: true, method: 'ai', ai: { model: 'birefnet-toonout' } }),
+      10,
+    );
+    expect($('#subject-anime').checked).toBe(true);
+    expect([...$('#ai-model').options].map((o) => o.value)).toEqual([
+      'anime',
+      'birefnet-general',
+      'birefnet-lite',
+      'birefnet-toonout',
+    ]);
+    expect($('#ai-model').value).toBe('birefnet-toonout');
     updateBackgroundPanel(
       root,
       makeState({ enabled: true, method: 'ai', ai: { model: 'video-person' } }),
@@ -303,6 +365,27 @@ describe('model choice', () => {
     expect($('#background-download-title').textContent).toBe('Download 223 MB?');
     expect($('#background-download-detail').textContent).toContain('Anything model (BEN2)');
     expect($('#subject-status-general').textContent).toContain('223 MB');
+  });
+
+  it('asks on the card a shared model was chosen for', () => {
+    updateBackgroundPanel(
+      root,
+      makeState({}, { downloadPrompt: 'birefnet-lite', downloadPromptSubject: 'general' }),
+      10,
+    );
+    expect($('#subject-general').checked).toBe(true);
+    expect($('#subject-anime').checked).toBe(false);
+    expect($('#background-download-title').textContent).toBe('Download 122 MB?');
+    expect($('#background-download-detail').textContent).toContain(
+      'Anything model (BiRefNet lite)',
+    );
+    updateBackgroundPanel(
+      root,
+      makeState({}, { downloadPrompt: 'birefnet-lite', downloadPromptSubject: 'anime' }),
+      10,
+    );
+    expect($('#subject-anime').checked).toBe(true);
+    expect($('#background-download-detail').textContent).toContain('Anime model (BiRefNet lite)');
   });
 });
 

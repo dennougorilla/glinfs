@@ -14,7 +14,7 @@
  * Every browser API is injectable for unit tests.
  */
 
-import { getModelSpec, getModelUrl, getSpecFiles } from './model-config.js';
+import { getModelSpec, getModelUrl, getSpecFiles, isModelOffered } from './model-config.js';
 import { modelCacheKey } from './model-loader.js';
 import { MODEL_CACHE_NAME, MODEL_REGISTRY } from './model-registry.js';
 
@@ -182,7 +182,8 @@ export async function listDownloadedModels(deps = {}) {
   }
   const keys = new Map(MODEL_REGISTRY.map((entry) => [entry.id, currentKeys(entry.id, resolved)]));
   const allUrls = cache && urls ? [...urls] : [];
-  const models = MODEL_REGISTRY.map((entry) => {
+  // Development-only models are listed by development builds only
+  const models = MODEL_REGISTRY.filter((entry) => isModelOffered(entry.id)).map((entry) => {
     const own = /** @type {string[]} */ (keys.get(entry.id));
     const files = new Set(own.map(withoutSearch));
     const cached = urls ? own.every((key) => urls.has(key)) : null;

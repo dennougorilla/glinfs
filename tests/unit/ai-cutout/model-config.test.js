@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEV_MODELS,
   describeMismatch,
   ensureModel,
   hashFile,
@@ -32,8 +33,10 @@ import {
   getModelIds,
   getModelSpec,
   getModelUrl,
+  getReleaseModels,
   getUpstreamModelUrl,
   isModelId,
+  isModelOffered,
   MASK_MAX_SIDE,
   MODEL_CACHE_NAME,
   MODEL_INPUT_SIZE,
@@ -216,11 +219,27 @@ describe('model registry', () => {
   it('has well-formed, unique entries and a frozen shape', () => {
     const ids = getModelIds();
     // UI order: General left/top, Portrait, Anime, Click to select, then
-    // the larger alternatives
-    expect(ids).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
+    // the larger alternatives, then the development-only BiRefNet models
+    expect(ids).toEqual([
+      'general',
+      'portrait',
+      'anime',
+      'click',
+      'ben2',
+      'video-person',
+      'birefnet-general',
+      'birefnet-lite',
+      'birefnet-toonout',
+    ]);
     const fileNames = MODEL_REGISTRY.flatMap((e) => getModelFiles(e).map((f) => f.fileName));
     expect(new Set(fileNames).size).toBe(fileNames.length);
     for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
+      if (entry.id.startsWith('birefnet-')) {
+        // Exported from a PyTorch checkpoint, not converted from an ONNX
+        // file: no size relation to the upstream file. Not in the release.
+        expect(entry.devOnly).toBe(true);
+        expect(entry.license.name).toBe('MIT');
+      }
       expect(entry.convertedFrom.revision).toMatch(/^[0-9a-f]{40}$/);
       if (entry.convertedFrom.url) {
         // Not on Hugging Face: a GitHub release asset
@@ -235,7 +254,7 @@ describe('model registry', () => {
       if (entry.id === 'ben2') {
         // Upstream is float16 already: only a Cast is added
         expect(entry.bytes - entry.convertedFrom.bytes).toBeLessThan(1000);
-      } else {
+      } else if (!entry.id.startsWith('birefnet-')) {
         // fp16 halves the upstream fp32 file
         expect(entry.bytes).toBeLessThan(entry.convertedFrom.bytes * 0.55);
       }
@@ -260,6 +279,9 @@ describe('model registry', () => {
     expect(formatModelSize(getModelEntry('portrait').bytes)).toBe('13 MB');
     expect(formatModelSize(getModelEntry('ben2').bytes)).toBe('223 MB');
     expect(formatModelSize(getModelEntry('video-person').bytes)).toBe('54 MB');
+    expect(formatModelSize(getModelEntry('birefnet-general').bytes)).toBe('519 MB');
+    expect(formatModelSize(getModelEntry('birefnet-lite').bytes)).toBe('122 MB');
+    expect(formatModelSize(getModelEntry('birefnet-toonout').bytes)).toBe('519 MB');
     // One helper for every size: download progress asks for a decimal
     expect(formatModelSize(getModelEntry('anime').bytes, 1)).toBe('88.1 MB');
     expect(formatModelSize(0, 1)).toBe('0.0 MB');
@@ -300,14 +322,92 @@ describe('model registry', () => {
       std: [0.5, 0.5, 0.5],
       output: 'probability',
     });
+    // BEN2 (upstream BEN2.py) and BiRefNet: stretch to 1024², / 255,
+    // ImageNet mean/std; BiRefNet's exports end in logits
+    const imagenet = {
+      resize: 'stretch',
+      scale: 1 / 255,
+      mean: [0.485, 0.456, 0.406],
+      std: [0.229, 0.224, 0.225],
+    };
+    expect(getModelEntry('ben2').preprocess).toEqual({ ...imagenet, output: 'probability' });
+    for (const id of ['birefnet-general', 'birefnet-lite', 'birefnet-toonout']) {
+      expect(getModelEntry(id).preprocess).toEqual({ ...imagenet, output: 'logits' });
+      expect(getModelEntry(id)).toMatchObject({
+        inputName: 'input_image',
+        outputName: 'output_image',
+        inputSize: 1024,
+      });
+    }
+  });
+
+  it('pins the three BiRefNet exports and the upstream checkpoints they come from', () => {
+    expect(
+      ['birefnet-general', 'birefnet-lite', 'birefnet-toonout'].map((id) => {
+        const { fileName, bytes, sha256, convertedFrom } = getModelEntry(id);
+        return [
+          fileName,
+          bytes,
+          sha256,
+          convertedFrom.repo,
+          convertedFrom.revision,
+          convertedFrom.path,
+        ];
+      }),
+    ).toEqual([
+      [
+        'birefnet-general-fp16.onnx',
+        519_348_204,
+        '809c204052cb841141fb261e4beefd313dd8035587246940bd73aa3c6d20207e',
+        'ZhengPeng7/BiRefNet',
+        'e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4',
+        'model.safetensors',
+      ],
+      [
+        'birefnet-lite-fp16.onnx',
+        122_466_609,
+        'dd67588b7b3fe3d4b311a5f30d4298f3a3b5e2bd513c0c72c0e41c29fcb8e05e',
+        'ZhengPeng7/BiRefNet_lite',
+        'aa62cd87eafb9cc43056d08ef3615a14628b831d',
+        'model.safetensors',
+      ],
+      [
+        'birefnet-toonout-fp16.onnx',
+        519_348_204,
+        'dd9c9fbc1a831b34aa8e2b7f9e28d42d44ac2debc37eedea85df33d1abbf038e',
+        'joelseytre/toonout',
+        'cbf720eca394edcde66b861a8a8c20fbabe9c748',
+        'birefnet_finetuned_toonout.pth',
+      ],
+    ]);
+  });
+
+  it('offers the development-only models in development builds only', () => {
+    const release = getReleaseModels().map((e) => e.id);
+    expect(release).toEqual(['general', 'portrait', 'anime', 'click', 'ben2', 'video-person']);
+    for (const id of ['birefnet-general', 'birefnet-lite', 'birefnet-toonout']) {
+      expect(isModelOffered(id, true)).toBe(true);
+      expect(isModelOffered(id, false)).toBe(false);
+    }
+    for (const id of release) {
+      expect(isModelOffered(id, false)).toBe(true);
+      expect(isModelOffered(id, true)).toBe(true);
+    }
+    expect(isModelOffered('nope', true)).toBe(false);
   });
 });
 
 describe('model-config', () => {
   it('feeds scripts/fetch-models.mjs from the registry (one release asset per model file)', () => {
-    const files = MODEL_REGISTRY.flatMap((entry) => getModelFiles(entry));
+    const files = getReleaseModels().flatMap((entry) => getModelFiles(entry));
     expect(MODELS).toHaveLength(files.length);
-    expect(MODELS).toHaveLength(MODEL_REGISTRY.length + 1); // MobileSAM has two files
+    expect(MODELS).toHaveLength(getReleaseModels().length + 1); // MobileSAM has two files
+    // The development-only models are never downloaded, only kept
+    expect(DEV_MODELS.map((m) => m.fileName)).toEqual([
+      'birefnet-general-fp16.onnx',
+      'birefnet-lite-fp16.onnx',
+      'birefnet-toonout-fp16.onnx',
+    ]);
     for (const file of files) {
       const pin = MODELS.find((m) => m.fileName === file.fileName);
       expect(pin).toEqual({
@@ -331,12 +431,19 @@ describe('model-config', () => {
   });
 
   it('converts from the same upstream files to the same asset names as scripts/convert-models-fp16.py', () => {
-    const script = repoFile('scripts/convert-models-fp16.py');
-    const flat = script.replace(/"\s*\n\s*"/g, ''); // join Python's implicit string concatenation
-    // MobileSAM ships unchanged: not in the conversion script
-    expect(flat).not.toContain('"id": "click"');
+    // join Python's implicit string concatenation
+    const flatten = (/** @type {string} */ text) => text.replace(/"\s*\n\s*"/g, '');
+    const fp16Script = flatten(repoFile('scripts/convert-models-fp16.py'));
+    // The BiRefNet models are exported from PyTorch checkpoints by their own script
+    const birefnetScript = flatten(repoFile('scripts/export-birefnet-onnx.py'));
+    // MobileSAM ships unchanged: not in a conversion script
+    expect(fp16Script).not.toContain('"id": "click"');
+    expect(birefnetScript).toContain('OUTPUT_NAME = "output_image"');
     for (const entry of MODEL_REGISTRY.filter((e) => !isSamEntry(e))) {
       const { bytes, sha256 } = entry.convertedFrom;
+      const birefnet = entry.id.startsWith('birefnet-');
+      const flat = birefnet ? birefnetScript : fp16Script;
+      expect((birefnet ? fp16Script : birefnetScript).includes(`"id": "${entry.id}"`)).toBe(false);
       expect(flat).toContain(`"id": "${entry.id}"`);
       expect(flat).toContain(`"asset": "${entry.fileName}"`);
       expect(flat).toContain(`"upstream_url": "${getUpstreamModelUrl(entry)}"`);
@@ -344,6 +451,7 @@ describe('model-config', () => {
         `"upstream_bytes": ${bytes.toLocaleString('en-US').replaceAll(',', '_')}`,
       );
       expect(flat).toContain(`"upstream_sha256": "${sha256}"`);
+      if (birefnet) continue;
       // The mask output is kept (BEN2's is renamed by a Cast; a recurrent
       // model keeps its state outputs too)
       const kept = flat.includes(`"cast_output_float32": "${entry.outputName}"`)
@@ -356,13 +464,15 @@ describe('model-config', () => {
       }
     }
     expect(repoFile('scripts/requirements-models.txt')).toMatch(/^onnxconverter-common==\d/m);
+    expect(repoFile('scripts/requirements-birefnet.txt')).toMatch(/^torch==2\.6\.0$/m);
   });
 
   it('uses the same SHA-256s and files as the Pages deploy workflow (cache key and final check)', () => {
     const workflow = repoFile('.github/workflows/deploy.yml');
     const hashes = workflow.match(/[0-9a-f]{64}/g) ?? [];
-    // Each hash appears in the cache key and in the final check
-    const files = MODEL_REGISTRY.flatMap((entry) => getModelFiles(entry));
+    // Each hash appears in the cache key and in the final check (the
+    // release models only: the development-only ones never deploy)
+    const files = getReleaseModels().flatMap((entry) => getModelFiles(entry));
     expect(hashes.length).toBeGreaterThanOrEqual(2 * files.length);
     expect(new Set(hashes)).toEqual(new Set(files.map((f) => f.sha256)));
     for (const file of files) {
@@ -374,8 +484,11 @@ describe('model-config', () => {
     );
     // The Pages artifact must stay under 1 GB
     expect(workflow).toContain('-ge 1000000000');
-    const total = MODEL_REGISTRY.reduce((sum, e) => sum + e.bytes, 0);
+    const total = getReleaseModels().reduce((sum, e) => sum + e.bytes, 0);
     expect(total).toBeLessThan(700_000_000);
+    for (const file of DEV_MODELS) {
+      expect(workflow).not.toContain(file.fileName);
+    }
   });
 
   it('serves each model same-origin under the base path', () => {

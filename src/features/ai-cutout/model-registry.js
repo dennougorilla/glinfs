@@ -26,6 +26,10 @@
  * converted file from the `models-v1` GitHub Release of this repository
  * (asset name = `fileName`) into public/models/<fileName>, and the browser
  * fetches it same-origin only when the user analyzes with that model.
+ * The exception is a `devOnly` model (the BiRefNet ones): not in the
+ * release yet, offered only by development builds, which serve whatever
+ * file was placed in public/models by hand (verified against the same
+ * pins).
  *
  * One model is made of two files: "Click to select" (MobileSAM) runs an
  * image encoder once per frame and a small prompt decoder per click. Its
@@ -44,7 +48,8 @@
  * @property {number} scale - Multiplier applied to 0..255 channel values
  * @property {readonly [number, number, number]} mean - Subtracted per channel (R, G, B) after scaling
  * @property {readonly [number, number, number]} std - Divides per channel after the mean
- * @property {'probability'} output - The graph's output is already in [0, 1]
+ * @property {'probability' | 'logits'} output - 'probability': the graph's
+ *   output is already in [0, 1]; 'logits': the worker applies a sigmoid
  */
 
 /**
@@ -103,6 +108,10 @@
  * @property {ModelPreprocess} preprocess
  * @property {readonly ModelRecurrentPair[]} [recurrent] - A video model's
  *   state, carried from frame to frame by the worker
+ * @property {true} [devOnly] - Offered only in development builds
+ *   (`npm run dev`): its file is not in the `models-v1` release, so
+ *   `npm run models:fetch` and the Pages deploy leave it out, and it is
+ *   placed in public/models/ by hand (see isModelOffered)
  */
 
 /**
@@ -523,6 +532,142 @@ const VIDEO_PERSON = {
 };
 
 /**
+ * What the three BiRefNet models share. BiRefNet (ZhengPeng7/BiRefNet,
+ * code and weights MIT) publishes PyTorch checkpoints, and no published
+ * ONNX file of it runs in the browser (onnx-community's fail with "Too many
+ * storage buffers" on WebGPU, and every fp16 file checked returns NaN on
+ * many frames), so scripts/export-birefnet-onnx.py exports them: the final
+ * prediction as logits, opset 17, deform_conv2d decomposed, fp16 with a
+ * float32 input and output, then four rewrites that compute the same values
+ * but run on onnxruntime-web 1.30's WebGPU backend (wide Split/Concat
+ * split, Sum as Add, the deformable conv's index maths in float32, and
+ * GlobalAveragePool/ReduceMean in float32: in float16 WebGPU's pooling
+ * overflows and the mask turns to NaN).
+ *
+ * Preprocessing, from upstream's inference code (the model card's
+ * `transforms.Normalize`): stretch to 1024×1024, `/ 255`, ImageNet mean/std.
+ * The output is logits (the worker applies the sigmoid).
+ *
+ * Measured in the browser bake-off of 2026-11 (Chrome 157, onnxruntime-web
+ * 1.30.0, WebGPU, RTX 3080 Ti; 10 anime GIF clips, 422 frames, and the
+ * ToonOut test split, 126 images with ground truth): every frame non-empty,
+ * the steadiest masks of all models on unchanged pixels, and about 485 ms
+ * per frame with a peak of about 7.7 GB GPU memory (lite: 260 ms, 5.8 GB).
+ * Too heavy for weak GPUs, and untested on Apple and Intel GPUs.
+ *
+ * Development builds only (`devOnly`): the files are not in the `models-v1`
+ * release, and the two large ones cannot ship with the Pages site next to
+ * the other models (GitHub Pages artifacts must stay under 1 GB).
+ */
+const BIREFNET_COMMON = /** @type {const} */ ({
+  license: MIT,
+  inputName: 'input_image',
+  outputName: 'output_image',
+  inputSize: 1024,
+  devOnly: true,
+});
+
+/** @returns {ModelPreprocess} */
+function birefnetPreprocess() {
+  return {
+    resize: 'stretch',
+    scale: 1 / 255,
+    mean: [0.485, 0.456, 0.406],
+    std: [0.229, 0.224, 0.225],
+    output: 'logits',
+  };
+}
+
+/**
+ * BiRefNet general (Swin-L backbone), from model.safetensors at the pinned
+ * commit. In the bake-off the most reliable model on busy anime
+ * backgrounds: no frame lost the character or kept the background (ISNet
+ * anime and BEN2 did both). Ground truth: IoU 0.970.
+ * @type {ModelEntry}
+ */
+const BIREFNET_GENERAL = {
+  id: 'birefnet-general',
+  label: 'Busy backgrounds',
+  modelName: 'BiRefNet (general)',
+  shortModelName: 'BiRefNet',
+  description: 'Characters, people and objects, cleanest on busy backgrounds (needs a strong GPU)',
+  finds: 'the characters, people and objects',
+  fileName: 'birefnet-general-fp16.onnx',
+  bytes: 519_348_204,
+  sha256: '809c204052cb841141fb261e4beefd313dd8035587246940bd73aa3c6d20207e',
+  convertedFrom: {
+    repo: 'ZhengPeng7/BiRefNet',
+    revision: 'e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4',
+    path: 'model.safetensors',
+    bytes: 444_473_596,
+    sha256: '9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154',
+  },
+  upstream: 'https://github.com/ZhengPeng7/BiRefNet',
+  ...BIREFNET_COMMON,
+  preprocess: birefnetPreprocess(),
+};
+
+/**
+ * BiRefNet lite (Swin-T backbone), from model.safetensors at the pinned
+ * commit: close to general (ground truth IoU 0.970) at about half the time
+ * and a quarter of the download, but in the bake-off it kept part of the
+ * background on one clip.
+ * @type {ModelEntry}
+ */
+const BIREFNET_LITE = {
+  id: 'birefnet-lite',
+  label: 'Busy backgrounds, faster',
+  modelName: 'BiRefNet lite (Swin-T)',
+  shortModelName: 'BiRefNet lite',
+  description: 'Like Busy backgrounds, about twice as fast and a smaller download',
+  finds: 'the characters, people and objects',
+  fileName: 'birefnet-lite-fp16.onnx',
+  bytes: 122_466_609,
+  sha256: 'dd67588b7b3fe3d4b311a5f30d4298f3a3b5e2bd513c0c72c0e41c29fcb8e05e',
+  convertedFrom: {
+    repo: 'ZhengPeng7/BiRefNet_lite',
+    revision: 'aa62cd87eafb9cc43056d08ef3615a14628b831d',
+    path: 'model.safetensors',
+    bytes: 177_634_392,
+    sha256: '4417d89795250e698c3cb0ae8df15743810065f646f48a694fdfa7ca052d0815',
+  },
+  upstream: 'https://github.com/ZhengPeng7/BiRefNet',
+  ...BIREFNET_COMMON,
+  preprocess: birefnetPreprocess(),
+};
+
+/**
+ * BiRefNet ToonOut (joelseytre/toonout: BiRefNet general fine-tuned on
+ * anime characters; weights MIT, dataset CC BY 4.0), from
+ * birefnet_finetuned_toonout.pth at the pinned commit. The most accurate
+ * model where ground truth exists (ToonOut test split: IoU 0.993, the best
+ * hair and edges), but on busy real anime backgrounds it kept background
+ * objects touching the character on 5 of the 10 bake-off clips.
+ * @type {ModelEntry}
+ */
+const BIREFNET_TOONOUT = {
+  id: 'birefnet-toonout',
+  label: 'Anime hair',
+  modelName: 'BiRefNet ToonOut',
+  shortModelName: 'ToonOut',
+  description: 'Anime characters, best on hair and edges; may keep parts of a busy background',
+  finds: 'the characters',
+  fileName: 'birefnet-toonout-fp16.onnx',
+  bytes: 519_348_204,
+  sha256: 'dd9c9fbc1a831b34aa8e2b7f9e28d42d44ac2debc37eedea85df33d1abbf038e',
+  convertedFrom: {
+    repo: 'joelseytre/toonout',
+    revision: 'cbf720eca394edcde66b861a8a8c20fbabe9c748',
+    path: 'birefnet_finetuned_toonout.pth',
+    bytes: 885_046_394,
+    sha256: '8c7f8a0bc24400f4caade76622f75ff22ca1e93e169add9d2b70093e2487fbe5',
+  },
+  upstream: 'https://huggingface.co/joelseytre/toonout',
+  ...BIREFNET_COMMON,
+  preprocess: birefnetPreprocess(),
+};
+
+/**
  * Deep-freeze a registry entry (it is shared by every module).
  * @template {ModelEntry | SamModelEntry} T
  * @param {T} entry
@@ -562,8 +707,31 @@ export const MODEL_REGISTRY = Object.freeze(
     freezeEntry(CLICK),
     freezeEntry(BEN2),
     freezeEntry(VIDEO_PERSON),
+    freezeEntry(BIREFNET_GENERAL),
+    freezeEntry(BIREFNET_LITE),
+    freezeEntry(BIREFNET_TOONOUT),
   ]),
 );
+
+/**
+ * Whether a model is offered in this build: every model in a development
+ * build, else only the models of the `models-v1` release (not `devOnly`)
+ * @param {Readonly<ModelEntry | SamModelEntry>} entry
+ * @param {boolean} dev - A development build (`import.meta.env.DEV`)
+ * @returns {boolean}
+ */
+export function isEntryOffered(entry, dev) {
+  return dev || !('devOnly' in entry && entry.devOnly);
+}
+
+/**
+ * The models of the `models-v1` release, which `npm run models:fetch`
+ * downloads and the Pages deploy ships (every model but the `devOnly` ones)
+ * @returns {readonly Readonly<ModelEntry | SamModelEntry>[]}
+ */
+export function getReleaseModels() {
+  return MODEL_REGISTRY.filter((entry) => isEntryOffered(entry, false));
+}
 
 /**
  * Model of edits that do not name one (everything saved before the general

@@ -8,7 +8,13 @@
  * segmentation worker receives.
  */
 
-import { getModelEntry, getModelFiles, isSamEntry } from './model-registry.js';
+import {
+  getModelEntry,
+  getModelFiles,
+  isEntryOffered,
+  isSamEntry,
+  MODEL_REGISTRY,
+} from './model-registry.js';
 
 export {
   DEFAULT_MODEL_ID,
@@ -16,6 +22,7 @@ export {
   getModelEntry,
   getModelFiles,
   getModelIds,
+  getReleaseModels,
   getUpstreamModelUrl,
   isModelId,
   isSamModelId,
@@ -23,6 +30,19 @@ export {
   MODEL_REGISTRY,
   MODEL_RELEASE_URL,
 } from './model-registry.js';
+
+/**
+ * Whether this build offers a model: a development build offers every
+ * model, a production build only the `models-v1` release ones (the
+ * `devOnly` BiRefNet models are not in the release yet)
+ * @param {string} modelId
+ * @param {boolean} [dev] - Defaults to Vite's DEV flag
+ * @returns {boolean}
+ */
+export function isModelOffered(modelId, dev = Boolean(import.meta.env?.DEV)) {
+  const entry = MODEL_REGISTRY.find((e) => e.id === modelId);
+  return entry ? isEntryOffered(entry, dev) : false;
+}
 
 /** Default model input side (the IS-Net models; each model has its own `inputSize`) */
 export const MODEL_INPUT_SIZE = 1024;

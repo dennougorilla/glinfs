@@ -37,6 +37,7 @@ describe('createDefaultEdits', () => {
           edge: 0,
           picks: [],
           clickScope: 'whole',
+          subject: null,
         },
       },
       touchUps: [],
@@ -368,7 +369,22 @@ describe('background method and AI cutout', () => {
     expect(ai({ model: 7 }).model).toBe('anime');
     expect(ai({ model: 'portrait' }).model).toBe('portrait');
     expect(ai({ model: 'click' }).model).toBe('click');
-    expect(AI_MODELS).toEqual(['anime', 'general', 'portrait', 'click', 'ben2', 'video-person']);
+    expect(AI_MODELS).toEqual([
+      'anime',
+      'general',
+      'portrait',
+      'click',
+      'ben2',
+      'video-person',
+      'birefnet-general',
+      'birefnet-lite',
+      'birefnet-toonout',
+    ]);
+    // The subject card a model was chosen with; anything else is none
+    expect(ai({ model: 'birefnet-general', subject: 'anime' }).subject).toBe('anime');
+    expect(ai({ model: 'birefnet-general', subject: 'general' }).subject).toBe('general');
+    expect(ai({ subject: 'color' }).subject).toBeNull();
+    expect(ai({}).subject).toBeNull();
   });
 
   it('validates picks: drops unusable ones, clamps the rest, caps the count', () => {

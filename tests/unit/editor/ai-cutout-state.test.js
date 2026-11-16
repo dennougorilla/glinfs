@@ -49,6 +49,7 @@ describe('AI cutout editor state', () => {
       smoothing: false,
       edge: 3,
       clickScope: 'whole',
+      subject: null,
       picks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
     });
     // Mirrored into the clip like every edit
