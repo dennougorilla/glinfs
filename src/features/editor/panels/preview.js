@@ -59,6 +59,12 @@ export function getPreviewToolHint(state) {
       ? 'Brush: paint to bring back · Esc to finish'
       : 'Brush: paint to erase · Esc to finish';
   }
+  if (state.aiPickTool === 'remove-object' || state.aiPickTool === 'add-object') {
+    if (state.aiObjectTarget) return 'Click the object to find it again · Esc to cancel';
+    return state.aiPickTool === 'remove-object'
+      ? 'Remove object: click the thing to remove · Esc to cancel'
+      : 'Add object: click what the cutout missed · Esc to cancel';
+  }
   const ai = state.edits?.background?.ai;
   if (ai?.model === 'click' && state.aiPickTool) {
     if (state.aiPickTool === 'remove') return 'Remove: click what to leave out · Esc to cancel';
@@ -80,6 +86,8 @@ export function getPreviewToolHint(state) {
  */
 export function getPreviewTool(state) {
   if (isBrushActive(state)) return 'brush';
+  if (state.aiPickTool === 'remove-object') return 'remove';
+  if (state.aiPickTool === 'add-object') return 'keep';
   if (state.aiPickTool) return state.aiPickTool;
   if (state.pickingKeyColor) return 'eyedropper';
   return '';

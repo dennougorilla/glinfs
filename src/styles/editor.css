@@ -2978,6 +2978,14 @@
   color: var(--color-error);
 }
 
+.editor-screen .editor-cutout-tool[data-tool="add-object"] svg {
+  color: var(--color-success);
+}
+
+.editor-screen .editor-cutout-tool[data-tool="remove-object"] svg {
+  color: var(--color-error);
+}
+
 .editor-screen .editor-cutout-tool.is-active svg,
 .editor-screen .editor-cutout-tool-input:checked + span svg {
   color: var(--color-on-primary);
@@ -3019,6 +3027,12 @@
 
 .editor-screen .editor-cutout-pick--remove {
   border-color: rgba(255, 61, 113, 0.5);
+}
+
+/* The tracked object Whole / Part applies to */
+.editor-screen .editor-cutout-pick.is-active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 
 .editor-screen .editor-cutout-pick-go,

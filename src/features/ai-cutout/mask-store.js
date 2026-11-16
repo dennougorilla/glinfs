@@ -36,8 +36,14 @@ export const DEFAULT_CLIP_ID = '';
  * @typedef {Object} MaskStore
  * @property {(key: string) => ProbabilityMask | null} get - Also marks the clip recently used
  * @property {(key: string) => boolean} has
- * @property {(key: string, mask: ProbabilityMask, clipId?: string, model?: string) => void} set
- * @property {(key: string) => boolean} delete
+ * @property {(key: string, mask: ProbabilityMask, clipId?: string, model?: string, tag?: string) => void} set
+ *   tag: what produced the mask (e.g. a tracked object's signature)
+ * @property {(key: string) => string | undefined} getTag - The tag a mask was set with
+ * @property {(key: string, tag: string, clipId?: string, model?: string) => void} mark - A
+ *   maskless entry in the group: `tag` tried this frame and could not make a
+ *   mask (dropped with the group, like its masks; a mask set at `key` replaces it)
+ * @property {(key: string) => string | undefined} getMark
+ * @property {(key: string) => boolean} delete - The mask and the mark at `key`
  * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip (all models); returns how many
  * @property {(clipId: string, model?: string) => void} touchClip - Mark a clip's masks of one
  *   model (default: of every model) recently used (e.g. the active clip)
@@ -62,9 +68,11 @@ export const DEFAULT_CLIP_ID = '';
  * @returns {MaskStore}
  */
 export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
-  /** @type {Map<string, { mask: ProbabilityMask, group: string }>} */
+  /** @type {Map<string, { mask: ProbabilityMask, group: string, tag: string }>} */
   const entries = new Map();
-  /** @type {Map<string, { clipId: string, model: string, keys: Set<string> }>} group id -> masks */
+  /** @type {Map<string, { group: string, tag: string }>} key -> mark (no mask) */
+  const marks = new Map();
+  /** @type {Map<string, { clipId: string, model: string, keys: Set<string>, marks: Set<string> }>} group id -> masks and marks */
   const groups = new Map();
   /** @type {Map<string, number>} group id -> last-use tick */
   const lastUsed = new Map();
@@ -97,6 +105,15 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     lastUsed.set(id, tick);
   }
 
+  /** @param {string} id - Forget a group once it holds nothing */
+  function dropIfEmpty(id) {
+    const group = groups.get(id);
+    if (group && group.keys.size === 0 && group.marks.size === 0) {
+      groups.delete(id);
+      lastUsed.delete(id);
+    }
+  }
+
   /**
    * Remove one entry without notifying.
    * @param {string} key
@@ -107,13 +124,38 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     if (!entry) return false;
     entries.delete(key);
     byteLength -= entry.mask.data.byteLength;
-    const group = groups.get(entry.group);
-    group?.keys.delete(key);
-    if (group && group.keys.size === 0) {
-      groups.delete(entry.group);
-      lastUsed.delete(entry.group);
-    }
+    groups.get(entry.group)?.keys.delete(key);
+    dropIfEmpty(entry.group);
     return true;
+  }
+
+  /**
+   * Remove one mark without notifying.
+   * @param {string} key
+   * @returns {boolean}
+   */
+  function removeMark(key) {
+    const mark = marks.get(key);
+    if (!mark) return false;
+    marks.delete(key);
+    groups.get(mark.group)?.marks.delete(key);
+    dropIfEmpty(mark.group);
+    return true;
+  }
+
+  /**
+   * The group of (clip, model), created when missing
+   * @param {string} clipId
+   * @param {string} model
+   */
+  function ensureGroup(clipId, model) {
+    const id = groupId(clipId, model);
+    let group = groups.get(id);
+    if (!group) {
+      group = { clipId, model, keys: new Set(), marks: new Set() };
+      groups.set(id, group);
+    }
+    return { id, group };
   }
 
   /**
@@ -128,6 +170,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     for (const key of [...group.keys]) {
       if (removeEntry(key)) removed++;
     }
+    for (const key of [...group.marks]) marks.delete(key);
     groups.delete(id);
     lastUsed.delete(id);
     return removed;
@@ -177,7 +220,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       return entries.has(key);
     },
 
-    set(key, mask, clipId = DEFAULT_CLIP_ID, model = '') {
+    set(key, mask, clipId = DEFAULT_CLIP_ID, model = '', tag = '') {
       if (!(mask?.data instanceof Uint8Array)) {
         throw new TypeError('mask.data must be a Uint8Array');
       }
@@ -187,23 +230,38 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
         );
       }
       removeEntry(key);
-      const id = groupId(clipId, model);
-      entries.set(key, { mask, group: id });
+      removeMark(key);
+      const { id, group } = ensureGroup(clipId, model);
+      entries.set(key, { mask, group: id, tag });
       byteLength += mask.data.byteLength;
-      let group = groups.get(id);
-      if (!group) {
-        group = { clipId, model, keys: new Set() };
-        groups.set(id, group);
-      }
       group.keys.add(key);
       touch(id);
       changed({ type: 'set', key, clipId });
       evictOverCap(id);
     },
 
+    getTag(key) {
+      return entries.get(key)?.tag;
+    },
+
+    mark(key, tag, clipId = DEFAULT_CLIP_ID, model = '') {
+      const hadMask = removeEntry(key);
+      removeMark(key);
+      const { id, group } = ensureGroup(clipId, model);
+      marks.set(key, { group: id, tag });
+      group.marks.add(key);
+      touch(id);
+      if (hadMask) changed({ type: 'delete', key, clipId });
+    },
+
+    getMark(key) {
+      return marks.get(key)?.tag;
+    },
+
     delete(key) {
       const entry = entries.get(key);
       const clipId = entry ? groups.get(entry.group)?.clipId : undefined;
+      removeMark(key);
       if (!removeEntry(key)) return false;
       changed({ type: 'delete', key, clipId });
       return true;
@@ -232,7 +290,12 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     },
 
     clear() {
-      if (entries.size === 0) return;
+      marks.clear();
+      if (entries.size === 0) {
+        groups.clear();
+        lastUsed.clear();
+        return;
+      }
       entries.clear();
       groups.clear();
       lastUsed.clear();

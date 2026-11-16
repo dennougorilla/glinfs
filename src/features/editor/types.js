@@ -109,8 +109,14 @@
  * @property {string|null} selectedTextId - Text layer being edited (null = none)
  * @property {boolean} pickingKeyColor - Eyedropper mode: the next preview click picks
  *   the background key color
- * @property {import('../../shared/edits/model.js').PickMode | null} aiPickTool - AI pick
- *   tool: the next preview click adds a Keep/Remove pick (null = off)
+ * @property {AiPickTool | null} aiPickTool - AI pick tool: the next preview click
+ *   adds a Keep/Remove pick, or selects a tracked object to remove / add
+ *   (null = off)
+ * @property {string | null} aiObjectTarget - With an object tool on: the tracked
+ *   object the click re-anchors (a frame where tracking lost it); null makes a
+ *   new object
+ * @property {string | null} aiActiveObjectId - The tracked object Whole / Part
+ *   applies to (the one last made, re-anchored or gone to)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
  * @property {BrushState} brush - Mask brush tool (not persisted; the strokes live in
  *   edits.touchUps). While it is on the sidebar shows the Touch up mode.
@@ -124,6 +130,24 @@
  *   downloaded was chosen: its id, while the panel asks before downloading
  * @property {import('../../shared/edits/model.js').AiSubject | null} [downloadPromptSubject] -
  *   The card the asked-about model was chosen for (a model can be on several)
+ */
+
+/**
+ * A preview tool of the AI cutout: Keep / Remove picks, or a tracked object
+ * to remove from / add to the mask
+ * @typedef {'keep'|'remove'|'remove-object'|'add-object'} AiPickTool
+ */
+
+/**
+ * Progress of the tracked object being tracked
+ * @typedef {Object} ObjectTrackingStatus
+ * @property {string} id
+ * @property {string} phase - As AiCutoutStatus.phase ('starting' before the model answers)
+ * @property {number} framesDone
+ * @property {number} framesTotal
+ * @property {number} [loadedBytes]
+ * @property {number} [totalBytes]
+ * @property {boolean} [fromCache]
  */
 
 /**
@@ -179,6 +203,10 @@
  *   session is loaded or its file downloaded (the model switch's hints)
  * @property {number[]} lostFrames - Click to select: frames where the last
  *   tracking lost the object (they need a click), sorted
+ * @property {ObjectTrackingStatus | null} objectTracking - The tracked object
+ *   being tracked (null: none)
+ * @property {Record<string, number[]>} objectLost - Per tracked object: frames
+ *   where its last tracking lost it, sorted
  */
 
 /**

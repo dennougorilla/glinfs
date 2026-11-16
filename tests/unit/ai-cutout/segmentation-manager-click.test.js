@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import { getModelSpec } from '../../../src/features/ai-cutout/model-config.js';
 import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.js';
-import { createSegmentationManager } from '../../../src/features/ai-cutout/segmentation-manager.js';
+import {
+  createSegmentationManager,
+  getObjectTrackRange,
+  getStaleObjectFrames,
+} from '../../../src/features/ai-cutout/segmentation-manager.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -12,7 +16,10 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
  * the object (a 40% box around the point), and the whole frame.
  */
 class FakeSamWorker {
-  constructor({ fail = false } = {}) {
+  constructor({ fail = false, blankAfter = Number.POSITIVE_INFINITY } = {}) {
+    /** Prompts answered with masks; later ones get empty masks (object lost) */
+    this.blankAfter = blankAfter;
+    this.answered = 0;
     /** @type {Function[]} */
     this.handlers = [];
     /** @type {any[]} */
@@ -58,6 +65,23 @@ class FakeSamWorker {
     }
     const w = msg.maskWidth;
     const h = msg.maskHeight;
+    if (this.answered++ >= this.blankAfter) {
+      const empty = () => new Uint8Array(w * h).buffer;
+      this.emit({
+        type: 'prompt-result',
+        requestId: msg.requestId,
+        width: w,
+        height: h,
+        masks: [empty(), empty(), empty(), empty()],
+        scores: [0.9, 0.8, 0.95, 0.2],
+        lowRes: null,
+        cached: false,
+        encodeMs: 1,
+        decodeMs: 1,
+        totalMs: 2,
+      });
+      return;
+    }
     // Centre of the prompt in mask pixels (coords are encoder pixels)
     const cx = (msg.coords[0] / msg.encoderWidth) * w;
     const cy = (msg.coords[1] / msg.encoderHeight) * h;
@@ -214,5 +238,160 @@ describe('SegmentationManager.analyzeClick', () => {
       }),
     ).rejects.toMatchObject({ code: SegmentationErrorCode.INFERENCE_FAILED });
     expect(workers[0].terminated).toBe(true);
+  });
+});
+
+describe('SegmentationManager.analyzeObject', () => {
+  it('tracks with the click model, storing small masks under the object, apart from the click masks', async () => {
+    const { manager, maskStore, workers } = harness();
+    const big = Array.from({ length: 4 }, (_, i) => ({
+      ...frame(`g${i}`),
+      width: 1024,
+      height: 512,
+    }));
+    const clicks = [{ frame: 1, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const result = await manager.analyzeObject(big, {
+      objectId: 'o1',
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+    });
+    expect(result).toMatchObject({ tracked: 4, lost: [] });
+    expect(workers).toHaveLength(1);
+    expect(workers[0].posted[0]).toMatchObject({ type: 'init', model: { id: 'click' } });
+    // Decoded at the object size (long side 256), not the frame size
+    expect(workers[0].prompts.every((m) => m.maskWidth === 256 && m.maskHeight === 128)).toBe(true);
+    for (const f of big) {
+      expect(maskStore.get(`object:o1:${f.id}`)).toMatchObject({ width: 256, height: 128 });
+      expect(maskStore.has(`click:${f.id}`)).toBe(false);
+    }
+    // A second object, then the click model, share the loaded model
+    await manager.analyzeObject(big, {
+      objectId: 'o2',
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+    });
+    await manager.analyzeClick(big, {
+      range: { start: 0, end: 3 },
+      currentFrame: 1,
+      picks: clicks,
+      clipId: 'clip',
+    });
+    expect(workers).toHaveLength(1);
+    expect(workers[0].posted.filter((m) => m.type === 'init')).toHaveLength(1);
+    expect(maskStore.get('click:g1')).toMatchObject({ width: 1024, height: 512 });
+    expect(maskStore.has('object:o2:g1')).toBe(true);
+  });
+
+  it('tags each mask with the object signature, marks unreachable frames, and skips a run already covered', async () => {
+    // The anchor (frame 1) and one more frame answer; then the object is lost
+    const { manager, maskStore, workers, frames } = harness({ blankAfter: 2 });
+    const clicks = [{ frame: 1, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const options = {
+      objectId: 'o1',
+      range: { start: 0, end: 5 },
+      currentFrame: 1,
+      clicks,
+      clipId: 'clip',
+      tag: 'whole|a',
+    };
+    const result = await manager.analyzeObject(frames, options);
+    const tracked = frames.filter((f) => maskStore.has(`object:o1:${f.id}`)).map((f) => f.id);
+    expect(tracked.length).toBe(result.tracked);
+    expect(result.lost.length).toBeGreaterThan(0);
+    for (const f of frames) {
+      const key = `object:o1:${f.id}`;
+      if (maskStore.has(key)) expect(maskStore.getTag(key)).toBe('whole|a');
+      else expect(maskStore.getMark(key)).toBe('whole|a');
+    }
+    expect(getStaleObjectFrames(frames, options.range, 'o1', 'whole|a', maskStore)).toEqual([]);
+
+    // Queued again for the same tag (an export behind the editor's run): nothing to do
+    const prompts = workers[0].prompts.length;
+    const again = await manager.analyzeObject(frames, { ...options, onlyIfStale: true });
+    expect(workers[0].prompts.length).toBe(prompts);
+    expect(again.lost).toEqual(result.lost);
+    // Another tag (Part chosen): the Whole masks are stale, so it tracks
+    expect(getStaleObjectFrames(frames, options.range, 'o1', 'part|a', maskStore)).toHaveLength(6);
+    await manager.analyzeObject(frames, { ...options, tag: 'part|a', onlyIfStale: true });
+    expect(workers[0].prompts.length).toBeGreaterThan(prompts);
+  });
+
+  it('a selection without a click tracks from the nearest click and marks only what it tried (review r3)', async () => {
+    const { manager, maskStore, workers, frames } = harness();
+    const clicks = [{ frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];
+    const base = { objectId: 'o1', clicks, clipId: 'clip', tag: 'whole|a' };
+    // Remove object at frame 0 over 0-3, cancelled after its first mask
+    const controller = new AbortController();
+    await expect(
+      manager.analyzeObject(frames, {
+        ...base,
+        range: { start: 0, end: 3 },
+        currentFrame: 0,
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.framesDone >= 1) controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(maskStore.getTag('object:o1:f0')).toBe('whole|a');
+    expect(['f1', 'f2', 'f3'].some((id) => maskStore.has(`object:o1:${id}`))).toBe(false);
+
+    // The selection narrowed to 1-3 (no click in it): tracked from frame 0
+    const narrowed = await manager.analyzeObject(frames, {
+      ...base,
+      range: { start: 1, end: 3 },
+      currentFrame: 1,
+    });
+    expect(narrowed.anchors).toBe(1);
+    for (const id of ['f0', 'f1', 'f2', 'f3']) {
+      expect(maskStore.getTag(`object:o1:${id}`)).toBe('whole|a');
+      expect(maskStore.getMark(`object:o1:${id}`)).toBeUndefined();
+    }
+
+    // Back to 0-3 for export: covered by real masks, nothing to redo
+    const prompts = workers[0].prompts.length;
+    await manager.analyzeObject(frames, {
+      ...base,
+      range: { start: 0, end: 3 },
+      currentFrame: 0,
+      onlyIfStale: true,
+    });
+    expect(workers[0].prompts.length).toBe(prompts);
+    expect(getStaleObjectFrames(frames, { start: 0, end: 3 }, 'o1', 'whole|a', maskStore)).toEqual(
+      [],
+    );
+  });
+
+  it('marks nothing when a run had no anchor to start from', async () => {
+    const { manager, maskStore, frames } = harness();
+    const result = await manager.analyzeObject(frames, {
+      objectId: 'o1',
+      clicks: [],
+      clipId: 'clip',
+      tag: 'whole|',
+      range: { start: 1, end: 3 },
+      currentFrame: 1,
+    });
+    expect(result).toMatchObject({ tracked: 0, anchors: 0 });
+    for (const f of frames) expect(maskStore.getMark(`object:o1:${f.id}`)).toBeUndefined();
+    expect(
+      getStaleObjectFrames(frames, { start: 1, end: 3 }, 'o1', 'whole|', maskStore),
+    ).toHaveLength(3);
+  });
+});
+
+describe('getObjectTrackRange', () => {
+  const at = (/** @type {number[]} */ ...frames) => frames.map((frame) => ({ frame }));
+  it('keeps a selection with a click, widens one without to the nearest click', () => {
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(3))).toEqual({ start: 2, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(0, 9))).toEqual({ start: 0, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(0, 6))).toEqual({ start: 2, end: 6 });
+    // A tie goes to the earlier click
+    expect(getObjectTrackRange({ start: 2, end: 5 }, at(8, 0))).toEqual({ start: 0, end: 5 });
+    expect(getObjectTrackRange({ start: 2, end: 5 }, [])).toEqual({ start: 2, end: 5 });
   });
 });

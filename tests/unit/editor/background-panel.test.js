@@ -18,10 +18,13 @@ import {
   getDownloadPrompt,
   getLostFramesInSelection,
   getLostFramesText,
+  getLostObject,
   getModelOptionLabel,
   getModelReadiness,
   getModelSubject,
   getModelTooltip,
+  getObjectLabel,
+  getObjectLostText,
   getSubject,
   getSubjectModel,
   getSubjectModels,
@@ -89,6 +92,10 @@ beforeEach(() => {
     onRemoveAiPick: vi.fn(),
     onFrameChange: vi.fn(),
     onGoToLostFrame: vi.fn(),
+    onGoToObject: vi.fn(),
+    onGoToObjectLost: vi.fn(),
+    onRemoveAiObject: vi.fn(),
+    onSetAiObjectScope: vi.fn(),
   };
   document.body.innerHTML = '';
   root = document.createElement('div');
@@ -751,5 +758,83 @@ describe('click to select ("Something else")', () => {
     updateBackgroundPanel(root, narrowed, 10);
     expect($('#ai-click-lost').hidden).toBe(true);
     expect($('#ai-status-text').textContent).not.toMatch(/of 3 frames tracked/);
+  });
+});
+
+describe('tracked objects', () => {
+  /** @param {string} id @param {'remove' | 'add'} mode @param {number} frame */
+  const object = (id, mode, frame) => ({
+    id,
+    mode,
+    scope: 'whole',
+    clicks: [{ frame, x: 0.5, y: 0.5, mode: 'keep' }],
+  });
+  /** @param {any[]} objects @param {Record<string, unknown>} [over] */
+  const stateWith = (objects, over = {}) =>
+    makeState(
+      { enabled: true, method: 'ai', ai: { model: 'general', objects } },
+      {
+        clip: { frames: Array.from({ length: 40 }, () => ({})), hasAlpha: false },
+        selectedRange: { start: 0, end: 39 },
+        ...over,
+      },
+    );
+
+  it('labels, finds the lost one (active first) and words its note', () => {
+    const a = /** @type {any} */ (object('a', 'remove', 10));
+    const b = /** @type {any} */ (object('b', 'add', 0));
+    expect(getObjectLabel(a, 10)).toBe('Remove object at 01:00');
+    expect(getObjectLabel(b, 10)).toBe('Add object at 00:00');
+    const lost = { a: [5], b: [7, 30] };
+    expect(getLostObject([a, b], lost, { start: 0, end: 39 })).toEqual({ object: a, frames: [5] });
+    expect(getLostObject([a, b], lost, { start: 0, end: 39 }, 'b')?.object).toBe(b);
+    // Outside the selection does not count
+    expect(getLostObject([a, b], lost, { start: 6, end: 20 })).toEqual({ object: b, frames: [7] });
+    expect(getLostObject([a], {}, { start: 0, end: 39 })).toBeNull();
+    expect(getObjectLostText(a, [5], 10)).toBe(
+      'The removed object was lost at 00:05. Click it there to keep going.',
+    );
+    expect(getObjectLostText(b, [7, 30], 10)).toBe(
+      'The added object was lost at 2 places, first at 00:07. Click it there to keep going.',
+    );
+  });
+
+  it('lists each object with go-to and delete, and the active one marked', () => {
+    updateBackgroundPanel(
+      root,
+      stateWith([object('a', 'remove', 10), object('b', 'add', 0)], { aiActiveObjectId: 'a' }),
+      10,
+    );
+    const chips = [...root.querySelectorAll('#ai-object-list [data-object-id]')];
+    expect(chips.map((c) => /** @type {HTMLElement} */ (c).dataset.objectId)).toEqual(['a', 'b']);
+    expect(chips[0].classList.contains('is-active')).toBe(true);
+    expect(chips[1].classList.contains('is-active')).toBe(false);
+    /** @type {HTMLElement} */ (chips[1].querySelector('.editor-cutout-pick-go')).click();
+    expect(handlers.onGoToObject).toHaveBeenCalledWith('b');
+    /** @type {HTMLElement} */ (chips[0].querySelector('.editor-cutout-pick-delete')).click();
+    expect(handlers.onRemoveAiObject).toHaveBeenCalledWith('a');
+    expect($('#ai-object-scope').hidden).toBe(false);
+  });
+
+  it('shows where an object was lost, with a button that goes there', () => {
+    const status = { ...createAiCutoutStatus(), objectLost: { a: [12] } };
+    updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)], { aiCutout: status }), 10);
+    expect($('#ai-object-lost').hidden).toBe(false);
+    expect($('#ai-object-lost').textContent).toContain('lost at 01:02');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToObjectLost).toHaveBeenCalledWith('a');
+    updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)]), 10);
+    expect($('#ai-object-lost').hidden).toBe(true);
+  });
+
+  it('turns the object tools off at the object limit', () => {
+    const many = Array.from({ length: EDIT_LIMITS.aiObjects.max }, (_, i) =>
+      object(`o${i}`, 'remove', i),
+    );
+    updateBackgroundPanel(root, stateWith(many.slice(0, 1)), 10);
+    expect($('#ai-object-remove').disabled).toBe(false);
+    updateBackgroundPanel(root, stateWith(many), 10);
+    expect($('#ai-object-remove').disabled).toBe(true);
+    expect($('#ai-object-add').disabled).toBe(true);
   });
 });

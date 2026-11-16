@@ -5,13 +5,20 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  addAiObject,
+  addAiObjectClick,
   addAiPick,
   clearAiPicks,
   createAiCutoutStatus,
   createEditorStore,
+  getActiveAiObject,
+  isObjectTool,
   PICK_NEEDS_ANALYSIS_NOTICE,
   PICK_NO_CHARACTER_NOTICE,
+  removeAiObject,
   removeAiPick,
+  setActiveAiObject,
+  setAiObjectScope,
   setAiParams,
   setAiPickTool,
   setBackgroundMethod,
@@ -49,6 +56,7 @@ describe('AI cutout editor state', () => {
       smoothing: false,
       edge: 3,
       clickScope: 'whole',
+      objects: [],
       subject: null,
       picks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
     });
@@ -155,5 +163,66 @@ describe('AI cutout editor state', () => {
       phase: 'idle',
       notice: 'x',
     });
+  });
+});
+
+describe('tracked objects', () => {
+  const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
+
+  it('adds an object with one keep click, Whole, and makes it the active one', () => {
+    const state = addAiObject(makeState(), 'remove', { ...click(), mode: 'remove' }, 'o1');
+    expect(state.edits.background.ai.objects).toEqual([
+      { id: 'o1', mode: 'remove', scope: 'whole', clicks: [click()] },
+    ]);
+    expect(state.aiActiveObjectId).toBe('o1');
+    expect(getActiveAiObject(state)?.id).toBe('o1');
+  });
+
+  it('stops at the object limit and the click limit', () => {
+    let state = makeState();
+    for (let i = 0; i < EDIT_LIMITS.aiObjects.max + 1; i++) {
+      state = addAiObject(state, 'add', click(), `o${i}`);
+    }
+    expect(state.edits.background.ai.objects).toHaveLength(EDIT_LIMITS.aiObjects.max);
+    for (let i = 0; i < EDIT_LIMITS.aiObjectClicks.max + 1; i++) {
+      state = addAiObjectClick(state, 'o0', click(i % 6));
+    }
+    expect(state.edits.background.ai.objects[0].clicks).toHaveLength(
+      EDIT_LIMITS.aiObjectClicks.max,
+    );
+    expect(state.aiActiveObjectId).toBe('o0');
+  });
+
+  it('sets the scope of one object and ignores unknown ids', () => {
+    let state = addAiObject(makeState(), 'remove', click(), 'o1');
+    state = addAiObject(state, 'add', click(), 'o2');
+    const before = state;
+    expect(setAiObjectScope(state, 'nope', 'part')).toBe(before);
+    state = setAiObjectScope(state, 'o1', 'part');
+    expect(state.edits.background.ai.objects.map((o) => o.scope)).toEqual(['part', 'whole']);
+  });
+
+  it('removes an object, turning off an object tool aimed at it', () => {
+    let state = addAiObject(makeState(), 'remove', click(), 'o1');
+    state = addAiObject(state, 'remove', click(), 'o2');
+    state = setActiveAiObject(state, 'o1');
+    state = setAiPickTool(state, 'remove-object', 'o1');
+    expect(state.aiObjectTarget).toBe('o1');
+    state = removeAiObject(state, 'o1');
+    expect(state.edits.background.ai.objects.map((o) => o.id)).toEqual(['o2']);
+    expect(state.aiPickTool).toBeNull();
+    expect(state.aiObjectTarget).toBeNull();
+    expect(state.aiActiveObjectId).toBeNull();
+    // The last one is active when none is chosen
+    expect(getActiveAiObject(state)?.id).toBe('o2');
+  });
+
+  it('aims only object tools at an object', () => {
+    const state = setAiPickTool(makeState(), 'keep', 'o1');
+    expect(state.aiObjectTarget).toBeNull();
+    expect(isObjectTool('remove-object')).toBe(true);
+    expect(isObjectTool('add-object')).toBe(true);
+    expect(isObjectTool('keep')).toBe(false);
+    expect(isObjectTool(null)).toBe(false);
   });
 });

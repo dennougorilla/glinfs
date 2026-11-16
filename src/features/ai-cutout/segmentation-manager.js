@@ -32,6 +32,13 @@
  * frame), so the rest of the pipeline (Fit, smoothing, touch-ups, export)
  * reads them like any model's.
  *
+ * A tracked object (the edits' `AiCutout.objects`) is driven the same way
+ * by analyzeObject(): its clicks are tracked with the click-to-select model
+ * through the selection, whatever model the clip's cutout uses. Its masks
+ * are decoded at the small object size (see object-masks.js) and stored
+ * under objectMaskKey, in the mask store group (clip, `object:<id>`), so
+ * they evict and clear with the clip like any model's masks.
+ *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
  * resolution for a letterbox model, to the square model input for a stretch
@@ -40,6 +47,11 @@
  * At most MAX_FRAMES_IN_FLIGHT bitmaps exist at a time.
  */
 
+import {
+  getObjectMaskSize,
+  OBJECT_TRACK_MIN_SCORE_RATIO,
+  OBJECT_WHOLE_MIN_SCORE_RATIO,
+} from '../../shared/masks/object-masks.js';
 import { getDrawableSource } from '../../shared/utils/canvas.js';
 import { trackClicks } from './click-tracker.js';
 import { getSharedMaskStore } from './mask-store.js';
@@ -107,6 +119,27 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {string} [modelId] - A SAM model (default 'click')
  * @property {() => boolean} [superseded] - On a cancel: whether a run with
  *   new clicks follows at once (see trackClicks)
+ */
+
+/**
+ * @typedef {Object} ObjectAnalyzeOptions
+ * @property {string} objectId - The tracked object (its masks' key and group)
+ * @property {{ start: number, end: number }} range - Selection (inclusive clip indices)
+ * @property {number} currentFrame - Frame on screen (worked on first)
+ * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} clicks
+ * @property {'whole' | 'part'} [scope]
+ * @property {(progress: AnalysisProgress) => void} [onProgress]
+ * @property {AbortSignal} [signal]
+ * @property {boolean} [allowWasm=false]
+ * @property {string} [clipId]
+ * @property {string} [modelId] - The SAM model that tracks it (default 'click')
+ * @property {() => boolean} [superseded] - See trackClicks
+ * @property {string} [tag] - The object's clicks and scope (see
+ *   getObjectSignature): each mask is stored with it, and each frame of the
+ *   selection a finished run could not reach is marked with it
+ * @property {boolean} [onlyIfStale] - Once its turn comes, do nothing when
+ *   every frame of the selection already has a mask or mark with `tag` (a
+ *   run ahead in the queue tracked it)
  */
 
 /**
@@ -267,6 +300,74 @@ export function frameKey(frame) {
  */
 export function maskKey(frame, modelId = DEFAULT_MODEL_ID) {
   return `${modelId}:${frameKey(frame)}`;
+}
+
+/**
+ * Mask store group ("model") of a tracked object's masks
+ * @param {string} objectId
+ * @returns {string}
+ */
+export function objectMaskGroup(objectId) {
+  return `object:${objectId}`;
+}
+
+/**
+ * Mask store key of a tracked object's mask on a frame
+ * @param {Frame} frame
+ * @param {string} objectId
+ * @returns {string}
+ */
+export function objectMaskKey(frame, objectId) {
+  return maskKey(frame, objectMaskGroup(objectId));
+}
+
+/**
+ * The frames a tracked object's run covers: the selection, widened to the
+ * nearest click when no click is inside it (tracking starts at a click, so
+ * a selection without one would otherwise track nothing)
+ * @param {{ start: number, end: number }} range
+ * @param {{ frame: number }[]} clicks
+ * @returns {{ start: number, end: number }}
+ */
+export function getObjectTrackRange(range, clicks) {
+  if (clicks.length === 0 || clicks.some((c) => c.frame >= range.start && c.frame <= range.end)) {
+    return range;
+  }
+  const distance = (/** @type {number} */ f) => (f < range.start ? range.start - f : f - range.end);
+  let nearest = clicks[0].frame;
+  for (const { frame } of clicks) {
+    const d = distance(frame);
+    if (d < distance(nearest) || (d === distance(nearest) && frame < nearest)) nearest = frame;
+  }
+  return { start: Math.min(range.start, nearest), end: Math.max(range.end, nearest) };
+}
+
+/**
+ * Frames of `range` (one per frame key) a tracked object still has to be
+ * tracked on: those with neither a mask nor an unreachable mark made with
+ * `tag` (the object's clicks and scope). A mask of older clicks or scope,
+ * or nothing at all (never tracked, cancelled, evicted), is still to track.
+ * @param {Frame[]} frames - The whole clip
+ * @param {{ start: number, end: number }} range
+ * @param {string} objectId
+ * @param {string} tag
+ * @param {{ getTag: (key: string) => string | undefined, getMark: (key: string) => string | undefined }} maskStore
+ * @param {{ retryLost?: boolean }} [options] - retryLost: a frame marked
+ *   unreachable is still to track too (an explicit retry)
+ * @returns {number[]}
+ */
+export function getStaleObjectFrames(frames, range, objectId, tag, maskStore, options = {}) {
+  const { retryLost = false } = options;
+  const seen = new Set();
+  const stale = [];
+  for (let f = Math.max(0, range.start); f <= Math.min(frames.length - 1, range.end); f++) {
+    const key = objectMaskKey(frames[f], objectId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (maskStore.getTag(key) === tag) continue;
+    if (retryLost || maskStore.getMark(key) !== tag) stale.push(f);
+  }
+  return stale;
 }
 
 /**
@@ -636,7 +737,13 @@ export class SegmentationManager {
     this.#markBusy(modelId, 1);
     const previous = this.#tail;
     const run = raceAbort(previous, options.signal).then(() =>
-      this.#analyzeClick(frames, { ...options, modelId }),
+      this.#analyzeClick(frames, {
+        ...options,
+        modelId,
+        group: modelId,
+        keyOf: (frame) => maskKey(frame, modelId),
+        maskSizeOf: (frame) => computeMaskSize(frame.width, frame.height),
+      }),
     );
     this.#tail = Promise.allSettled([previous, run]);
     const settle = () => this.#markBusy(modelId, -1);
@@ -645,12 +752,83 @@ export class SegmentationManager {
   }
 
   /**
+   * Track a tracked object's clicks through the selection with a SAM model
+   * (see trackClicks), storing its masks at the object size under
+   * objectMaskKey. Queued with the other analyses (one at a time).
+   * @param {Frame[]} frames - The whole clip
+   * @param {ObjectAnalyzeOptions} options
+   * @returns {Promise<ClickAnalyzeResult>}
+   */
+  analyzeObject(frames, options) {
+    const modelId = options.modelId ?? 'click';
+    const group = objectMaskGroup(options.objectId);
+    this.#markBusy(modelId, 1);
+    const previous = this.#tail;
+    const { tag, onlyIfStale = false, objectId, range } = options;
+    const run = raceAbort(previous, options.signal).then(async () => {
+      if (
+        tag !== undefined &&
+        onlyIfStale &&
+        getStaleObjectFrames(frames, range, objectId, tag, this.#maskStore).length === 0
+      ) {
+        // Lost where a marked frame borders a tracked one (as trackClicks reports)
+        const start = Math.max(0, range.start);
+        const end = Math.min(frames.length - 1, range.end);
+        const hasMask = (/** @type {number} */ f) =>
+          f >= start && f <= end && this.#maskStore.has(objectMaskKey(frames[f], objectId));
+        const lost = [];
+        for (let f = start; f <= end; f++) {
+          if (!hasMask(f) && (hasMask(f - 1) || hasMask(f + 1))) lost.push(f);
+        }
+        return { tracked: 0, lost, anchors: 0, backend: this.#lastReady?.backend ?? null };
+      }
+      // A selection without a click tracks from the nearest one outside it
+      const trackRange = getObjectTrackRange(range, options.clicks);
+      const result = await this.#analyzeClick(frames, {
+        ...options,
+        range: trackRange,
+        picks: options.clicks,
+        modelId,
+        group,
+        tag,
+        keyOf: (frame) => objectMaskKey(frame, objectId),
+        maskSizeOf: (frame) => getObjectMaskSize(frame.width, frame.height),
+        minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
+        wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
+      });
+      // Finished: the frames it could not reach from an anchor are marked
+      // as tried (a run that started from no anchor tried nothing)
+      if (
+        tag !== undefined &&
+        result.anchors > 0 &&
+        !(options.clipId !== undefined && this.#releasedClips.has(options.clipId))
+      ) {
+        const start = Math.max(0, trackRange.start);
+        const end = Math.min(frames.length - 1, trackRange.end);
+        for (let f = start; f <= end; f++) {
+          const key = objectMaskKey(frames[f], objectId);
+          if (!this.#maskStore.has(key)) this.#maskStore.mark(key, tag, options.clipId, group);
+        }
+      }
+      return result;
+    });
+    this.#tail = Promise.allSettled([previous, run]);
+    const settle = () => this.#markBusy(modelId, -1);
+    run.then(settle, settle);
+    return run;
+  }
+
+  /**
    * @param {Frame[]} frames
-   * @param {ClickAnalyzeOptions & { modelId: string }} options
+   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
+   *   group: mask store group of the masks; keyOf: their store key;
+   *   maskSizeOf: the size the decoder answers at; minScoreRatio and
+   *   wholeMinScoreRatio: see trackClicks
    * @returns {Promise<ClickAnalyzeResult>}
    */
   async #analyzeClick(frames, options) {
     const { onProgress, signal, allowWasm = false, clipId, modelId, range } = options;
+    const { group, keyOf, maskSizeOf } = options;
     if (signal?.aborted) throw createAbortError();
     const start = Math.max(0, range.start);
     const end = Math.min(frames.length - 1, range.end);
@@ -681,9 +859,11 @@ export class SegmentationManager {
         currentFrame: options.currentFrame,
         picks: options.picks,
         scope: options.scope,
+        minScoreRatio: options.minScoreRatio,
+        wholeMinScoreRatio: options.wholeMinScoreRatio,
         keyOf: (f) => frameKey(frames[f]),
         prompt: async (f, prompt) => {
-          const request = this.#submitPrompt(jobId, frames[f], prompt, spec);
+          const request = this.#submitPrompt(jobId, frames[f], prompt, spec, maskSizeOf(frames[f]));
           submitted.push(request);
           const answer = await raceAbort(request, signal);
           lastMs = answer.totalMs;
@@ -691,12 +871,12 @@ export class SegmentationManager {
         },
         store: (f, mask) => {
           if (released()) return;
-          this.#maskStore.set(maskKey(frames[f], modelId), mask, clipId, modelId);
+          this.#maskStore.set(keyOf(frames[f]), mask, clipId, group, options.tag);
         },
         clear: (f) => {
-          this.#maskStore.delete(maskKey(frames[f], modelId));
+          this.#maskStore.delete(keyOf(frames[f]));
         },
-        peek: (f) => this.#maskStore.get(maskKey(frames[f], modelId)) ?? null,
+        peek: (f) => this.#maskStore.get(keyOf(frames[f])) ?? null,
         superseded: options.superseded,
         onProgress: ({ done }) => report(done, lastMs),
         signal,
@@ -722,9 +902,10 @@ export class SegmentationManager {
    * @param {Frame} frame
    * @param {{ points: import('./sam-prompts.js').SamPoint[], box: import('./sam-prompts.js').SamBox | null, maskInput?: Float32Array | null }} prompt
    * @param {ModelSpec} spec
+   * @param {{ width: number, height: number }} mask - Size the decoder answers at
    * @returns {Promise<PromptResult>}
    */
-  async #submitPrompt(jobId, frame, prompt, spec) {
+  async #submitPrompt(jobId, frame, prompt, spec, mask) {
     const source = getDrawableSource(frame);
     if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
       throw new SegmentationError(
@@ -733,7 +914,6 @@ export class SegmentationManager {
       );
     }
     const encoderSize = getEncoderSize(frame.width, frame.height, spec.inputSize);
-    const mask = computeMaskSize(frame.width, frame.height);
     const { coords, labels } = buildPromptInputs({
       points: prompt.points,
       box: prompt.box,
