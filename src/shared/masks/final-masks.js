@@ -315,6 +315,96 @@ export function pickFindsComponent(options, pick) {
 }
 
 /**
+ * The stage of a build before Fit's edge and the tracked objects: each
+ * frame's binary mask after the pick selection and the whole-clip
+ * clean-up. Picks and clean-up act here, so the clean-up suggestions are
+ * measured here too.
+ * @param {FrameBinarySource} frameBinary
+ * @param {AiCutout} ai
+ * @param {number} frameCount
+ */
+function createPreEdgeStage(frameBinary, ai, frameCount) {
+  const { width, height, binaryAt } = frameBinary;
+  const size = width * height;
+  const picks = getRegionPicks(ai);
+  const tracker = picks.length > 0 ? createPickTracker({ picks, width, height }) : null;
+  const backwardStart = tracker ? Math.min(tracker.backwardStart, frameCount - 1) : -1;
+  const labels = new Int32Array(size);
+  const selected = new Uint8Array(size);
+  const cleanupScratch = createCleanupScratch(ai, size);
+  return {
+    /** Frames the backward pick pass walks */
+    backwardSteps: backwardStart + 1,
+    /**
+     * The backward pick pass (before the first maskAt)
+     * @param {() => Promise<void>} stepDone - After each frame
+     */
+    async trackBackward(stepDone) {
+      if (!tracker) return;
+      for (let f = backwardStart; f >= 0; f--) {
+        const bin = binaryAt(f);
+        tracker.trackBackward(f, bin ? labelComponents(bin, width, height, labels) : null);
+        await stepDone();
+      }
+    },
+    /**
+     * A frame's pre-edge mask (0/1), or null when it was not analyzed. Call
+     * for every frame in order from 0; the result lives in a buffer that the
+     * next call overwrites.
+     * @param {number} f
+     * @returns {Uint8Array | null}
+     */
+    maskAt(f) {
+      const bin = binaryAt(f);
+      if (!bin) {
+        tracker?.skipForward(f);
+        return null;
+      }
+      let mask = bin;
+      if (tracker) {
+        mask = tracker.selectForward(f, labelComponents(bin, width, height, labels), selected);
+      }
+      if (cleanupScratch) mask = applyCleanup(mask, width, height, ai.cleanup, cleanupScratch);
+      return mask;
+    },
+  };
+}
+
+/**
+ * The pre-edge masks of a clip (see createPreEdgeStage), for passes that
+ * must see what picks and clean-up see: read every frame in order from 0
+ * with maskAt. The backward pick pass runs (sliced) before this resolves.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, signal?: AbortSignal, sliceMs?: number, now?: () => number, yieldToMain?: () => Promise<void> }} options
+ * @returns {Promise<{ width: number, height: number, maskAt: (f: number) => Uint8Array | null } | null>}
+ *   null when no frame is analyzed
+ * @throws {DOMException} AbortError when cancelled
+ */
+export async function createPreEdgeMaskSource(options) {
+  const {
+    frameCount,
+    getProb,
+    ai,
+    signal,
+    sliceMs = BUILD_SLICE_MS,
+    now = defaultNow,
+    yieldToMain = defaultYieldToMain,
+  } = options;
+  throwIfAborted(signal);
+  const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
+  if (!frameBinary) return null;
+  const stage = createPreEdgeStage(frameBinary, ai, frameCount);
+  let sliceStart = now();
+  await stage.trackBackward(async () => {
+    if (now() - sliceStart >= sliceMs) {
+      await yieldToMain();
+      sliceStart = now();
+    }
+    throwIfAborted(signal);
+  });
+  return { width: frameBinary.width, height: frameBinary.height, maskAt: stage.maskAt };
+}
+
+/**
  * Build the final masks of a clip.
  *
  * Without picks every frame is independent (one pass). With picks, the
@@ -347,7 +437,7 @@ export async function buildFinalMasks(options) {
   if (!frameBinary) {
     return { masks, width: 0, height: 0, bytes: 0 };
   }
-  const { width, height, binaryAt } = frameBinary;
+  const { width, height } = frameBinary;
   // Snapshot, like the probability masks: the store may change while the
   // build yields
   const objectMasks = objects.map((object) => {
@@ -359,17 +449,12 @@ export async function buildFinalMasks(options) {
 
   const size = width * height;
   const radius = edgeRadiusInMaskPixels(ai.edge, width, options.sourceWidth ?? width);
-  const picks = getRegionPicks(ai);
-  const tracker = picks.length > 0 ? createPickTracker({ picks, width, height }) : null;
-  const backwardStart = tracker ? Math.min(tracker.backwardStart, frameCount - 1) : -1;
-  const total = frameCount + (backwardStart + 1);
+  const stage = createPreEdgeStage(frameBinary, ai, frameCount);
+  const total = frameCount + stage.backwardSteps;
 
   // Scratch, reused for every frame
-  const labels = new Int32Array(size);
-  const selected = new Uint8Array(size);
   const morphed = new Uint8Array(size);
   const objectScratch = objectMasks.length > 0 ? createObjectScratch(size) : null;
-  const cleanupScratch = createCleanupScratch(ai, size);
 
   let done = 0;
   let sliceStart = now();
@@ -384,27 +469,13 @@ export async function buildFinalMasks(options) {
     throwIfAborted(signal);
   };
 
-  if (tracker) {
-    for (let f = backwardStart; f >= 0; f--) {
-      const bin = binaryAt(f);
-      tracker.trackBackward(f, bin ? labelComponents(bin, width, height, labels) : null);
-      await stepDone();
-    }
-  }
+  // Only with picks: an await here would defer the first slice
+  if (stage.backwardSteps > 0) await stage.trackBackward(stepDone);
 
   let bytes = 0;
   for (let f = 0; f < frameCount; f++) {
-    const bin = binaryAt(f);
-    if (!bin) {
-      tracker?.skipForward(f);
-    } else {
-      let mask = bin;
-      if (tracker) {
-        mask = tracker.selectForward(f, labelComponents(bin, width, height, labels), selected);
-      }
-      if (cleanupScratch) {
-        mask = applyCleanup(mask, width, height, ai.cleanup, cleanupScratch);
-      }
+    let mask = stage.maskAt(f);
+    if (mask) {
       if (radius !== 0) {
         mask = morphMask(mask, width, height, radius, morphed);
       }

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
 import {
   describePlace,
   findCleanupSuggestions,
   MAX_SUGGESTIONS,
+  suggestCleanups,
 } from '../../../../src/shared/masks/cleanup-suggestions.js';
+import { buildFinalMasks } from '../../../../src/shared/masks/final-masks.js';
+import { unpackMask } from '../../../../src/shared/masks/mask-ops.js';
 
 const W = 100;
 const H = 60;
@@ -151,5 +155,120 @@ describe('describePlace', () => {
     expect(describePlace(0.5, 0.5)).toBe('center');
     expect(describePlace(0.9, 0.5)).toBe('right');
     expect(describePlace(0.5, 0.9)).toBe('bottom');
+  });
+});
+
+describe('suggestCleanups: measured where picks and clean-up act (review #194)', () => {
+  /** @param {Rect[]} rects @param {Rect[]} [holes] */
+  const prob = (rects, holes = []) => {
+    const { data } = frame(rects, holes);
+    return { data: data.map((v) => (v ? 255 : 10)), width: W, height: H };
+  };
+  /** @param {Partial<import('../../../../src/shared/edits/model.js').AiCutout>} over */
+  const aiOf = (over = {}) => ({ ...createDefaultAiCutout(), smoothing: false, ...over });
+  const fast = { now: () => 0, yieldToMain: async () => {} };
+  /** @param {{ data: Uint8Array }[]} probs @param {any} ai */
+  const build = (probs, ai) =>
+    buildFinalMasks({ frameCount: probs.length, getProb: (f) => probs[f], ai, ...fast });
+  /** @param {any} packed */
+  const area = (packed) => unpackMask(packed).reduce((sum, v) => sum + v, 0);
+
+  it('offers no blob pick for a lobe that Fit only cuts off, so the character stays', async () => {
+    // A 10x10 lobe on frames 1, 3 and 6, joined to the character by a 1 px bridge;
+    // Tighter by 1 cuts the bridge in the final mask
+    const lobe = new Set([1, 3, 6]);
+    const probs = Array.from({ length: 10 }, (_, f) =>
+      prob(
+        lobe.has(f)
+          ? [
+              CHARACTER,
+              /** @type {Rect} */ ([40, 20, 5, 1]),
+              /** @type {Rect} */ ([45, 15, 10, 10]),
+            ]
+          : [CHARACTER],
+      ),
+    );
+    const ai = aiOf({ edge: -1 });
+    // On the final masks the lobe reads as a separate flickering blob (the old input)
+    const { masks } = await build(probs, ai);
+    const onFinal = await findCleanupSuggestions({
+      frameCount: masks.length,
+      getBinary: (f) => ({ data: unpackMask(masks[f]), width: W, height: H }),
+      ...fast,
+    });
+    expect(onFinal.some((s) => s.kind === 'blob')).toBe(true);
+
+    const suggestions = await suggestCleanups({
+      frameCount: 10,
+      getProb: (f) => probs[f],
+      ai,
+      ...fast,
+    });
+    expect(suggestions.some((s) => s.kind === 'blob')).toBe(false);
+    // What the old blob chip did: a remove pick there empties every frame
+    const blob = /** @type {any} */ (onFinal.find((s) => s.kind === 'blob'));
+    const picked = await build(probs, { ...ai, picks: [{ ...blob.pick, mode: 'remove' }] });
+    expect(picked.masks.every((m) => m && area(m) === 0)).toBe(true);
+  });
+
+  it('a real flickering blob still gets a pick that removes it and only it', async () => {
+    const on = new Set([1, 3, 6]);
+    const probs = Array.from({ length: 10 }, (_, f) =>
+      prob(on.has(f) ? [CHARACTER, [70, 8, 10, 10]] : [CHARACTER]),
+    );
+    const ai = aiOf({ edge: -1 });
+    const suggestions = await suggestCleanups({
+      frameCount: 10,
+      getProb: (f) => probs[f],
+      ai,
+      ...fast,
+    });
+    const blob = /** @type {any} */ (suggestions.find((s) => s.kind === 'blob'));
+    expect(blob).toBeDefined();
+    const before = await build(probs, ai);
+    const after = await build(probs, { ...ai, picks: [{ ...blob.pick, mode: 'remove' }] });
+    for (let f = 0; f < 10; f++) {
+      expect(area(after.masks[f])).toBe(area(before.masks[f]) - (on.has(f) ? 8 * 8 : 0));
+    }
+  });
+
+  it('sets the hole size from the hole before Fit, so applying it fills the hole the build shows', async () => {
+    // A 5x5 hole; Looser by 1 shows it as 3x3
+    const probs = Array.from({ length: 4 }, () => prob([CHARACTER], [[20, 20, 5, 5]]));
+    const ai = aiOf({ edge: 1 });
+    const { masks } = await build(probs, ai);
+    const centre = 22 * W + 22;
+    expect(unpackMask(masks[0])[centre]).toBe(0);
+    const onFinal = await findCleanupSuggestions({
+      frameCount: 4,
+      getBinary: (f) => ({ data: unpackMask(masks[f]), width: W, height: H }),
+      ...fast,
+    });
+    expect(/** @type {any} */ (onFinal[0]).maxHoleArea * W * H).toBeCloseTo(9, 3);
+
+    const [holes] = /** @type {any[]} */ (
+      await suggestCleanups({ frameCount: 4, getProb: (f) => probs[f], ai, ...fast })
+    );
+    expect(holes.kind).toBe('holes');
+    expect(holes.maxHoleArea * W * H).toBeGreaterThanOrEqual(25);
+    const filled = await build(probs, {
+      ...ai,
+      cleanup: { minIslandArea: 0, maxHoleArea: holes.maxHoleArea },
+    });
+    for (const m of filled.masks) expect(unpackMask(m)[centre]).toBe(1);
+  });
+
+  it('sets the speck size from the speck before Fit (Tighter shrinks it in the final mask)', async () => {
+    const probs = Array.from({ length: 4 }, () => prob([CHARACTER, [70, 10, 3, 3]]));
+    const ai = aiOf({ edge: -1 });
+    const [specks] = /** @type {any[]} */ (
+      await suggestCleanups({ frameCount: 4, getProb: (f) => probs[f], ai, ...fast })
+    );
+    expect(specks.kind).toBe('specks');
+    const cleaned = await build(probs, {
+      ...ai,
+      cleanup: { minIslandArea: specks.minIslandArea, maxHoleArea: 0 },
+    });
+    for (const m of cleaned.masks) expect(unpackMask(m)[11 * W + 71]).toBe(0);
   });
 });

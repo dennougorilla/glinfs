@@ -53,8 +53,7 @@
  */
 
 import { isAiCutoutActive } from '../../shared/edits/model.js';
-import { findCleanupSuggestions } from '../../shared/masks/cleanup-suggestions.js';
-import { unpackMask } from '../../shared/masks/mask-ops.js';
+import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
@@ -73,6 +72,7 @@ import {
   estimateRemainingMs,
   getAiModelId,
   getBuildParamsKey,
+  getClipProbSource,
   getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
@@ -247,21 +247,17 @@ export function createAiCutoutSession(options) {
     abortSuggestions();
     suggestTimer = setTimeout(() => {
       suggestTimer = null;
-      const frames = getState()?.clip?.frames;
-      if (disposed || !frames || maskSource !== source) return;
+      const state = getState();
+      const frames = state?.clip?.frames;
+      if (disposed || !state || !frames || maskSource !== source) return;
+      const { ai } = state.edits.background;
       const controller = new AbortController();
       suggestController = controller;
-      /** @type {Uint8Array | null} */
-      let buffer = null;
-      findCleanupSuggestions({
+      // Measured where picks and clean-up act (before Fit and the objects)
+      suggestCleanups({
         frameCount: frames.length,
-        getBinary: (f) => {
-          const packed = source.getFinalMask(f);
-          if (!packed) return null;
-          const size = packed.width * packed.height;
-          if (!buffer || buffer.length !== size) buffer = new Uint8Array(size);
-          return { data: unpackMask(packed, buffer), width: packed.width, height: packed.height };
-        },
+        getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+        ai,
         keyOf: (f) => frameKey(frames[f]),
         signal: controller.signal,
       }).then(

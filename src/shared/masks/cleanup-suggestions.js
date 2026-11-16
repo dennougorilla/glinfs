@@ -27,8 +27,13 @@
  * @module shared/masks/cleanup-suggestions
  */
 
-import { defaultNow, defaultYieldToMain } from './final-masks.js';
-import { labelComponents, TRACK_JOIN_IOU } from './mask-ops.js';
+import {
+  createFrameBinarySource,
+  createPreEdgeMaskSource,
+  defaultNow,
+  defaultYieldToMain,
+} from './final-masks.js';
+import { findPickedComponent, labelComponents, TRACK_JOIN_IOU } from './mask-ops.js';
 
 /** Specks: at most this fraction of the frame */
 export const SPECK_MAX_FRAME_FRACTION = 0.002;
@@ -482,4 +487,62 @@ export async function findCleanupSuggestions(options) {
   }
 
   return out.slice(0, MAX_SUGGESTIONS);
+}
+
+/**
+ * The clean-up suggestions of a clip, measured where they act: on each
+ * frame's mask after the picks and the clean-up already applied, before
+ * Fit's edge and the tracked objects (createPreEdgeMaskSource). A
+ * threshold measured there does on the build what the chip says, and a
+ * blob found there is a piece the pick tracking can select alone. A blob
+ * whose pick would select the frame's largest piece on the mask the picks
+ * read is dropped all the same.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => import('./final-masks.js').ProbMask | null, ai: import('../edits/model.js').AiCutout, keyOf?: (frameIndex: number) => string, signal?: AbortSignal, sliceMs?: number, now?: () => number, yieldToMain?: () => Promise<void> }} options
+ * @returns {Promise<CleanupSuggestion[]>}
+ * @throws {DOMException} AbortError when cancelled
+ */
+export async function suggestCleanups(options) {
+  const { frameCount, getProb, ai, keyOf, signal, sliceMs, now, yieldToMain } = options;
+  const source = await createPreEdgeMaskSource({
+    frameCount,
+    getProb,
+    ai,
+    signal,
+    sliceMs,
+    now,
+    yieldToMain,
+  });
+  if (!source) return [];
+  const { width, height } = source;
+  // The pick tracking must see every frame in order: step through the
+  // frames the pass skips (holds)
+  let next = 0;
+  /** @type {Uint8Array | null} */
+  let mask = null;
+  const getBinary = (/** @type {number} */ f) => {
+    while (next <= f) mask = source.maskAt(next++);
+    return mask ? { data: mask, width, height } : null;
+  };
+  const suggestions = await findCleanupSuggestions({
+    frameCount,
+    getBinary,
+    keyOf,
+    signal,
+    sliceMs,
+    now,
+    yieldToMain,
+  });
+  const picksRead = createFrameBinarySource({ frameCount, getProb, ai });
+  return suggestions.filter((s) => {
+    if (s.kind !== 'blob' || !picksRead) return true;
+    const bin = picksRead.binaryAt(s.pick.frame);
+    if (!bin) return false;
+    const comps = labelComponents(bin, width, height);
+    const picked = findPickedComponent(comps, width, height, s.pick);
+    let largest = 0;
+    for (let l = 1; l <= comps.count; l++) {
+      if (!largest || comps.areas[l] > comps.areas[largest]) largest = l;
+    }
+    return picked !== 0 && picked !== largest;
+  });
 }
