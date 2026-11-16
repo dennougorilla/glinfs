@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isScoreDrop,
   joinCandidates,
+  refineAnchorPrompt,
   refinePrompt,
   trackClicks,
 } from '../../../src/features/ai-cutout/click-tracker.js';
@@ -461,5 +462,157 @@ describe('isScoreDrop', () => {
     expect(isScoreDrop(0.96, 0.5, 0)).toBe(false);
     expect(isScoreDrop(null, 0.5, 0.92)).toBe(false);
     expect(isScoreDrop(0, 0.5, 0.92)).toBe(false);
+  });
+});
+
+describe('trackClicks with seeds (an earlier answer of the object on an anchor frame)', () => {
+  const seedMask = () => ({ data: rect(4, 4, 30, 16), width: W, height: H });
+  const seedLogits = Float32Array.from({ length: 16 }, (_, i) => i);
+
+  it("prompts the anchor with the seed's box and points, its own points and the seed's logits; keeps the best-scoring answer", async () => {
+    const { promise, masks, calls } = run({
+      seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits } : null),
+    });
+    await promise;
+    const first = calls[0];
+    expect(first.frame).toBe(3);
+    expect(first.prompt.maskInput).toBe(seedLogits);
+    // The seed's grown box (it holds the seed), an inside point of the seed, then the click
+    const [x0, y0, x1, y1] = first.prompt.box;
+    expect(x0).toBeLessThanOrEqual(4 / W);
+    expect(y0).toBeLessThanOrEqual(4 / H);
+    expect(x1).toBeGreaterThanOrEqual(30 / W);
+    expect(y1).toBeGreaterThanOrEqual(16 / H);
+    expect(first.prompt.points.at(-1)).toEqual({ x: 0.3, y: 0.5, mode: 'keep' });
+    expect(first.prompt.points[0].mode).toBe('keep');
+    // One decode of the anchor, the best-scoring answer (the top half), not the seed
+    expect(calls.filter((c) => c.frame === 3)).toHaveLength(1);
+    expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 10));
+    expect(masks.get(3)?.data).not.toEqual(seedMask().data);
+  });
+
+  it('a frame without a seed is decoded from its own points, as before', async () => {
+    const { promise, calls } = run({ seedOf: () => null });
+    await promise;
+    expect(calls[0].prompt).toEqual({ points: [{ x: 0.3, y: 0.5, mode: 'keep' }], box: null });
+  });
+
+  it("seedGuard 'score' keeps the unseeded answer when the seeded one scores lower", async () => {
+    /** @param {'off' | 'score'} seedGuard */
+    const go = async (seedGuard) => {
+      const { prompt } = fakeSegmenter();
+      const lower = vi.fn(async (/** @type {number} */ f, /** @type {any} */ p) => {
+        const answers = await prompt(f, p);
+        // A seeded prompt scores lower than the plain click
+        return p.maskInput ? answers.map((a) => ({ ...a, score: a.score * 0.5 })) : answers;
+      });
+      const { promise, masks } = run({
+        prompt: lower,
+        seedGuard,
+        seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits } : null),
+      });
+      await promise;
+      return masks.get(3)?.data;
+    };
+    // off: the seeded answer (the top half, its best score)
+    expect(await go('off')).toEqual(rect(8, 6, 18, 10));
+    // score: the plain click's Whole answer (the object) scores higher, so it stays
+    expect(await go('score')).toEqual(rect(8, 6, 18, 14));
+  });
+
+  it("a frame with only remove points and no mask of these prompts starts from its seed's mask (not its logits)", async () => {
+    const { promise, calls } = run({
+      currentFrame: 6,
+      picks: [
+        { frame: 3, x: 0.3, y: 0.5, mode: 'keep' },
+        { frame: 6, x: 0.45, y: 0.65, mode: 'remove' },
+      ],
+      peek: () => null,
+      seedOf: (f) => (f === 6 ? { mask: seedMask(), lowRes: seedLogits } : null),
+    });
+    await promise;
+    expect(calls[0].frame).toBe(6);
+    // The seed's grown box, its inside point, the remove point; no logits (they
+    // hold the old answer and pull against the remove point)
+    expect(calls[0].prompt.box[0]).toBeLessThanOrEqual(4 / W);
+    expect(calls[0].prompt.maskInput).toBeNull();
+    expect(calls[0].prompt.points.at(-1)).toEqual({ x: 0.45, y: 0.65, mode: 'remove' });
+  });
+
+  it("a new box inside the seed's box is prompted on its own: two different inner boxes give different prompts", async () => {
+    /** @param {[number, number, number, number]} inner */
+    const go = async (inner) => {
+      const box = { frame: 3, x0: inner[0], y0: inner[1], x1: inner[2], y1: inner[3] };
+      const { promise, calls, masks } = run({
+        boxes: [box],
+        seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits, boxes: [inner] } : null),
+      });
+      await promise;
+      return {
+        prompts: calls.filter((c) => c.frame === 3).map((c) => c.prompt),
+        mask: masks.get(3),
+      };
+    };
+    // Both inside the seed's box (4..30 x 4..16 of 40 x 20)
+    const a = await go([0.2, 0.3, 0.3, 0.5]);
+    const b = await go([0.5, 0.4, 0.7, 0.7]);
+    // The seeded prompt is the same for both (the seed's box already holds them) ...
+    expect(a.prompts[0]).toEqual(b.prompts[0]);
+    // ... and each box gets its own prompt: the box, the keep point inside it, no logits
+    expect(a.prompts[1]).toEqual({
+      points: [{ x: 0.3, y: 0.5, mode: 'keep' }],
+      box: [0.2, 0.3, 0.3, 0.5],
+    });
+    expect(b.prompts[1]).toEqual({ points: [], box: [0.5, 0.4, 0.7, 0.7] });
+    expect(a.prompts).not.toEqual(b.prompts);
+    // The answer is the seeded one joined with the box's (Whole: the object)
+    expect(a.mask?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
+  it('a box the seed was made with is not prompted again', async () => {
+    const { promise, calls } = run({
+      boxes: [{ frame: 3, x0: 0.2, y0: 0.3, x1: 0.3, y1: 0.5 }],
+      seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits, boxes: [] } : null),
+    });
+    await promise;
+    expect(calls.filter((c) => c.frame === 3)).toHaveLength(1);
+  });
+
+  it("store gets each answer's low-res logits (for the next run's seeds)", async () => {
+    const stored = [];
+    const { promise } = run({ store: (f, _mask, lowRes) => stored.push([f, lowRes]) });
+    await promise;
+    expect(stored).toHaveLength(10);
+    // The fake segmenter answers without logits
+    expect(stored.every(([, lowRes]) => lowRes === null)).toBe(true);
+  });
+});
+
+describe('refineAnchorPrompt', () => {
+  const seed = { data: rect(4, 4, 12, 12), width: W, height: H };
+  it("stretches the seed's box over a keep point outside it and keeps the frame's points last", () => {
+    const next = refineAnchorPrompt(seed, {
+      points: [{ x: 0.9, y: 0.5, mode: 'keep' }],
+      boxes: [],
+    });
+    expect(next?.box[2]).toBeGreaterThanOrEqual(0.9);
+    expect(next?.points.at(-1)).toEqual({ x: 0.9, y: 0.5, mode: 'keep' });
+  });
+  it("stretches it over the frame's boxes", () => {
+    const next = refineAnchorPrompt(seed, { points: [], boxes: [[0.05, 0.05, 0.95, 0.95]] });
+    expect(next?.box).toEqual([0.05, 0.05, 0.95, 0.95]);
+  });
+  it("drops the seed's points right at one of the frame's points", () => {
+    const inside = { x: 8 / W, y: 8 / H, mode: /** @type {const} */ ('remove') };
+    const next = refineAnchorPrompt(seed, { points: [inside], boxes: [] });
+    expect(next?.points.filter((p) => p.mode === 'keep')).toHaveLength(0);
+  });
+  it('is null for an empty seed', () => {
+    expect(
+      refineAnchorPrompt(
+        { data: new Uint8Array(W * H), width: W, height: H },
+        { points: [], boxes: [] },
+      ),
+    ).toBeNull();
   });
 });

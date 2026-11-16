@@ -798,6 +798,21 @@ export function openAddModelDialog(deps = {}) {
           ]),
         ]
       : [];
+    // A Conv WebGPU computes wrong: the test fails on WebGPU; without WebGPU
+    // it would pass here and still be wrong on a computer that has it
+    if (opened.webgpuConvNote) {
+      webgpuNote.push(
+        el(
+          'p',
+          { className: 'settings-dialog-problem', role: 'alert', id: 'add-model-webgpu-conv' },
+          [
+            opened.backend === 'webgpu'
+              ? opened.webgpuConvNote
+              : `${opened.webgpuConvNote} This browser runs it without WebGPU, where it is right, so the test can pass here; with WebGPU it would not.`,
+          ],
+        ),
+      );
+    }
 
     body.replaceChildren(
       summary,

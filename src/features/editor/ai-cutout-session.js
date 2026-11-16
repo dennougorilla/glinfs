@@ -724,6 +724,7 @@ export function createAiCutoutSession(options) {
    */
   const dropObjectMasks = (id) => {
     for (const frame of getState()?.clip?.frames ?? []) maskStore.delete(objectMaskKey(frame, id));
+    manager.dropObjectSeeds?.(id);
   };
 
   /** Track the next queued object that still exists (one at a time) */

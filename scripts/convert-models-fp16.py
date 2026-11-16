@@ -17,9 +17,14 @@ checked against its pinned size and SHA-256. The script then
   `square_pows`, `double_to_float` or `cast_output_float32`, applies that step (see the
   model list and the functions);
 - for models marked `pad_conv_channels` (MODNet, RVM), zero-pads the input
-  channels of every Conv whose channel count is not a multiple of 4 (see
-  pad_conv_input_channels: onnxruntime-web's WebGPU backend computes those
-  Convs wrong; the padded graph computes exactly the same values);
+  channels of every Conv whose channel count is not a multiple of 4; for the
+  others, of every Conv that hits the WebGPU rule (input channels divisible
+  by 3, not by 4, output channels a multiple of 4: onnxruntime-web's WebGPU
+  backend computes those Convs
+  wrong; the padded graph computes exactly the same values; see
+  scripts/webgpu_convs.py). No shipped model other than MODNet and RVM has
+  such a Conv, so their bytes do not change. A file with such a Conv left
+  fails the conversion;
 - converts weights and activations to float16 with onnxconverter-common,
   `keep_io_types=True`: the input and the output stay float32, so the
   worker feeds and reads exactly the same tensors as with the fp32 file.
@@ -51,6 +56,11 @@ import onnx
 import onnxconverter_common
 from onnx import helper, numpy_helper
 from onnxconverter_common import float16
+from webgpu_convs import (
+    assert_no_webgpu_conv_hazards,
+    pad_conv_input_channels,
+    pad_webgpu_conv_hazards,
+)
 
 MODELS = [
     {
@@ -191,66 +201,6 @@ def keep_only_outputs(model: onnx.ModelProto, names: list[str]) -> int:
     del graph.value_info[:]
     graph.value_info.extend(value_info)
     return removed
-
-
-def pad_conv_input_channels(model: onnx.ModelProto, multiple: int = 4) -> list[str]:
-    """Zero-pad the input channels of every Conv whose input channel count
-    is above and not a multiple of `multiple`. Returns "name: before -> after"
-    for each Conv changed.
-
-    onnxruntime-web 1.30's WebGPU backend computes such a Conv wrong (MODNet's
-    Conv_304 has 99 input channels: its output is off by roughly its own
-    magnitude, so the mask is garbage, while WASM and the CPU are right;
-    every node before it matches the CPU to about 1e-6). A Pad node appends
-    zero channels to the Conv's input and the weight gets as many zero input
-    channels, so every output value is the same sum as before (plus zeros).
-    Only plain Convs (group 1, weight stored as an initializer) are changed.
-    """
-    opset = next((o.version for o in model.opset_import if o.domain in ("", "ai.onnx")), 0)
-    if opset < 11:
-        raise ValueError(f"Pad with a pads input needs opset 11 or later, the model has {opset}")
-    graph = model.graph
-    initializers = {t.name: t for t in graph.initializer}
-    nodes = []
-    changed = []
-    for node in graph.node:
-        if node.op_type == "Conv" and node.input[1] in initializers:
-            group = next((a.i for a in node.attribute if a.name == "group"), 1)
-            weight = numpy_helper.to_array(initializers[node.input[1]])
-            channels = weight.shape[1]
-            if group == 1 and channels > multiple and channels % multiple:
-                pad = multiple - channels % multiple
-                zeros = np.zeros((weight.shape[0], pad, *weight.shape[2:]), weight.dtype)
-                weight_name = f"{node.input[1]}_cpad"
-                graph.initializer.append(
-                    numpy_helper.from_array(np.concatenate([weight, zeros], axis=1), weight_name)
-                )
-                pads_name = f"{node.name}_cpad_pads"
-                pads = np.zeros(2 * weight.ndim, np.int64)
-                pads[weight.ndim + 1] = pad  # end of axis 1 (channels)
-                graph.initializer.append(numpy_helper.from_array(pads, pads_name))
-                padded = f"{node.input[0]}_cpad_{node.name}"
-                nodes.append(
-                    helper.make_node(
-                        "Pad",
-                        [node.input[0], pads_name],
-                        [padded],
-                        name=f"{node.name}_cpad",
-                        mode="constant",
-                    )
-                )
-                node.input[0] = padded
-                node.input[1] = weight_name
-                changed.append(f"{node.name}: {channels} -> {channels + pad}")
-        nodes.append(node)
-    del graph.node[:]
-    graph.node.extend(nodes)
-    # Drop the original weights nothing reads any more
-    used = {name for node in graph.node for name in node.input}
-    kept = [t for t in graph.initializer if t.name in used]
-    del graph.initializer[:]
-    graph.initializer.extend(kept)
-    return changed
 
 
 def isolate_outputs(model: onnx.ModelProto) -> list[str]:
@@ -397,7 +347,11 @@ def fix_inputs(model: onnx.ModelProto, values: dict[str, float]) -> None:
 def convert(model_def: dict, src: Path, out: Path) -> dict:
     model = onnx.load(str(src))
     removed = keep_only_outputs(model, model_def["keep_outputs"])
-    padded = pad_conv_input_channels(model) if model_def.get("pad_conv_channels") else []
+    padded = (
+        pad_conv_input_channels(model)
+        if model_def.get("pad_conv_channels")
+        else pad_webgpu_conv_hazards(model)
+    )
     steps = "; outputs kept: " + ", ".join(model_def["keep_outputs"])
     if model_def.get("fix_inputs"):
         fix_inputs(model, model_def["fix_inputs"])
@@ -445,6 +399,7 @@ def convert(model_def: dict, src: Path, out: Path) -> dict:
     ):
         model.metadata_props.add(key=key, value=value)
     onnx.checker.check_model(model)
+    assert_no_webgpu_conv_hazards(model, model_def["id"])
     out.parent.mkdir(parents=True, exist_ok=True)
     onnx.save(model, str(out))
     return {

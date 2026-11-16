@@ -53,6 +53,19 @@ export const OBJECT_TRACK_MIN_SCORE_RATIO = 0.93;
 export const OBJECT_WHOLE_MIN_SCORE_RATIO = 0.9;
 
 /**
+ * A correction's anchor frame prompted from its seed (its earlier answer,
+ * see object-seeds.js): 'score' also decodes it without the seed and keeps
+ * the seeded answer only when it scores at least as well; 'off' always
+ * keeps the seeded answer. Measured on 7 targets of the owner's anime clips
+ * (a scripted user, up to 8 corrections; see the PR that added seeds): 'score'
+ * made a few fewer frames worse (25 vs 26 from a click, 18 vs 22 from a box)
+ * but solved one target less from a Whole click and lowered the box start's
+ * worst-frame score (mean 0.49 vs 0.60), so 'off'.
+ * @type {'off' | 'score'}
+ */
+export const OBJECT_SEED_GUARD = 'off';
+
+/**
  * A removed object grows by this many pixels of a 1024-wide mask before it
  * is subtracted, so no fringe of it stays around its edge
  */

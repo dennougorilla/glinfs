@@ -14,7 +14,11 @@
  *   Without any adapter the session is WASM (the test then says so).
  * - 'test': run one generated frame (custom-models.js createTestFrame)
  *   with the settings the user chose and judge the output (NaN, values
- *   outside 0..1, an empty or full mask: assessTestOutput).
+ *   outside 0..1, an empty or full mask: assessTestOutput). On WebGPU, a
+ *   graph with a Conv that onnxruntime-web's WebGPU backend computes wrong
+ *   (onnx-graph.js: kernel above 1 × 1, input channels divisible by 3 and
+ *   not by 4) fails the test with that Conv named, whatever the output
+ *   looks like ('open' already reports such Convs from the graph).
  * - 'save': put the bytes into the model cache under the key the app
  *   loads the model with (nothing leaves the device).
  *
@@ -36,6 +40,11 @@ import {
 } from '../features/ai-cutout/custom-models.js';
 import { MODEL_CACHE_NAME } from '../features/ai-cutout/model-config.js';
 import { downloadUnpinnedModel, toHex } from '../features/ai-cutout/model-loader.js';
+import {
+  assessWebgpuConvs,
+  describeWebgpuConvHazards,
+  findWebgpuConvHazards,
+} from '../features/ai-cutout/onnx-graph.js';
 import { rgbaToChw } from '../features/ai-cutout/preprocess.js';
 import {
   SegmentationError,
@@ -62,6 +71,8 @@ const PROGRESS_INTERVAL_MS = 100;
  * @property {'webgpu' | 'wasm' | null} backend
  * @property {string | null} webgpuError - Why WebGPU could not create the session
  * @property {boolean} hasAdapter
+ * @property {import('../features/ai-cutout/onnx-graph.js').ConvInfo[]} convHazards - Convs
+ *   WebGPU computes wrong (see onnx-graph.js)
  */
 
 /** @type {ProbeState} */
@@ -72,6 +83,7 @@ const state = {
   backend: null,
   webgpuError: null,
   hasAdapter: false,
+  convHazards: [],
 };
 
 /** @type {AbortController | null} */
@@ -261,12 +273,20 @@ async function inspect() {
   const bytes = /** @type {Uint8Array} */ (state.bytes);
   await createSession(bytes);
   const session = state.session;
+  // The session read the file: a protobuf this reader cannot follow only
+  // means no Conv can be checked, not that the model is broken
+  try {
+    state.convHazards = findWebgpuConvHazards(bytes);
+  } catch {
+    state.convHazards = [];
+  }
   return {
     bytes: bytes.byteLength,
     sha256: state.sha256,
     backend: state.backend,
     hasAdapter: state.hasAdapter,
     webgpuError: state.webgpuError,
+    webgpuConvNote: state.convHazards.length ? describeWebgpuConvHazards(state.convHazards) : null,
     graph: {
       inputs: describeValues(session.inputMetadata, session.inputNames),
       outputs: describeValues(session.outputMetadata, session.outputNames),
@@ -288,6 +308,8 @@ async function test({ settings }) {
       backend: state.backend,
     };
   }
+  const conv = assessWebgpuConvs(state.convHazards, state.backend);
+  if (conv) return { ...conv, backend: state.backend };
   const size = settings.inputSize;
   const rgba = createTestFrame(size);
   const { mean, std } = NORMALIZATIONS[settings.normalization];
