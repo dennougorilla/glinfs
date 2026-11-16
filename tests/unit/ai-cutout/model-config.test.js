@@ -28,6 +28,7 @@ import {
 } from '../../../scripts/generate-stub-seg-model.mjs';
 import {
   DEFAULT_MODEL_ID,
+  devModelsEnabled,
   getModelDownloadUrl,
   getModelEntry,
   getModelIds,
@@ -394,6 +395,11 @@ describe('model registry', () => {
       expect(isModelOffered(id, true)).toBe(true);
     }
     expect(isModelOffered('nope', true)).toBe(false);
+    // Development builds, except the E2E suite's dev server
+    expect(devModelsEnabled({ DEV: true })).toBe(true);
+    expect(devModelsEnabled({ DEV: true, VITE_HIDE_DEV_MODELS: '1' })).toBe(false);
+    expect(devModelsEnabled({ DEV: false })).toBe(false);
+    expect(devModelsEnabled({})).toBe(false);
   });
 });
 

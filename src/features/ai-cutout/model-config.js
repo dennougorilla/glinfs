@@ -32,14 +32,26 @@ export {
 } from './model-registry.js';
 
 /**
- * Whether this build offers a model: a development build offers every
- * model, a production build only the `models-v1` release ones (the
- * `devOnly` BiRefNet models are not in the release yet)
- * @param {string} modelId
- * @param {boolean} [dev] - Defaults to Vite's DEV flag
+ * Whether this build offers the development-only models: a development
+ * build does, unless VITE_HIDE_DEV_MODELS=1 (the E2E suite's dev server
+ * sets it, see playwright.config.js: the suite checks the release's model
+ * lists)
+ * @param {Record<string, unknown> | undefined} [env] - Defaults to import.meta.env
  * @returns {boolean}
  */
-export function isModelOffered(modelId, dev = Boolean(import.meta.env?.DEV)) {
+export function devModelsEnabled(env = import.meta.env) {
+  return Boolean(env?.DEV) && env?.VITE_HIDE_DEV_MODELS !== '1';
+}
+
+/**
+ * Whether this build offers a model: a development build offers every
+ * model (see devModelsEnabled), a production build only the `models-v1`
+ * release ones (the `devOnly` BiRefNet models are not in the release yet)
+ * @param {string} modelId
+ * @param {boolean} [dev] - Defaults to devModelsEnabled()
+ * @returns {boolean}
+ */
+export function isModelOffered(modelId, dev = devModelsEnabled()) {
   const entry = MODEL_REGISTRY.find((e) => e.id === modelId);
   return entry ? isEntryOffered(entry, dev) : false;
 }
