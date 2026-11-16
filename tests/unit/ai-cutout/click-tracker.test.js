@@ -539,6 +539,45 @@ describe('trackClicks with seeds (an earlier answer of the object on an anchor f
     expect(calls[0].prompt.points.at(-1)).toEqual({ x: 0.45, y: 0.65, mode: 'remove' });
   });
 
+  it("a new box inside the seed's box is prompted on its own: two different inner boxes give different prompts", async () => {
+    /** @param {[number, number, number, number]} inner */
+    const go = async (inner) => {
+      const box = { frame: 3, x0: inner[0], y0: inner[1], x1: inner[2], y1: inner[3] };
+      const { promise, calls, masks } = run({
+        boxes: [box],
+        seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits, boxes: [inner] } : null),
+      });
+      await promise;
+      return {
+        prompts: calls.filter((c) => c.frame === 3).map((c) => c.prompt),
+        mask: masks.get(3),
+      };
+    };
+    // Both inside the seed's box (4..30 x 4..16 of 40 x 20)
+    const a = await go([0.2, 0.3, 0.3, 0.5]);
+    const b = await go([0.5, 0.4, 0.7, 0.7]);
+    // The seeded prompt is the same for both (the seed's box already holds them) ...
+    expect(a.prompts[0]).toEqual(b.prompts[0]);
+    // ... and each box gets its own prompt: the box, the keep point inside it, no logits
+    expect(a.prompts[1]).toEqual({
+      points: [{ x: 0.3, y: 0.5, mode: 'keep' }],
+      box: [0.2, 0.3, 0.3, 0.5],
+    });
+    expect(b.prompts[1]).toEqual({ points: [], box: [0.5, 0.4, 0.7, 0.7] });
+    expect(a.prompts).not.toEqual(b.prompts);
+    // The answer is the seeded one joined with the box's (Whole: the object)
+    expect(a.mask?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
+  it('a box the seed was made with is not prompted again', async () => {
+    const { promise, calls } = run({
+      boxes: [{ frame: 3, x0: 0.2, y0: 0.3, x1: 0.3, y1: 0.5 }],
+      seedOf: (f) => (f === 3 ? { mask: seedMask(), lowRes: seedLogits, boxes: [] } : null),
+    });
+    await promise;
+    expect(calls.filter((c) => c.frame === 3)).toHaveLength(1);
+  });
+
   it("store gets each answer's low-res logits (for the next run's seeds)", async () => {
     const stored = [];
     const { promise } = run({ store: (f, _mask, lowRes) => stored.push([f, lowRes]) });

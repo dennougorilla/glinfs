@@ -50,6 +50,10 @@ const LOGIT_STEPS = 4;
  * @typedef {Object} Seed
  * @property {{ data: Uint8Array, width: number, height: number }} mask
  * @property {Float32Array | null} lowRes - The answer's low-res logits
+ * @property {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]} newBoxes -
+ *   The boxes of the new prompts that the seed's prompts did not have (each
+ *   is prompted on its own: a box inside the seed's bounds would change
+ *   nothing in the seed's prompt)
  */
 
 /**
@@ -124,36 +128,64 @@ export function extendsPrompts(older, newer) {
 }
 
 /**
+ * The boxes of `newer` that `older` does not have (as a multiset)
+ * @param {SeedPrompts} older
+ * @param {SeedPrompts} newer
+ * @returns {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]}
+ */
+export function addedBoxes(older, newer) {
+  /** @type {Map<string, number>} */
+  const count = new Map();
+  for (const b of older.boxes ?? []) count.set(boxKey(b), (count.get(boxKey(b)) ?? 0) + 1);
+  return (newer.boxes ?? []).filter((b) => {
+    const n = count.get(boxKey(b)) ?? 0;
+    if (n === 0) return true;
+    count.set(boxKey(b), n - 1);
+    return false;
+  });
+}
+
+/**
  * @typedef {Object} ObjectSeeds
- * @property {(objectId: string, frameKey: string, mask: Seed['mask'], lowRes: Float32Array | null, prompts: SeedPrompts) => void} set
- * @property {(objectId: string, frameKey: string, prompts: SeedPrompts) => Seed | null} get -
+ * @property {(clipId: string | undefined, objectId: string, frameKey: string, mask: Seed['mask'], lowRes: Float32Array | null, prompts: SeedPrompts) => void} set
+ * @property {(clipId: string | undefined, objectId: string, frameKey: string, prompts: SeedPrompts) => Seed | null} get -
  *   The seed of a frame when `prompts` extend the ones that made it, else null
- * @property {(objectId: string, frameKey: string) => void} delete - The frame has no
- *   answer of the object's latest prompts (redone or not reached): its older seed goes
- * @property {(objectId: string) => void} dropObject
+ * @property {(clipId: string | undefined, objectId: string, frameKey: string) => void} delete - The
+ *   frame has no answer of the object's latest prompts (redone or not
+ *   reached): its older seed goes
+ * @property {(objectId: string) => void} dropObject - The object was deleted
+ * @property {(clipId: string) => void} dropClip - The clip was released
  * @property {() => void} clear
  * @property {number} bytes
  */
 
 /**
+ * Seeds are kept per clip, object and frame (a frame key is pixel identity,
+ * which two clips may share), so a released clip's seeds can go with it.
  * @param {{ capBytes?: number }} [options]
  * @returns {ObjectSeeds}
  */
 export function createObjectSeeds({ capBytes = OBJECT_SEED_CAP_BYTES } = {}) {
-  /** @type {Map<string, Set<string>>} objectId -> its keys */
-  const keysOf = new Map();
+  /** @type {Map<string, { clipId: string | undefined, objectId: string }>} key -> its owners */
+  const owners = new Map();
   /** @type {import('./byte-lru.js').ByteLru<{ mask: Seed['mask'], lowRes: Int8Array | null, prompts: SeedPrompts }>} */
-  const lru = createByteLru(capBytes, {
-    onEvict: (key) => {
-      const id = key.slice(0, key.indexOf('\u0000'));
-      keysOf.get(id)?.delete(key);
-    },
-  });
-  const keyOf = (/** @type {string} */ objectId, /** @type {string} */ frameKey) =>
-    `${objectId}\u0000${frameKey}`;
+  const lru = createByteLru(capBytes, { onEvict: (key) => owners.delete(key) });
+  const keyOf = (
+    /** @type {string | undefined} */ clipId,
+    /** @type {string} */ objectId,
+    /** @type {string} */ frameKey,
+  ) => `${clipId ?? ''}\u0000${objectId}\u0000${frameKey}`;
+  /** @param {(owner: { clipId: string | undefined, objectId: string }) => boolean} match */
+  const dropWhere = (match) => {
+    for (const [key, owner] of [...owners]) {
+      if (!match(owner)) continue;
+      lru.delete(key);
+      owners.delete(key);
+    }
+  };
   return {
-    set(objectId, frameKey, mask, lowRes, prompts) {
-      const key = keyOf(objectId, frameKey);
+    set(clipId, objectId, frameKey, mask, lowRes, prompts) {
+      const key = keyOf(clipId, objectId, frameKey);
       const value = {
         mask,
         lowRes: lowRes ? quantizeLogits(lowRes) : null,
@@ -165,32 +197,31 @@ export function createObjectSeeds({ capBytes = OBJECT_SEED_CAP_BYTES } = {}) {
         },
       };
       const bytes = mask.data.byteLength + (value.lowRes?.byteLength ?? 0) + 256;
-      if (lru.set(key, value, bytes)) {
-        let keys = keysOf.get(objectId);
-        if (!keys) {
-          keys = new Set();
-          keysOf.set(objectId, keys);
-        }
-        keys.add(key);
-      }
+      if (lru.set(key, value, bytes)) owners.set(key, { clipId, objectId });
     },
-    get(objectId, frameKey, prompts) {
-      const entry = lru.get(keyOf(objectId, frameKey));
+    get(clipId, objectId, frameKey, prompts) {
+      const entry = lru.get(keyOf(clipId, objectId, frameKey));
       if (!entry || !extendsPrompts(entry.prompts, prompts)) return null;
-      return { mask: entry.mask, lowRes: entry.lowRes ? dequantizeLogits(entry.lowRes) : null };
+      return {
+        mask: entry.mask,
+        lowRes: entry.lowRes ? dequantizeLogits(entry.lowRes) : null,
+        newBoxes: addedBoxes(entry.prompts, prompts),
+      };
     },
-    delete(objectId, frameKey) {
-      const key = keyOf(objectId, frameKey);
+    delete(clipId, objectId, frameKey) {
+      const key = keyOf(clipId, objectId, frameKey);
       lru.delete(key);
-      keysOf.get(objectId)?.delete(key);
+      owners.delete(key);
     },
     dropObject(objectId) {
-      for (const key of keysOf.get(objectId) ?? []) lru.delete(key);
-      keysOf.delete(objectId);
+      dropWhere((owner) => owner.objectId === objectId);
+    },
+    dropClip(clipId) {
+      dropWhere((owner) => owner.clipId === clipId);
     },
     clear() {
       lru.clear();
-      keysOf.clear();
+      owners.clear();
     },
     get bytes() {
       return lru.bytes;

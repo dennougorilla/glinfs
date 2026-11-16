@@ -585,4 +585,74 @@ describe('SegmentationManager.analyzeObject: seeds (a correction refines the ear
     });
     expect(h.workers[0].prompts.slice(before)[0].maskInput).toBeNull();
   });
+
+  it('a correction box inside the earlier answer is prompted on its own: two inner boxes, two prompts', async () => {
+    /** @param {{ x0: number, y0: number, x1: number, y1: number }} inner */
+    const go = async (inner) => {
+      const h = harness();
+      await h.manager.analyzeObject(h.frames, {
+        ...base,
+        currentFrame: 0,
+        clicks: [k0],
+        scope: 'whole',
+        tag: 't1',
+      });
+      const before = h.workers[0].prompts.length;
+      await h.manager.analyzeObject(h.frames, {
+        ...base,
+        currentFrame: 0,
+        clicks: [k0],
+        boxes: [{ frame: 0, ...inner }],
+        scope: 'whole',
+        tag: 't2',
+      });
+      return h.workers[0].prompts.slice(before);
+    };
+    const a = await go({ x0: 0.45, y0: 0.45, x1: 0.5, y1: 0.5 });
+    const b = await go({ x0: 0.5, y0: 0.5, x1: 0.55, y1: 0.55 });
+    // The seeded prompt of frame 0, then the new box on its own (labels 2, 3, no logits)
+    expect(a[0].maskInput).toBeInstanceOf(Float32Array);
+    expect(a[1].maskInput).toBeNull();
+    expect([...a[1].labels].slice(-2)).toEqual([2, 3]);
+    expect(promptsOf([a[1]])).not.toEqual(promptsOf([b[1]]));
+  });
+
+  it("seeds are kept per clip, and a released clip's seeds go (forgetClip)", async () => {
+    const h = harness();
+    const first = { ...base, currentFrame: 0, clicks: [k0], scope: 'whole', tag: 't1' };
+    const correction = { ...base, currentFrame: 3, clicks: [k0, k3], scope: 'whole', tag: 't2' };
+    await h.manager.analyzeObject(h.frames, first);
+    // The same object id and frames in another clip: no seed
+    let before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, { ...correction, clipId: 'other' });
+    expect(h.workers[0].prompts.slice(before)[0].maskInput).toBeNull();
+    // Released: its seeds are gone with it
+    h.manager.forgetClip('clip');
+    before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, correction);
+    expect(h.workers[0].prompts.slice(before)[0].maskInput).toBeNull();
+  });
+
+  it('dispose() drops the seeds', async () => {
+    const h = harness();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    h.manager.dispose();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    const worker = h.workers.at(-1);
+    expect(worker).not.toBe(h.workers[0]);
+    expect(worker?.prompts[0].maskInput).toBeNull();
+    expect(worker?.prompts[1].maskInput).toBeNull();
+  });
 });

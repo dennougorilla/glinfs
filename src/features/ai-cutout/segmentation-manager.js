@@ -891,11 +891,21 @@ export class SegmentationManager {
               const { objectId, prompts } = /** @type {NonNullable<typeof options.seeds>} */ (
                 options.seeds
               );
-              const seed = this.#objectSeeds.get(objectId, keyOf(frames[f]), prompts);
+              const seed = this.#objectSeeds.get(clipId, objectId, keyOf(frames[f]), prompts);
               const size = maskSizeOf(frames[f]);
-              return seed && seed.mask.width === size.width && seed.mask.height === size.height
-                ? seed
-                : null;
+              if (!seed || seed.mask.width !== size.width || seed.mask.height !== size.height) {
+                return null;
+              }
+              return {
+                mask: seed.mask,
+                lowRes: seed.lowRes,
+                boxes: seed.newBoxes
+                  .filter((b) => b.frame === f)
+                  .map(
+                    (b) =>
+                      /** @type {[number, number, number, number]} */ ([b.x0, b.y0, b.x1, b.y1]),
+                  ),
+              };
             }
           : undefined,
         seedGuard: OBJECT_SEED_GUARD,
@@ -904,12 +914,14 @@ export class SegmentationManager {
           this.#maskStore.set(keyOf(frames[f]), mask, clipId, group, options.tag);
           if (options.seeds) {
             const { objectId, prompts } = options.seeds;
-            this.#objectSeeds.set(objectId, keyOf(frames[f]), mask, lowRes, prompts);
+            this.#objectSeeds.set(clipId, objectId, keyOf(frames[f]), mask, lowRes, prompts);
           }
         },
         clear: (f) => {
           this.#maskStore.delete(keyOf(frames[f]));
-          if (options.seeds) this.#objectSeeds.delete(options.seeds.objectId, keyOf(frames[f]));
+          if (options.seeds) {
+            this.#objectSeeds.delete(clipId, options.seeds.objectId, keyOf(frames[f]));
+          }
         },
         // A frame with only remove points starts from the mask it has, but
         // only one its current prompts made (a tracked object's tag): a mask
@@ -1306,11 +1318,13 @@ export class SegmentationManager {
    * A clip is gone for good (its deletion can no longer be undone): masks
    * of its frames that are still in the worker are dropped when they
    * arrive, instead of recreating the clip's group in the mask store after
-   * its masks were deleted (nothing would ever release them again).
+   * its masks were deleted (nothing would ever release them again). Its
+   * tracked objects' seeds go too.
    * @param {string} clipId
    */
   forgetClip(clipId) {
     this.#releasedClips.add(clipId);
+    this.#objectSeeds.dropClip(clipId);
   }
 
   /**
@@ -1460,6 +1474,7 @@ export class SegmentationManager {
   dispose() {
     this.#teardown(createAbortError('Segmentation manager disposed'));
     this.#cancelledJobs.clear();
+    this.#objectSeeds.clear();
   }
 }
 

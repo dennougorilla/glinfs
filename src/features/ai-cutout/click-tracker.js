@@ -32,7 +32,10 @@
  *    (stretched over the new keep points and boxes), its inside and
  *    background points except those right at a new point, the frame's own
  *    points, and its low-res logits as `mask_input`; the best-scoring
- *    answer is kept (refineAnchorPrompt). A correction then refines what
+ *    answer is kept (refineAnchorPrompt). A box the earlier prompts did not
+ *    have is also prompted on its own (with the keep points inside it and
+ *    the frame's remove points) and joined to that answer, as boxes are
+ *    without a seed: inside the answer's box it would change nothing there. A correction then refines what
  *    the frame showed instead of starting over from its own points (which
  *    answers a click beside a region with that piece alone, or the whole
  *    frame). A frame with only remove points starts from its seed's mask
@@ -110,9 +113,10 @@ import {
  * @property {(frameIndex: number) => void} clear - Drop a frame's mask (no-op when none)
  * @property {(frameIndex: number) => ClickMask | null} [peek] - The mask a frame has
  *   before this run, to refine a frame that has only remove points
- * @property {(frameIndex: number) => { mask: ClickMask, lowRes: Float32Array | null } | null} [seedOf] -
+ * @property {(frameIndex: number) => { mask: ClickMask, lowRes: Float32Array | null, boxes?: SamBox[] } | null} [seedOf] -
  *   An answer on the frame from earlier prompts that these extend (see
- *   object-seeds.js): prompts the frame when it is an anchor, never stored
+ *   object-seeds.js): prompts the frame when it is an anchor, never stored.
+ *   boxes: the frame's boxes the earlier prompts did not have
  * @property {'off' | 'score'} [seedGuard] - 'score': an anchor prompted from
  *   its seed is also decoded without it, and the seeded answer is kept only
  *   when its predicted IoU is not lower
@@ -457,6 +461,20 @@ export async function trackClicks({
         throwIfAborted(signal);
         const best = bestScoring(candidates);
         if (maskStats(best.data, best.width, best.height).area > 0) seeded = best;
+        // A new box on its own, joined: inside the seed's box it would not
+        // change the prompt above, so it could not pick a part it missed
+        if (seeded && seed.boxes?.length) {
+          const fresh = splitAnchorPrompts({ points: anchor.points, boxes: seed.boxes }).filter(
+            (p) => p.box,
+          );
+          const boxed = [];
+          for (const p of fresh) {
+            const answers = await prompt(anchor.frame, p);
+            throwIfAborted(signal);
+            boxed.push(chooseCandidate(answers, { scope: 'whole', wholeMinScoreRatio }));
+          }
+          seeded = joinCandidates([seeded, ...boxed]);
+        }
         if (seeded && seedGuard !== 'score') {
           const { area } = maskStats(seeded.data, seeded.width, seeded.height);
           record(anchor.frame, toMask(seeded), area, seeded.lowRes ?? null, seeded.score);
