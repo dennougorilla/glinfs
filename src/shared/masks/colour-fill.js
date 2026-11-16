@@ -49,28 +49,56 @@ export const COLOUR_SAMPLES_PER_POINT = 48;
 export const COLOUR_GUARD_SHARE = 0.1;
 
 /**
- * What a point samples: the colours within this share of the tolerance (at
- * least COLOUR_TOLERANCE.min) of the one under its centre, connected to it
- * (see samplePoint). A flat leftover lies well inside it (GIF noise is a
- * few RGB steps).
+ * Share of the region a dither's other colour covers at least, and how
+ * densely it fills its own bounding box: a dither interleaves it in two
+ * dimensions (a checkerboard: about half), while a jag, a strand's tip, a
+ * speck (1-2 pixels) or a 1-pixel strand crossing the disc (a line: about
+ * 1 / its length of its box) does not
  */
-export const COLOUR_SAMPLE_CORE = 0.5;
+export const COLOUR_DITHER_MIN_SHARE = 0.2;
 
 /**
- * The colour distance a point samples within (see COLOUR_SAMPLE_CORE)
- * @param {number} tolerance
- * @returns {number}
+ * Whether pixels of one colour family, each with 3-4 neighbours in a
+ * point's region, are the other colour of a dither
+ * @param {number[]} family - pixel indices
+ * @param {number} width
+ * @param {number} regionSize
+ * @returns {boolean}
  */
-export function getCoreTolerance(tolerance) {
-  return Math.max(COLOUR_TOLERANCE.min, tolerance * COLOUR_SAMPLE_CORE);
+function isDitherFamily(family, width, regionSize) {
+  if (family.length < 3 || family.length < COLOUR_DITHER_MIN_SHARE * regionSize) return false;
+  let x0 = Number.POSITIVE_INFINITY;
+  let x1 = -1;
+  let y0 = Number.POSITIVE_INFINITY;
+  let y1 = -1;
+  for (const i of family) {
+    const x = i % width;
+    const y = (i - x) / width;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const box = (x1 - x0 + 1) * (y1 - y0 + 1);
+  return x1 > x0 && y1 > y0 && family.length >= COLOUR_DITHER_MIN_SHARE * box;
 }
 
 /**
- * The guard counts a removed pixel farther than this from every sampled
- * colour as a colour the points did not sample (half the default
- * tolerance: below a tolerance of 16 nothing counts)
+ * "Near" in colour, Euclidean RGB, whatever the tolerance:
+ * - a point samples the colours within this of the one under its centre,
+ *   connected to it (see samplePoint): the leftover and its noise, never
+ *   what lies across an edge (half the tolerance, as before, reached 48 at
+ *   the top of the slider, and with noise of +-3 took in a pillar 16 RGB
+ *   from a protected strand at 32);
+ * - the guard counts a removed pixel farther than this from every sampled
+ *   colour as a colour the points did not sample.
+ * It has to stay above what the same leftover drifts by between frames:
+ * per-frame GIF palettes and noise (a generated drift of +-6 per channel
+ * and frame plus noise of +-3 reached 10 RGB; 8 raised false alarms on
+ * it). A subject within this distance of the leftover's colour is not seen
+ * by colour at all (see getColourGuardShares).
  */
-export const COLOUR_GUARD_NEAR = 16;
+export const COLOUR_NEAR = 12;
 
 /**
  * Pack an RGB colour into one integer
@@ -152,7 +180,8 @@ function pixelDistSq(rgba, i, j) {
  * under its centre, and their colours (most frequent first, at most
  * COLOUR_SAMPLES_PER_POINT). The region is the disc pixels within `near`
  * of the centre's colour and 8-connected to it, plus disc pixels with at
- * least 3 of their 4 neighbours in it (the other colour of a dither). A
+ * least 3 of their 4 neighbours in it whose colour forms a texture (the
+ * other colour of a dither; see isDitherFamily). A
  * point near the subject's edge (or a protect point on a thin strand next
  * to a pillar) so never samples what lies across the edge.
  * @param {Uint8ClampedArray | Uint8Array} rgba - width * height * 4
@@ -186,6 +215,11 @@ export function samplePoint(rgba, width, height, point, radius, near) {
   }
   /** @type {number[]} */
   const pixels = [...region];
+  // The other colour of a dither: disc pixels with at least 3 of their 4
+  // neighbours in the region, kept only when their colour forms a texture
+  // there (see isDitherFamily), not a jag, a strand's tip or a speck
+  /** @type {number[]} */
+  const partners = [];
   for (const i of disc) {
     if (region.has(i)) continue;
     const x = i % width;
@@ -194,7 +228,11 @@ export function samplePoint(rgba, width, height, point, radius, near) {
     if (x < width - 1 && region.has(i + 1)) around++;
     if (region.has(i - width)) around++;
     if (region.has(i + width)) around++;
-    if (around >= 3) pixels.push(i);
+    if (around >= 3) partners.push(i);
+  }
+  for (const i of partners) {
+    const family = partners.filter((j) => pixelDistSq(rgba, i, j) <= near2);
+    if (isDitherFamily(family, width, region.size)) pixels.push(i);
   }
   /** @type {Map<number, number>} */
   const counts = new Map();
@@ -232,7 +270,7 @@ function nearestSq(c, colours) {
 
 /** A colour the fill stops at */
 export const COLOUR_STOP = 0;
-/** A colour the fill removes, near a sampled colour (see COLOUR_GUARD_NEAR) */
+/** A colour the fill removes, near a sampled colour (see COLOUR_NEAR) */
 export const COLOUR_REMOVE = 1;
 /**
  * A colour within the tolerance of a sampled colour but protected: the
@@ -259,7 +297,7 @@ export const COLOUR_REMOVE_FAR = 3;
  */
 export function createColourMatcher(samples, protects, tolerance) {
   const t2 = tolerance * tolerance;
-  const near2 = COLOUR_GUARD_NEAR * COLOUR_GUARD_NEAR;
+  const near2 = COLOUR_NEAR * COLOUR_NEAR;
   /** @type {Map<number, number>} */
   const memo = new Map();
   return (c) => {
@@ -344,40 +382,28 @@ export function fillColourRegion(
  */
 
 /**
- * The guard's share per frame, of the cutout the fill is applied to there
- * (the subject plus the leftover), the larger of:
- * - what it removes that is not near any sampled colour: a colour the
- *   points did not sample (shelf rows that run into the shirt);
- * - what it removes beyond what it removes on the reference frame (the
- *   nearest point frame with a cutout, else the median frame): the subject
- *   moving onto the leftover, a cut. The background of a shot hardly moves
- *   (87-100 % of it within 8/255 of the median in the bake-off clips), so
- *   the leftover takes about the same share on every frame.
- * Shares, not positions, so a subject that moves is still seen.
+ * The guard's share per frame: what the fill removes there in colours the
+ * points did not sample (farther than COLOUR_NEAR from all of them),
+ * of the subject as far as colour can tell (what the fill leaves, plus
+ * that). Shelf rows that run into the shirt, a subject of another colour
+ * that moves onto the leftover, a cut: on every frame on its own, whatever
+ * the other frames hold, so a subject that grows, shrinks or leaves, a
+ * leftover that grows, or a point frame without a mask change nothing.
+ *
+ * What it cannot see, by construction: a subject within COLOUR_NEAR
+ * of the leftover's colours. Its pixels are those of more leftover (a
+ * leftover that grows looks the same), so no statistic of colours, counts
+ * or positions tells them apart. It also counts the far end of a leftover
+ * whose colours run beyond the disc (a lit wall at a high tolerance).
  * @param {Map<number, ColourFrameStats>} stats - per frame the fill ran on
- * @param {number[]} pointFrames - frames of the fix-up's points
  * @returns {Map<number, number>} frame -> share 0..1
  */
-export function getColourGuardShares(stats, pointFrames) {
+export function getColourGuardShares(stats) {
   /** @type {Map<number, number>} */
   const shares = new Map();
-  /** @type {Map<number, number>} */
-  const removedShare = new Map();
-  for (const [f, s] of stats) if (s.mask > 0) removedShare.set(f, s.removed / s.mask);
-  if (removedShare.size === 0) return shares;
-  const refs = [...new Set(pointFrames)].filter((f) => removedShare.has(f));
-  const sorted = [...removedShare.values()].sort((a, b) => a - b);
-  const median = sorted[Math.floor((sorted.length - 1) / 2)];
   for (const [f, s] of stats) {
-    const share = removedShare.get(f);
-    if (share === undefined) continue;
-    let reference = median;
-    if (refs.length > 0) {
-      let ref = refs[0];
-      for (const r of refs) if (Math.abs(r - f) < Math.abs(ref - f)) ref = r;
-      reference = /** @type {number} */ (removedShare.get(ref));
-    }
-    shares.set(f, Math.max(s.far / s.mask, share - reference, 0));
+    const subject = s.mask - s.removed + s.far;
+    shares.set(f, subject > 0 ? s.far / subject : 0);
   }
   return shares;
 }

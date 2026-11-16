@@ -1306,10 +1306,16 @@ export function renderBackgroundPanel(handlers) {
   );
   cleanups.push(
     on(objectLostGo, 'click', () => {
-      const id = objectLostGo.dataset.objectId;
-      const frame = objectLostGo.dataset.frame;
-      if (id && frame) handlers.onGoToColourGuard?.(id, Number(frame));
-      else if (id) handlers.onGoToObjectLost?.(id);
+      // One notice may hold a lost fix-up and a Colour warning: each click
+      // goes to the next of them
+      /** @type {{ id: string, frame?: number }[]} */
+      const targets = JSON.parse(objectLostGo.dataset.targets || '[]');
+      if (targets.length === 0) return;
+      const next = Number(objectLostGo.dataset.next || 0) % targets.length;
+      objectLostGo.dataset.next = String((next + 1) % targets.length);
+      const target = targets[next];
+      if (target.frame !== undefined) handlers.onGoToColourGuard?.(target.id, target.frame);
+      else handlers.onGoToObjectLost?.(target.id);
     }),
   );
   const objectLost = createElement(
@@ -1885,26 +1891,33 @@ export function updateBackgroundPanel(container, state, fps) {
     setValue(input, String(selected.tolerance));
     input.setAttribute('aria-valuetext', String(selected.tolerance));
   }
-  // The notice: a tracked fix-up that lost its object (certain), else a
-  // Colour one that takes much of the cutout somewhere (an estimate)
+  // The notice: a tracked fix-up that lost its object and a Colour one
+  // that takes much of the subject somewhere, both when both (a fix-up whose
+  // object left the shot stays lost to the end and must not hide the other)
   const lostObject =
     isAi && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)
       : null;
-  const guard =
-    isAi && !lostObject ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
+  const guard = isAi ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
   setHidden(q(root, '#ai-object-lost'), !lostObject && !guard);
   setText(
     q(root, '#ai-object-lost-text'),
-    lostObject
-      ? getObjectLostText(lostObject.object, lostObject.frames, fps)
-      : guard
-        ? getColourGuardText(guard, fps)
-        : '',
+    [
+      lostObject ? getObjectLostText(lostObject.object, lostObject.frames, fps) : '',
+      guard ? getColourGuardText(guard, fps) : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
   );
   const go = /** @type {HTMLElement} */ (q(root, '#ai-object-lost-go'));
-  go.dataset.objectId = lostObject?.object.id ?? guard?.object.id ?? '';
-  go.dataset.frame = guard ? String(guard.frame) : '';
+  const targets = JSON.stringify([
+    ...(lostObject ? [{ id: lostObject.object.id }] : []),
+    ...(guard ? [{ id: guard.object.id, frame: guard.frame }] : []),
+  ]);
+  if (go.dataset.targets !== targets) {
+    go.dataset.targets = targets;
+    go.dataset.next = '0';
+  }
 
   setHidden(q(root, '#background-alpha-note'), !state.clip?.hasAlpha);
 

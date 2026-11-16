@@ -1003,29 +1003,43 @@ describe('tracked objects', () => {
     expect($('#ai-object-lost').textContent).not.toContain('Colour takes');
   });
 
-  it('shows a tracked fix-up that lost its object before a Colour warning', () => {
+  it('shows a lost tracked fix-up and a Colour warning together; Go there takes turns (C)', () => {
+    // A bystander that left the shot stays lost to the end of the selection:
+    // the Colour warning must not hide behind it
     const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
     const tracked = object('b', 'remove', 5);
     const shares = new Array(40).fill(0);
     shares[25] = 0.38;
+    const lostToEnd = Array.from({ length: 28 }, (_, i) => 12 + i);
     const status = {
       ...createAiCutoutStatus(),
       colourShares: { a: shares },
-      objectLost: { a: [4], b: [12] },
+      objectLost: { a: [4], b: lostToEnd },
     };
     updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
-    expect($('#ai-object-lost').textContent).toContain('What you removed was lost at 01:02.');
-    expect($('#ai-object-lost').textContent).not.toContain('Colour takes');
+    const text = $('#ai-object-lost').textContent;
+    expect(text).toContain('What you removed was lost at 28 places, first at 01:02.');
+    expect(text).toContain('Colour takes 38% of the subject at 02:05.');
     $('#ai-object-lost-go').click();
-    expect(handlers.onGoToObjectLost).toHaveBeenCalledWith('b');
-    expect(handlers.onGoToColourGuard).not.toHaveBeenCalled();
-    // Found again: the Colour warning shows (the Colour fix-up's own lost frames never count)
+    expect(handlers.onGoToObjectLost).toHaveBeenLastCalledWith('b');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenLastCalledWith('a', 25);
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToObjectLost).toHaveBeenCalledTimes(2);
+    // The same notice again does not restart the turns; a new one does
+    updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenCalledTimes(2);
+    // Found again: only the Colour warning (the Colour fix-up's own lost frames never count)
     updateBackgroundPanel(
       root,
       stateWith([colour, tracked], { aiCutout: { ...status, objectLost: { a: [4] } } }),
       10,
     );
-    expect($('#ai-object-lost').textContent).toContain('Colour takes 38% of the subject at 02:05.');
+    expect($('#ai-object-lost').textContent).not.toContain('was lost');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenLastCalledWith('a', 25);
+    expect(handlers.onGoToObjectLost).toHaveBeenCalledTimes(2);
   });
 
   it('says when the tracked fix-ups are full; Keep / Remove stay on for picks', () => {

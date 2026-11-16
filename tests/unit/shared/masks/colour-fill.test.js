@@ -8,6 +8,7 @@ import {
   COLOUR_GUARD_SHARE,
   COLOUR_PASS,
   COLOUR_REMOVE,
+  COLOUR_REMOVE_FAR,
   COLOUR_STOP,
   createColourMatcher,
   fillColourRegion,
@@ -45,14 +46,15 @@ const character = /** @type {Paint[]} */ ([
  * probability (230 on everything painted with inMask, 10 elsewhere)
  * @param {Paint[]} paints
  * @param {number} seed
+ * @param {number} [amount] - noise, +- RGB steps per channel
  */
-function makeFrame(paints, seed) {
+function makeFrame(paints, seed, amount = 3) {
   const rgba = new Uint8ClampedArray(W * H * 4);
   const prob = new Uint8Array(W * H).fill(10);
   let s = seed >>> 0;
   const noise = () => {
     s = (s * 1664525 + 1013904223) >>> 0;
-    return Math.round((s / 2 ** 32) * 6 - 3);
+    return Math.round((s / 2 ** 32) * 2 * amount - amount);
   };
   for (let i = 0; i < W * H; i++) {
     for (let k = 0; k < 3; k++) rgba[i * 4 + k] = BG[k] + noise();
@@ -187,8 +189,8 @@ describe('fillColourRegion', () => {
     expect(matches(packRgb(82, 52, 36))).toBe(COLOUR_REMOVE);
     expect(matches(packRgb(70, 44, 31))).toBe(COLOUR_PASS);
     expect(matches(packRgb(200, 200, 200))).toBe(COLOUR_STOP);
-    // Without the protect colour the hair goes too
-    expect(createColourMatcher([near], [], 32)(packRgb(70, 44, 31))).toBe(COLOUR_REMOVE);
+    // Without the protect colour the hair goes too (12.3 RGB away: the guard counts it)
+    expect(createColourMatcher([near], [], 32)(packRgb(70, 44, 31))).toBe(COLOUR_REMOVE_FAR);
   });
 
   it('passes through protected pixels without removing them', () => {
@@ -367,23 +369,20 @@ describe('Colour fix-ups in a build', () => {
 });
 
 describe('getColourGuardShares', () => {
-  it('takes what a frame removes beyond the reference frame, or colours not sampled', () => {
+  it('is what a frame removes in colours not sampled, of what it leaves plus that', () => {
     const stats = new Map([
       [0, { mask: 1000, removed: 300, far: 0 }],
-      [1, { mask: 1000, removed: 320, far: 0 }],
-      [4, { mask: 1000, removed: 700, far: 0 }],
-      [5, { mask: 1000, removed: 300, far: 250 }],
+      [1, { mask: 2000, removed: 1600, far: 0 }],
+      [2, { mask: 1000, removed: 500, far: 100 }],
+      [3, { mask: 400, removed: 400, far: 0 }],
     ]);
-    const shares = getColourGuardShares(stats, [0]);
+    const shares = getColourGuardShares(stats);
     expect(shares.get(0)).toBe(0);
-    expect(shares.get(1)).toBeCloseTo(0.02);
-    expect(shares.get(4)).toBeCloseTo(0.4);
-    expect(shares.get(5)).toBe(0.25);
-    // The point's frame not measured (not analysed): the median frame is the reference
-    stats.delete(0);
-    const median = getColourGuardShares(stats, [0]);
-    expect(median.get(1)).toBe(0);
-    expect(median.get(4)).toBeCloseTo(0.38);
+    // More removed than elsewhere, but all of sampled colours: nothing to say
+    expect(shares.get(1)).toBe(0);
+    expect(shares.get(2)).toBeCloseTo(100 / 600);
+    // The whole cutout removed in sampled colours (the subject left): 0
+    expect(shares.get(3)).toBe(0);
   });
 });
 
@@ -509,6 +508,164 @@ describe('Review #197 round 1', () => {
     const region = getColourRegion(options, object.input, 5);
     expect(reads).toEqual([5]);
     expect(region?.data[20 * W + 40]).toBe(255);
+  });
+});
+
+describe('Review #197 round 2', () => {
+  /**
+   * A clip of explicit frames
+   * @param {(f: number) => Paint[]} paints - everything on frame f
+   * @param {number} [noise]
+   */
+  const clipOf = (paints, noise = 3) => {
+    const frames = Array.from({ length: FRAMES }, (_, f) => makeFrame(paints(f), 11 + f, noise));
+    return {
+      getProb: (/** @type {number} */ f) => frames[f].prob,
+      getPixels: (/** @type {number} */ f) => frames[f].rgba,
+    };
+  };
+  const WALL = [200, 170, 140];
+  /** @type {Rect} */
+  const LEFTOVER = [32, 6, 14, 22];
+  const withLeftover = (/** @type {Paint[]} */ extra) => () => [
+    ...character,
+    { rect: LEFTOVER, color: WALL },
+    ...extra,
+  ];
+
+  // A: one subject-coloured pixel in the disc; the shirt ends at x = 31
+  for (const [name, extra, at] of /** @type {[string, Paint[], [number, number]][]} */ ([
+    ['a 1-pixel jag of the shirt edge', [{ rect: [32, 16, 1, 1], color: SHIRT }], [35, 16]],
+    ['the tip of a 1-pixel shirt strand', [{ rect: [32, 16, 4, 1], color: SHIRT }], [38, 16]],
+    ['an isolated shirt-coloured speck', [{ rect: [37, 14, 1, 1], color: SHIRT }], [39, 16]],
+  ])) {
+    it(`A: ${name} in the disc is not sampled; the shirt stays`, async () => {
+      const result = await build(
+        clipOf(withLeftover(extra)),
+        colourObject([{ frame: 0, x: at[0], y: at[1] }]),
+      );
+      for (const mask of result.masks) {
+        expect(keptIn(mask, SHIRT_RECT)).toBe(1);
+        expect(keptIn(mask, [40, 8, 6, 18])).toBe(0);
+      }
+    });
+  }
+
+  it("A: a pillar-coloured speck inside the protected strand does not protect the pillar (round 1's 4)", async () => {
+    const PILLAR = [90, 60, 40];
+    /** @type {Rect} */
+    const PILLAR_RECT = [44, 0, 12, 32];
+    /** @type {Rect} */
+    const STRAND_RECT = [41, 4, 3, 24];
+    const clip = clipOf(() => [
+      ...character,
+      { rect: STRAND_RECT, color: [100, 70, 48] },
+      { rect: [42, 14, 1, 1], color: PILLAR },
+      { rect: PILLAR_RECT, color: PILLAR },
+    ]);
+    const result = await build(
+      clip,
+      colourObject([
+        { frame: 0, x: 50, y: 16 },
+        { frame: 0, x: 42, y: 16, mode: 'remove' },
+      ]),
+    );
+    for (const mask of result.masks) expect(keptIn(mask, PILLAR_RECT)).toBe(0);
+  });
+
+  it('B: an arm that reaches the wall after the point frame is flagged, whatever the size change', async () => {
+    // The reviewer's case: a small person far away on the point frame, close
+    // with a skin-coloured arm (13 RGB from the wall) on frames 3-5
+    const clip = clipOf(
+      (f) =>
+        /** @type {Paint[]} */ ([
+          f < 3 ? { rect: [2, 20, 6, 10], color: SHIRT } : { rect: [4, 4, 24, 26], color: SHIRT },
+          ...(f < 3 ? [] : [{ rect: [28, 12, 12, 8], color: [210, 176, 146] }]),
+          { rect: [40, 4, 20, 24], color: WALL },
+        ]),
+      0,
+    );
+    const result = await build(clip, colourObject([{ frame: 0, x: 50, y: 16 }]));
+    const shares = result.colourShares.c1;
+    for (let f = 0; f < FRAMES; f++) {
+      if (f < 3) expect(shares[f]).toBe(0);
+      else {
+        expect(keptIn(result.masks[f], [28, 12, 12, 8])).toBe(0);
+        expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+      }
+    }
+  });
+
+  for (const [name, paints] of /** @type {[string, (f: number) => Paint[]][]} */ ([
+    [
+      'the subject leaves the frame',
+      (f) => [
+        { rect: [20 - 8 * f, 10, 12, 20], color: SHIRT },
+        { rect: LEFTOVER, color: WALL },
+      ],
+    ],
+    [
+      'the subject shrinks',
+      (f) => [
+        { rect: [20, 10, 12 - 2 * f, 20], color: SHIRT },
+        { rect: LEFTOVER, color: WALL },
+      ],
+    ],
+    ['the leftover grows', (f) => [...character, { rect: [32, 6, 4 + 4 * f, 22], color: WALL }]],
+  ])) {
+    it(`B: no alarm when ${name} and nothing of it is eaten`, async () => {
+      const result = await build(clipOf(paints), colourObject([{ frame: 0, x: 33, y: 16 }]));
+      for (let f = 0; f < FRAMES; f++) {
+        const shares = result.colourShares.c1;
+        expect(shares[f]).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+      }
+    });
+  }
+
+  it("B: most frames bad with the point frame unanalysed are all flagged (round 1's 3)", async () => {
+    const SKIN = [230, 195, 160];
+    const clip = clipOf((f) => [
+      { rect: [f < 2 ? 2 : 32, 4, 12, 24], color: SKIN },
+      { rect: [44, 4, 14, 24], color: WALL },
+    ]);
+    const object = colourObject([{ frame: 0, x: 50, y: 16 }], 64);
+    const result = await buildFinalMasks({
+      frameCount: FRAMES,
+      getProb: (f) => (f === 0 ? null : clip.getProb(f)),
+      getPixels: clip.getPixels,
+      ai: aiOf({ objects: [object.edit] }),
+      objects: [object.input],
+      ...noYield,
+    });
+    const shares = result.colourShares.c1;
+    expect(shares[0]).toBe(-1);
+    expect(shares[1]).toBe(0);
+    for (let f = 2; f < FRAMES; f++) {
+      expect(keptIn(result.masks[f], [32, 4, 12, 24])).toBe(0);
+      expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+    }
+  });
+
+  it('limit: a subject of nearly the leftover colour looks exactly like more leftover', async () => {
+    // Pixel for pixel the same clip: one reads as a person (8 RGB from the
+    // wall) walking onto it, the other as the wall growing. No guard by
+    // colour can flag the first without flagging the second.
+    const NEAR_WALL = [205, 174, 143];
+    const person = await build(
+      clipOf(withLeftover([]), 3),
+      colourObject([{ frame: 0, x: 40, y: 16 }]),
+    );
+    const walksOn = await build(
+      clipOf((f) => [
+        ...character,
+        { rect: LEFTOVER, color: WALL },
+        ...(f >= 3 ? [{ rect: /** @type {Rect} */ ([46, 6, 8, 22]), color: NEAR_WALL }] : []),
+      ]),
+      colourObject([{ frame: 0, x: 40, y: 16 }]),
+    );
+    expect(Math.max(...person.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+    expect(keptIn(walksOn.masks[4], [46, 6, 8, 22])).toBe(0);
+    expect(Math.max(...walksOn.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
   });
 });
 

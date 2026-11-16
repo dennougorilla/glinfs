@@ -23,10 +23,10 @@
 
 import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
+  COLOUR_NEAR,
   createColourMatcher,
   fillColourRegion,
   getColourGuardShares,
-  getCoreTolerance,
   getDiscPixels,
   getSampleRadius,
   samplePoint,
@@ -557,8 +557,8 @@ function getFillScratch(size) {
 
 /**
  * Sample the points of a Colour fix-up on the frames they were placed on.
- * Memoized by the frames' identity (PixelSource.frameKey), the points, the
- * tolerance and the size.
+ * Memoized by the frames' identity (PixelSource.frameKey), the points and
+ * the size (not the tolerance: a drag of Similar colors re-samples nothing).
  * @param {NonNullable<ObjectMaskInput['colour']>} colour
  * @param {PixelSource} getPixels
  * @param {(f: number) => Uint8ClampedArray | Uint8Array | null} pixelsOf
@@ -573,7 +573,7 @@ function sampleColourPoints(colour, getPixels, pixelsOf, width, height, radius) 
   if (frameKey) {
     const frames = colour.clicks.map((c) => frameKey(c.frame));
     if (frames.every((k) => k !== null && k !== undefined)) {
-      key = `${width}x${height}:${radius}:${colour.tolerance}:${colour.clicks
+      key = `${width}x${height}:${radius}:${colour.clicks
         .map((c, n) => `${frames[n]}:${c.x}:${c.y}:${c.mode}`)
         .join(';')}`;
       const hit = samplingCache.get(key);
@@ -584,7 +584,7 @@ function sampleColourPoints(colour, getPixels, pixelsOf, width, height, radius) 
       }
     }
   }
-  const near = getCoreTolerance(colour.tolerance);
+  const near = COLOUR_NEAR;
   /** @type {number[]} */
   const samples = [];
   /** @type {number[]} */
@@ -653,7 +653,6 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
     return {
       id: object.id ?? '',
       seeds,
-      pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
       matches: createColourMatcher(samples, protects, object.colour.tolerance),
       /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
       stats: options.guard ? new Map() : null,
@@ -708,7 +707,7 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
       const out = {};
       for (const layer of layers) {
         if (!layer?.stats) continue;
-        const shares = getColourGuardShares(layer.stats, layer.pointFrames);
+        const shares = getColourGuardShares(layer.stats);
         const perFrame = new Array(frameCount).fill(-1);
         for (const [f, share] of shares) perFrame[f] = Math.round(share * 1000) / 1000;
         out[layer.id] = perFrame;
