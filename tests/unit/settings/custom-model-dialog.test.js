@@ -59,6 +59,16 @@ function pick(input, file) {
 
 beforeAll(() => {
   // jsdom: a modal dialog needs only its open state here
+  // jsdom: Blob.text() is missing
+  const blob = /** @type {any} */ (Blob.prototype);
+  blob.text ??= function text() {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(this);
+    });
+  };
   const proto = /** @type {any} */ (HTMLDialogElement.prototype);
   proto.showModal ??= function showModal() {
     this.setAttribute('open', '');
@@ -116,6 +126,50 @@ describe('Add model dialog (review #196, finding 2)', () => {
     /** @type {HTMLButtonElement} */ (dialog.querySelector('#add-model-save')).click();
     await vi.waitFor(() => expect(probeB.save).toHaveBeenCalledTimes(1));
     expect(probeB.save.mock.calls[0][0]).toContain(`sha256=${'2'.repeat(64)}`);
+    expect(probeA.save).not.toHaveBeenCalled();
+    close();
+  });
+  it('an imported definition replaces a file still loading: the late file result is ignored (round 2)', async () => {
+    const { probes, createProbe } = fakeProbes();
+    const { dialog, close } = openAddModelDialog({ createProbe });
+    const input = /** @type {HTMLInputElement} */ (dialog.querySelector('#add-model-file'));
+
+    pick(input, new File([new Uint8Array(10)], 'a.onnx'));
+    await Promise.resolve();
+    const probeA = probes.at(-1);
+    expect(probeA.open).toHaveBeenCalledTimes(1);
+
+    const definition = {
+      format: 'glinfs-custom-model',
+      version: 1,
+      label: 'Shared model',
+      source: 'url',
+      url: 'https://huggingface.co/o/r/resolve/abc/x.onnx',
+      fileName: 'x.onnx',
+      bytes: 1234,
+      sha256: 'f'.repeat(64),
+      inputName: 'a_in',
+      outputName: 'a_out',
+      inputSize: 64,
+      resize: 'stretch',
+      normalization: 'imagenet',
+      output: 'logits',
+      subjects: ['general'],
+    };
+    pick(
+      input,
+      new File([JSON.stringify(definition)], 'x.glinfs-model.json', { type: 'application/json' }),
+    );
+    await vi.waitFor(() => expect(dialog.querySelector('#add-model-import')).not.toBeNull());
+    expect(probeA.dispose).toHaveBeenCalled();
+
+    // a.onnx finishes late, with a graph that would even match the definition
+    probeA.finish(opened('a', 1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dialog.querySelector('#add-model-import')?.textContent).toContain('Shared model');
+    expect(dialog.querySelector('#add-model-summary')).toBeNull();
+    expect(dialog.querySelector('#add-model-save')).toBeNull();
+    expect(probeA.test).not.toHaveBeenCalled();
     expect(probeA.save).not.toHaveBeenCalled();
     close();
   });

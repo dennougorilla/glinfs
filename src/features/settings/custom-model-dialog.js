@@ -329,9 +329,7 @@ export function openAddModelDialog(deps = {}) {
     body.replaceChildren(el('div', { className: 'settings-dialog-progress' }, [line, bar]));
     const stop = button('Cancel', { id: 'add-model-stop' });
     stop.addEventListener('click', () => {
-      probe.cancel();
-      probe.dispose();
-      probe = createProbe();
+      invalidateOpen();
       say('Stopped.');
       showSource();
     });
@@ -395,8 +393,7 @@ export function openAddModelDialog(deps = {}) {
     );
     const again = button('Choose another file or URL', { id: 'add-model-again' }, true);
     again.addEventListener('click', () => {
-      probe.dispose();
-      probe = createProbe();
+      invalidateOpen();
       say('');
       showSource();
     });
@@ -416,6 +413,9 @@ export function openAddModelDialog(deps = {}) {
         say(result.error);
         return;
       }
+      // The import replaces a file that is still loading: its late result
+      // must not fill the form under the imported definition's name
+      invalidateOpen();
       showImport(result.definition);
       return;
     }
@@ -485,16 +485,26 @@ export function openAddModelDialog(deps = {}) {
   /** Bumped by every open: only the latest one may fill the dialog */
   let openSeq = 0;
 
+  /**
+   * Abandon whatever is loading: its result can no longer fill the dialog,
+   * and its worker (file, hash, session) is freed. Every new open, an
+   * import, Stop and "Choose another" start from here.
+   */
+  function invalidateOpen() {
+    openSeq++;
+    probe.cancel();
+    probe.dispose();
+    probe = createProbe();
+  }
+
   const openSource = async (source, expect, allowLarge = false) => {
-    const seq = ++openSeq;
     // A new file or URL replaces whatever is still loading. A fresh worker
     // for every open: two opens never share its file, hash and session
     // (a second file dropped while the first was loading could otherwise
     // pair one file's bytes with the other's graph), and the old session's
     // memory is freed now
-    probe.cancel();
-    probe.dispose();
-    probe = createProbe();
+    invalidateOpen();
+    const seq = openSeq;
     const current = probe;
     const stale = () => closed || seq !== openSeq;
     state.source = source;
@@ -520,7 +530,10 @@ export function openAddModelDialog(deps = {}) {
             showProgress('Loading the model…');
             void current.confirmDownloaded().then(
               (opened) => !stale() && showSettings(opened),
-              (error) => !stale() && showError(describeOpenError(error)),
+              (error) =>
+                !stale() &&
+                /** @type {any} */ (error)?.name !== 'AbortError' &&
+                showError(describeOpenError(error)),
             );
           } else {
             void openSource(source, expect, true);
@@ -615,8 +628,7 @@ export function openAddModelDialog(deps = {}) {
       );
       const again = button('Choose another file or URL', { id: 'add-model-again' }, true);
       again.addEventListener('click', () => {
-        probe.dispose();
-        probe = createProbe();
+        invalidateOpen();
         showSource();
       });
       footer.replaceChildren(cancelButton(), again);
@@ -912,7 +924,8 @@ export function openAddModelDialog(deps = {}) {
     const file = event.dataTransfer?.files?.[0];
     if (!file || state.saving) return;
     event.preventDefault();
-    probe.cancel();
+    // An .onnx opens anew and an imported .json replaces what is loading
+    // (both through invalidateOpen)
     void handleFile(file);
   });
 
