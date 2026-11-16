@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/dennougorilla/glinfs/compare/v0.16.0...v0.17.0) (2026-11-16)
+
+
+### Features
+
+* **ai-cutout:** a correction refines a tracked fix-up's earlier answer ([#199](https://github.com/dennougorilla/glinfs/issues/199)) ([3e3a62a](https://github.com/dennougorilla/glinfs/commit/3e3a62a77c0765f2502aba2d8c4fdaa290b3573e))
+* **ai-cutout:** add your own models in Settings; BiRefNet from Hugging Face in production ([#196](https://github.com/dennougorilla/glinfs/issues/196)) ([1405265](https://github.com/dennougorilla/glinfs/commit/140526507c9a5398f0c147483285a808ccae7347))
+* **ai-cutout:** BiRefNet general, lite and ToonOut in development builds; BEN2 ImageNet input; fail on NaN ([#192](https://github.com/dennougorilla/glinfs/issues/192)) ([b9d53e6](https://github.com/dennougorilla/glinfs/commit/b9d53e6deacf628b3f4d5e389d6360e3084a0f04))
+* **ai-cutout:** Colour scope for Remove fix-ups, removed by colour on every frame ([#197](https://github.com/dennougorilla/glinfs/issues/197)) ([365731b](https://github.com/dennougorilla/glinfs/commit/365731bab7c5c6a0748f68b0441de632161cc16e))
+* **ai-cutout:** flag the Convs onnxruntime-web WebGPU computes wrongly ([#198](https://github.com/dennougorilla/glinfs/issues/198)) ([aad4c73](https://github.com/dennougorilla/glinfs/commit/aad4c73da022ae2f5934c5fa0a7cec76fa9b462a))
+* **ai-cutout:** one Keep / Remove pair, box prompts, corrections and coloured regions ([#195](https://github.com/dennougorilla/glinfs/issues/195)) ([a68b675](https://github.com/dennougorilla/glinfs/commit/a68b675af02f01fdfda9000ad22b193a34470d77))
+* **ai-cutout:** remember the last model, prefer downloaded models, BEN2 first-run default ([#188](https://github.com/dennougorilla/glinfs/issues/188)) ([56e7037](https://github.com/dennougorilla/glinfs/commit/56e70372c81f200650ab8d6886b716af0df045dc))
+* **ai-cutout:** remove or add a tracked object on top of any model ([#193](https://github.com/dennougorilla/glinfs/issues/193)) ([da83ed1](https://github.com/dennougorilla/glinfs/commit/da83ed16cd6517c98d39778ff4d222e7bc9a45e8))
+* **queue:** remove the oldest clips automatically when memory or the queue is full ([#191](https://github.com/dennougorilla/glinfs/issues/191)) ([06807d5](https://github.com/dennougorilla/glinfs/commit/06807d58de8ee74d8407392916244a7041be7eb5))
+
+
+### Bug Fixes
+
+* **capture:** release the screen share when the screen is left mid-start ([#183](https://github.com/dennougorilla/glinfs/issues/183)) ([74a7fc6](https://github.com/dennougorilla/glinfs/commit/74a7fc6ade430cf4a64ea9ec8126f883b50ebf62))
+* **capture:** settle every concurrent requestFrames() call ([#185](https://github.com/dennougorilla/glinfs/issues/185)) ([b36f2a6](https://github.com/dennougorilla/glinfs/commit/b36f2a645eece4fe07eedf031bac7f00c87238f0)), closes [#170](https://github.com/dennougorilla/glinfs/issues/170)
+* **export:** fall back to canvas when VideoFrame.copyTo() rejects ([#181](https://github.com/dennougorilla/glinfs/issues/181)) ([e15118c](https://github.com/dennougorilla/glinfs/commit/e15118cefa2df6239269322c1065bcdc019dbe8a)), closes [#169](https://github.com/dennougorilla/glinfs/issues/169)
+* **loading:** drop scene detection result when the active clip changed meanwhile ([#182](https://github.com/dennougorilla/glinfs/issues/182)) ([84f4e18](https://github.com/dennougorilla/glinfs/commit/84f4e183a485572ef8ddb4df3906c80d3b046faf)), closes [#171](https://github.com/dennougorilla/glinfs/issues/171)
+* **queue:** Undo restores a clip deleted while it was compressing ([#184](https://github.com/dennougorilla/glinfs/issues/184)) ([bc626fc](https://github.com/dennougorilla/glinfs/commit/bc626fcff33e720644dcd9e291c21645e8db7b4d))
+
 ## [0.16.0](https://github.com/dennougorilla/glinfs/compare/v0.15.1...v0.16.0) (2026-10-02)
 
 
