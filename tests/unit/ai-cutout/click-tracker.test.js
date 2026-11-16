@@ -123,6 +123,18 @@ describe('trackClicks', () => {
     expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
   });
 
+  it('answers a box with the whole of what it holds, also on a Part object', async () => {
+    const { promise, masks } = run({
+      picks: [],
+      boxes: [{ frame: 3, x0: 0, y0: 0, x1: 1, y1: 1 }],
+      range: { start: 3, end: 3 },
+      scope: 'part',
+    });
+    await promise;
+    // Whole: the object (index 2), not the half-frame "part" (index 0)
+    expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
   it('joins the answers of two boxes on a frame into one region', async () => {
     const { promise, masks, calls } = run({
       picks: [],

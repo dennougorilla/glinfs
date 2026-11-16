@@ -171,11 +171,11 @@ describe('tracked objects', () => {
   const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
   const box = (frame = 2) => ({ frame, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.5 });
 
-  it('adds an object from a keep click or a box, Whole, not selected', () => {
+  it('adds an object from a click or a box, not selected; a Remove click starts at Part', () => {
     let state = addAiObject(makeState(), 'remove', { click: { ...click(), mode: 'remove' } }, 'o1');
     state = addAiObject(state, 'add', { box: box() }, 'o2');
     expect(state.edits.background.ai.objects).toEqual([
-      { id: 'o1', mode: 'remove', scope: 'whole', clicks: [click()], boxes: [] },
+      { id: 'o1', mode: 'remove', scope: 'part', clicks: [click()], boxes: [] },
       { id: 'o2', mode: 'add', scope: 'whole', clicks: [], boxes: [box()] },
     ]);
     // The next click of a tool adds another fix-up
@@ -183,6 +183,12 @@ describe('tracked objects', () => {
     // Whole / Part falls back to the last one
     expect(getActiveAiObject(state)?.id).toBe('o2');
     expect(addAiObject(state, 'add', {})).toBe(state);
+    expect(
+      addAiObject(state, 'remove', { box: box() }, 'o3').edits.background.ai.objects[2].scope,
+    ).toBe('whole');
+    expect(
+      addAiObject(state, 'add', { click: click() }, 'o4').edits.background.ai.objects[2].scope,
+    ).toBe('whole');
   });
 
   it('stops at the object, click and box limits', () => {
@@ -210,8 +216,8 @@ describe('tracked objects', () => {
     state = addAiObject(state, 'add', { click: click() }, 'o2');
     const before = state;
     expect(setAiObjectScope(state, 'nope', 'part')).toBe(before);
-    state = setAiObjectScope(state, 'o1', 'part');
-    expect(state.edits.background.ai.objects.map((o) => o.scope)).toEqual(['part', 'whole']);
+    state = setAiObjectScope(state, 'o1', 'whole');
+    expect(state.edits.background.ai.objects.map((o) => o.scope)).toEqual(['whole', 'whole']);
   });
 
   it('removes an object; the selected one takes its correction tool with it', () => {

@@ -77,6 +77,7 @@ import { drawRegions } from './object-overlay.js';
 import {
   getLostFramesInSelection,
   getModelSubject,
+  getObjectFrame,
   getRememberedModels,
   getSubjectModel,
   getSubjectModels,
@@ -2117,17 +2118,8 @@ function handleGoToObject(id) {
     return;
   }
   store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
-  handleFrameChange(getObjectFirstFrame(object));
+  handleFrameChange(getObjectFrame(object));
   announce('Selected. Click to add to it, Alt-click to take away from it. Escape to finish.');
-}
-
-/**
- * The frame a tracked object was made on (its first box or click)
- * @param {import('../../shared/edits/model.js').CutoutObject} object
- * @returns {number}
- */
-function getObjectFirstFrame(object) {
-  return object.boxes?.[0]?.frame ?? object.clicks[0]?.frame ?? 0;
 }
 
 /**

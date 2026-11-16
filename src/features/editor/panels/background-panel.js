@@ -351,6 +351,21 @@ export function getPickLabel(pick, fps) {
 }
 
 /**
+ * The frame a tracked fix-up was made on: its first keep click, else its
+ * first box (corrections on other frames do not move it)
+ * @param {CutoutObject} object
+ * @returns {number}
+ */
+export function getObjectFrame(object) {
+  return (
+    object.clicks.find((c) => c.mode === 'keep')?.frame ??
+    object.boxes?.[0]?.frame ??
+    object.clicks[0]?.frame ??
+    0
+  );
+}
+
+/**
  * Label of a tracked object in the list
  * @param {CutoutObject} object
  * @param {number} fps
@@ -358,8 +373,7 @@ export function getPickLabel(pick, fps) {
  */
 export function getObjectLabel(object, fps) {
   const verb = object.mode === 'remove' ? 'Remove' : 'Keep';
-  const frame = object.boxes?.[0]?.frame ?? object.clicks[0]?.frame ?? 0;
-  return `${verb} at ${frameToTimecode(frame, fps)}`;
+  return `${verb} at ${frameToTimecode(getObjectFrame(object), fps)}`;
 }
 
 /**
@@ -1668,8 +1682,8 @@ export function updateBackgroundPanel(container, state, fps) {
     toolsHint = 'Click the thing you want to keep in the preview.';
   } else if (click) {
     toolsHint = 'Keep or Remove adds a point to fix the selection.';
-  } else if (isAi && ai.picks.length === 0 && state.aiPickTool === null) {
-    toolsHint = 'Keep or Remove, then click a character in the preview.';
+  } else if (isAi && ai.picks.length === 0 && objects.length === 0 && state.aiPickTool === null) {
+    toolsHint = 'Keep or Remove, then click or drag a box in the preview.';
   }
   setText(q(root, '#background-tools-hint'), toolsHint);
 
@@ -1703,11 +1717,13 @@ export function updateBackgroundPanel(container, state, fps) {
   updateCleanupList(/** @type {HTMLElement} */ (q(root, '#ai-cleanup-list')), chips);
   setHidden(q(root, '#ai-cleanup'), chips.length === 0);
 
-  // Tracked fix-ups: Whole / Part of the active one, lost frames
+  // Tracked fix-ups: Whole / Part of the selected one (beside its marked
+  // chip), lost frames
   const active = isAi ? getActiveAiObject(state) : null;
-  setHidden(q(root, '#ai-object-scope'), !active);
-  setChecked(q(root, '#ai-object-scope-whole'), active?.scope !== 'part');
-  setChecked(q(root, '#ai-object-scope-part'), active?.scope === 'part');
+  const selected = selectedId ? objects.find((o) => o.id === selectedId) : undefined;
+  setHidden(q(root, '#ai-object-scope'), !selected);
+  setChecked(q(root, '#ai-object-scope-whole'), selected?.scope !== 'part');
+  setChecked(q(root, '#ai-object-scope-part'), selected?.scope === 'part');
   const lostObject =
     isAi && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)

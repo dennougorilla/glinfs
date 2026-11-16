@@ -279,8 +279,13 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     const id = await page.evaluate(
       () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].id,
     );
-    // Part: only disc A (the stub's Whole is both discs); tracked again
-    await page.locator('label[for="ai-object-scope-part"]').click();
+    // A Remove click starts at Part: only disc A (the stub's Whole is both
+    // discs)
+    expect(
+      await page.evaluate(
+        () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].scope,
+      ),
+    ).toBe('part');
     const objectAt = (/** @type {number} */ i) =>
       page.evaluate(
         ({ i, group, p }) => window.__TEST_HOOKS__.aiCutout.sampleMask(i, p, group)?.values ?? null,

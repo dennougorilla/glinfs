@@ -707,7 +707,11 @@ describe('tracked objects', () => {
     const b = /** @type {any} */ (object('b', 'add', 0));
     expect(getObjectLabel(a, 10)).toBe('Remove at 01:00');
     expect(getObjectLabel(b, 10)).toBe('Keep at 00:00');
-    // A box-only object is labelled at its box
+    // A box-only object is labelled at its box; a box added later does not
+    // move the label
+    expect(getObjectLabel({ ...a, boxes: [{ frame: 20, x0: 0, y0: 0, x1: 1, y1: 1 }] }, 10)).toBe(
+      'Remove at 01:00',
+    );
     expect(
       getObjectLabel({ ...b, clicks: [], boxes: [{ frame: 20, x0: 0, y0: 0, x1: 1, y1: 1 }] }, 10),
     ).toBe('Keep at 02:00');
@@ -768,6 +772,13 @@ describe('tracked objects', () => {
     /** @type {HTMLElement} */ (chips[0].querySelector('.editor-cutout-pick-delete')).click();
     expect(handlers.onRemoveAiObject).toHaveBeenCalledWith('a');
     expect($('#ai-object-scope').hidden).toBe(false);
+    // Whole / Part only beside a selected fix-up
+    updateBackgroundPanel(
+      root,
+      stateWith([object('a', 'remove', 10), object('b', 'add', 0)], { aiActiveObjectId: null }),
+      10,
+    );
+    expect($('#ai-object-scope').hidden).toBe(true);
   });
 
   it('shows where an object was lost, with a button that goes there', () => {

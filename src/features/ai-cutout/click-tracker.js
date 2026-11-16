@@ -381,13 +381,17 @@ export async function trackClicks({
         }
         continue;
       }
-      // One prompt per box and per lone keep point, joined into one region
+      // One prompt per box and per lone keep point, joined into one region.
+      // A box marks the extent: its answer is the whole of what it holds
+      // (Part would pick a piece inside it).
       /** @type {SamCandidate[]} */
       const parts = [];
       for (const p of splitAnchorPrompts(anchor)) {
         const candidates = await prompt(anchor.frame, p);
         throwIfAborted(signal);
-        parts.push(chooseCandidate(candidates, { scope, wholeMinScoreRatio }));
+        parts.push(
+          chooseCandidate(candidates, { scope: p.box ? 'whole' : scope, wholeMinScoreRatio }),
+        );
       }
       const chosen = joinCandidates(parts);
       const { area } = maskStats(chosen.data, chosen.width, chosen.height);

@@ -534,7 +534,9 @@ export function clearAiPicks(state) {
 /**
  * Add a tracked object selected by a click or a box (ignored once
  * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
- * a tool adds another fix-up.
+ * a tool adds another fix-up. A click with Remove starts at Part: what is
+ * removed is mostly a patch on or beside the subject, and Whole answers
+ * with the subject too (measured live, see PR 3).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
  * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
@@ -549,7 +551,7 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
   const object = {
     id,
     mode,
-    scope: 'whole',
+    scope: mode === 'remove' && selection.click && !selection.box ? 'part' : 'whole',
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
   };
