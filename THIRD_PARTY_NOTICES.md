@@ -123,7 +123,8 @@ components only.
   GitHub Release, downloaded by `npm run models:fetch` / the Pages deploy
   workflow and served next to the app as `models/ben2-base-fp16.onnx`; the
   browser runs it locally. It is not stored in this repository. The
-  preprocessing (RGB / 255, 1024×1024) follows upstream's `onnx_run.py`.
+  preprocessing (RGB / 255, ImageNet mean/std, 1024×1024) follows
+  upstream's PyTorch inference code `BEN2.py`.
 
 ```
 MIT License
@@ -174,6 +175,59 @@ SOFTWARE.
   workflow and served next to the app as `models/rvm-resnet50-fp16.onnx`;
   the browser runs it locally. It is not stored in this repository. The
   preprocessing (RGB / 255) follows upstream's `documentation/inference.md`.
+
+## BiRefNet models (`birefnet-general-fp16.onnx`, `birefnet-lite-fp16.onnx`, `birefnet-toonout-fp16.onnx`; development builds only)
+
+- Source: https://github.com/ZhengPeng7/BiRefNet; the checkpoints
+  https://huggingface.co/ZhengPeng7/BiRefNet `model.safetensors` at commit
+  `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4` (SHA-256
+  `9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154`),
+  https://huggingface.co/ZhengPeng7/BiRefNet_lite `model.safetensors` at
+  commit `aa62cd87eafb9cc43056d08ef3615a14628b831d` (SHA-256
+  `4417d89795250e698c3cb0ae8df15743810065f646f48a694fdfa7ca052d0815`), and
+  the ToonOut fine-tune https://huggingface.co/joelseytre/toonout
+  `birefnet_finetuned_toonout.pth` at commit
+  `cbf720eca394edcde66b861a8a8c20fbabe9c748` (SHA-256
+  `8c7f8a0bc24400f4caade76622f75ff22ca1e93e169add9d2b70093e2487fbe5`;
+  trained on the ToonOut dataset, CC BY 4.0)
+- Copyright: Copyright (c) 2024 ZhengPeng (BiRefNet); the ToonOut authors
+  (ToonOut weights)
+- License: MIT License (BiRefNet's text below; the ToonOut model card
+  states MIT)
+- Modifications: `scripts/export-birefnet-onnx.py` exports each checkpoint
+  to ONNX (the final prediction, opset 17, deformable convolutions
+  decomposed), converts it to float16 (input and output float32) and
+  rewrites it so ONNX Runtime Web's WebGPU backend runs it (wide
+  Split/Concat split, Sum as Add, index arithmetic in float32, pooling in
+  float32); the computed values are unchanged apart from float16 rounding.
+  The modified files are under the same MIT License.
+- Use in Glinfs: development builds only (`npm run dev`), served from
+  `public/models/` where they are placed by hand; they are not in the
+  `models-v1` release, not deployed and not stored in this repository.
+
+```
+MIT License
+
+Copyright (c) 2024 ZhengPeng
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## ONNX Runtime Web (`onnxruntime-web` 1.30.0)
 

@@ -25,6 +25,11 @@
  * The pins come straight from the registry (plain data without Vite
  * imports); tests/unit/ai-cutout/model-config.test.js checks that the Pages
  * deploy workflow uses the same hashes and file names.
+ *
+ * Development-only models (`devOnly` in the registry: the BiRefNet ones)
+ * are not in the release: they are never downloaded or required. A copy
+ * placed in public/models by hand is kept and verified against its pin (a
+ * mismatching copy is deleted and fails the run, like a release model).
  */
 
 import { createHash } from 'node:crypto';
@@ -37,6 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   getModelDownloadUrl,
   getModelFiles,
+  getReleaseModels,
   MODEL_REGISTRY,
 } from '../src/features/ai-cutout/model-registry.js';
 
@@ -50,14 +56,34 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @property {string} sha256 - Lowercase hex SHA-256
  */
 
-/** Every model file (a model of two files has two pins) @type {ModelPin[]} */
-export const MODELS = MODEL_REGISTRY.flatMap((entry) =>
-  getModelFiles(entry).map((file) => ({
-    fileName: file.fileName,
-    url: getModelDownloadUrl(file),
-    bytes: file.bytes,
-    sha256: file.sha256,
-  })),
+/**
+ * @param {ReturnType<typeof getReleaseModels>} entries - Registry entries
+ * @returns {ModelPin[]}
+ */
+function pinsOf(entries) {
+  return entries.flatMap((entry) =>
+    getModelFiles(entry).map((file) => ({
+      fileName: file.fileName,
+      url: getModelDownloadUrl(file),
+      bytes: file.bytes,
+      sha256: file.sha256,
+    })),
+  );
+}
+
+/**
+ * Every file of the release models (a model of two files has two pins)
+ * @type {ModelPin[]}
+ */
+export const MODELS = pinsOf(getReleaseModels());
+
+/**
+ * Files of the development-only models: kept and verified when present,
+ * never downloaded
+ * @type {ModelPin[]}
+ */
+export const DEV_MODELS = pinsOf(
+  MODEL_REGISTRY.filter((entry) => !getReleaseModels().includes(entry)),
 );
 
 /** Default output directory, served by Vite from publicDir */
@@ -213,9 +239,16 @@ export async function removeUnlistedFiles(pins, { outDir = DEFAULT_OUT_DIR, log 
 export async function main(argv, { outDir = DEFAULT_OUT_DIR } = {}) {
   const checkOnly = argv.includes('--check');
   try {
-    await removeUnlistedFiles(MODELS, { outDir });
+    await removeUnlistedFiles([...MODELS, ...DEV_MODELS], { outDir });
     for (const pin of MODELS) {
       await ensureModel(pin, { outDir, checkOnly });
+    }
+    for (const pin of DEV_MODELS) {
+      if (await hashFile(resolve(outDir, pin.fileName))) {
+        await ensureModel(pin, { outDir, checkOnly: true });
+      } else {
+        console.log(`${pin.fileName}: development-only model, not downloaded (place it by hand)`);
+      }
     }
     return 0;
   } catch (error) {

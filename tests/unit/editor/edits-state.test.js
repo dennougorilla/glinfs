@@ -54,6 +54,7 @@ describe('createClip with edits', () => {
           edge: 0,
           picks: [],
           clickScope: 'whole',
+          subject: null,
         },
       },
       touchUps: [],
@@ -180,6 +181,7 @@ describe('background reducers', () => {
         edge: 0,
         picks: [],
         clickScope: 'whole',
+        subject: null,
       },
     });
     state = setBackground(state, { mode: 'global', color: 'bad' });
