@@ -396,8 +396,10 @@ export async function downloadModelToCache(spec, deps = {}) {
   if (cache) {
     const key = modelCacheKey(spec, baseHref);
     // Copies of this model under earlier pins can never load again: drop
-    // them before storing the new one (it also frees the quota for it)
-    await removeOlderPins(cache, key);
+    // them before storing the new one (it also frees the quota for it).
+    // Not for a custom model: another custom model may load the same URL
+    // under its own pin (its copy is no older pin of this one)
+    if (!spec.keepOtherPins) await removeOlderPins(cache, key);
     try {
       await cache.put(
         key,

@@ -106,6 +106,8 @@ export function getModelUrl(modelId, baseUrl) {
  * @property {string} sha256 - Expected lowercase hex SHA-256
  * @property {boolean} [localOnly] - Never downloaded: the file exists only
  *   in Cache Storage (a custom model added from a local file)
+ * @property {boolean} [keepOtherPins] - A custom model: storing a download
+ *   keeps the URL's copies under other pins (they may be other models')
  */
 
 /**
@@ -120,6 +122,7 @@ export function getModelUrl(modelId, baseUrl) {
  * @property {number} bytes - Expected byte size (all files)
  * @property {string} [sha256] - Expected lowercase hex SHA-256 (single-file models)
  * @property {boolean} [localOnly] - Never downloaded (see ModelFileSpec)
+ * @property {boolean} [keepOtherPins] - A custom model (see ModelFileSpec)
  * @property {ModelFileSpec[]} files - Every file, in load order
  * @property {string} [inputName]
  * @property {string} [outputName]
@@ -167,12 +170,14 @@ export function getModelSpec(modelId, baseUrl) {
   // A model hosted elsewhere is fetched from its own URL (with CORS)
   const remoteUrl = 'url' in entry && entry.url ? entry.url : null;
   const localOnly = Boolean(entry.localOnly);
+  const custom = Boolean(entry.custom);
   const files = getModelFiles(entry).map((file) => ({
     role: file.role,
     url: remoteUrl ?? getModelFileUrl(file.fileName, baseUrl),
     bytes: file.bytes,
     sha256: file.sha256,
     ...(localOnly ? { localOnly } : {}),
+    ...(custom ? { keepOtherPins: true } : {}),
   }));
   if (isSamEntry(entry)) {
     return {

@@ -104,6 +104,30 @@ function currentKeys(modelId, { baseHref, getFiles }) {
 }
 
 /**
+ * The Cache Storage keys every OTHER model's current files are kept under:
+ * built-in and user-added models share a key when they load the same bytes
+ * from the same URL (two custom models of one local file with different
+ * settings; a custom model of a hosted BiRefNet file), and such a key
+ * belongs to all of them
+ * @param {string} modelId
+ * @param {ReturnType<typeof resolveDeps>} deps
+ * @returns {Set<string>}
+ */
+function otherModelsKeys(modelId, deps) {
+  /** @type {Set<string>} */
+  const keys = new Set();
+  for (const entry of [...MODEL_REGISTRY, ...getCustomModelEntries()]) {
+    if (entry.id === modelId) continue;
+    try {
+      for (const key of currentKeys(entry.id, deps)) keys.add(key);
+    } catch {
+      // An entry that cannot be resolved holds no file
+    }
+  }
+  return keys;
+}
+
+/**
  * Open the model cache WITHOUT creating it, or null when it does not exist
  * or Cache Storage is unavailable.
  * @param {CacheStorage | undefined} cacheStorage
@@ -189,6 +213,8 @@ export async function listDownloadedModels(deps = {}) {
   const entries = [...MODEL_REGISTRY, ...getCustomModelEntries()];
   const keys = new Map(entries.map((entry) => [entry.id, currentKeys(entry.id, resolved)]));
   const allUrls = cache && urls ? [...urls] : [];
+  // A key is a model's current file; it is no other model's older copy
+  const current = new Set([...keys.values()].flat());
   // Development-only models (none while every model is hosted) are listed
   // by development builds only
   const models = entries
@@ -197,9 +223,7 @@ export async function listDownloadedModels(deps = {}) {
       const own = /** @type {string[]} */ (keys.get(entry.id));
       const files = new Set(own.map(withoutSearch));
       const cached = urls ? own.every((key) => urls.has(key)) : null;
-      const staleUrls = allUrls.filter(
-        (url) => !own.includes(url) && files.has(withoutSearch(url)),
-      );
+      const staleUrls = allUrls.filter((url) => !current.has(url) && files.has(withoutSearch(url)));
       return {
         id: entry.id,
         label: entry.label,
@@ -274,7 +298,9 @@ async function deleteEntry(url, deps) {
 
 /**
  * Delete a model's files from Cache Storage: their current copies and
- * their copies under earlier pins (an update that was not downloaded yet).
+ * their copies under earlier pins (an update that was not downloaded yet),
+ * except every key another model still loads (models can share a file:
+ * see otherModelsKeys). Each entry is deleted by its exact key.
  * @param {string} modelId
  * @param {ModelCacheDeps} [deps]
  * @returns {Promise<boolean>} Something was deleted
@@ -283,10 +309,24 @@ export async function deleteDownloadedModel(modelId, deps = {}) {
   const resolved = resolveDeps(deps);
   const cache = await openExistingCache(resolved.cacheStorage);
   if (!cache) return false;
+  const own = currentKeys(modelId, resolved);
+  const paths = new Set(own.map(withoutSearch));
+  const shared = otherModelsKeys(modelId, resolved);
+  /** @type {string[]} */
+  let candidates;
+  try {
+    candidates = (await cache.keys())
+      .map((request) => request.url)
+      .filter((url) => paths.has(withoutSearch(url)));
+  } catch {
+    // Cannot list: the current copies at least
+    candidates = own;
+  }
   let deleted = false;
-  for (const key of currentKeys(modelId, resolved)) {
+  for (const key of candidates) {
+    if (shared.has(key)) continue;
     try {
-      if (await cache.delete(withoutSearch(key), { ignoreSearch: true })) deleted = true;
+      if (await cache.delete(key)) deleted = true;
     } catch {
       // The next file may still go
     }

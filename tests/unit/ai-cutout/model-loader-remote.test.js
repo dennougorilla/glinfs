@@ -110,6 +110,54 @@ describe('remote model files', () => {
   });
 });
 
+describe('copies of one URL under other pins (review #196, finding 1)', () => {
+  /** In-memory cache with ignoreSearch */
+  function cacheWith(/** @type {string[]} */ keys) {
+    const map = new Map(keys.map((k) => [k, new Uint8Array(1)]));
+    const strip = (/** @type {string} */ u) => u.split('?')[0];
+    const cache = {
+      keys: async (/** @type {string} */ url, /** @type {any} */ options) =>
+        [...map.keys()]
+          .filter((k) => (options?.ignoreSearch ? strip(k) === strip(url) : k === url))
+          .map((k) => ({ url: k })),
+      delete: async (/** @type {any} */ r) => map.delete(typeof r === 'string' ? r : r.url),
+      put: async (/** @type {string} */ k) => {
+        map.set(k, new Uint8Array(1));
+      },
+    };
+    return { map, storage: /** @type {any} */ ({ open: async () => cache }) };
+  }
+  const other = `${HF}?sha256=${'1'.repeat(64)}`;
+
+  it('a custom model keeps the copies other models load from the same URL', async () => {
+    const { map, storage } = cacheWith([other]);
+    await downloadModelToCache(
+      { url: HF, bytes: MODEL.byteLength, sha256: SHA, keepOtherPins: true },
+      {
+        fetchImpl: vi.fn(async () => response(MODEL)),
+        subtle,
+        baseHref: BASE,
+        cacheStorage: storage,
+      },
+    );
+    expect([...map.keys()].sort()).toEqual([`${HF}?sha256=${SHA}`, other].sort());
+  });
+
+  it('a built-in model still drops its own older pins', async () => {
+    const { map, storage } = cacheWith([other]);
+    await downloadModelToCache(
+      { url: HF, bytes: MODEL.byteLength, sha256: SHA },
+      {
+        fetchImpl: vi.fn(async () => response(MODEL)),
+        subtle,
+        baseHref: BASE,
+        cacheStorage: storage,
+      },
+    );
+    expect([...map.keys()]).toEqual([`${HF}?sha256=${SHA}`]);
+  });
+});
+
 describe('downloadUnpinnedModel', () => {
   const options = (/** @type {any} */ extra = {}) => ({
     maxBytes: 1_000_000,
