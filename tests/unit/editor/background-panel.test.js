@@ -7,6 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MODEL_REGISTRY } from '../../../src/features/ai-cutout/model-registry.js';
+import { OBJECT_COLORS } from '../../../src/features/editor/object-colors.js';
 import {
   aiFromFit,
   canResetBackground,
@@ -93,6 +94,7 @@ beforeEach(() => {
     onFrameChange: vi.fn(),
     onGoToLostFrame: vi.fn(),
     onGoToObject: vi.fn(),
+    onHighlightAiObject: vi.fn(),
     onGoToObjectLost: vi.fn(),
     onRemoveAiObject: vi.fn(),
     onSetAiObjectScope: vi.fn(),
@@ -703,8 +705,12 @@ describe('tracked objects', () => {
   it('labels, finds the lost one (active first) and words its note', () => {
     const a = /** @type {any} */ (object('a', 'remove', 10));
     const b = /** @type {any} */ (object('b', 'add', 0));
-    expect(getObjectLabel(a, 10)).toBe('Remove object at 01:00');
-    expect(getObjectLabel(b, 10)).toBe('Add object at 00:00');
+    expect(getObjectLabel(a, 10)).toBe('Remove at 01:00');
+    expect(getObjectLabel(b, 10)).toBe('Keep at 00:00');
+    // A box-only object is labelled at its box
+    expect(
+      getObjectLabel({ ...b, clicks: [], boxes: [{ frame: 20, x0: 0, y0: 0, x1: 1, y1: 1 }] }, 10),
+    ).toBe('Keep at 02:00');
     const lost = { a: [5], b: [7, 30] };
     expect(getLostObject([a, b], lost, { start: 0, end: 39 })).toEqual({ object: a, frames: [5] });
     expect(getLostObject([a, b], lost, { start: 0, end: 39 }, 'b')?.object).toBe(b);
@@ -712,23 +718,51 @@ describe('tracked objects', () => {
     expect(getLostObject([a, b], lost, { start: 6, end: 20 })).toEqual({ object: b, frames: [7] });
     expect(getLostObject([a], {}, { start: 0, end: 39 })).toBeNull();
     expect(getObjectLostText(a, [5], 10)).toBe(
-      'The removed object was lost at 00:05. Click it there to keep going.',
+      'What you removed was lost at 00:05. Click it there to keep going.',
     );
     expect(getObjectLostText(b, [7, 30], 10)).toBe(
-      'The added object was lost at 2 places, first at 00:07. Click it there to keep going.',
+      'What you kept was lost at 2 places, first at 00:07. Click it there to keep going.',
     );
   });
 
-  it('lists each object with go-to and delete, and the active one marked', () => {
-    updateBackgroundPanel(
-      root,
-      stateWith([object('a', 'remove', 10), object('b', 'add', 0)], { aiActiveObjectId: 'a' }),
-      10,
-    );
-    const chips = [...root.querySelectorAll('#ai-object-list [data-object-id]')];
+  it('lists picks and tracked fix-ups as one list, with swatches and the selected one marked', () => {
+    const state = stateWith([object('a', 'remove', 10), object('b', 'add', 0)], {
+      aiActiveObjectId: 'a',
+      aiPickTool: 'remove',
+    });
+    state.edits.background.ai.picks = [{ frame: 4, x: 0.2, y: 0.2, mode: 'remove' }];
+    updateBackgroundPanel(root, state, 10);
+    // Only Keep / Remove make fix-ups
+    expect(root.querySelector('#ai-object-remove')).toBeNull();
+    expect(root.querySelector('#ai-object-list')).toBeNull();
+    const items = [...root.querySelectorAll('#ai-pick-list > li')];
+    const [ta, tb] = state.edits.background.ai.objects;
+    expect(items.map((li) => li.textContent)).toEqual([
+      'Remove at 00:04×',
+      `${getObjectLabel(ta, 10)}×`,
+      `${getObjectLabel(tb, 10)}×`,
+    ]);
+    expect(getObjectLabel(tb, 10)).toMatch(/^Keep at /);
+    expect(items[0].querySelector('.editor-cutout-pick-swatch')).toBeNull();
+    const swatches = items
+      .slice(1)
+      .map((li) =>
+        /** @type {HTMLElement} */ (
+          li.querySelector('.editor-cutout-pick-swatch')
+        ).style.getPropertyValue('--swatch'),
+      );
+    expect(swatches).toEqual([OBJECT_COLORS[0], OBJECT_COLORS[1]]);
+    const chips = [...root.querySelectorAll('#ai-pick-list [data-object-id]')];
     expect(chips.map((c) => /** @type {HTMLElement} */ (c).dataset.objectId)).toEqual(['a', 'b']);
     expect(chips[0].classList.contains('is-active')).toBe(true);
     expect(chips[1].classList.contains('is-active')).toBe(false);
+    // Hover and focus highlight a tracked fix-up
+    chips[1]
+      .querySelector('.editor-cutout-pick-go')
+      ?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    expect(handlers.onHighlightAiObject).toHaveBeenLastCalledWith('b');
+    $('#ai-pick-list').dispatchEvent(new MouseEvent('mouseleave'));
+    expect(handlers.onHighlightAiObject).toHaveBeenLastCalledWith(null);
     /** @type {HTMLElement} */ (chips[1].querySelector('.editor-cutout-pick-go')).click();
     expect(handlers.onGoToObject).toHaveBeenCalledWith('b');
     /** @type {HTMLElement} */ (chips[0].querySelector('.editor-cutout-pick-delete')).click();
@@ -747,15 +781,15 @@ describe('tracked objects', () => {
     expect($('#ai-object-lost').hidden).toBe(true);
   });
 
-  it('turns the object tools off at the object limit', () => {
+  it('says when the tracked fix-ups are full; Keep / Remove stay on for picks', () => {
     const many = Array.from({ length: EDIT_LIMITS.aiObjects.max }, (_, i) =>
       object(`o${i}`, 'remove', i),
     );
     updateBackgroundPanel(root, stateWith(many.slice(0, 1)), 10);
-    expect($('#ai-object-remove').disabled).toBe(false);
+    expect($('#background-tools-hint').textContent).not.toContain('limit');
     updateBackgroundPanel(root, stateWith(many), 10);
-    expect($('#ai-object-remove').disabled).toBe(true);
-    expect($('#ai-object-add').disabled).toBe(true);
+    expect($('#background-tools-hint').textContent).toContain('limit of 4 tracked fix-ups');
+    expect($('#ai-pick-remove').disabled).toBe(false);
   });
 });
 

@@ -59,13 +59,14 @@ export function getPreviewToolHint(state) {
       ? 'Brush: paint to bring back · Esc to finish'
       : 'Brush: paint to erase · Esc to finish';
   }
-  if (state.aiPickTool === 'remove-object' || state.aiPickTool === 'add-object') {
-    if (state.aiObjectTarget) return 'Click the object to find it again · Esc to cancel';
-    return state.aiPickTool === 'remove-object'
-      ? 'Remove object: click the thing to remove · Esc to cancel'
-      : 'Add object: click what the cutout missed · Esc to cancel';
-  }
   const ai = state.edits?.background?.ai;
+  const selected =
+    state.aiPickTool && state.aiActiveObjectId
+      ? ai?.objects?.find((o) => o.id === state.aiActiveObjectId)
+      : null;
+  if (selected) {
+    return 'Click to add to it · Alt-click to take away · Drag a box around it · Esc to finish';
+  }
   if (ai?.model === 'click' && state.aiPickTool) {
     if (state.aiPickTool === 'remove') return 'Remove: click what to leave out · Esc to cancel';
     return ai.picks.length === 0
@@ -73,10 +74,11 @@ export function getPreviewToolHint(state) {
       : 'Keep: click to add to the selection · Esc to cancel';
   }
   if (state.aiPickTool === 'keep') {
-    return 'Click a character to keep it. Anything not attached to it disappears on every frame · Esc to cancel';
+    return 'Click a character to keep it. Anything not attached to it disappears on every frame · Drag a box to add · Esc to cancel';
   }
-  if (state.aiPickTool === 'remove')
-    return 'Click a blob to remove it from every frame · Esc to cancel';
+  if (state.aiPickTool === 'remove') {
+    return 'Click or drag a box over what to remove from every frame · Esc to cancel';
+  }
   if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
   return '';
 }
@@ -89,8 +91,6 @@ export function getPreviewToolHint(state) {
  */
 export function getPreviewTool(state) {
   if (isBrushActive(state)) return 'brush';
-  if (state.aiPickTool === 'remove-object') return 'remove';
-  if (state.aiPickTool === 'add-object') return 'keep';
   if (state.aiPickTool) return state.aiPickTool;
   if (state.pickingKeyColor) return 'eyedropper';
   return '';
@@ -241,6 +241,34 @@ export function setOverlayPickMode(overlayCanvas, picking) {
     overlayCanvas.removeAttribute('role');
     overlayCanvas.setAttribute('aria-label', CROP_OVERLAY_LABEL);
   }
+}
+
+/** A press that moves this far (CSS pixels) drags a box instead of clicking */
+export const PICK_DRAG_MIN_PX = 6;
+
+/**
+ * The box being dragged with Keep / Remove
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{ x: number, y: number }} a - Frame pixels
+ * @param {{ x: number, y: number }} b
+ * @param {number} frameWidth
+ * @param {number} frameHeight
+ */
+function drawPickBox(ctx, a, b, frameWidth, frameHeight) {
+  const unit = Math.max(1, Math.round(Math.max(frameWidth, frameHeight) / 400));
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const w = Math.abs(a.x - b.x);
+  const h = Math.abs(a.y - b.y);
+  ctx.save();
+  ctx.lineWidth = 3 * unit;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.strokeRect(x, y, w, h);
+  ctx.lineWidth = 1.5 * unit;
+  ctx.setLineDash([6 * unit, 4 * unit]);
+  ctx.strokeStyle = '#ffffff';
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
 }
 
 /**
@@ -395,6 +423,13 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
    * @type {{ id: string, start: { x: number, y: number }, layerX: number, layerY: number, outW: number, outH: number } | null}
    */
   let textDrag = null;
+  /**
+   * Keep / Remove pressed on the preview: a click, or a box once the
+   * pointer moves PICK_DRAG_MIN_PX (frame pixels; client pixels for the
+   * threshold)
+   * @type {{ start: { x: number, y: number }, end: { x: number, y: number }, clientX: number, clientY: number, alt: boolean, dragging: boolean } | null}
+   */
+  let pickDrag = null;
   /** Keyboard pick marker, fractions of the source frame (see onKeyDown) */
   const pickMarker = { x: 0.5, y: 0.5 };
   /** Pointer painting the brush stroke in progress (null: none) */
@@ -572,6 +607,8 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
       boundaryHit,
       selectedText: getSelectedTextOverlay(ctx, state, frame),
     });
+    if (pickDrag?.dragging)
+      drawPickBox(ctx, pickDrag.start, pickDrag.end, frame.width, frame.height);
     if (state.aiPickTool && document.activeElement === overlayCanvas) {
       drawPickMarker(
         ctx,
@@ -612,7 +649,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
       case 'Enter':
       case ' ':
         e.preventDefault();
-        if (!e.repeat) handlers.onAiPick?.({ x: pickMarker.x, y: pickMarker.y });
+        if (!e.repeat) {
+          handlers.onAiPick?.({ x: pickMarker.x, y: pickMarker.y }, { alt: e.altKey });
+        }
         return;
       default:
         return;
@@ -695,13 +734,15 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     const coords = getFrameCoords(e);
 
     if (state?.aiPickTool) {
-      const frame = getCurrentFrame();
-      if (frame?.width > 0 && frame.height > 0) {
-        handlers.onAiPick?.({
-          x: Math.min(1, Math.max(0, coords.x / frame.width)),
-          y: Math.min(1, Math.max(0, coords.y / frame.height)),
-        });
-      }
+      // A click or a box: decided on release (see onMouseUp)
+      pickDrag = {
+        start: coords,
+        end: coords,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        alt: e.altKey,
+        dragging: false,
+      };
       return;
     }
 
@@ -757,6 +798,19 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     }
     const frame = getCurrentFrame();
     const coords = getFrameCoords(e);
+
+    if (pickDrag) {
+      e.preventDefault();
+      pickDrag.end = coords;
+      if (
+        !pickDrag.dragging &&
+        Math.hypot(e.clientX - pickDrag.clientX, e.clientY - pickDrag.clientY) >= PICK_DRAG_MIN_PX
+      ) {
+        pickDrag.dragging = true;
+      }
+      if (pickDrag.dragging) renderOverlayWithState();
+      return;
+    }
 
     if (textDrag) {
       e.preventDefault();
@@ -826,6 +880,29 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
    * @param {MouseEvent} e
    */
   function onMouseUp(e) {
+    if (pickDrag) {
+      const drag = pickDrag;
+      pickDrag = null;
+      const frame = getCurrentFrame();
+      if (!frame || !(frame.width > 0 && frame.height > 0)) return;
+      const fx = (/** @type {number} */ x) => Math.min(1, Math.max(0, x / frame.width));
+      const fy = (/** @type {number} */ y) => Math.min(1, Math.max(0, y / frame.height));
+      const alt = drag.alt || e.altKey;
+      if (drag.dragging) {
+        const end = getFrameCoords(e);
+        const box = {
+          x0: fx(Math.min(drag.start.x, end.x)),
+          y0: fy(Math.min(drag.start.y, end.y)),
+          x1: fx(Math.max(drag.start.x, end.x)),
+          y1: fy(Math.max(drag.start.y, end.y)),
+        };
+        renderOverlayWithState();
+        if (box.x1 > box.x0 && box.y1 > box.y0) handlers.onAiBox?.(box, { alt });
+      } else {
+        handlers.onAiPick?.({ x: fx(drag.start.x), y: fy(drag.start.y) }, { alt });
+      }
+      return;
+    }
     if (brushPointer !== null || (isBrushActive(getCurrentState()) && !textDrag && !dragMode)) {
       return;
     }

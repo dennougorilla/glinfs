@@ -70,12 +70,16 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {() => void} [onAiAllowWasm] - Explicit "Run without WebGPU" choice
  * @property {(patch: Partial<import('../../shared/edits/model.js').AiCutout>, options?: { live?: boolean }) => void} [onSetAiParams] - Threshold/smoothing/edge (live: a slider drag in progress)
  * @property {(tool: import('./types.js').AiPickTool | null, options?: { fromKeyboard?: boolean, target?: string | null }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks; target: an object tool re-anchors this tracked object)
- * @property {(point: { x: number, y: number }) => void} [onAiPick] - Pick at a point (fractions of the source frame)
+ * @property {(point: { x: number, y: number }, options?: { alt?: boolean }) => void} [onAiPick] - Keep / Remove
+ *   clicked at a point (fractions of the source frame); alt: the opposite tool
+ * @property {(box: { x0: number, y0: number, x1: number, y1: number }, options?: { alt?: boolean }) => void} [onAiBox] - Keep /
+ *   Remove dragged a box (fractions of the source frame)
  * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
  * @property {() => void} [onGoToLostFrame] - Click to select: go to the first frame
  *   where tracking lost the object, with the Keep tool on
  * @property {() => void} [onClearAiPicks] - Remove every pick
- * @property {(id: string) => void} [onGoToObject] - Tracked object: go to its first click (it becomes the active object)
+ * @property {(id: string) => void} [onGoToObject] - Tracked fix-up's chip: select it for corrections (again: deselect)
+ * @property {(id: string | null) => void} [onHighlightAiObject] - A tracked fix-up's chip is hovered or focused (null: none)
  * @property {(id: string) => void} [onGoToObjectLost] - Tracked object: go to the first frame where tracking lost it, its tool aimed at it
  * @property {(id: string) => void} [onRemoveAiObject] - Delete a tracked object
  * @property {(scope: import('../../shared/edits/model.js').ClickScope) => void} [onSetAiObjectScope] - Whole / Part of the active tracked object

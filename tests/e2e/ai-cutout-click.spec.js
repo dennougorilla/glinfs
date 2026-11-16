@@ -236,7 +236,7 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     });
   });
 
-  test('Remove object on another model: tracked, subtracted on every frame and in the export', async ({
+  test('Remove on the subject with another model: tracked, subtracted on every frame and in the export', async ({
     page,
   }) => {
     const N = 6;
@@ -263,13 +263,19 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     await expect.poll(() => editorPreviewAlpha(page, discA(2).x, discA(2).y)).toBe(255);
     expect(await editorPreviewAlpha(page, discB(2).x, discB(2).y)).toBe(255);
 
-    // Remove object: click disc A on frame 2
-    await page.locator('label[for="ai-object-remove"]').click();
-    await expect(page.locator('#ai-object-remove')).toBeChecked();
+    // Remove on disc A on frame 2: the discs are the same size, so disc A
+    // (found first) is the frame's main piece and the click becomes a
+    // tracked fix-up, not a pick
+    await page.locator('label[for="ai-pick-remove"]').click();
+    await expect(page.locator('#ai-pick-remove')).toBeChecked();
     const target = await editorFramePointToViewport(page, discA(2).x, discA(2).y);
     await page.mouse.click(target.x, target.y);
-    await expect(page.locator('#ai-object-list [data-object-id]')).toHaveCount(1);
-    await expect(page.locator('#ai-object-list')).toContainText('Remove object at 00:02');
+    await expect(page.locator('#ai-pick-list [data-object-id]')).toHaveCount(1);
+    await expect(page.locator('#ai-pick-list [data-object-id]')).toContainText('Remove at 00:02');
+    await expect(page.locator('#ai-pick-list .editor-cutout-pick-swatch')).toHaveCount(1);
+    expect(
+      await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits.background.ai.picks),
+    ).toEqual([]);
     const id = await page.evaluate(
       () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].id,
     );

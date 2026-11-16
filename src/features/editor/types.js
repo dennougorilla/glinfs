@@ -109,14 +109,15 @@
  * @property {string|null} selectedTextId - Text layer being edited (null = none)
  * @property {boolean} pickingKeyColor - Eyedropper mode: the next preview click picks
  *   the background key color
- * @property {AiPickTool | null} aiPickTool - AI pick tool: the next preview click
- *   adds a Keep/Remove pick, or selects a tracked object to remove / add
- *   (null = off)
- * @property {string | null} aiObjectTarget - With an object tool on: the tracked
- *   object the click re-anchors (a frame where tracking lost it); null makes a
- *   new object
- * @property {string | null} aiActiveObjectId - The tracked object Whole / Part
- *   applies to (the one last made, re-anchored or gone to)
+ * @property {AiPickTool | null} aiPickTool - Keep / Remove on the preview: the
+ *   next click (or drag) adds a fix-up, the app choosing a pick or a tracked
+ *   object (null = off)
+ * @property {string | null} aiActiveObjectId - The tracked object whose chip is
+ *   selected: while a tool is on, clicks and drags correct it instead of
+ *   adding a fix-up, and Whole / Part applies to it. Leaving the tool
+ *   deselects it.
+ * @property {string | null} [aiHighlightObjectId] - The tracked fix-up whose chip
+ *   is hovered or focused: its region stands out in Show mask (view only)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
  * @property {BrushState} brush - Mask brush tool (not persisted; the strokes live in
  *   edits.touchUps). While it is on the sidebar shows the Touch up mode.
@@ -131,9 +132,8 @@
  */
 
 /**
- * A preview tool of the AI cutout: Keep / Remove picks, or a tracked object
- * to remove from / add to the mask
- * @typedef {'keep'|'remove'|'remove-object'|'add-object'} AiPickTool
+ * A preview tool of the AI cutout: what to keep, what to remove
+ * @typedef {'keep'|'remove'} AiPickTool
  */
 
 /**

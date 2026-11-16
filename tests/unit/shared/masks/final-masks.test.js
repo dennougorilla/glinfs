@@ -9,6 +9,7 @@ import {
   edgeRadiusInMaskPixels,
   getAiParamsKey,
   getFinalMaskParamsKey,
+  getPickedPieceRole,
   pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
@@ -473,6 +474,25 @@ describe('createDraftMaskSource', () => {
     });
     const draft2 = createDraftMaskSource({ frameCount: 6, getProb, ai: aiOf() });
     expect(new Set([draft1.version, built.version, draft2.version]).size).toBe(3);
+  });
+});
+
+describe('getPickedPieceRole', () => {
+  it("tells the frame's largest piece (the subject) from another piece and from nothing", () => {
+    const W = 40;
+    const H = 20;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 16, 16],
+      [30, 2, 4, 4],
+    ];
+    const options = { frameCount: 1, getProb: () => probOf(W, H, pieces), ai: aiOf() };
+    expect(getPickedPieceRole(options, { frame: 0, x: 8 / W, y: 8 / H })).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 0, x: 31 / W, y: 3 / H })).toBe('separate');
+    expect(getPickedPieceRole(options, { frame: 0, x: 0.6, y: 0.9 })).toBe('none');
+    expect(
+      getPickedPieceRole({ ...options, getProb: () => null }, { frame: 0, x: 8 / W, y: 8 / H }),
+    ).toBe('none');
   });
 });
 

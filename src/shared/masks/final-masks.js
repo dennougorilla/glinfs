@@ -405,6 +405,29 @@ export async function createPreEdgeMaskSource(options) {
 }
 
 /**
+ * What a pick on a frame lands on, judged on the binary mask the build
+ * tracks picks on: 'none' (no piece under it or within the snap radius),
+ * 'main' (the frame's largest piece, the subject) or 'separate' (another
+ * piece)
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
+ * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
+ * @returns {'none' | 'main' | 'separate'}
+ */
+export function getPickedPieceRole(options, pick) {
+  const source = createFrameBinarySource(options);
+  const bin = source?.binaryAt(pick.frame);
+  if (!source || !bin) return 'none';
+  const comps = labelComponents(bin, source.width, source.height);
+  const picked = findPickedComponent(comps, source.width, source.height, pick);
+  if (picked === 0) return 'none';
+  let largest = 0;
+  for (let l = 1; l <= comps.count; l++) {
+    if (!largest || comps.areas[l] > comps.areas[largest]) largest = l;
+  }
+  return picked === largest ? 'main' : 'separate';
+}
+
+/**
  * Build the final masks of a clip.
  *
  * Without picks every frame is independent (one pass). With picks, the

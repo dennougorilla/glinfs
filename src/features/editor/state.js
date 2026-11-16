@@ -42,8 +42,8 @@ export function initEditorState(clip) {
     selectedTextId: null,
     pickingKeyColor: false,
     aiPickTool: null,
-    aiObjectTarget: null,
     aiActiveObjectId: null,
+    aiHighlightObjectId: null,
     aiCutout: createAiCutoutStatus(),
     brush: createBrushState(),
     sidebarTab: 'frame',
@@ -532,21 +532,42 @@ export function clearAiPicks(state) {
 /** @typedef {import('../../shared/edits/model.js').CutoutObject} CutoutObject */
 
 /**
- * Add a tracked object selected by a click (ignored once
- * EDIT_LIMITS.aiObjects.max exist); it becomes the active object
+ * Add a tracked object selected by a click or a box (ignored once
+ * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
+ * a tool adds another fix-up.
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
- * @param {{ frame: number, x: number, y: number }} click
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
  * @param {string} [id]
  * @returns {import('./types.js').EditorState}
  */
-export function addAiObject(state, mode, click, id = createLayerId()) {
+export function addAiObject(state, mode, selection, id = createLayerId()) {
   const objects = state.edits.background.ai.objects ?? [];
   if (objects.length >= EDIT_LIMITS.aiObjects.max) return state;
+  if (!selection.click && !selection.box) return state;
   /** @type {CutoutObject} */
-  const object = { id, mode, scope: 'whole', clicks: [{ ...click, mode: 'keep' }] };
-  const next = setAiParams(state, { objects: [...objects, object] });
-  return { ...next, aiActiveObjectId: id };
+  const object = {
+    id,
+    mode,
+    scope: 'whole',
+    clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
+    boxes: selection.box ? [selection.box] : [],
+  };
+  return setAiParams(state, { objects: [...objects, object] });
+}
+
+/**
+ * Add a box to a tracked object: one more rough region it covers (ignored
+ * at EDIT_LIMITS.aiObjectBoxes.max)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {import('../../shared/edits/model.js').CutoutBox} box
+ * @returns {import('./types.js').EditorState}
+ */
+export function addAiObjectBox(state, id, box) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || (object.boxes ?? []).length >= EDIT_LIMITS.aiObjectBoxes.max) return state;
+  return updateAiObject(state, id, (o) => ({ ...o, boxes: [...(o.boxes ?? []), box] }));
 }
 
 /**
@@ -592,7 +613,7 @@ export function setAiObjectScope(state, id, scope) {
 }
 
 /**
- * Delete a tracked object (an object tool aimed at it goes off)
+ * Delete a tracked object (selected, its correction ends: the tool goes off)
  * @param {import('./types.js').EditorState} state
  * @param {string} id
  * @returns {import('./types.js').EditorState}
@@ -601,13 +622,22 @@ export function removeAiObject(state, id) {
   const objects = state.edits.background.ai.objects ?? [];
   if (!objects.some((o) => o.id === id)) return state;
   const next = setAiParams(state, { objects: objects.filter((o) => o.id !== id) });
-  const aimed = state.aiObjectTarget === id;
+  const selected = state.aiActiveObjectId === id;
   return {
     ...next,
-    aiActiveObjectId: state.aiActiveObjectId === id ? null : state.aiActiveObjectId,
-    aiObjectTarget: aimed ? null : state.aiObjectTarget,
-    aiPickTool: aimed ? null : state.aiPickTool,
+    aiActiveObjectId: selected ? null : state.aiActiveObjectId,
+    aiPickTool: selected ? null : state.aiPickTool,
   };
+}
+
+/**
+ * The tool whose click adds to a tracked object (Remove for a removed
+ * object, Keep for an added one); the other tool, or Alt, takes away
+ * @param {CutoutObject} object
+ * @returns {import('./types.js').AiPickTool}
+ */
+export function getObjectTool(object) {
+  return object.mode === 'remove' ? 'remove' : 'keep';
 }
 
 /**
@@ -630,15 +660,6 @@ export function setActiveAiObject(state, id) {
 export function getActiveAiObject(state) {
   const objects = state.edits?.background.ai.objects ?? [];
   return objects.find((o) => o.id === state.aiActiveObjectId) ?? objects.at(-1) ?? null;
-}
-
-/**
- * Whether a pick tool selects a tracked object
- * @param {import('./types.js').AiPickTool | null | undefined} tool
- * @returns {tool is 'remove-object' | 'add-object'}
- */
-export function isObjectTool(tool) {
-  return tool === 'remove-object' || tool === 'add-object';
 }
 
 /**
@@ -669,21 +690,19 @@ export function setBackgroundMethod(state, method, detectedColor = null) {
 }
 
 /**
- * Enter/leave an AI pick tool ('keep' / 'remove', or an object tool); null
- * leaves it. A pick tool and the eyedropper are exclusive.
+ * Enter/leave an AI pick tool ('keep' / 'remove'); null leaves it and
+ * deselects the tracked object being corrected. A pick tool and the
+ * eyedropper are exclusive.
  * @param {import('./types.js').EditorState} state
  * @param {import('./types.js').AiPickTool | null} tool
- * @param {string | null} [target] - Object tool: the tracked object the click
- *   re-anchors (null: the click makes a new object)
  * @returns {import('./types.js').EditorState}
  */
-export function setAiPickTool(state, tool, target = null) {
-  const aiObjectTarget = isObjectTool(tool) ? target : null;
-  if (state.aiPickTool === tool && (state.aiObjectTarget ?? null) === aiObjectTarget) return state;
+export function setAiPickTool(state, tool) {
+  if (state.aiPickTool === tool && (tool || !state.aiActiveObjectId)) return state;
   const next = {
     ...state,
     aiPickTool: tool,
-    aiObjectTarget,
+    aiActiveObjectId: tool ? state.aiActiveObjectId : null,
     pickingKeyColor: tool ? false : state.pickingKeyColor,
     brush: tool ? brushOff(state.brush) : state.brush,
   };

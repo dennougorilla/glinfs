@@ -456,25 +456,61 @@ export function isTrackingLost(previousArea, area, maxChange = TRACK_MAX_AREA_CH
 }
 
 /**
- * The frames that hold prompts, with their points: one anchor per frame,
- * in the order they are worked on (the frame on screen first, then the
- * nearest), only frames inside the range.
+ * The prompts of one anchor frame, whose answers are joined into one
+ * region (a fix-up is a label: what the user marked, all of it): each box
+ * with the keep points inside it, and each keep point outside every box on
+ * its own; every prompt carries the frame's remove points. Empty when the
+ * frame has no box or keep point.
+ * @param {{ points: SamPoint[], boxes: SamBox[] }} anchor
+ * @returns {{ points: SamPoint[], box: SamBox | null }[]}
+ */
+export function splitAnchorPrompts(anchor) {
+  const removes = anchor.points.filter((p) => p.mode === 'remove');
+  const keeps = anchor.points.filter((p) => p.mode === 'keep');
+  const inside = (/** @type {SamPoint} */ p, /** @type {SamBox} */ b) =>
+    p.x >= b[0] && p.x <= b[2] && p.y >= b[1] && p.y <= b[3];
+  const prompts = anchor.boxes.map((box) => ({
+    points: [...keeps.filter((p) => inside(p, box)), ...removes],
+    box,
+  }));
+  for (const p of keeps) {
+    if (!anchor.boxes.some((b) => inside(p, b)))
+      prompts.push({ points: [p, ...removes], box: null });
+  }
+  return prompts;
+}
+
+/**
+ * The frames that hold prompts, with their points and boxes: one anchor
+ * per frame, in the order they are worked on (the frame on screen first,
+ * then the nearest), only frames inside the range.
  * @param {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} picks
  * @param {{ start: number, end: number }} range - Inclusive
  * @param {number} currentFrame
- * @returns {{ frame: number, points: SamPoint[] }[]}
+ * @param {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]} [boxes]
+ * @returns {{ frame: number, points: SamPoint[], boxes: SamBox[] }[]}
  */
-export function planAnchors(picks, range, currentFrame) {
-  /** @type {Map<number, SamPoint[]>} */
+export function planAnchors(picks, range, currentFrame, boxes = []) {
+  /** @type {Map<number, { points: SamPoint[], boxes: SamBox[] }>} */
   const byFrame = new Map();
+  const at = (/** @type {number} */ frame) => {
+    let anchor = byFrame.get(frame);
+    if (!anchor) {
+      anchor = { points: [], boxes: [] };
+      byFrame.set(frame, anchor);
+    }
+    return anchor;
+  };
   for (const pick of picks) {
     if (pick.frame < range.start || pick.frame > range.end) continue;
-    const points = byFrame.get(pick.frame) ?? [];
-    points.push({ x: pick.x, y: pick.y, mode: pick.mode });
-    byFrame.set(pick.frame, points);
+    at(pick.frame).points.push({ x: pick.x, y: pick.y, mode: pick.mode });
+  }
+  for (const b of boxes) {
+    if (b.frame < range.start || b.frame > range.end) continue;
+    at(b.frame).boxes.push([b.x0, b.y0, b.x1, b.y1]);
   }
   return [...byFrame]
-    .map(([frame, points]) => ({ frame, points }))
+    .map(([frame, { points, boxes: frameBoxes }]) => ({ frame, points, boxes: frameBoxes }))
     .sort(
       (a, b) =>
         Math.abs(a.frame - currentFrame) - Math.abs(b.frame - currentFrame) || a.frame - b.frame,

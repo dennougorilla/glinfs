@@ -127,6 +127,8 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {{ start: number, end: number }} range - Selection (inclusive clip indices)
  * @property {number} currentFrame - Frame on screen (worked on first)
  * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} clicks
+ * @property {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]} [boxes] - Box
+ *   prompts (one per frame)
  * @property {'whole' | 'part'} [scope]
  * @property {(progress: AnalysisProgress) => void} [onProgress]
  * @property {AbortSignal} [signal]
@@ -775,7 +777,7 @@ export class SegmentationManager {
         return { tracked: 0, lost, anchors: 0, backend: this.#lastReady?.backend ?? null };
       }
       // A selection without a click tracks from the nearest one outside it
-      const trackRange = getObjectTrackRange(range, options.clicks);
+      const trackRange = getObjectTrackRange(range, [...options.clicks, ...(options.boxes ?? [])]);
       const result = await this.#analyzeClick(frames, {
         ...options,
         range: trackRange,
@@ -812,7 +814,7 @@ export class SegmentationManager {
 
   /**
    * @param {Frame[]} frames
-   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
+   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, boxes?: ObjectAnalyzeOptions['boxes'], keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
    *   group: mask store group of the masks; keyOf: their store key;
    *   maskSizeOf: the size the decoder answers at; minScoreRatio and
    *   wholeMinScoreRatio: see trackClicks
@@ -850,6 +852,7 @@ export class SegmentationManager {
         range: { start, end },
         currentFrame: options.currentFrame,
         picks: options.picks,
+        boxes: options.boxes,
         scope: options.scope,
         minScoreRatio: options.minScoreRatio,
         wholeMinScoreRatio: options.wholeMinScoreRatio,

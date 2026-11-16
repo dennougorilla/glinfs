@@ -756,6 +756,7 @@ export function createAiCutoutSession(options) {
         // The frame on screen first when it is in the selection
         currentFrame: state.currentFrame,
         clicks: object.clicks,
+        boxes: object.boxes ?? [],
         scope: object.scope,
         tag: signature,
         superseded: () => objectQueue.includes(id),

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   isScoreDrop,
+  joinCandidates,
   refinePrompt,
   trackClicks,
 } from '../../../src/features/ai-cutout/click-tracker.js';
@@ -105,6 +106,62 @@ describe('trackClicks', () => {
     expect(masks.get(0)?.data).toEqual(rect(5, 6, 15, 14));
     expect(progress).toHaveBeenLastCalledWith({ done: 10, total: 10, frame: 0 });
     expect(progress.mock.calls[0][0]).toEqual({ done: 1, total: 10, frame: 3 });
+  });
+
+  it('a box alone anchors the object: prompted as the box (with any points), then tracked', async () => {
+    const box = { frame: 3, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.8 };
+    const { promise, masks, calls } = run({
+      picks: [{ frame: 3, x: 0.45, y: 0.5, mode: 'remove' }],
+      boxes: [box],
+    });
+    const result = await promise;
+    expect(result).toMatchObject({ tracked: 10, anchors: 1 });
+    expect(calls[0]).toMatchObject({
+      frame: 3,
+      prompt: { points: [{ x: 0.45, y: 0.5, mode: 'remove' }], box: [0.1, 0.2, 0.5, 0.8] },
+    });
+    expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
+  it('joins the answers of two boxes on a frame into one region', async () => {
+    const { promise, masks, calls } = run({
+      picks: [],
+      boxes: [
+        { frame: 3, x0: 0, y0: 0, x1: 0.5, y1: 1 },
+        { frame: 3, x0: 0.5, y0: 0, x1: 1, y1: 1 },
+      ],
+      range: { start: 3, end: 3 },
+    });
+    await promise;
+    expect(calls.map((c) => c.prompt.box)).toEqual([
+      [0, 0, 0.5, 1],
+      [0.5, 0, 1, 1],
+    ]);
+    expect(masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
+  it('joinCandidates: union of masks, max of logits, lowest score', () => {
+    const a = {
+      data: Uint8Array.of(255, 0, 0),
+      width: 3,
+      height: 1,
+      score: 0.9,
+      index: 0,
+      lowRes: Float32Array.of(1, -2),
+    };
+    const b = {
+      data: Uint8Array.of(0, 0, 255),
+      width: 3,
+      height: 1,
+      score: 0.7,
+      index: 1,
+      lowRes: Float32Array.of(-1, 3),
+    };
+    const joined = joinCandidates([a, b]);
+    expect([...joined.data]).toEqual([255, 0, 255]);
+    expect([...(joined.lowRes ?? [])]).toEqual([1, 3]);
+    expect(joined.score).toBe(0.7);
+    expect(joinCandidates([a, { ...b, lowRes: undefined }]).lowRes).toBeNull();
   });
 
   it("passes the low-res logits of the answer each frame kept as the next frame's mask_input", async () => {
