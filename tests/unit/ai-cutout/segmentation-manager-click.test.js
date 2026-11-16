@@ -320,6 +320,45 @@ describe('SegmentationManager.analyzeObject', () => {
     expect(workers[0].prompts.length).toBeGreaterThan(prompts);
   });
 
+  it('a remove-only frame never starts from a mask of older prompts (review #195)', async () => {
+    const clicks = [
+      { frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') },
+      { frame: 3, x: 0.9, y: 0.5, mode: /** @type {const} */ ('remove') },
+    ];
+    const options = {
+      objectId: 'o1',
+      range: { start: 0, end: 5 },
+      currentFrame: 3,
+      clicks,
+      clipId: 'clip',
+    };
+    /** @param {ReturnType<typeof harness>} h */
+    const masksOf = (h) =>
+      h.frames.map((f) => [...(h.maskStore.get(`object:o1:${f.id}`)?.data ?? [])].join(''));
+    // Whole first, then Part: frame 3 holds a Whole mask when the Part run starts
+    const changed = harness();
+    await changed.manager.analyzeObject(changed.frames, {
+      ...options,
+      scope: 'whole',
+      tag: 'whole|a',
+    });
+    const before = changed.workers[0].prompts.length;
+    await changed.manager.analyzeObject(changed.frames, {
+      ...options,
+      scope: 'part',
+      tag: 'part|a',
+    });
+    const fresh = harness();
+    await fresh.manager.analyzeObject(fresh.frames, { ...options, scope: 'part', tag: 'part|a' });
+    // The same prompts, in the same order, and the same masks as a fresh Part run
+    const promptsOf = (/** @type {any[]} */ list) =>
+      list.map((m) => JSON.stringify([...m.coords, ...m.labels]));
+    expect(promptsOf(changed.workers[0].prompts.slice(before))).toEqual(
+      promptsOf(fresh.workers[0].prompts),
+    );
+    expect(masksOf(changed)).toEqual(masksOf(fresh));
+  });
+
   it('a selection without a click tracks from the nearest click and marks only what it tried (review r3)', async () => {
     const { manager, maskStore, workers, frames } = harness();
     const clicks = [{ frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') }];

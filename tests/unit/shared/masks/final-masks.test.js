@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { chooseFixUp } from '../../../../src/features/editor/ai-cutout.js';
 import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
 import {
   BUILD_SLICE_MS,
@@ -9,6 +10,8 @@ import {
   edgeRadiusInMaskPixels,
   getAiParamsKey,
   getFinalMaskParamsKey,
+  getPickedPieceRole,
+  getSurvivingMask,
   pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
@@ -476,6 +479,143 @@ describe('createDraftMaskSource', () => {
   });
 });
 
+describe('getPickedPieceRole', () => {
+  it("tells the frame's largest piece (the subject) from another piece and from nothing", () => {
+    const W = 40;
+    const H = 20;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 16, 16],
+      [30, 2, 4, 4],
+    ];
+    const options = { frameCount: 1, getProb: () => probOf(W, H, pieces), ai: aiOf() };
+    expect(getPickedPieceRole(options, { frame: 0, x: 8 / W, y: 8 / H })).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 0, x: 31 / W, y: 3 / H })).toBe('separate');
+    expect(getPickedPieceRole(options, { frame: 0, x: 0.6, y: 0.9 })).toBe('none');
+    expect(
+      getPickedPieceRole({ ...options, getProb: () => null }, { frame: 0, x: 8 / W, y: 8 / H }),
+    ).toBe('none');
+  });
+});
+
+describe('getPickedPieceRole after the picks (review #195)', () => {
+  const W = 40;
+  const H = 20;
+  /** @type {Rect} */
+  const shelf = [2, 2, 20, 16];
+  /** @type {Rect} */
+  const character = [28, 4, 8, 12];
+  const onCharacter = { frame: 2, x: 32 / W, y: 10 / H };
+  const onShelf = { frame: 2, x: 12 / W, y: 10 / H };
+  /** @param {any[]} picks */
+  const optionsWith = (picks) => ({
+    frameCount: 4,
+    getProb: () => probOf(W, H, [shelf, character]),
+    ai: aiOf({ picks }),
+  });
+
+  it('a Keep pick on a smaller character makes it the subject: Remove on it is tracked, never a pick', async () => {
+    // Keep pick on the character on frame 0: the bigger shelf drops out
+    const options = optionsWith([{ frame: 0, x: 32 / W, y: 10 / H, mode: 'keep' }]);
+    // The raw mask alone calls the character 'separate' (the old judgement)
+    expect(getPickedPieceRole(options, onCharacter)).toBe('separate');
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onCharacter, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, onShelf, survivor)).toBe('separate');
+    // What the old judgement did: a remove pick on the character wipes it
+    const wiped = await buildFinalMasks({
+      ...optionsWith([
+        { frame: 0, x: 32 / W, y: 10 / H, mode: 'keep' },
+        { frame: 2, x: 32 / W, y: 10 / H, mode: 'remove' },
+      ]),
+      ...noYield,
+    });
+    const area = (/** @type {any} */ m) => unpackMask(m).reduce((t, v) => t + v, 0);
+    expect(area(wiped?.masks[2])).toBe(0);
+  });
+
+  it('a Remove pick that took out a bigger piece leaves the character as the subject', async () => {
+    const options = optionsWith([{ frame: 0, x: 12 / W, y: 10 / H, mode: 'remove' }]);
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onCharacter, survivor)).toBe('main');
+  });
+
+  it('with two Keep picks, Remove on the smaller kept character is tracked too (review #195 r2)', async () => {
+    const W2 = 60;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 20, 16], // A, kept
+      [26, 4, 8, 12], // B, kept, smaller
+      [44, 3, 12, 14], // shelf, dropped by the Keep picks
+    ];
+    const keepA = { frame: 0, x: 12 / W2, y: 10 / H, mode: 'keep' };
+    const keepB = { frame: 0, x: 30 / W2, y: 10 / H, mode: 'keep' };
+    const options = {
+      frameCount: 4,
+      getProb: () => probOf(W2, H, pieces),
+      ai: aiOf({ picks: [keepA, keepB] }),
+    };
+    const onB = { frame: 2, x: 30 / W2, y: 10 / H };
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onB, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 2, x: 12 / W2, y: 10 / H }, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, { frame: 2, x: 50 / W2, y: 10 / H }, survivor)).toBe(
+      'separate',
+    );
+    // What a remove pick on B would do: B gone on every frame
+    const built = await buildFinalMasks({
+      ...options,
+      ai: aiOf({ picks: [keepA, keepB, { ...onB, mode: 'remove' }] }),
+      ...noYield,
+    });
+    const at = (/** @type {any} */ m, /** @type {number} */ x) => unpackMask(m)[10 * W2 + x];
+    expect(built?.masks.map((m) => at(m, 30))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('with Remove picks only, Remove on another separate blob stays an instant pick (review #195 r3)', async () => {
+    const W3 = 80;
+    /** @type {Rect[]} */
+    const pieces = [
+      [2, 2, 24, 16], // subject
+      [34, 6, 8, 8], // B, removed by a pick
+      [50, 6, 8, 8], // C
+      [66, 6, 8, 8], // D
+    ];
+    const options = {
+      frameCount: 4,
+      getProb: () => probOf(W3, H, pieces),
+      ai: aiOf({ picks: [{ frame: 0, x: 38 / W3, y: 10 / H, mode: 'remove' }] }),
+    };
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    const at = (/** @type {number} */ x) => ({ frame: 2, x: x / W3, y: 10 / H });
+    // C and D overlap the survivor, but no Keep pick is in effect
+    expect(getPickedPieceRole(options, at(54), survivor)).toBe('separate');
+    expect(getPickedPieceRole(options, at(70), survivor)).toBe('separate');
+    expect(chooseFixUp(getPickedPieceRole(options, at(54), survivor), 'remove')).toBe(
+      'remove-pick',
+    );
+    // The subject is still the subject
+    expect(getPickedPieceRole(options, at(12), survivor)).toBe('main');
+    // Add a Keep pick on the subject: now the overlap rule holds (C and D are
+    // dropped by it, so they are outside the survivor and stay separate; the
+    // subject is main)
+    const kept = {
+      ...options,
+      ai: aiOf({ picks: [...options.ai.picks, { frame: 0, x: 12 / W3, y: 10 / H, mode: 'keep' }] }),
+    };
+    const keptSurvivor = await getSurvivingMask({ ...kept, ...noYield }, 2);
+    expect(getPickedPieceRole(kept, at(54), keptSurvivor)).toBe('separate');
+    expect(getPickedPieceRole(kept, at(12), keptSurvivor)).toBe('main');
+  });
+
+  it('without picks the largest raw piece is the subject', async () => {
+    const options = optionsWith([]);
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onShelf, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, onCharacter)).toBe('separate');
+  });
+});
+
 describe('pickFindsComponent', () => {
   const W = 40;
   const H = 20;
@@ -860,5 +1000,50 @@ describe('tracked objects', () => {
     const added = unpackMask(/** @type {any} */ (full.masks[0]));
     expect(added[8 * W + 24]).toBe(1);
     expect(added[8 * W + 5]).toBe(0);
+  });
+});
+
+describe('whole-clip clean-up', () => {
+  const W = 40;
+  const H = 20;
+  /** A character with a 2x2 hole and a 2x2 speck */
+  const getProb = () => {
+    const prob = probOf(W, H, [
+      [4, 4, 12, 12],
+      [30, 2, 2, 2],
+    ]);
+    for (const y of [8, 9]) prob.data.fill(10, y * W + 8, y * W + 10);
+    return prob;
+  };
+  const cleaned = binaryOf(W, H, [[4, 4, 12, 12]]);
+
+  it('keys the params by the clean-up', () => {
+    const base = aiOf();
+    expect(getAiParamsKey(aiOf({ cleanup: { minIslandArea: 0.01, maxHoleArea: 0 } }))).not.toBe(
+      getAiParamsKey(base),
+    );
+    expect(getAiParamsKey(aiOf({ cleanup: { minIslandArea: 0, maxHoleArea: 0.01 } }))).not.toBe(
+      getAiParamsKey(base),
+    );
+  });
+
+  it('drops specks and fills holes on every frame, in builds and drafts alike', async () => {
+    const ai = aiOf({ cleanup: { minIslandArea: 5 / (W * H), maxHoleArea: 4 / (W * H) } });
+    const full = await buildFinalMasks({ frameCount: 2, getProb, ai, ...noYield });
+    const draft = createDraftMaskSource({ frameCount: 2, getProb, ai });
+    for (let f = 0; f < 2; f++) {
+      expect(full.masks[f]).toEqual(packMask(cleaned, W, H));
+      expect(draft.getFinalMask(f)).toEqual(full.masks[f]);
+    }
+    // Off: as the model gave it
+    const off = await buildFinalMasks({ frameCount: 1, getProb, ai: aiOf(), ...noYield });
+    expect(off.masks[0]).not.toEqual(packMask(cleaned, W, H));
+  });
+
+  it('cleans up before the edge grows the cutout', async () => {
+    const ai = aiOf({ edge: 1, cleanup: { minIslandArea: 5 / (W * H), maxHoleArea: 0 } });
+    const full = await buildFinalMasks({ frameCount: 1, getProb, ai, ...noYield });
+    // The speck does not come back grown
+    expect(unpackMask(/** @type {any} */ (full.masks[0]))[3 * W + 31]).toBe(0);
   });
 });

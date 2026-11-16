@@ -4,7 +4,8 @@
  * Turns a clip's probability masks (one per analyzed frame, from the
  * segmentation model) and the AI cutout parameters into the final 1-bit
  * mask of every frame: threshold (optionally averaged with the neighbouring
- * frames), follow the picks, grow/shrink by the edge, subtract / add the
+ * frames), follow the picks, clean up (small pieces, small holes),
+ * grow/shrink by the edge, subtract / add the
  * tracked objects (see object-masks.js), bit-pack.
  *
  * Building runs on the main thread in slices: it yields to the event loop
@@ -23,10 +24,12 @@
 import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
   createPickTracker,
+  fillSmallHoles,
   findPickedComponent,
   labelComponents,
   morphMask,
   packMask,
+  removeSmallComponents,
   resampleNearest,
   smoothTemporal,
   thresholdMask,
@@ -97,7 +100,7 @@ let buildCounter = 0;
  * task's priority), else a macrotask
  * @returns {Promise<void>}
  */
-function defaultYieldToMain() {
+export function defaultYieldToMain() {
   const scheduler = /** @type {any} */ (globalThis).scheduler;
   if (scheduler && typeof scheduler.yield === 'function') {
     return scheduler.yield();
@@ -106,7 +109,7 @@ function defaultYieldToMain() {
 }
 
 /** @returns {number} */
-function defaultNow() {
+export function defaultNow() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
@@ -141,7 +144,53 @@ export function getAiParamsKey(ai) {
   // Like the click model's picks, an object's clicks change its masks (the
   // store version), not the build: only which objects apply, and how
   const objects = (ai.objects ?? []).map((o) => `${o.id}:${o.mode}`).join(',');
-  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}`;
+  const cleanup = `${ai.cleanup?.minIslandArea ?? 0}:${ai.cleanup?.maxHoleArea ?? 0}`;
+  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}|${cleanup}`;
+}
+
+/**
+ * @typedef {Object} CleanupScratch
+ * @property {Int32Array} labels
+ * @property {Uint8Array} islands
+ * @property {Uint8Array} holes
+ */
+
+/**
+ * Scratch buffers for applyCleanup, or null when the clean-up is off
+ * @param {AiCutout} ai
+ * @param {number} size - width * height
+ * @returns {CleanupScratch | null}
+ */
+function createCleanupScratch(ai, size) {
+  if (!(ai.cleanup?.minIslandArea > 0) && !(ai.cleanup?.maxHoleArea > 0)) return null;
+  return {
+    labels: new Int32Array(size),
+    islands: new Uint8Array(size),
+    holes: new Uint8Array(size),
+  };
+}
+
+/**
+ * The whole-clip clean-up of one frame's selection: small separate pieces
+ * go, small holes are filled (areas are fractions of the frame)
+ * @param {Uint8Array} mask - 0/1, width * height (not modified)
+ * @param {number} width
+ * @param {number} height
+ * @param {import('../edits/model.js').CutoutCleanup} cleanup
+ * @param {CleanupScratch} scratch
+ * @returns {Uint8Array}
+ */
+export function applyCleanup(mask, width, height, cleanup, scratch) {
+  const size = width * height;
+  let out = mask;
+  const minIsland = cleanup.minIslandArea * size;
+  if (minIsland > 0) {
+    const comps = labelComponents(out, width, height, scratch.labels);
+    out = removeSmallComponents(out, comps, minIsland, scratch.islands);
+  }
+  const maxHole = cleanup.maxHoleArea * size;
+  if (maxHole > 0) out = fillSmallHoles(out, width, height, maxHole, scratch.labels, scratch.holes);
+  return out;
 }
 
 /**
@@ -266,6 +315,189 @@ export function pickFindsComponent(options, pick) {
 }
 
 /**
+ * The stage of a build before Fit's edge and the tracked objects: each
+ * frame's binary mask after the pick selection and the whole-clip
+ * clean-up. Picks and clean-up act here, so the clean-up suggestions are
+ * measured here too.
+ * @param {FrameBinarySource} frameBinary
+ * @param {AiCutout} ai
+ * @param {number} frameCount
+ */
+function createPreEdgeStage(frameBinary, ai, frameCount) {
+  const { width, height, binaryAt } = frameBinary;
+  const size = width * height;
+  const picks = getRegionPicks(ai);
+  const tracker = picks.length > 0 ? createPickTracker({ picks, width, height }) : null;
+  const backwardStart = tracker ? Math.min(tracker.backwardStart, frameCount - 1) : -1;
+  const labels = new Int32Array(size);
+  const selected = new Uint8Array(size);
+  const cleanupScratch = createCleanupScratch(ai, size);
+  return {
+    /** Frames the backward pick pass walks */
+    backwardSteps: backwardStart + 1,
+    /**
+     * The backward pick pass (before the first maskAt)
+     * @param {() => Promise<void>} stepDone - After each frame
+     */
+    async trackBackward(stepDone) {
+      if (!tracker) return;
+      for (let f = backwardStart; f >= 0; f--) {
+        const bin = binaryAt(f);
+        tracker.trackBackward(f, bin ? labelComponents(bin, width, height, labels) : null);
+        await stepDone();
+      }
+    },
+    /**
+     * A frame's pre-edge mask (0/1), or null when it was not analyzed. Call
+     * for every frame in order from 0; the result lives in a buffer that the
+     * next call overwrites.
+     * @param {number} f
+     * @returns {Uint8Array | null}
+     */
+    maskAt(f) {
+      const bin = binaryAt(f);
+      if (!bin) {
+        tracker?.skipForward(f);
+        return null;
+      }
+      let mask = bin;
+      if (tracker) {
+        mask = tracker.selectForward(f, labelComponents(bin, width, height, labels), selected);
+      }
+      if (cleanupScratch) mask = applyCleanup(mask, width, height, ai.cleanup, cleanupScratch);
+      return mask;
+    },
+  };
+}
+
+/**
+ * The pre-edge masks of a clip (see createPreEdgeStage), for passes that
+ * must see what picks and clean-up see: read every frame in order from 0
+ * with maskAt. The backward pick pass runs (sliced) before this resolves.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, signal?: AbortSignal, sliceMs?: number, now?: () => number, yieldToMain?: () => Promise<void> }} options
+ * @returns {Promise<{ width: number, height: number, maskAt: (f: number) => Uint8Array | null } | null>}
+ *   null when no frame is analyzed
+ * @throws {DOMException} AbortError when cancelled
+ */
+export async function createPreEdgeMaskSource(options) {
+  const {
+    frameCount,
+    getProb,
+    ai,
+    signal,
+    sliceMs = BUILD_SLICE_MS,
+    now = defaultNow,
+    yieldToMain = defaultYieldToMain,
+  } = options;
+  throwIfAborted(signal);
+  const frameBinary = createFrameBinarySource({ frameCount, getProb, ai });
+  if (!frameBinary) return null;
+  const stage = createPreEdgeStage(frameBinary, ai, frameCount);
+  let sliceStart = now();
+  await stage.trackBackward(async () => {
+    if (now() - sliceStart >= sliceMs) {
+      await yieldToMain();
+      sliceStart = now();
+    }
+    throwIfAborted(signal);
+  });
+  return { width: frameBinary.width, height: frameBinary.height, maskAt: stage.maskAt };
+}
+
+/**
+ * What a pick on a frame lands on: 'none' (no piece of the binary mask the
+ * build tracks picks on is under it or within the snap radius), 'main'
+ * (the subject) or 'separate' (another piece).
+ *
+ * With picks, the subject is judged on what is left after them (and
+ * clean-up): `survivor`, the frame's pre-edge mask (see getSurvivingMask).
+ * - A Keep pick in effect: the survivor is what the user kept, so a clicked
+ *   piece that overlaps it at all is 'main' (a remove pick there would
+ *   take out a kept character, even a smaller one or one of several). Only
+ *   a piece outside it is 'separate'.
+ * - Remove picks only: everything but the removed pieces survives, so the
+ *   subject is the survivor's largest piece and the clicked piece is
+ *   'main' when it holds most of it. Other blobs stay 'separate' and get
+ *   instant remove picks.
+ * Without `survivor` (no picks) the largest raw piece is the subject.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
+ * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
+ * @param {Uint8Array | null} [survivor] - 0/1 pre-edge mask of the frame, at
+ *   the binary mask's size
+ * @returns {'none' | 'main' | 'separate'}
+ */
+export function getPickedPieceRole(options, pick, survivor = null) {
+  const source = createFrameBinarySource(options);
+  const bin = source?.binaryAt(pick.frame);
+  if (!source || !bin) return 'none';
+  const { width, height } = source;
+  const comps = labelComponents(bin, width, height);
+  const picked = findPickedComponent(comps, width, height, pick);
+  if (picked === 0) return 'none';
+  if (survivor && survivor.length === width * height && survivor.includes(1)) {
+    if (getRegionPicks(options.ai).some((p) => p.mode === 'keep')) {
+      for (let i = 0; i < survivor.length; i++) {
+        if (survivor[i] && comps.labels[i] === picked) return 'main';
+      }
+      return 'separate';
+    }
+    const kept = labelComponents(survivor, width, height);
+    const subject = largestComponent(kept.areas, kept.count);
+    let inside = 0;
+    for (let i = 0; i < kept.labels.length; i++) {
+      if (kept.labels[i] === subject && comps.labels[i] === picked) inside++;
+    }
+    return inside * 2 > kept.areas[subject] ? 'main' : 'separate';
+  }
+  return picked === largestComponent(comps.areas, comps.count) ? 'main' : 'separate';
+}
+
+/**
+ * Label of the largest component (the first of equal ones), 0 for none
+ * @param {ArrayLike<number>} areas - Indexed by label
+ * @param {number} count
+ * @returns {number}
+ */
+function largestComponent(areas, count) {
+  let largest = 0;
+  for (let l = 1; l <= count; l++) {
+    if (!largest || areas[l] > areas[largest]) largest = l;
+  }
+  return largest;
+}
+
+/**
+ * A frame's pre-edge mask (threshold, picks, clean-up: what remains for the
+ * edge), for getPickedPieceRole. The pick tracking runs from frame 0 up to
+ * `frame`, in time slices; null when the frame is not analyzed.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, signal?: AbortSignal, sliceMs?: number, now?: () => number, yieldToMain?: () => Promise<void> }} options
+ * @param {number} frame
+ * @returns {Promise<Uint8Array | null>}
+ * @throws {DOMException} AbortError when cancelled
+ */
+export async function getSurvivingMask(options, frame) {
+  const {
+    signal,
+    sliceMs = BUILD_SLICE_MS,
+    now = defaultNow,
+    yieldToMain = defaultYieldToMain,
+  } = options;
+  const source = await createPreEdgeMaskSource(options);
+  if (!source) return null;
+  let sliceStart = now();
+  for (let f = 0; f < frame; f++) {
+    source.maskAt(f);
+    if (now() - sliceStart >= sliceMs) {
+      await yieldToMain();
+      sliceStart = now();
+    }
+    throwIfAborted(signal);
+  }
+  const mask = source.maskAt(frame);
+  return mask ? Uint8Array.from(mask) : null;
+}
+
+/**
  * Build the final masks of a clip.
  *
  * Without picks every frame is independent (one pass). With picks, the
@@ -298,7 +530,7 @@ export async function buildFinalMasks(options) {
   if (!frameBinary) {
     return { masks, width: 0, height: 0, bytes: 0 };
   }
-  const { width, height, binaryAt } = frameBinary;
+  const { width, height } = frameBinary;
   // Snapshot, like the probability masks: the store may change while the
   // build yields
   const objectMasks = objects.map((object) => {
@@ -310,14 +542,10 @@ export async function buildFinalMasks(options) {
 
   const size = width * height;
   const radius = edgeRadiusInMaskPixels(ai.edge, width, options.sourceWidth ?? width);
-  const picks = getRegionPicks(ai);
-  const tracker = picks.length > 0 ? createPickTracker({ picks, width, height }) : null;
-  const backwardStart = tracker ? Math.min(tracker.backwardStart, frameCount - 1) : -1;
-  const total = frameCount + (backwardStart + 1);
+  const stage = createPreEdgeStage(frameBinary, ai, frameCount);
+  const total = frameCount + stage.backwardSteps;
 
   // Scratch, reused for every frame
-  const labels = new Int32Array(size);
-  const selected = new Uint8Array(size);
   const morphed = new Uint8Array(size);
   const objectScratch = objectMasks.length > 0 ? createObjectScratch(size) : null;
 
@@ -334,24 +562,13 @@ export async function buildFinalMasks(options) {
     throwIfAborted(signal);
   };
 
-  if (tracker) {
-    for (let f = backwardStart; f >= 0; f--) {
-      const bin = binaryAt(f);
-      tracker.trackBackward(f, bin ? labelComponents(bin, width, height, labels) : null);
-      await stepDone();
-    }
-  }
+  // Only with picks: an await here would defer the first slice
+  if (stage.backwardSteps > 0) await stage.trackBackward(stepDone);
 
   let bytes = 0;
   for (let f = 0; f < frameCount; f++) {
-    const bin = binaryAt(f);
-    if (!bin) {
-      tracker?.skipForward(f);
-    } else {
-      let mask = bin;
-      if (tracker) {
-        mask = tracker.selectForward(f, labelComponents(bin, width, height, labels), selected);
-      }
+    let mask = stage.maskAt(f);
+    if (mask) {
       if (radius !== 0) {
         mask = morphMask(mask, width, height, radius, morphed);
       }
@@ -451,7 +668,7 @@ export function createDraftMaskSource({
   const picks = getRegionPicks(ai);
   /** @type {Map<number, PackedMask | null>} */
   const computed = new Map();
-  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array, objects: import('./object-masks.js').ObjectScratch | null } | null} */
+  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array, objects: import('./object-masks.js').ObjectScratch | null, cleanup: CleanupScratch | null } | null} */
   let scratch = null;
 
   /**
@@ -469,6 +686,7 @@ export function createDraftMaskSource({
       selected: new Uint8Array(size),
       morphed: new Uint8Array(size),
       objects: objects.length > 0 ? createObjectScratch(size) : null,
+      cleanup: createCleanupScratch(ai, size),
     };
     let mask = bin;
     const previous = picks.length > 0 ? (base?.getFinalMask(frameIndex) ?? null) : null;
@@ -482,6 +700,7 @@ export function createDraftMaskSource({
         scratch.selected,
       );
     }
+    if (scratch.cleanup) mask = applyCleanup(mask, width, height, ai.cleanup, scratch.cleanup);
     const radius = edgeRadiusInMaskPixels(ai.edge, width, sourceWidth ?? width);
     if (radius !== 0) mask = morphMask(mask, width, height, radius, scratch.morphed);
     if (scratch.objects) {

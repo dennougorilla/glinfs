@@ -16,12 +16,13 @@
  *    aiFromFit) and "Reduce flicker between frames"; color: the key color
  *    with an eyedropper, "Similar colors" (tolerance) and Edges only /
  *    Everywhere.
- * 3. Fix-ups as tools on the preview: Keep / Remove (AI picks), Brush (the
- *    Touch up mode) and Reset; with any AI model, Remove object / Add
- *    object: one click on a thing (even one touching the character) tracks
- *    it through the selection with MobileSAM and subtracts it from, or adds
- *    it to, the model's mask on every frame. Objects are listed with go-to
- *    and delete, the active one gets Whole / Part, and frames where tracking
+ * 3. Fix-ups as tools on the preview: Keep / Remove, Brush (the Touch up
+ *    mode) and Reset. A Keep / Remove click becomes a pick (a piece of the
+ *    mask) or a tracked fix-up (MobileSAM through the selection: something
+ *    on the subject to remove, something the mask missed to keep, or any
+ *    dragged box); see classifyFixUp. Every fix-up is one chip with go-to
+ *    and delete; a tracked one carries its Show mask colour, is selected for
+ *    corrections by its chip, and gets Whole / Part. Frames where tracking
  *    lost one are listed with a way to go there and click it again.
  *
  * "Something else — click it" (click to select, MobileSAM) works by
@@ -46,6 +47,7 @@ import {
   createDefaultEdits,
   EDIT_LIMITS,
 } from '../../../shared/edits/model.js';
+import { MAX_SUGGESTIONS } from '../../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
@@ -60,11 +62,13 @@ import {
   getModelSizeLabel,
   RUNTIME_SIZE_LABEL,
 } from '../ai-cutout.js';
+import { getObjectColor } from '../object-colors.js';
 import { getActiveAiObject } from '../state.js';
 
 /** @typedef {import('../../../shared/edits/model.js').CutoutPick} CutoutPick */
 /** @typedef {import('../../../shared/edits/model.js').CutoutObject} CutoutObject */
 /** @typedef {import('../../../shared/edits/model.js').AiCutout} AiCutout */
+/** @typedef {import('../../../shared/masks/cleanup-suggestions.js').CleanupSuggestion} CleanupSuggestion */
 /** @typedef {'none' | 'anime' | 'portrait' | 'general' | 'click' | 'color'} Subject */
 
 /**
@@ -367,14 +371,29 @@ export function getPickLabel(pick, fps) {
 }
 
 /**
+ * The frame a tracked fix-up was made on: its first keep click, else its
+ * first box (corrections on other frames do not move it)
+ * @param {CutoutObject} object
+ * @returns {number}
+ */
+export function getObjectFrame(object) {
+  return (
+    object.clicks.find((c) => c.mode === 'keep')?.frame ??
+    object.boxes?.[0]?.frame ??
+    object.clicks[0]?.frame ??
+    0
+  );
+}
+
+/**
  * Label of a tracked object in the list
  * @param {CutoutObject} object
  * @param {number} fps
  * @returns {string}
  */
 export function getObjectLabel(object, fps) {
-  const verb = object.mode === 'remove' ? 'Remove' : 'Add';
-  return `${verb} object at ${frameToTimecode(object.clicks[0].frame, fps)}`;
+  const verb = object.mode === 'remove' ? 'Remove' : 'Keep';
+  return `${verb} at ${frameToTimecode(getObjectFrame(object), fps)}`;
 }
 
 /**
@@ -433,7 +452,7 @@ export function getLostObject(objects, lost, range, activeId = null) {
  * @returns {string}
  */
 export function getObjectLostText(object, frames, fps) {
-  const what = object.mode === 'remove' ? 'The removed object' : 'The added object';
+  const what = object.mode === 'remove' ? 'What you removed' : 'What you kept';
   const first = frameToTimecode(frames[0], fps);
   if (frames.length === 1) return `${what} was lost at ${first}. Click it there to keep going.`;
   return `${what} was lost at ${frames.length} places, first at ${first}. Click it there to keep going.`;
@@ -561,10 +580,6 @@ function icon(paths, size = 18) {
 const TOOL_ICONS = {
   keep: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
   remove: '<circle cx="12" cy="12" r="8"/><path d="M8 12h8"/>',
-  'remove-object':
-    '<rect x="4" y="4" width="16" height="16" rx="3" stroke-dasharray="3 2.5"/><path d="M8 12h8"/>',
-  'add-object':
-    '<rect x="4" y="4" width="16" height="16" rx="3" stroke-dasharray="3 2.5"/><path d="M12 8v8M8 12h8"/>',
   brush: '<path d="M14.5 4.5l5 5L10 19H5v-5z"/><path d="M12.5 6.5l5 5"/>',
   reset: '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/>',
   eyedropper:
@@ -915,6 +930,28 @@ export function renderBackgroundPanel(handlers) {
     [smoothing, createElement('span', {}, ['Reduce flicker between frames'])],
   );
 
+  // --- Clean up: one-tap fixes found in the last build (at most 4 chips) ---
+  const cleanupList = createElement('ul', {
+    id: 'ai-cleanup-list',
+    className: 'editor-cutout-picks',
+    'aria-labelledby': 'ai-cleanup-title',
+  });
+  const cleanupGroup = createElement('div', { id: 'ai-cleanup', hidden: 'true' }, [
+    createElement('h3', { className: 'editor-cutout-label', id: 'ai-cleanup-title' }, ['Clean up']),
+    cleanupList,
+  ]);
+  cleanups.push(
+    on(cleanupList, 'click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const item = target?.closest('[data-cleanup]');
+      if (!(item instanceof HTMLElement) || !target?.closest('button')) return;
+      const chip = cleanupChips.get(cleanupList)?.[Number(item.dataset.index)];
+      if (!chip) return;
+      if (chip.applied) handlers.onClearCleanup?.(/** @type {'specks' | 'holes'} */ (chip.kind));
+      else if (chip.suggestion) handlers.onApplyCleanup?.(chip.suggestion);
+    }),
+  );
+
   // --- Click to select: Whole / Part and the frames that need a click ---
   const scopes = /** @type {const} */ ([
     { value: 'whole', label: 'Whole', title: 'The whole thing you clicked' },
@@ -995,6 +1032,7 @@ export function renderBackgroundPanel(handlers) {
       notice,
       fit.row,
       smoothingRow,
+      cleanupGroup,
     ],
   );
 
@@ -1109,43 +1147,6 @@ export function renderBackgroundPanel(handlers) {
       }),
     ),
   );
-  const removeObject = toolToggle('ai-object-remove', 'Remove object', 'remove-object', {
-    'aria-describedby': 'background-tools-hint',
-  });
-  const addObject = toolToggle('ai-object-add', 'Add object', 'add-object', {
-    'aria-describedby': 'background-tools-hint',
-  });
-  cleanups.push(
-    on(removeObject.input, 'change', () =>
-      handlers.onSetAiPickTool?.(removeObject.input.checked ? 'remove-object' : null, {
-        fromKeyboard: isKeyboardFocused(removeObject.input),
-      }),
-    ),
-    on(addObject.input, 'change', () =>
-      handlers.onSetAiPickTool?.(addObject.input.checked ? 'add-object' : null, {
-        fromKeyboard: isKeyboardFocused(addObject.input),
-      }),
-    ),
-  );
-  const objectList = createElement('ul', {
-    id: 'ai-object-list',
-    className: 'editor-cutout-picks',
-    'aria-label': 'Objects',
-    hidden: 'true',
-  });
-  cleanups.push(
-    on(objectList, 'click', (e) => {
-      const target = e.target instanceof Element ? e.target : null;
-      const item = target?.closest('[data-object-id]');
-      if (!(item instanceof HTMLElement)) return;
-      const id = /** @type {string} */ (item.dataset.objectId);
-      if (target?.closest('.editor-cutout-pick-delete')) {
-        handlers.onRemoveAiObject?.(id);
-      } else if (target?.closest('.editor-cutout-pick-go')) {
-        handlers.onGoToObject?.(id);
-      }
-    }),
-  );
   const objectScope = createElement(
     'fieldset',
     { className: 'editor-cutout-segmented-group', id: 'ai-object-scope', hidden: 'true' },
@@ -1215,11 +1216,33 @@ export function renderBackgroundPanel(handlers) {
   const pickList = createElement('ul', {
     id: 'ai-pick-list',
     className: 'editor-cutout-picks',
-    'aria-label': 'Picks',
+    'aria-label': 'Fix-ups',
   });
+  /** @param {EventTarget | null} node */
+  const objectIdOf = (node) => {
+    const item = node instanceof Element ? node.closest('[data-object-id]') : null;
+    return item instanceof HTMLElement ? (item.dataset.objectId ?? null) : null;
+  };
+  /** @type {string | null} */
+  let highlighted = null;
+  /** @param {string | null} id */
+  const highlight = (id) => {
+    if (id === highlighted) return;
+    highlighted = id;
+    handlers.onHighlightAiObject?.(id);
+  };
   cleanups.push(
     on(pickList, 'click', (e) => {
       const target = e.target instanceof Element ? e.target : null;
+      const objectId = objectIdOf(target);
+      if (objectId) {
+        if (target?.closest('.editor-cutout-pick-delete')) {
+          handlers.onRemoveAiObject?.(objectId);
+        } else if (target?.closest('.editor-cutout-pick-go')) {
+          handlers.onGoToObject?.(objectId);
+        }
+        return;
+      }
       const item = target?.closest('[data-pick-index]');
       if (!(item instanceof HTMLElement)) return;
       const index = Number(item.dataset.pickIndex);
@@ -1229,6 +1252,21 @@ export function renderBackgroundPanel(handlers) {
         handlers.onFrameChange(Number(item.dataset.pickFrame));
       }
     }),
+    // Hovering or focusing a tracked fix-up's chip shows its region on the frame
+    on(pickList, 'mouseover', (e) => highlight(objectIdOf(e.target))),
+    on(pickList, 'mouseleave', () =>
+      highlight(
+        objectIdOf(pickList.contains(document.activeElement) ? document.activeElement : null),
+      ),
+    ),
+    on(pickList, 'focusin', (e) => highlight(objectIdOf(e.target))),
+    on(pickList, 'focusout', (e) =>
+      highlight(
+        objectIdOf(
+          pickList.contains(/** @type {Node | null} */ (e.relatedTarget)) ? e.relatedTarget : null,
+        ),
+      ),
+    ),
   );
 
   const tools = createElement(
@@ -1249,13 +1287,8 @@ export function renderBackgroundPanel(handlers) {
         brush.wrapper,
         reset,
       ]),
-      createElement('div', { className: 'editor-cutout-tools', id: 'ai-object-tools' }, [
-        removeObject.wrapper,
-        addObject.wrapper,
-      ]),
       createElement('p', { className: 'editor-cutout-note', id: 'background-tools-hint' }),
       pickList,
-      objectList,
       objectScope,
       objectLost,
       createElement('p', { className: 'editor-cutout-note', id: 'touchup-entry-summary' }),
@@ -1331,93 +1364,189 @@ function setHidden(el, hidden) {
 }
 
 /**
- * Rebuild the pick list (small: at most 16 items). Keeps focus inside the
- * list when the focused item goes away.
+ * Rebuild the fix-up list: the picks, then the tracked fix-ups with their
+ * colour (small: at most 16 + 4 items). Keeps focus inside the list when
+ * the focused item goes away.
  * @param {HTMLElement} list
  * @param {CutoutPick[]} picks
+ * @param {CutoutObject[]} objects
+ * @param {string | null} selectedId - The tracked fix-up being corrected
  * @param {number} fps
  * @param {HTMLElement} fallbackFocus
  */
-function updatePickList(list, picks, fps, fallbackFocus) {
-  const signature = picks.map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`).join('|');
+function updatePickList(list, picks, objects, selectedId, fps, fallbackFocus) {
+  const signature = [
+    selectedId,
+    ...picks.map((p) => `${p.frame}:${p.x}:${p.y}:${p.mode}`),
+    ...objects.map((o) => `${o.id}:${o.mode}:${getObjectLabel(o, fps)}`),
+  ].join('|');
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   const focused = document.activeElement;
   const hadFocus = focused instanceof HTMLElement && list.contains(focused);
-  const focusedIndex = hadFocus
-    ? Number(/** @type {HTMLElement} */ (focused.closest('[data-pick-index]'))?.dataset.pickIndex)
-    : -1;
+  const focusedItem = hadFocus ? /** @type {HTMLElement | null} */ (focused.closest('li')) : null;
+  const focusedKey = focusedItem?.dataset.objectId ?? focusedItem?.dataset.pickIndex;
+  const focusedIndex = focusedItem ? [...list.children].indexOf(focusedItem) : -1;
+  const focusedGo = hadFocus && Boolean(focused.closest('.editor-cutout-pick-go'));
+  /**
+   * @param {string} className
+   * @param {Record<string, string>} data
+   * @param {string} label
+   * @param {string} deleteLabel
+   * @param {{ color: string, active: boolean } | null} tracked
+   */
+  const chip = (className, data, label, deleteLabel, tracked) =>
+    createElement(
+      'li',
+      { className: `${className}${tracked?.active ? ' is-active' : ''}`, ...data },
+      [
+        createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'editor-cutout-pick-go',
+            'aria-label': `${label} (go to frame)`,
+            ...(tracked ? { 'aria-pressed': tracked.active ? 'true' : 'false' } : {}),
+          },
+          tracked
+            ? [
+                createElement('span', {
+                  className: 'editor-cutout-pick-swatch',
+                  style: `--swatch: ${tracked.color}`,
+                  'aria-hidden': 'true',
+                }),
+                label,
+              ]
+            : [label],
+        ),
+        createElement(
+          'button',
+          { type: 'button', className: 'editor-cutout-pick-delete', 'aria-label': deleteLabel },
+          ['×'],
+        ),
+      ],
+    );
   list.replaceChildren(
     ...picks.map((pick, index) => {
       const label = getPickLabel(pick, fps);
-      return createElement(
-        'li',
-        {
-          className: `editor-cutout-pick editor-cutout-pick--${pick.mode}`,
-          'data-pick-index': String(index),
-          'data-pick-frame': String(pick.frame),
-        },
-        [
-          createElement(
-            'button',
-            {
-              type: 'button',
-              className: 'editor-cutout-pick-go',
-              'aria-label': `${label} (go to frame)`,
-            },
-            [label],
-          ),
-          createElement(
-            'button',
-            {
-              type: 'button',
-              className: 'editor-cutout-pick-delete',
-              'aria-label': `Remove pick: ${label}`,
-            },
-            ['×'],
-          ),
-        ],
+      return chip(
+        `editor-cutout-pick editor-cutout-pick--${pick.mode}`,
+        { 'data-pick-index': String(index), 'data-pick-frame': String(pick.frame) },
+        label,
+        `Delete: ${label}`,
+        null,
+      );
+    }),
+    ...objects.map((object) => {
+      const label = getObjectLabel(object, fps);
+      return chip(
+        `editor-cutout-pick editor-cutout-pick--${object.mode === 'remove' ? 'remove' : 'keep'}`,
+        { 'data-object-id': object.id },
+        label,
+        `Delete: ${label}`,
+        { color: getObjectColor(objects, object.id), active: object.id === selectedId },
       );
     }),
   );
   if (hadFocus) {
-    const index = Math.min(focusedIndex, picks.length - 1);
+    const items = [...list.children];
+    const same = items.find((li) => {
+      const d = /** @type {HTMLElement} */ (li).dataset;
+      return (d.objectId ?? d.pickIndex) === focusedKey;
+    });
+    const item = same ?? items[Math.min(focusedIndex, items.length - 1)];
     const target =
-      index >= 0
-        ? list.children[index]?.querySelector('.editor-cutout-pick-delete')
-        : fallbackFocus;
+      item?.querySelector(
+        same && focusedGo ? '.editor-cutout-pick-go' : '.editor-cutout-pick-delete',
+      ) ?? fallbackFocus;
     if (target instanceof HTMLElement) target.focus();
   }
 }
 
 /**
- * Rebuild the tracked object list (at most four items); the active object
- * is marked
- * @param {HTMLElement} list
- * @param {CutoutObject[]} objects
- * @param {string | null} activeId
- * @param {number} fps
- * @param {HTMLElement} fallbackFocus
+ * @typedef {Object} CleanupChip
+ * @property {CleanupSuggestion['kind']} kind
+ * @property {string} label
+ * @property {boolean} applied - A clean-up that is on (tapping turns it off)
+ * @property {CleanupSuggestion | null} suggestion - What tapping applies
  */
-function updateObjectList(list, objects, activeId, fps, fallbackFocus) {
-  const signature = `${activeId}|${objects.map((o) => `${o.id}:${o.mode}:${o.clicks[0].frame}`).join('|')}`;
+
+/**
+ * The chips of each Clean up list's most recent update (its click handler
+ * reads them)
+ * @type {WeakMap<HTMLElement, CleanupChip[]>}
+ */
+const cleanupChips = new WeakMap();
+
+/**
+ * @param {number} n
+ * @param {string} one
+ * @param {string} many
+ */
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The Clean up chips: the clean-ups that are on (checked), then the
+ * suggestions for what is off (a blob suggestion only where picks select
+ * pieces, not with click to select), at most MAX_SUGGESTIONS
+ * @param {AiCutout} ai
+ * @param {CleanupSuggestion[]} suggestions
+ * @returns {CleanupChip[]}
+ */
+export function getCleanupChips(ai, suggestions) {
+  /** @type {CleanupChip[]} */
+  const chips = [];
+  const cleanup = ai.cleanup ?? { minIslandArea: 0, maxHoleArea: 0 };
+  if (cleanup.minIslandArea > 0) {
+    chips.push({
+      kind: 'specks',
+      label: 'Specks removed · every frame',
+      applied: true,
+      suggestion: null,
+    });
+  }
+  if (cleanup.maxHoleArea > 0) {
+    chips.push({
+      kind: 'holes',
+      label: 'Small holes filled · every frame',
+      applied: true,
+      suggestion: null,
+    });
+  }
+  for (const s of suggestions) {
+    if (s.kind === 'specks' && cleanup.minIslandArea > 0) continue;
+    if (s.kind === 'holes' && cleanup.maxHoleArea > 0) continue;
+    if (s.kind === 'blob' && ai.model === 'click') continue;
+    const label =
+      s.kind === 'specks'
+        ? `Remove ${plural(s.count, 'speck', 'specks')} · every frame`
+        : s.kind === 'holes'
+          ? `Fill ${plural(s.count, 'small hole', 'small holes')} · every frame`
+          : s.kind === 'blob'
+            ? `Remove blob near ${s.where} · on ${plural(s.frames, 'frame', 'frames')}`
+            : `Check ${plural(s.frames, 'frame', 'frames')} where the character shrinks`;
+    chips.push({ kind: s.kind, label, applied: false, suggestion: s });
+  }
+  return chips.slice(0, MAX_SUGGESTIONS);
+}
+
+/**
+ * @param {HTMLElement} list
+ * @param {CleanupChip[]} chips
+ */
+function updateCleanupList(list, chips) {
+  cleanupChips.set(list, chips);
+  const signature = chips.map((c) => `${c.applied ? 1 : 0}:${c.label}`).join('|');
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
-  const focused = document.activeElement;
-  const hadFocus = focused instanceof HTMLElement && list.contains(focused);
-  const focusedId = hadFocus
-    ? /** @type {HTMLElement} */ (focused.closest('[data-object-id]'))?.dataset.objectId
-    : undefined;
-  const focusedGo = hadFocus && Boolean(focused.closest('.editor-cutout-pick-go'));
   list.replaceChildren(
-    ...objects.map((object) => {
-      const label = getObjectLabel(object, fps);
-      const active = object.id === activeId;
-      return createElement(
+    ...chips.map((chip, index) =>
+      createElement(
         'li',
         {
-          className: `editor-cutout-pick editor-cutout-pick--${object.mode === 'remove' ? 'remove' : 'keep'}${active ? ' is-active' : ''}`,
-          'data-object-id': object.id,
+          className: `editor-cutout-pick editor-cutout-pick--${chip.kind === 'shrink' ? 'keep' : 'remove'}${chip.applied ? ' is-active' : ''}`,
+          'data-cleanup': chip.kind,
+          'data-index': String(index),
         },
         [
           createElement(
@@ -1425,34 +1554,16 @@ function updateObjectList(list, objects, activeId, fps, fallbackFocus) {
             {
               type: 'button',
               className: 'editor-cutout-pick-go',
-              'aria-label': `${label} (go to frame)`,
-              'aria-current': active ? 'true' : 'false',
+              ...(chip.kind === 'specks' || chip.kind === 'holes'
+                ? { 'aria-pressed': chip.applied ? 'true' : 'false' }
+                : {}),
             },
-            [label],
-          ),
-          createElement(
-            'button',
-            {
-              type: 'button',
-              className: 'editor-cutout-pick-delete',
-              'aria-label': `Delete: ${label}`,
-            },
-            ['×'],
+            [chip.label],
           ),
         ],
-      );
-    }),
+      ),
+    ),
   );
-  if (hadFocus) {
-    const item = [...list.children].find(
-      (li) => /** @type {HTMLElement} */ (li).dataset.objectId === focusedId,
-    );
-    const target =
-      item?.querySelector(focusedGo ? '.editor-cutout-pick-go' : '.editor-cutout-pick-delete') ??
-      list.lastElementChild?.querySelector('.editor-cutout-pick-delete') ??
-      fallbackFocus;
-    if (target instanceof HTMLElement) target.focus();
-  }
 }
 
 /**
@@ -1556,32 +1667,21 @@ export function updateBackgroundPanel(container, state, fps) {
   // AI
   if (isAi && status) updateAiSettings(root, state, fps);
 
-  // Fix-up tools: Keep/Remove with the AI only
+  // Fix-up tools: Keep/Remove with the AI only; they make picks and tracked
+  // fix-ups, so only both lists full (and nothing selected to correct)
+  // turns them off
   const { ai } = background;
+  const objects = ai.objects ?? [];
   const full = ai.picks.length >= EDIT_LIMITS.aiPicks.max;
+  const objectsFull = objects.length >= EDIT_LIMITS.aiObjects.max;
+  const correcting = Boolean(state.aiActiveObjectId && state.aiPickTool);
   for (const mode of /** @type {const} */ (['keep', 'remove'])) {
     const input = /** @type {HTMLInputElement} */ (q(root, `#ai-pick-${mode}`));
     const label = /** @type {HTMLElement} */ (input.closest('.editor-cutout-tool'));
     setHidden(label, !isAi);
     setChecked(input, state.aiPickTool === mode);
-    input.disabled = full && state.aiPickTool !== mode;
+    input.disabled = full && objectsFull && !correcting && state.aiPickTool !== mode;
     label.classList.toggle('is-active', state.aiPickTool === mode);
-  }
-  // Object tools: with any AI model; a full list leaves only a tool aimed at
-  // an object (a re-anchor)
-  const objects = ai.objects ?? [];
-  const objectsFull = objects.length >= EDIT_LIMITS.aiObjects.max;
-  setHidden(q(root, '#ai-object-tools'), !isAi);
-  for (const [id, tool] of /** @type {const} */ ([
-    ['#ai-object-remove', 'remove-object'],
-    ['#ai-object-add', 'add-object'],
-  ])) {
-    const input = /** @type {HTMLInputElement} */ (q(root, id));
-    const label = /** @type {HTMLElement} */ (input.closest('.editor-cutout-tool'));
-    const activeTool = state.aiPickTool === tool;
-    setChecked(input, activeTool);
-    input.disabled = objectsFull && !activeTool;
-    label.classList.toggle('is-active', activeTool);
   }
 
   const brushLabel = q(root, '#touchup-brush').closest('.editor-cutout-tool');
@@ -1590,21 +1690,20 @@ export function updateBackgroundPanel(container, state, fps) {
     !canResetBackground(state);
 
   const click = isAi && getAiModelId(ai) === 'click';
-  const objectTool = state.aiPickTool === 'remove-object' || state.aiPickTool === 'add-object';
   const samReady = getModelReadiness('click', status?.models?.click).ready;
   let toolsHint = '';
-  if (isAi && objectTool && !samReady) {
-    toolsHint = `Objects are tracked with MobileSAM: the first click downloads ${getModelSizeLabel('click')}.`;
-  } else if (isAi && objectsFull && !state.aiObjectTarget) {
-    toolsHint = `The limit of ${EDIT_LIMITS.aiObjects.max} objects is reached. Delete one to add another.`;
+  if (isAi && !click && state.aiPickTool && !samReady) {
+    toolsHint = `Fix-ups on the subject and boxes are tracked with MobileSAM: the first one downloads ${getModelSizeLabel('click')}.`;
+  } else if (isAi && objectsFull && !correcting) {
+    toolsHint = `The limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups is reached. Delete one to add another.`;
   } else if (isAi && full) {
     toolsHint = `The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached. Remove one to add another.`;
   } else if (click && ai.picks.length === 0) {
     toolsHint = 'Click the thing you want to keep in the preview.';
   } else if (click) {
     toolsHint = 'Keep or Remove adds a point to fix the selection.';
-  } else if (isAi && ai.picks.length === 0 && state.aiPickTool === null) {
-    toolsHint = 'Keep or Remove, then click a character in the preview.';
+  } else if (isAi && ai.picks.length === 0 && objects.length === 0 && state.aiPickTool === null) {
+    toolsHint = 'Keep or Remove, then click or drag a box in the preview.';
   }
   setText(q(root, '#background-tools-hint'), toolsHint);
 
@@ -1620,24 +1719,31 @@ export function updateBackgroundPanel(container, state, fps) {
   setHidden(q(root, '#ai-click-lost'), lostText === '');
   setText(q(root, '#ai-click-lost-text'), lostText);
 
+  // Every fix-up, pick or tracked, in one list; the selected one is marked
   const list = /** @type {HTMLElement} */ (q(root, '#ai-pick-list'));
-  updatePickList(list, isAi ? ai.picks : [], fps, q(root, '#ai-pick-keep'));
-  setHidden(list, !isAi || ai.picks.length === 0);
-
-  // Tracked objects: the list, Whole / Part of the active one, lost frames
-  const active = isAi ? getActiveAiObject(state) : null;
-  const objectList = /** @type {HTMLElement} */ (q(root, '#ai-object-list'));
-  updateObjectList(
-    objectList,
+  const selectedId = state.aiPickTool ? state.aiActiveObjectId : null;
+  updatePickList(
+    list,
+    isAi ? ai.picks : [],
     isAi ? objects : [],
-    active?.id ?? null,
+    selectedId,
     fps,
-    q(root, '#ai-object-remove'),
+    q(root, '#ai-pick-keep'),
   );
-  setHidden(objectList, !isAi || objects.length === 0);
-  setHidden(q(root, '#ai-object-scope'), !active);
-  setChecked(q(root, '#ai-object-scope-whole'), active?.scope !== 'part');
-  setChecked(q(root, '#ai-object-scope-part'), active?.scope === 'part');
+  setHidden(list, !isAi || (ai.picks.length === 0 && objects.length === 0));
+
+  // Clean up chips
+  const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? []) : [];
+  updateCleanupList(/** @type {HTMLElement} */ (q(root, '#ai-cleanup-list')), chips);
+  setHidden(q(root, '#ai-cleanup'), chips.length === 0);
+
+  // Tracked fix-ups: Whole / Part of the selected one (beside its marked
+  // chip), lost frames
+  const active = isAi ? getActiveAiObject(state) : null;
+  const selected = selectedId ? objects.find((o) => o.id === selectedId) : undefined;
+  setHidden(q(root, '#ai-object-scope'), !selected);
+  setChecked(q(root, '#ai-object-scope-whole'), selected?.scope !== 'part');
+  setChecked(q(root, '#ai-object-scope-part'), selected?.scope === 'part');
   const lostObject =
     isAi && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)

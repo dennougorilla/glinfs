@@ -2978,14 +2978,6 @@
   color: var(--color-error);
 }
 
-.editor-screen .editor-cutout-tool[data-tool="add-object"] svg {
-  color: var(--color-success);
-}
-
-.editor-screen .editor-cutout-tool[data-tool="remove-object"] svg {
-  color: var(--color-error);
-}
-
 .editor-screen .editor-cutout-tool.is-active svg,
 .editor-screen .editor-cutout-tool-input:checked + span svg {
   color: var(--color-on-primary);
@@ -3029,7 +3021,7 @@
   border-color: rgba(255, 61, 113, 0.5);
 }
 
-/* The tracked object Whole / Part applies to */
+/* The tracked fix-up being corrected */
 .editor-screen .editor-cutout-pick.is-active {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 1px var(--color-primary);
@@ -3052,6 +3044,17 @@
 
 .editor-screen .editor-cutout-pick-delete {
   padding: 4px 8px 4px 4px;
+}
+
+/* A tracked fix-up's colour: its region in Show mask has the same */
+.editor-screen .editor-cutout-pick-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--swatch);
+  vertical-align: 0;
 }
 
 .editor-screen .editor-cutout-pick-go:hover,

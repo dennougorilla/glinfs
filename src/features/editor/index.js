@@ -50,11 +50,13 @@ import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
+  classifyFixUp,
   getAiModelId,
+  getClipObjectSources,
   getModelSizeLabel,
   getSharedFinalMaskCache,
+  isAbortError,
   isFrameAnalyzed,
-  pickFindsCharacter,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
@@ -71,9 +73,12 @@ import {
   previewDependsOnCrop,
 } from './edits-preview.js';
 import { initLiveMonitor } from './live-monitor.js';
+import { getObjectColor } from './object-colors.js';
+import { drawRegions } from './object-overlay.js';
 import {
   getLostFramesInSelection,
   getModelSubject,
+  getObjectFrame,
   getRememberedModels,
   getSubject,
   getSubjectModel,
@@ -86,6 +91,7 @@ import { updateDeleteHint } from './panels/status-bar.js';
 import { TOUCH_UP_NEEDS_REMOVAL, updateTouchUpSection } from './panels/touch-up-panel.js';
 import {
   addAiObject,
+  addAiObjectBox,
   addAiObjectClick,
   addAiPick,
   addTextLayer,
@@ -101,9 +107,9 @@ import {
   getActiveAiObject,
   getBrushStrokeRange,
   getEffectivePreviewView,
+  getObjectTool,
   goToFrame,
   isCurrentFrameOutsideSelection,
-  isObjectTool,
   moveTextLayer,
   PICK_NEEDS_ANALYSIS_NOTICE,
   PICK_NO_CHARACTER_NOTICE,
@@ -612,8 +618,8 @@ export function initEditor() {
     selectedTextId: initialState.selectedTextId,
     pickingKeyColor: initialState.pickingKeyColor,
     aiPickTool: initialState.aiPickTool,
-    aiObjectTarget: initialState.aiObjectTarget,
     aiActiveObjectId: initialState.aiActiveObjectId,
+    aiHighlightObjectId: initialState.aiHighlightObjectId,
     aiCutout: initialState.aiCutout,
     brush: initialState.brush,
     sidebarTab: initialState.sidebarTab,
@@ -669,14 +675,16 @@ export function initEditor() {
     const pickingChanged = state.pickingKeyColor !== lastRendered.pickingKeyColor;
     const pickToolChanged =
       state.aiPickTool !== lastRendered.aiPickTool ||
-      state.aiObjectTarget !== lastRendered.aiObjectTarget ||
       state.aiActiveObjectId !== lastRendered.aiActiveObjectId;
     const aiChanged = state.aiCutout !== lastRendered.aiCutout;
     const brushChanged = state.brush !== lastRendered.brush;
     const masksChanged = state.aiCutout.maskVersion !== lastRendered.aiCutout.maskVersion;
     const tabChanged = state.sidebarTab !== lastRendered.sidebarTab;
     const viewChanged =
-      state.previewView !== lastRendered.previewView || state.comparing !== lastRendered.comparing;
+      state.previewView !== lastRendered.previewView ||
+      state.comparing !== lastRendered.comparing ||
+      state.aiHighlightObjectId !== lastRendered.aiHighlightObjectId ||
+      state.aiActiveObjectId !== lastRendered.aiActiveObjectId;
     const promptChanged =
       state.downloadPrompt !== lastRendered.downloadPrompt ||
       state.downloadPromptSubject !== lastRendered.downloadPromptSubject;
@@ -768,8 +776,8 @@ export function initEditor() {
       lastRendered.selectedTextId = state.selectedTextId;
       lastRendered.pickingKeyColor = state.pickingKeyColor;
       lastRendered.aiPickTool = state.aiPickTool;
-      lastRendered.aiObjectTarget = state.aiObjectTarget;
       lastRendered.aiActiveObjectId = state.aiActiveObjectId;
+      lastRendered.aiHighlightObjectId = state.aiHighlightObjectId;
       lastRendered.aiCutout = state.aiCutout;
       lastRendered.brush = state.brush;
       lastRendered.downloadPrompt = state.downloadPrompt;
@@ -977,12 +985,16 @@ function render(container) {
       onSetAiParams: handleSetAiParams,
       onSetAiPickTool: handleSetAiPickTool,
       onAiPick: handleAiPick,
+      onAiBox: handleAiBox,
+      onHighlightAiObject: handleHighlightAiObject,
       onRemoveAiPick: handleRemoveAiPick,
       onGoToLostFrame: handleGoToLostFrame,
       onGoToObject: handleGoToObject,
       onGoToObjectLost: handleGoToObjectLost,
       onRemoveAiObject: handleRemoveAiObject,
       onSetAiObjectScope: handleSetAiObjectScope,
+      onApplyCleanup: handleApplyCleanup,
+      onClearCleanup: handleClearCleanup,
       onClearAiPicks: handleClearAiPicks,
       onSetBrush: handleSetBrush,
       onBrushStrokeStart: handleBrushStrokeStart,
@@ -1032,6 +1044,46 @@ function drawPreview(state) {
     maskSource: isAiCutoutActive(state.edits.background) ? (aiSession?.maskSource ?? null) : null,
     view: getEffectivePreviewView(state),
   });
+  drawObjectRegions(ctx, state, frame);
+}
+
+/**
+ * Show mask: the tracked fix-ups' regions on the frame on screen, each in
+ * its chip's colour (the base mask keeps the removal tint)
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../capture/types.js').Frame} frame
+ */
+function drawObjectRegions(ctx, state, frame) {
+  if (getEffectivePreviewView(state) !== 'mask' || !isAiCutoutActive(state.edits.background)) {
+    return;
+  }
+  const { ai } = state.edits.background;
+  const objects = ai.objects ?? [];
+  if (objects.length === 0 || !state.clip) return;
+  const sources = getClipObjectSources(state.clip.frames, ai, getSharedMaskStore());
+  /** @type {import('./object-overlay.js').OverlayRegion[]} */
+  const regions = [];
+  let highlight = -1;
+  objects.forEach((object, index) => {
+    const mask = sources[index].getMask(state.currentFrame);
+    if (!mask) return;
+    if (object.id === (state.aiHighlightObjectId ?? state.aiActiveObjectId)) {
+      highlight = regions.length;
+    }
+    regions.push({ mode: object.mode, color: getObjectColor(objects, object.id), mask });
+  });
+  drawRegions(ctx, frame.width, frame.height, regions, highlight);
+}
+
+/**
+ * A fix-up chip is hovered or focused (null: none): its region stands out
+ * in Show mask
+ * @param {string | null} id
+ */
+function handleHighlightAiObject(id) {
+  if (!store) return;
+  store.setState((s) => (s.aiHighlightObjectId === id ? s : { ...s, aiHighlightObjectId: id }));
 }
 
 /**
@@ -1854,25 +1906,24 @@ function handleResetBackground() {
 
 /**
  * @param {import('./types.js').AiPickTool | null} tool
- * @param {{ fromKeyboard?: boolean, target?: string | null }} [options] -
- *   fromKeyboard: the toggle was switched with the keyboard, so the keyboard
- *   pick target (the preview) takes focus; target: an object tool's click
- *   re-anchors this tracked object
+ * @param {{ fromKeyboard?: boolean }} [options] - fromKeyboard: the toggle
+ *   was switched with the keyboard, so the keyboard pick target (the
+ *   preview) takes focus
  */
 function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
-  store.setState((state) => setAiPickTool(state, tool, options.target ?? null));
+  store.setState((state) => setAiPickTool(state, tool));
   if (tool && options.fromKeyboard && overlayCanvas) {
     setOverlayPickMode(overlayCanvas, true);
     overlayCanvas.focus();
-  } else if (isObjectTool(tool)) {
-    announce(
-      options.target
-        ? 'Click the object in the preview to find it again'
-        : `Click the thing in the preview to ${tool === 'remove-object' ? 'remove it from' : 'add it to'} every frame`,
-    );
+  } else if (tool && store.getState().aiActiveObjectId) {
+    announce('Click to add to the selected fix-up, Alt-click to take away from it');
   } else if (tool) {
-    announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
+    announce(
+      tool === 'keep'
+        ? 'Click a character in the preview to keep it. Anything not attached to it disappears on every frame. Drag a box around a thing to add it.'
+        : 'Click a blob in the preview to remove it from every frame. Drag a box around a thing to remove it.',
+    );
   }
 }
 
@@ -1890,32 +1941,50 @@ function updateOverlayPickMode(container, tool, previousTool) {
   const hadFocus = document.activeElement === overlayCanvas;
   setOverlayPickMode(overlayCanvas, tool !== null);
   if (tool === null && hadFocus && previousTool) {
-    const toggle = container.querySelector(
-      previousTool === 'remove-object'
-        ? '#ai-object-remove'
-        : previousTool === 'add-object'
-          ? '#ai-object-add'
-          : `#ai-pick-${previousTool}`,
-    );
+    const toggle = container.querySelector(`#ai-pick-${previousTool}`);
     if (toggle instanceof HTMLElement) toggle.focus();
   }
 }
 
 /**
- * The pick tool clicked the preview: add a pick on the current frame and
- * leave the tool. Picks need the frame's analysis (the character under the
- * click is found in its mask).
- * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ * The Keep / Remove click being judged (classifyFixUp can wait for the pick
+ * tracking): a newer click cancels it
+ * @type {AbortController | null}
  */
-function handleAiPick(point) {
+let fixUpClick = null;
+
+/** Notice when a Keep / Remove click is dropped because the frame or the cutout changed while it was judged */
+const PICK_DROPPED_NOTICE =
+  'The frame or the cutout changed before that click was added. Click again.';
+
+/**
+ * Keep or Remove clicked the preview. With a tracked object selected the
+ * click corrects it; with click to select it is a prompt point; else it
+ * adds a fix-up, the app choosing the mechanism from what the click lands
+ * on (classifyFixUp): a pick, or a tracked object. Needs the frame's
+ * analysis.
+ * @param {{ alt?: boolean }} [options] - alt: the opposite of the tool
+ * @returns {Promise<void>}
+ * @param {{ alt?: boolean }} [options] - alt: the opposite of the tool
+ */
+async function handleAiPick(point, options = {}) {
   if (!store) return;
-  const state = store.getState();
-  const mode = state.aiPickTool;
-  if (!mode) return;
-  if (isObjectTool(mode)) {
-    handleObjectPoint(point, mode);
+  const editorStore = store;
+  const tool = editorStore.getState().aiPickTool;
+  if (!tool) return;
+  // A click is for the frame on screen: playback stops (as for the brush),
+  // so the frame cannot move on while the click is judged
+  if (editorStore.getState().isPlaying) {
+    stopPlayback();
+    editorStore.setState((s) => setPlaying(s, false));
+  }
+  const state = editorStore.getState();
+  const selected = getSelectedAiObject(state);
+  if (selected) {
+    handleObjectCorrection(selected, { click: point, alt: options.alt === true });
     return;
   }
+  const mode = options.alt ? (tool === 'keep' ? 'remove' : 'keep') : tool;
   if (getAiModelId(state.edits.background.ai) === 'click') {
     handleClickSelectPoint(point, mode);
     return;
@@ -1927,24 +1996,96 @@ function handleAiPick(point) {
     store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
     return;
   }
-  if (state.edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
-    announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
-    return;
-  }
-  // A pick on background would be ignored by the build (a Keep pick there
-  // would otherwise leave nothing): refuse it and keep the tool on
   const frames = /** @type {import('../capture/types.js').Frame[]} */ (state.clip?.frames);
   const ai = state.edits.background.ai;
-  if (!pickFindsCharacter({ frames, ai, frameIndex: state.currentFrame, point })) {
+  fixUpClick?.abort();
+  const click = new AbortController();
+  fixUpClick = click;
+  /** @type {import('./ai-cutout.js').FixUpKind} */
+  let kind;
+  try {
+    kind = await classifyFixUp({
+      frames,
+      ai,
+      frameIndex: state.currentFrame,
+      point,
+      tool: mode,
+      signal: click.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) return;
+    throw error;
+  } finally {
+    if (fixUpClick === click) fixUpClick = null;
+  }
+  // The editor closed (or another one opened) meanwhile
+  if (store !== editorStore) return;
+  // Judged on the state of the click: drop it when the tool or the
+  // selection changed (the user moved on), and say so when the frame or
+  // the cutout changed under it
+  const now = editorStore.getState();
+  if (now.aiPickTool !== tool || now.aiActiveObjectId) return;
+  if (now.currentFrame !== state.currentFrame || now.edits.background.ai !== ai) {
+    announce(PICK_DROPPED_NOTICE);
+    editorStore.setState((s) => updateAiCutoutStatus(s, { notice: PICK_DROPPED_NOTICE }));
+    return;
+  }
+  if (kind === 'none') {
     const message = PICK_NO_CHARACTER_NOTICE;
     announce(message);
     store.setState((s) => updateAiCutoutStatus(s, { notice: message }));
     return;
   }
+  if (kind === 'add-object' || kind === 'remove-object') {
+    addObjectFixUp(kind === 'add-object' ? 'add' : 'remove', {
+      click: { frame: state.currentFrame, x: point.x, y: point.y },
+    });
+    return;
+  }
+  if (ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
+    return;
+  }
   store.setState((s) =>
     setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
   );
-  announce(`${mode === 'keep' ? 'Keep' : 'Remove'} pick added. It is followed through the clip.`);
+  announce(
+    mode === 'keep'
+      ? 'Kept. Anything not attached to it disappears on every frame.'
+      : 'Removed from every frame.',
+  );
+}
+
+/**
+ * Keep or Remove dragged a box on the preview: a tracked object around
+ * it (Keep adds it, Remove removes it), or with an object selected, one
+ * more region of it
+ * @param {{ x0: number, y0: number, x1: number, y1: number }} box - Fractions of the SOURCE frame
+ * @param {{ alt?: boolean }} [options]
+ */
+function handleAiBox(box, options = {}) {
+  if (!store) return;
+  const state = store.getState();
+  const tool = state.aiPickTool;
+  if (!tool) return;
+  const cutoutBox = { frame: state.currentFrame, ...box };
+  const selected = getSelectedAiObject(state);
+  if (selected) {
+    handleObjectCorrection(selected, { box: cutoutBox, alt: false });
+    return;
+  }
+  const mode = options.alt ? (tool === 'keep' ? 'remove' : 'keep') : tool;
+  addObjectFixUp(mode === 'keep' ? 'add' : 'remove', { box: cutoutBox });
+}
+
+/**
+ * The tracked object whose chip is selected (it is being corrected)
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('../../shared/edits/model.js').CutoutObject | null}
+ */
+function getSelectedAiObject(state) {
+  const id = state.aiActiveObjectId;
+  return (id && state.edits.background.ai.objects?.find((o) => o.id === id)) || null;
 }
 
 /**
@@ -1981,14 +2122,13 @@ const OBJECT_OUTSIDE_SELECTION_NOTICE =
   'Objects are tracked through the selection. Click it on a frame inside it.';
 
 /**
- * An object tool clicked the preview: a new tracked object (Remove object /
- * Add object), or a click that re-anchors the object the tool is aimed at
- * (a frame where tracking lost it). The store subscription then tracks it
- * (see startAiCutoutSession); the tool goes off.
- * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
- * @param {'remove-object' | 'add-object'} tool
+ * A new tracked object (removed from or added to every frame of the
+ * selection); the tool goes off. The store subscription tracks it (see
+ * startAiCutoutSession).
+ * @param {import('../../shared/edits/model.js').ObjectMode} mode
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
  */
-function handleObjectPoint(point, tool) {
+function addObjectFixUp(mode, selection) {
   if (!store) return;
   const state = store.getState();
   if (isCurrentFrameOutsideSelection(state)) {
@@ -1996,42 +2136,73 @@ function handleObjectPoint(point, tool) {
     store.setState((s) => updateAiCutoutStatus(s, { notice: OBJECT_OUTSIDE_SELECTION_NOTICE }));
     return;
   }
-  const objects = state.edits.background.ai.objects ?? [];
-  const target = objects.find((o) => o.id === state.aiObjectTarget);
-  const click = { frame: state.currentFrame, x: point.x, y: point.y };
-  if (target) {
-    if (target.clicks.length >= EDIT_LIMITS.aiObjectClicks.max) {
-      announce(`The limit of ${EDIT_LIMITS.aiObjectClicks.max} points is reached`);
-      return;
-    }
-    store.setState((s) =>
-      setAiPickTool(addAiObjectClick(s, target.id, { ...click, mode: 'keep' }), null),
-    );
-    announce('Point added. Tracking again.');
+  if ((state.edits.background.ai.objects ?? []).length >= EDIT_LIMITS.aiObjects.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups is reached`);
     return;
   }
-  if (objects.length >= EDIT_LIMITS.aiObjects.max) {
-    announce(`The limit of ${EDIT_LIMITS.aiObjects.max} objects is reached`);
-    return;
-  }
-  const mode = tool === 'remove-object' ? 'remove' : 'add';
-  store.setState((s) => setAiPickTool(addAiObject(s, mode, click), null));
+  store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
   announce(
     `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
   );
 }
 
 /**
- * Tracked object: go to its first click and make it the one Whole / Part
- * applies to
+ * A click or box on the frame on screen that corrects the selected tracked
+ * object: a click with its own tool adds a point on it, with the other
+ * tool or Alt a point off it; a box adds a region to it. The tool stays on
+ * for more corrections.
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {{ click?: { x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, alt: boolean }} correction
+ */
+function handleObjectCorrection(object, correction) {
+  if (!store) return;
+  const state = store.getState();
+  if (isCurrentFrameOutsideSelection(state)) {
+    announce(OBJECT_OUTSIDE_SELECTION_NOTICE);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: OBJECT_OUTSIDE_SELECTION_NOTICE }));
+    return;
+  }
+  if (correction.box) {
+    const box = correction.box;
+    if ((object.boxes ?? []).length >= EDIT_LIMITS.aiObjectBoxes.max) {
+      announce(`The limit of ${EDIT_LIMITS.aiObjectBoxes.max} boxes is reached`);
+      return;
+    }
+    store.setState((s) => addAiObjectBox(s, object.id, box));
+    announce('Box added. Tracking again.');
+    return;
+  }
+  if (object.clicks.length >= EDIT_LIMITS.aiObjectClicks.max) {
+    announce(`The limit of ${EDIT_LIMITS.aiObjectClicks.max} points is reached`);
+    return;
+  }
+  const own = state.aiPickTool === getObjectTool(object);
+  const mode = own !== correction.alt ? 'keep' : 'remove';
+  const point = /** @type {{ x: number, y: number }} */ (correction.click);
+  store.setState((s) =>
+    addAiObjectClick(s, object.id, { frame: s.currentFrame, x: point.x, y: point.y, mode }),
+  );
+  announce(mode === 'keep' ? 'Point added. Tracking again.' : 'Point taken away. Tracking again.');
+}
+
+/**
+ * A tracked object's chip: select it (go to the frame it was made on, its
+ * tool on: clicks correct it, Whole / Part applies to it); the selected
+ * chip again deselects it
  * @param {string} id
  */
 function handleGoToObject(id) {
   if (!store) return;
-  const object = store.getState().edits.background.ai.objects?.find((o) => o.id === id);
+  const state = store.getState();
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
   if (!object) return;
-  store.setState((s) => setActiveAiObject(s, id));
-  handleFrameChange(object.clicks[0].frame);
+  if (state.aiActiveObjectId === id) {
+    store.setState((s) => setAiPickTool(s, null));
+    return;
+  }
+  store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
+  handleFrameChange(getObjectFrame(object));
+  announce('Selected. Click to add to it, Alt-click to take away from it. Escape to finish.');
 }
 
 /**
@@ -2047,9 +2218,9 @@ function handleGoToObjectLost(id) {
   const { start, end } = state.selectedRange;
   const frame = (state.aiCutout.objectLost?.[id] ?? []).find((f) => f >= start && f <= end);
   if (frame === undefined) return;
-  store.setState((s) => setActiveAiObject(s, id));
+  store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
   handleFrameChange(frame);
-  handleSetAiPickTool(object.mode === 'remove' ? 'remove-object' : 'add-object', { target: id });
+  announce('Click the object to find it again');
 }
 
 /** @param {string} id */
@@ -2068,6 +2239,47 @@ function handleSetAiObjectScope(scope) {
   const object = getActiveAiObject(store.getState());
   if (!object) return;
   store.setState((state) => setAiObjectScope(state, object.id, scope));
+}
+
+/**
+ * A Clean up chip: specks and holes set the whole-clip clean-up, a blob
+ * becomes a remove pick on it (on the frame where it is largest, shown),
+ * a shrink goes to its first frame
+ * @param {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion} suggestion
+ */
+function handleApplyCleanup(suggestion) {
+  if (!store) return;
+  const { cleanup } = store.getState().edits.background.ai;
+  if (suggestion.kind === 'specks') {
+    handleSetAiParams({ cleanup: { ...cleanup, minIslandArea: suggestion.minIslandArea } });
+    announce('Specks removed on every frame');
+  } else if (suggestion.kind === 'holes') {
+    handleSetAiParams({ cleanup: { ...cleanup, maxHoleArea: suggestion.maxHoleArea } });
+    announce('Small holes filled on every frame');
+  } else if (suggestion.kind === 'blob') {
+    if (store.getState().edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
+      announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
+      return;
+    }
+    store.setState((s) => addAiPick(s, { ...suggestion.pick, mode: 'remove' }));
+    handleFrameChange(suggestion.pick.frame);
+    announce(`Blob near ${suggestion.where} removed`);
+  } else {
+    handleFrameChange(suggestion.frame);
+  }
+}
+
+/**
+ * Turn a whole-clip clean-up off (its chip tapped again)
+ * @param {'specks' | 'holes'} kind
+ */
+function handleClearCleanup(kind) {
+  if (!store) return;
+  const { cleanup } = store.getState().edits.background.ai;
+  handleSetAiParams({
+    cleanup: { ...cleanup, ...(kind === 'specks' ? { minIslandArea: 0 } : { maxHoleArea: 0 }) },
+  });
+  announce(kind === 'specks' ? 'Specks are back' : 'Holes are back');
 }
 
 /** Click to select: go to the first frame that lost the object, Keep tool on */
@@ -2919,6 +3131,9 @@ async function startSceneDetectionAsync(frames) {
  * - Frames are only closed when a new clip is created
  */
 function cleanup() {
+  // A Keep / Remove click still being judged belongs to this mount
+  fixUpClick?.abort();
+  fixUpClick = null;
   // The Export dialog lives over this editor: close it first (aborting a
   // running export) so nothing of it outlives the mount
   if (exportDialog) {
@@ -3060,7 +3275,6 @@ function registerTestHooks() {
         pickingKeyColor: state.pickingKeyColor,
         hasAlpha: state.clip?.hasAlpha === true,
         aiPickTool: state.aiPickTool,
-        aiObjectTarget: state.aiObjectTarget,
         aiActiveObjectId: state.aiActiveObjectId,
         aiCutout: state.aiCutout,
         brush: state.brush,

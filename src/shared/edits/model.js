@@ -80,9 +80,23 @@
  * @property {string} id
  * @property {ObjectMode} mode
  * @property {CutoutPick[]} clicks - at most EDIT_LIMITS.aiObjectClicks.max,
- *   in the order they were made; the first is a keep click (the object)
- *   and later ones re-anchor it on frames where tracking lost it
+ *   in the order they were made: keep points (on the object) and remove
+ *   points (not on it), on any frame. Without a box the first is a keep
+ *   point (what selected the object).
+ * @property {CutoutBox[]} boxes - at most EDIT_LIMITS.aiObjectBoxes.max:
+ *   rough regions on a frame (each one SAM box prompt); with the keep
+ *   points they add up to one region
  * @property {ClickScope} scope - the whole clicked thing or the part under the click
+ */
+
+/**
+ * A box dragged around a tracked object on one frame
+ * @typedef {Object} CutoutBox
+ * @property {number} frame - absolute clip frame index
+ * @property {number} x0 - left, fraction of the SOURCE frame width, 0..1
+ * @property {number} y0 - top, fraction of the SOURCE frame height
+ * @property {number} x1 - right (> x0)
+ * @property {number} y1 - bottom (> y0)
  */
 
 /**
@@ -103,9 +117,20 @@
  *   clicked thing or the part under the click
  * @property {CutoutObject[]} objects - at most EDIT_LIMITS.aiObjects.max
  *   tracked objects removed from / added to the mask, applied in order
+ * @property {CutoutCleanup} cleanup - whole-clip clean-up of the final masks
  * @property {AiSubject | null} subject - the subject card the model was
  *   chosen with; null (edits saved before cards could share a model) means
  *   the first card that lists the model
+ */
+
+/**
+ * Whole-clip clean-up of the AI cutout, applied to every frame after the
+ * picks and before the edge. Areas are fractions of the frame, 0 = off.
+ * @typedef {Object} CutoutCleanup
+ * @property {number} minIslandArea - separate pieces smaller than this go
+ *   (the largest piece of a frame always stays)
+ * @property {number} maxHoleArea - holes up to this size are filled (a hole
+ *   touching the frame border is never filled)
  */
 
 /**
@@ -201,6 +226,8 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiPicks: { max: 16 },
   aiObjects: { max: 4 },
   aiObjectClicks: { max: 16 },
+  aiObjectBoxes: { max: 8 },
+  aiCleanupArea: { min: 0, max: 0.01 },
   touchUpRadius: { min: 0.0025, max: 0.15 },
   touchUps: { max: 200 },
   touchUpPoints: { max: 500 },
@@ -354,7 +381,31 @@ export function createDefaultEdits() {
  * @returns {AiCutout}
  */
 export function createDefaultAiCutout() {
-  return { ...AI_DEFAULTS, picks: [], objects: [] };
+  return { ...AI_DEFAULTS, picks: [], objects: [], cleanup: createDefaultCleanup() };
+}
+
+/**
+ * Clean-up off
+ * @returns {CutoutCleanup}
+ */
+export function createDefaultCleanup() {
+  return { minIslandArea: 0, maxHoleArea: 0 };
+}
+
+/**
+ * Normalize the clean-up: each area clamped into EDIT_LIMITS.aiCleanupArea
+ * (anything else is off)
+ * @param {unknown} cleanup
+ * @returns {CutoutCleanup}
+ */
+function normalizeCleanup(cleanup) {
+  const c =
+    cleanup && typeof cleanup === 'object' ? /** @type {Record<string, unknown>} */ (cleanup) : {};
+  const { min, max } = EDIT_LIMITS.aiCleanupArea;
+  return {
+    minIslandArea: clampNumber(c.minIslandArea, min, max, 0),
+    maxHoleArea: clampNumber(c.maxHoleArea, min, max, 0),
+  };
 }
 
 /**
@@ -444,10 +495,38 @@ function normalizePick(pick, frameCount) {
 }
 
 /**
- * Normalize one tracked object; null when it has no usable keep click (an
- * object is what its first keep click selected). Clicks are normalized
- * like picks and limited to EDIT_LIMITS.aiObjectClicks.max; clicks before
- * the first keep click are dropped (remove points alone select nothing).
+ * Normalize one box; null when it has no usable frame or no area
+ * @param {unknown} box
+ * @param {number} frameCount
+ * @returns {CutoutBox | null}
+ */
+function normalizeBox(box, frameCount) {
+  if (!box || typeof box !== 'object' || Array.isArray(box)) return null;
+  const b = /** @type {Record<string, unknown>} */ (box);
+  if (
+    ![b.frame, b.x0, b.y0, b.x1, b.y1].every((v) => typeof v === 'number' && Number.isFinite(v))
+  ) {
+    return null;
+  }
+  const at = (/** @type {unknown} */ v) => clampNumber(v, 0, 1, 0);
+  const [x0, x1] = [at(b.x0), at(b.x1)].sort((p, q) => p - q);
+  const [y0, y1] = [at(b.y0), at(b.y1)].sort((p, q) => p - q);
+  if (x1 <= x0 || y1 <= y0) return null;
+  return {
+    frame: Math.round(clampNumber(b.frame, 0, lastFrameIndex(frameCount), 0)),
+    x0,
+    y0,
+    x1,
+    y1,
+  };
+}
+
+/**
+ * Normalize one tracked object; null when nothing selects it (a box, or a
+ * keep click: remove points alone select nothing). Clicks are normalized
+ * like picks and limited to EDIT_LIMITS.aiObjectClicks.max; without a box,
+ * clicks before the first keep click are dropped. Boxes: the last
+ * EDIT_LIMITS.aiObjectBoxes.max made.
  * @param {unknown} object
  * @param {number} frameCount
  * @returns {CutoutObject | null}
@@ -459,12 +538,17 @@ function normalizeObject(object, frameCount) {
   const clicks = raw
     .map((click) => normalizePick(click, frameCount))
     .filter((click) => click !== null);
-  const first = clicks.findIndex((click) => click.mode === 'keep');
+  const boxes = (Array.isArray(o.boxes) ? o.boxes : [])
+    .map((box) => normalizeBox(box, frameCount))
+    .filter((box) => box !== null)
+    .slice(-EDIT_LIMITS.aiObjectBoxes.max);
+  const first = boxes.length > 0 ? 0 : clicks.findIndex((click) => click.mode === 'keep');
   if (first < 0) return null;
   return {
     id: typeof o.id === 'string' && o.id ? o.id : createLayerId(),
     mode: normalizeEnum(o.mode, OBJECT_MODES, 'remove'),
     clicks: clicks.slice(first, first + EDIT_LIMITS.aiObjectClicks.max),
+    boxes,
     scope: normalizeEnum(o.scope, CLICK_SCOPES, 'whole'),
   };
 }
@@ -516,6 +600,7 @@ function normalizeAiCutout(ai, frameCount) {
       .slice(0, aiPicks.max),
     clickScope: normalizeEnum(a.clickScope, CLICK_SCOPES, AI_DEFAULTS.clickScope),
     objects: normalizeObjects(a.objects, frameCount),
+    cleanup: normalizeCleanup(a.cleanup),
     subject: normalizeEnum(a.subject, AI_SUBJECTS, AI_DEFAULTS.subject),
   };
 }

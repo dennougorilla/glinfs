@@ -6,13 +6,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   addAiObject,
+  addAiObjectBox,
   addAiObjectClick,
   addAiPick,
   clearAiPicks,
   createAiCutoutStatus,
   createEditorStore,
   getActiveAiObject,
-  isObjectTool,
+  getObjectTool,
   PICK_NEEDS_ANALYSIS_NOTICE,
   PICK_NO_CHARACTER_NOTICE,
   removeAiObject,
@@ -22,6 +23,7 @@ import {
   setAiParams,
   setAiPickTool,
   setBackgroundMethod,
+  setBrush,
   setPickingKeyColor,
   updateAiCutoutStatus,
 } from '../../../src/features/editor/state.js';
@@ -57,6 +59,7 @@ describe('AI cutout editor state', () => {
       edge: 3,
       clickScope: 'whole',
       objects: [],
+      cleanup: { minIslandArea: 0, maxHoleArea: 0 },
       subject: null,
       picks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
     });
@@ -168,20 +171,32 @@ describe('AI cutout editor state', () => {
 
 describe('tracked objects', () => {
   const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
+  const box = (frame = 2) => ({ frame, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.5 });
 
-  it('adds an object with one keep click, Whole, and makes it the active one', () => {
-    const state = addAiObject(makeState(), 'remove', { ...click(), mode: 'remove' }, 'o1');
+  it('adds an object from a click or a box, not selected; a Remove click starts at Part', () => {
+    let state = addAiObject(makeState(), 'remove', { click: { ...click(), mode: 'remove' } }, 'o1');
+    state = addAiObject(state, 'add', { box: box() }, 'o2');
     expect(state.edits.background.ai.objects).toEqual([
-      { id: 'o1', mode: 'remove', scope: 'whole', clicks: [click()] },
+      { id: 'o1', mode: 'remove', scope: 'part', clicks: [click()], boxes: [] },
+      { id: 'o2', mode: 'add', scope: 'whole', clicks: [], boxes: [box()] },
     ]);
-    expect(state.aiActiveObjectId).toBe('o1');
-    expect(getActiveAiObject(state)?.id).toBe('o1');
+    // The next click of a tool adds another fix-up
+    expect(state.aiActiveObjectId).toBeNull();
+    // Whole / Part falls back to the last one
+    expect(getActiveAiObject(state)?.id).toBe('o2');
+    expect(addAiObject(state, 'add', {})).toBe(state);
+    expect(
+      addAiObject(state, 'remove', { box: box() }, 'o3').edits.background.ai.objects[2].scope,
+    ).toBe('whole');
+    expect(
+      addAiObject(state, 'add', { click: click() }, 'o4').edits.background.ai.objects[2].scope,
+    ).toBe('whole');
   });
 
-  it('stops at the object limit and the click limit', () => {
+  it('stops at the object, click and box limits', () => {
     let state = makeState();
     for (let i = 0; i < EDIT_LIMITS.aiObjects.max + 1; i++) {
-      state = addAiObject(state, 'add', click(), `o${i}`);
+      state = addAiObject(state, 'add', { click: click() }, `o${i}`);
     }
     expect(state.edits.background.ai.objects).toHaveLength(EDIT_LIMITS.aiObjects.max);
     for (let i = 0; i < EDIT_LIMITS.aiObjectClicks.max + 1; i++) {
@@ -190,39 +205,64 @@ describe('tracked objects', () => {
     expect(state.edits.background.ai.objects[0].clicks).toHaveLength(
       EDIT_LIMITS.aiObjectClicks.max,
     );
+    for (let i = 0; i < EDIT_LIMITS.aiObjectBoxes.max + 1; i++) {
+      state = addAiObjectBox(state, 'o1', box(2));
+    }
+    // Boxes add up, also on one frame
+    expect(state.edits.background.ai.objects[1].boxes).toHaveLength(EDIT_LIMITS.aiObjectBoxes.max);
     expect(state.aiActiveObjectId).toBe('o0');
   });
 
   it('sets the scope of one object and ignores unknown ids', () => {
-    let state = addAiObject(makeState(), 'remove', click(), 'o1');
-    state = addAiObject(state, 'add', click(), 'o2');
+    let state = addAiObject(makeState(), 'remove', { click: click() }, 'o1');
+    state = addAiObject(state, 'add', { click: click() }, 'o2');
     const before = state;
     expect(setAiObjectScope(state, 'nope', 'part')).toBe(before);
-    state = setAiObjectScope(state, 'o1', 'part');
-    expect(state.edits.background.ai.objects.map((o) => o.scope)).toEqual(['part', 'whole']);
+    state = setAiObjectScope(state, 'o1', 'whole');
+    expect(state.edits.background.ai.objects.map((o) => o.scope)).toEqual(['whole', 'whole']);
   });
 
-  it('removes an object, turning off an object tool aimed at it', () => {
-    let state = addAiObject(makeState(), 'remove', click(), 'o1');
-    state = addAiObject(state, 'remove', click(), 'o2');
-    state = setActiveAiObject(state, 'o1');
-    state = setAiPickTool(state, 'remove-object', 'o1');
-    expect(state.aiObjectTarget).toBe('o1');
+  it('removes an object; the selected one takes its correction tool with it', () => {
+    let state = addAiObject(makeState(), 'remove', { click: click() }, 'o1');
+    state = addAiObject(state, 'remove', { click: click() }, 'o2');
+    state = setAiPickTool(setActiveAiObject(state, 'o1'), 'remove');
+    state = removeAiObject(state, 'o2');
+    expect(state.aiPickTool).toBe('remove');
+    expect(state.aiActiveObjectId).toBe('o1');
     state = removeAiObject(state, 'o1');
-    expect(state.edits.background.ai.objects.map((o) => o.id)).toEqual(['o2']);
+    expect(state.edits.background.ai.objects).toEqual([]);
     expect(state.aiPickTool).toBeNull();
-    expect(state.aiObjectTarget).toBeNull();
     expect(state.aiActiveObjectId).toBeNull();
-    // The last one is active when none is chosen
-    expect(getActiveAiObject(state)?.id).toBe('o2');
   });
 
-  it('aims only object tools at an object', () => {
-    const state = setAiPickTool(makeState(), 'keep', 'o1');
-    expect(state.aiObjectTarget).toBeNull();
-    expect(isObjectTool('remove-object')).toBe(true);
-    expect(isObjectTool('add-object')).toBe(true);
-    expect(isObjectTool('keep')).toBe(false);
-    expect(isObjectTool(null)).toBe(false);
+  it('Brush and the eyedropper deselect the object too (review #195)', () => {
+    const enabled = {
+      ...makeState(),
+      edits: {
+        ...makeState().edits,
+        background: { ...makeState().edits.background, enabled: true },
+      },
+    };
+    let state = addAiObject(enabled, 'remove', { click: click() }, 'o1');
+    state = setAiPickTool(setActiveAiObject(state, 'o1'), 'remove');
+    const brushed = setBrush(state, { on: true });
+    expect(brushed.brush.on).toBe(true);
+    expect(brushed.aiActiveObjectId).toBeNull();
+    // Brush off again, then Remove: a new fix-up, not a point on o1
+    expect(setAiPickTool(setBrush(brushed, { on: false }), 'remove').aiActiveObjectId).toBeNull();
+    const picking = setPickingKeyColor(state, true);
+    expect(picking.aiPickTool).toBeNull();
+    expect(picking.aiActiveObjectId).toBeNull();
+  });
+
+  it('leaving the tool deselects the object; its own tool is Remove or Keep', () => {
+    let state = addAiObject(makeState(), 'add', { click: click() }, 'o1');
+    state = setAiPickTool(setActiveAiObject(state, 'o1'), 'keep');
+    expect(setAiPickTool(state, 'remove').aiActiveObjectId).toBe('o1');
+    state = setAiPickTool(state, null);
+    expect(state.aiActiveObjectId).toBeNull();
+    const [object] = state.edits.background.ai.objects;
+    expect(getObjectTool(object)).toBe('keep');
+    expect(getObjectTool({ ...object, mode: 'remove' })).toBe('remove');
   });
 });

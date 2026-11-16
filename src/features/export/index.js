@@ -719,8 +719,11 @@ async function prepareObjectMasks(ai, signal) {
       clipId,
       allowWasm: isWasmAllowed(),
       range,
-      currentFrame: object.clicks.find((c) => c.frame >= start && c.frame <= end)?.frame ?? start,
+      currentFrame:
+        [...object.clicks, ...(object.boxes ?? [])].find((c) => c.frame >= start && c.frame <= end)
+          ?.frame ?? start,
       clicks: object.clicks,
+      boxes: object.boxes ?? [],
       scope: object.scope,
       tag: getObjectSignature(object),
       onlyIfStale: true,
