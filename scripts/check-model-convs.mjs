@@ -2,7 +2,8 @@
 /**
  * Check the app's model files for Convs that onnxruntime-web's WebGPU
  * backend computes wrong (src/features/ai-cutout/onnx-graph.js: kernel above
- * 1 × 1, input channels divisible by 3, not by 4, more than 3).
+ * 1 × 1, input channels divisible by 3, not by 4, more than 3, output
+ * channels a multiple of 4).
  *
  *   npm run models:check-convs                  the files in public/models
  *   npm run models:check-convs -- --dir <path>  the files in another directory

@@ -17,17 +17,26 @@ const fixture = (name) => new Uint8Array(readFileSync(join(root, 'tests/fixtures
 
 describe('readOnnxGraph / listConvs', () => {
   it('reads every Conv with its input channels, kernel and group, whatever holds the weight', () => {
-    // scripts/generate-conv-rule-fixture.py: one graph, six Convs
+    // scripts/generate-conv-rule-fixture.py: one graph, eight Convs
     const convs = listConvs(readOnnxGraph(fixture('webgpu-conv-rule.onnx')));
+    const conv = (name, inputChannels, outputChannels, k, group = 1) => ({
+      name,
+      inputChannels,
+      outputChannels,
+      kernel: [k, k],
+      group,
+    });
     expect(convs).toEqual([
-      { name: 'conv_hazard_6', inputChannels: 6, kernel: [3, 3], group: 1 },
-      { name: 'conv_ok_8', inputChannels: 8, kernel: [3, 3], group: 1 },
-      { name: 'conv_ok_1x1', inputChannels: 6, kernel: [1, 1], group: 1 },
+      conv('conv_hazard_6', 6, 4, 3),
+      conv('conv_ok_8', 8, 4, 3),
+      conv('conv_ok_1x1', 6, 4, 1),
       // an fp16 initializer through a Cast
-      { name: 'conv_cast_33', inputChannels: 33, kernel: [3, 3], group: 1 },
+      conv('conv_cast_33', 33, 4, 3),
       // a Constant node
-      { name: 'conv_const_99', inputChannels: 99, kernel: [3, 3], group: 1 },
-      { name: 'conv_group_2x3', inputChannels: 3, kernel: [3, 3], group: 2 },
+      conv('conv_const_99', 99, 4, 3),
+      conv('conv_group_2x3', 3, 4, 3, 2),
+      conv('conv_ok_out3', 6, 3, 3),
+      conv('conv_dilated_6', 6, 4, 3),
     ]);
   });
 
@@ -37,36 +46,48 @@ describe('readOnnxGraph / listConvs', () => {
 });
 
 describe('isWebgpuConvHazard', () => {
-  it('is the measured rule: kernel > 1, input channels divisible by 3, not by 4, more than 3', () => {
+  it('is the measured rule: kernel > 1, input channels divisible by 3, not by 4, more than 3, output channels a multiple of 4', () => {
+    const hazard = (inputChannels, outputChannels, k = 3, group = 1) =>
+      isWebgpuConvHazard({ inputChannels, outputChannels, kernel: [k, k], group });
     const flagged = [];
-    for (let c = 1; c <= 130; c++) {
-      if (isWebgpuConvHazard({ inputChannels: c, kernel: [3, 3], group: 1 })) flagged.push(c);
-    }
-    // The 3 × 3 channel counts that came out wrong in the sweep (bakeoff3, 1..130)
+    for (let c = 1; c <= 130; c++) if (hazard(c, 64)) flagged.push(c);
+    // The 3 × 3 input channel counts that came out wrong in the sweep (64 outputs, 1..130)
     expect(flagged).toEqual([
       6, 9, 15, 18, 21, 27, 30, 33, 39, 42, 45, 51, 54, 57, 63, 66, 69, 75, 78, 81, 87, 90, 93, 99,
       102, 105, 111, 114, 117, 123, 126, 129,
     ]);
-    expect(isWebgpuConvHazard({ inputChannels: 99, kernel: [1, 1], group: 1 })).toBe(false);
-    expect(isWebgpuConvHazard({ inputChannels: 6, kernel: [7, 7], group: 1 })).toBe(true);
-    // Grouped Convs were not measured: not flagged
-    expect(isWebgpuConvHazard({ inputChannels: 6, kernel: [3, 3], group: 2 })).toBe(false);
+    expect(hazard(99, 64, 1)).toBe(false);
+    expect(hazard(6, 64, 7)).toBe(true);
+    // Output channels (sweep of #198's review: 1, 2, 3, 4, 5, 6, 8, 12, 16 with 6, 9, 15, 99 inputs)
+    const outputs = [1, 2, 3, 4, 5, 6, 8, 12, 16].filter((o) => hazard(9, o));
+    expect(outputs).toEqual([4, 8, 12, 16]);
+    // No grouped Conv measured was wrong: not flagged
+    expect(hazard(6, 4, 3, 2)).toBe(false);
   });
 });
 
 describe('findWebgpuConvHazards', () => {
   it('flags the Convs WebGPU computes wrong, and describes them for the Add model dialog', () => {
     const hazards = findWebgpuConvHazards(fixture('webgpu-conv-rule.onnx'));
-    expect(hazards.map((h) => h.name)).toEqual(['conv_hazard_6', 'conv_cast_33', 'conv_const_99']);
+    expect(hazards.map((h) => h.name)).toEqual([
+      'conv_hazard_6',
+      'conv_cast_33',
+      'conv_const_99',
+      'conv_dilated_6',
+    ]);
     const message = describeWebgpuConvHazards(hazards);
     expect(message).toContain('onnxruntime-web WebGPU computes this convolution wrongly');
-    expect(message).toContain('conv_hazard_6, 6 input channels, kernel 3 × 3 (and 2 more)');
+    expect(message).toContain(
+      'conv_hazard_6, 6 input and 4 output channels, kernel 3 × 3 (and 3 more)',
+    );
     expect(message).toContain('Pad its input channels to a multiple of 4');
   });
 
   it('fails the model test on WebGPU only (WASM computes these Convs right)', () => {
     const hazards = findWebgpuConvHazards(fixture('stub-seg-conv6.onnx'));
-    expect(hazards).toEqual([{ name: 'conv6_3x3', inputChannels: 6, kernel: [3, 3], group: 1 }]);
+    expect(hazards).toEqual([
+      { name: 'conv6_3x3', inputChannels: 6, outputChannels: 4, kernel: [3, 3], group: 1 },
+    ]);
     expect(assessWebgpuConvs(hazards, 'webgpu')).toEqual({
       ok: false,
       problem: 'webgpu-conv',

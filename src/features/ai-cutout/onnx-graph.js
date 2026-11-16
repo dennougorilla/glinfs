@@ -3,18 +3,23 @@
  * @module features/ai-cutout/onnx-graph
  *
  * onnxruntime-web's WebGPU backend (1.30 and 1.31.1) computes a Conv wrong
- * when its kernel is larger than 1 × 1 and its input has a number of
- * channels that is divisible by 3, not by 4, and more than 3 (6, 9, 15, 18,
- * 21, 27, 30, 33 ... 99 ...): the output is off by about its own magnitude,
- * while the WASM and CPU backends are right. Measured on 190 one-Conv graphs
- * (1 to 130 input channels, 1 × 1, 3 × 3 and 7 × 7 kernels, strides 1 and
- * 2) on an NVIDIA RTX 3080 Ti and on Chrome's SwiftShader adapter (a CPU
- * implementation of WebGPU), with the same wrong values on both: the error
- * is in the WebGPU kernel, not in a GPU or driver. Zero-padding the input
- * channels to a multiple of 4 (zero channels in the input and the weight)
- * gives exactly the same result and avoids it; scripts/convert-models-fp16.py
- * does that for the shipped models. Grouped Convs were not measured and are
- * not flagged.
+ * when its kernel is larger than 1 × 1, its input has a number of channels
+ * that is divisible by 3, not by 4, and more than 3 (6, 9, 15, 18, 21, 27,
+ * 30, 33 ... 99 ...), and its number of output channels is a multiple of 4:
+ * the output is off by about its own magnitude, while the WASM and CPU
+ * backends are right. Measured on one-Conv graphs against WASM: 1 to 130
+ * input channels with 32 or 64 outputs, then 268 graphs with 6, 9, 15 and
+ * 99 inputs (4, 8 and 12 as controls) × 1, 2, 3, 4, 5, 6, 8, 12 and 16
+ * outputs × 1 × 1, 3 × 3 and 7 × 7 kernels, strides 1 and 2, plus dilation
+ * 2 and grouped Convs (6 or 9 inputs per group). On an NVIDIA RTX 3080 Ti
+ * and on Chrome's SwiftShader adapter (a CPU implementation of WebGPU) the
+ * same 52 of the 268 were wrong, exactly the ones this rule names: the error
+ * is in the WebGPU kernel, not in a GPU or driver. With 1, 2, 3, 5 or 6
+ * outputs, and in every grouped Conv measured, the result was right;
+ * dilation does not change it. Zero-padding the
+ * input channels to a multiple of 4 (zero channels in the input and the
+ * weight) gives exactly the same result and avoids it;
+ * scripts/convert-models-fp16.py does that for the shipped models.
  *
  * The reader is a minimal protobuf walk over the ModelProto: the graph's
  * nodes (name, op_type, inputs, outputs, attributes) and the shapes of its
@@ -51,6 +56,7 @@
  * @typedef {Object} ConvInfo
  * @property {string} name - The node's name (or its output when unnamed)
  * @property {number} inputChannels - Per group (the weight's axis 1)
+ * @property {number} outputChannels - The weight's axis 0
  * @property {number[]} kernel
  * @property {number} group
  */
@@ -255,6 +261,7 @@ export function listConvs(graph) {
     convs.push({
       name: node.name || node.outputs[0] || '(unnamed Conv)',
       inputChannels: dims[1],
+      outputChannels: dims[0],
       kernel: node.attributes.kernel_shape?.ints ?? dims.slice(2),
       group: node.attributes.group?.i ?? 1,
     });
@@ -265,17 +272,19 @@ export function listConvs(graph) {
 /**
  * Whether onnxruntime-web's WebGPU backend computes this Conv wrong (see the
  * module header): kernel above 1 × 1, input channels divisible by 3, not by
- * 4, more than 3; plain Convs (group 1) only
+ * 4, more than 3, output channels a multiple of 4; plain Convs (group 1)
+ * only (no grouped Conv measured was wrong)
  * @param {ConvInfo} conv
  * @returns {boolean}
  */
-export function isWebgpuConvHazard({ inputChannels, kernel, group }) {
+export function isWebgpuConvHazard({ inputChannels, outputChannels, kernel, group }) {
   return (
     group === 1 &&
     kernel.some((k) => k > 1) &&
     inputChannels > 3 &&
     inputChannels % 3 === 0 &&
-    inputChannels % 4 !== 0
+    inputChannels % 4 !== 0 &&
+    outputChannels % 4 === 0
   );
 }
 
@@ -308,5 +317,5 @@ export function assessWebgpuConvs(hazards, backend) {
 export function describeWebgpuConvHazards(hazards) {
   const [first] = hazards;
   const more = hazards.length > 1 ? ` (and ${hazards.length - 1} more)` : '';
-  return `onnxruntime-web WebGPU computes this convolution wrongly: ${first.name}, ${first.inputChannels} input channels, kernel ${first.kernel.join(' × ')}${more}. Pad its input channels to a multiple of 4 (zero channels in the input and in the weight give the same result).`;
+  return `onnxruntime-web WebGPU computes this convolution wrongly: ${first.name}, ${first.inputChannels} input and ${first.outputChannels} output channels, kernel ${first.kernel.join(' × ')}${more}. Pad its input channels to a multiple of 4 (zero channels in the input and in the weight give the same result).`;
 }

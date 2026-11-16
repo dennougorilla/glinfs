@@ -19,7 +19,8 @@ checked against its pinned size and SHA-256. The script then
 - for models marked `pad_conv_channels` (MODNet, RVM), zero-pads the input
   channels of every Conv whose channel count is not a multiple of 4; for the
   others, of every Conv that hits the WebGPU rule (input channels divisible
-  by 3, not by 4: onnxruntime-web's WebGPU backend computes those Convs
+  by 3, not by 4, output channels a multiple of 4: onnxruntime-web's WebGPU
+  backend computes those Convs
   wrong; the padded graph computes exactly the same values; see
   scripts/webgpu_convs.py). No shipped model other than MODNet and RVM has
   such a Conv, so their bytes do not change. A file with such a Conv left

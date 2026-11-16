@@ -2,14 +2,15 @@
 The WebGPU Conv rule, for the model conversion scripts.
 
 onnxruntime-web's WebGPU backend (1.30 and 1.31.1) computes a Conv wrong when
-its kernel is larger than 1 x 1 and its input has a number of channels that is
+its kernel is larger than 1 x 1, its input has a number of channels that is
 divisible by 3, not by 4, and more than 3 (6, 9, 15, 18, 21, 27, 30, 33 ... 99
-...): measured on 190 one-Conv graphs on an NVIDIA GPU and on Chrome's
-SwiftShader WebGPU adapter, with the same wrong values on both (see
-src/features/ai-cutout/onnx-graph.js, the same rule in the app). Zero-padding
-the input channels to a multiple of 4 gives exactly the same result.
+...), and its number of output channels is a multiple of 4: measured on
+one-Conv graphs on an NVIDIA GPU and on Chrome's SwiftShader WebGPU adapter,
+with the same wrong graphs on both (see src/features/ai-cutout/onnx-graph.js,
+the same rule in the app). Zero-padding the input channels to a multiple of 4
+gives exactly the same result.
 
-- webgpu_conv_hazards(model): the Convs that hit the rule, "name: N channels, k x k";
+- webgpu_conv_hazards(model): the Convs that hit the rule, "name: N -> M channels, k x k";
 - pad_conv_input_channels(model, only=...): the padding (a Pad node and zero
   weight channels), for every Conv it is given or the hazards only.
 
@@ -47,9 +48,17 @@ def _weight_dims(model: onnx.ModelProto, name: str) -> list[int] | None:
     return None
 
 
-def is_hazard(channels: int, kernel: list[int], group: int) -> bool:
-    """The rule: group 1, kernel above 1 x 1, channels divisible by 3, not by 4, more than 3"""
-    return group == 1 and any(k > 1 for k in kernel) and channels > 3 and channels % 3 == 0 and channels % 4 != 0
+def is_hazard(channels: int, kernel: list[int], group: int, out_channels: int) -> bool:
+    """The rule: group 1, kernel above 1 x 1, input channels divisible by 3, not by 4, more
+    than 3, output channels a multiple of 4"""
+    return (
+        group == 1
+        and any(k > 1 for k in kernel)
+        and channels > 3
+        and channels % 3 == 0
+        and channels % 4 != 0
+        and out_channels % 4 == 0
+    )
 
 
 def webgpu_conv_hazards(model: onnx.ModelProto) -> list[str]:
@@ -63,19 +72,21 @@ def webgpu_conv_hazards(model: onnx.ModelProto) -> list[str]:
             continue
         kernel = next((list(a.ints) for a in node.attribute if a.name == "kernel_shape"), dims[2:])
         group = next((a.i for a in node.attribute if a.name == "group"), 1)
-        if is_hazard(dims[1], kernel, group):
-            found.append(f"{node.name or node.output[0]}: {dims[1]} channels, {' x '.join(map(str, kernel))}")
+        if is_hazard(dims[1], kernel, group, dims[0]):
+            found.append(
+                f"{node.name or node.output[0]}: {dims[1]} -> {dims[0]} channels, {' x '.join(map(str, kernel))}"
+            )
     return found
 
 
 def pad_conv_input_channels(
     model: onnx.ModelProto,
     multiple: int = 4,
-    only: Callable[[int, list[int]], bool] | None = None,
+    only: Callable[[int, list[int], int], bool] | None = None,
 ) -> list[str]:
     """Zero-pad the input channels of every Conv whose input channel count
     is above and not a multiple of `multiple` (and, with `only`, for which
-    `only(channels, kernel)` holds). Returns "name: before -> after" for each
+    `only(channels, kernel, out_channels)` holds). Returns "name: before -> after" for each
     Conv changed.
 
     onnxruntime-web's WebGPU backend computes some of those Convs wrong (see
@@ -100,7 +111,7 @@ def pad_conv_input_channels(
             weight = numpy_helper.to_array(initializers[node.input[1]])
             channels = weight.shape[1]
             kernel = list(weight.shape[2:])
-            wanted = only is None or only(channels, kernel)
+            wanted = only is None or only(channels, kernel, weight.shape[0])
             if group == 1 and channels > multiple and channels % multiple and wanted:
                 pad = multiple - channels % multiple
                 zeros = np.zeros((weight.shape[0], pad, *weight.shape[2:]), weight.dtype)
@@ -138,7 +149,9 @@ def pad_conv_input_channels(
 
 def pad_webgpu_conv_hazards(model: onnx.ModelProto) -> list[str]:
     """Pad only the Convs that hit the rule"""
-    return pad_conv_input_channels(model, only=lambda channels, kernel: is_hazard(channels, kernel, 1))
+    return pad_conv_input_channels(
+        model, only=lambda channels, kernel, out_channels: is_hazard(channels, kernel, 1, out_channels)
+    )
 
 
 def assert_no_webgpu_conv_hazards(model: onnx.ModelProto, what: str) -> None:
@@ -147,5 +160,6 @@ def assert_no_webgpu_conv_hazards(model: onnx.ModelProto, what: str) -> None:
     if left:
         raise ValueError(
             f"{what}: onnxruntime-web WebGPU computes these Convs wrong (input channels divisible "
-            f"by 3, not by 4): {', '.join(left)}. Pad their input channels to a multiple of 4."
+            f"by 3, not by 4; output channels a multiple of 4): {', '.join(left)}. Pad their input "
+            f"channels to a multiple of 4."
         )

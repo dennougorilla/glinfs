@@ -245,7 +245,7 @@ test.describe('Custom AI models', () => {
     await expect(note).toContainText('onnxruntime-web WebGPU computes this convolution wrongly', {
       timeout: 30_000,
     });
-    await expect(note).toContainText('conv6_3x3, 6 input channels, kernel 3 × 3');
+    await expect(note).toContainText('conv6_3x3, 6 input and 4 output channels, kernel 3 × 3');
     await expect(note).toContainText('Pad its input channels to a multiple of 4');
     // Headless Chromium has no WebGPU: the note says the test can pass here
     await expect(note).toContainText('without WebGPU');
