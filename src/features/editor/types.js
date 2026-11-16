@@ -129,6 +129,8 @@
  *   the original frame while removal is on (view only)
  * @property {string | null} downloadPrompt - An AI subject whose model is not
  *   downloaded was chosen: its id, while the panel asks before downloading
+ * @property {import('../../shared/edits/model.js').AiSubject | null} [downloadPromptSubject] -
+ *   The card the asked-about model was chosen for (a model can be on several)
  */
 
 /**
