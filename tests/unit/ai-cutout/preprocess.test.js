@@ -6,7 +6,12 @@ import {
   computeMaskSize,
   probabilityToMask,
   rgbaToChw,
+  toProbabilities,
 } from '../../../src/features/ai-cutout/preprocess.js';
+import {
+  SegmentationError,
+  SegmentationErrorCode,
+} from '../../../src/features/ai-cutout/protocol.js';
 
 /**
  * Reference for upstream's geometry (Python):
@@ -281,5 +286,40 @@ describe('probabilityToMask', () => {
     const box = computeLetterbox(4, 4, 4);
     expect(() => probabilityToMask(new Float32Array(15), box, 4, 4)).toThrow(RangeError);
     expect(() => probabilityToMask(new Float32Array(16), box, 0, 4)).toThrow(RangeError);
+  });
+});
+
+describe('toProbabilities', () => {
+  it('applies a sigmoid to logits in place and leaves probabilities alone', () => {
+    const logits = Float32Array.of(0, 2, -2, 50, -50, Infinity, -Infinity);
+    expect(toProbabilities(logits, 'logits')).toBe(logits);
+    expect(logits[0]).toBe(0.5);
+    expect(logits[1]).toBeCloseTo(1 / (1 + Math.exp(-2)), 6);
+    expect(logits[2]).toBeCloseTo(1 / (1 + Math.exp(2)), 6);
+    expect(logits[3]).toBe(1);
+    expect(logits[4]).toBeCloseTo(0, 10);
+    expect([logits[5], logits[6]]).toEqual([1, 0]);
+    const probability = Float32Array.of(0, 0.25, 1);
+    expect(Array.from(toProbabilities(probability))).toEqual([0, 0.25, 1]);
+    expect(() => toProbabilities(probability, /** @type {any} */ ('raw'))).toThrow(RangeError);
+  });
+
+  it('fails on NaN instead of letting it become an empty mask', () => {
+    // What probabilityToMask alone would do with a NaN output: an empty mask
+    const box = computeInputGeometry('stretch', 2, 2, 2);
+    const nanOutput = new Float32Array(4).fill(Number.NaN);
+    expect(Array.from(probabilityToMask(nanOutput, box, 2, 2).data)).toEqual([0, 0, 0, 0]);
+    for (const kind of /** @type {const} */ (['probability', 'logits'])) {
+      const output = Float32Array.of(0.9, Number.NaN, 0.8, Number.NaN);
+      let error;
+      try {
+        toProbabilities(output, kind);
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(SegmentationError);
+      expect(error.code).toBe(SegmentationErrorCode.INVALID_OUTPUT);
+      expect(error.message).toBe('The model returned NaN for 2 of 4 mask values');
+    }
   });
 });

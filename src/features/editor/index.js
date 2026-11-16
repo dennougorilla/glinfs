@@ -75,6 +75,7 @@ import {
   getLostFramesInSelection,
   getModelSubject,
   getRememberedModels,
+  getSubject,
   getSubjectModel,
   getSubjectModels,
 } from './panels/background-panel.js';
@@ -619,6 +620,7 @@ export function initEditor() {
     previewView: initialState.previewView,
     comparing: initialState.comparing,
     downloadPrompt: initialState.downloadPrompt,
+    downloadPromptSubject: initialState.downloadPromptSubject,
   };
 
   // Subscribe to state changes (must be set up before setting pre-computed scenes)
@@ -675,7 +677,9 @@ export function initEditor() {
     const tabChanged = state.sidebarTab !== lastRendered.sidebarTab;
     const viewChanged =
       state.previewView !== lastRendered.previewView || state.comparing !== lastRendered.comparing;
-    const promptChanged = state.downloadPrompt !== lastRendered.downloadPrompt;
+    const promptChanged =
+      state.downloadPrompt !== lastRendered.downloadPrompt ||
+      state.downloadPromptSubject !== lastRendered.downloadPromptSubject;
     const editsUseCrop = previewDependsOnCrop(state.edits, state.clip?.hasAlpha);
     // The analysis coverage shown in the panel depends on the selection
     const selectionChanged =
@@ -769,6 +773,7 @@ export function initEditor() {
       lastRendered.aiCutout = state.aiCutout;
       lastRendered.brush = state.brush;
       lastRendered.downloadPrompt = state.downloadPrompt;
+      lastRendered.downloadPromptSubject = state.downloadPromptSubject;
     } else if (touchUpSectionStale) {
       updateTouchUpSection(container, state);
     }
@@ -1684,7 +1689,7 @@ async function handleChooseSubject(subject) {
     availability: state.aiCutout.models ?? null,
   });
   if (!modelId) return;
-  await handleChooseModel(modelId);
+  await handleChooseModel(modelId, subject);
 }
 
 /**
@@ -1692,9 +1697,15 @@ async function handleChooseSubject(subject) {
  * a ready model starts at once, one that still has to download asks first
  * (see handleChooseSubject).
  * @param {string} modelId
+ * @param {import('./panels/background-panel.js').Subject} [subject] - The
+ *   card it is chosen for; the Model choice passes none (the current card)
  */
-async function handleChooseModel(modelId) {
+async function handleChooseModel(modelId, subject) {
   if (!store || !isModelId(modelId)) return;
+  const background = store.getState().edits?.background;
+  const card = /** @type {import('../../shared/edits/model.js').AiSubject | null} */ (
+    getModelSubject(modelId, subject ?? (background ? getSubject(background) : null))
+  );
   const seq = ++modelChoiceSeq;
   store.setState((s) => setDownloadPrompt(s, null));
   const current = store;
@@ -1709,14 +1720,18 @@ async function handleChooseModel(modelId) {
   const state = current.getState();
   const frame = state.clip?.frames[state.currentFrame];
   if (!ready && !isFrameAnalyzed(frame, { modelId })) {
-    current.setState((s) => setDownloadPrompt(s, modelId));
+    current.setState((s) => setDownloadPrompt(s, modelId, card));
     const entry = getModelEntry(modelId);
     announce(
       `The ${entry.label} model needs a ${getModelSizeLabel(modelId)} download. Download or Cancel.`,
     );
     return;
   }
-  applyAiSubject(/** @type {import('../../shared/edits/model.js').AiModel} */ (modelId), ready);
+  applyAiSubject(
+    /** @type {import('../../shared/edits/model.js').AiModel} */ (modelId),
+    ready,
+    card,
+  );
 }
 
 /**
@@ -1727,15 +1742,24 @@ async function handleChooseModel(modelId) {
  * user settings, so the next clip starts with it (#187).
  * @param {import('../../shared/edits/model.js').AiModel} modelId
  * @param {boolean} analyze
+ * @param {import('../../shared/edits/model.js').AiSubject | null} [subject] - The
+ *   card it was chosen with (the first card that lists it when not given)
  */
-function applyAiSubject(modelId, analyze) {
+function applyAiSubject(modelId, analyze, subject = null) {
   if (!store) return;
-  rememberAiCutoutModel(modelId, getModelSubject(modelId));
+  const card = /** @type {import('../../shared/edits/model.js').AiSubject | null} */ (
+    getModelSubject(modelId, subject)
+  );
+  rememberAiCutoutModel(modelId, card);
   const before = store.getState();
   const sameModel = getAiModelId(before.edits.background.ai) === modelId;
+  if (sameModel && before.edits.background.ai.subject !== card) {
+    // The same model chosen on another card (BiRefNet: Anime and Anything)
+    store.setState((s) => setAiParams(s, { subject: card }));
+  }
   if (!sameModel) {
     store.setState((s) => {
-      const next = setAiParams(s, { model: modelId });
+      const next = setAiParams(s, { model: modelId, subject: card });
       // The last analysis' outcome (and a model's failure on WebGPU)
       // belonged to the other model
       return updateAiCutoutStatus(next, {
@@ -1769,10 +1793,14 @@ function applyAiSubject(modelId, analyze) {
 /** The inline "Download 88 MB?" question: Download */
 function handleConfirmModelDownload() {
   if (!store) return;
-  const modelId = store.getState().downloadPrompt;
+  const { downloadPrompt: modelId, downloadPromptSubject: subject } = store.getState();
   if (!modelId) return;
   store.setState((s) => setDownloadPrompt(s, null));
-  applyAiSubject(/** @type {import('../../shared/edits/model.js').AiModel} */ (modelId), true);
+  applyAiSubject(
+    /** @type {import('../../shared/edits/model.js').AiModel} */ (modelId),
+    true,
+    subject ?? null,
+  );
 }
 
 /** The inline "Download 88 MB?" question: Cancel (the previous choice stays) */
@@ -1800,7 +1828,11 @@ function handleResetBackground() {
   if (background.method === 'ai') {
     next = {
       ...background,
-      ai: { ...createDefaultAiCutout(), model: background.ai.model },
+      ai: {
+        ...createDefaultAiCutout(),
+        model: background.ai.model,
+        subject: background.ai.subject,
+      },
     };
   } else {
     const frame = state.clip?.frames[state.currentFrame];

@@ -17,7 +17,14 @@
 /**
  * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
  * keeps AI_MODELS equal to the registry's ids)
- * @typedef {'anime'|'general'|'portrait'|'click'|'ben2'|'video-person'} AiModel
+ * @typedef {'anime'|'general'|'portrait'|'click'|'ben2'|'video-person'|'birefnet-general'|'birefnet-lite'|'birefnet-toonout'} AiModel
+ */
+/**
+ * The Background tab's AI subject card a cutout was chosen with (see
+ * SUBJECT_CARDS in features/editor/panels/background-panel.js). A model
+ * can belong to several cards (BiRefNet: Anime and Anything), so the card
+ * is kept next to the model.
+ * @typedef {'anime'|'portrait'|'general'|'click'} AiSubject
  */
 /** @typedef {'keep'|'remove'} PickMode */
 /**
@@ -97,6 +104,9 @@
  * @property {CutoutObject[]} objects - at most EDIT_LIMITS.aiObjects.max
  *   tracked objects removed from / added to the mask, applied in order
  * @property {CutoutCleanup} cleanup - whole-clip clean-up of the final masks
+ * @property {AiSubject | null} subject - the subject card the model was
+ *   chosen with; null (edits saved before cards could share a model) means
+ *   the first card that lists the model
  */
 
 /**
@@ -177,10 +187,15 @@ export const AI_MODELS = /** @type {const} */ ([
   'click',
   'ben2',
   'video-person',
+  'birefnet-general',
+  'birefnet-lite',
+  'birefnet-toonout',
 ]);
 
 /** @type {readonly ObjectMode[]} */
 export const OBJECT_MODES = /** @type {const} */ (['remove', 'add']);
+/** @type {readonly AiSubject[]} */
+export const AI_SUBJECTS = /** @type {const} */ (['anime', 'portrait', 'general', 'click']);
 
 /** @type {readonly TouchUpMode[]} */
 export const TOUCH_UP_MODES = /** @type {const} */ (['erase', 'restore']);
@@ -229,6 +244,7 @@ const AI_DEFAULTS = /** @type {const} */ ({
   smoothing: true,
   edge: 0,
   clickScope: 'whole',
+  subject: null,
 });
 
 /**
@@ -537,6 +553,7 @@ function normalizeAiCutout(ai, frameCount) {
     clickScope: normalizeEnum(a.clickScope, CLICK_SCOPES, AI_DEFAULTS.clickScope),
     objects: normalizeObjects(a.objects, frameCount),
     cleanup: normalizeCleanup(a.cleanup),
+    subject: normalizeEnum(a.subject, AI_SUBJECTS, AI_DEFAULTS.subject),
   };
 }
 

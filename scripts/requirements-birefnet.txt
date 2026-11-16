@@ -1,0 +1,19 @@
+# scripts/export-birefnet-onnx.py (Python 3.12). The versions the pinned
+# BiRefNet files in model-registry.js were exported with. The export runs
+# on the CPU; a CUDA build of torch works the same. onnxruntime-gpu 1.32.0
+# (same CPU optimiser) was used for the constant folding step.
+torch==2.6.0
+torchvision==0.21.0
+deform-conv2d-onnx-exporter==1.2.0
+onnx==1.23.2
+onnxruntime==1.32.0
+onnxconverter-common==1.16.0
+safetensors==0.8.0
+# Imported by BiRefNet's birefnet.py
+timm==1.0.31
+kornia==0.9.1
+einops==0.8.2
+transformers==5.23.0
+numpy==2.5.4
+protobuf==7.36.2
+ml_dtypes==0.6.0

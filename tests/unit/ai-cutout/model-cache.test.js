@@ -88,6 +88,9 @@ describe('listDownloadedModels', () => {
       ['click', false],
       ['ben2', false],
       ['video-person', false],
+      ['birefnet-general', false],
+      ['birefnet-lite', false],
+      ['birefnet-toonout', false],
     ]);
     expect(models[0]).toMatchObject({
       label: 'General',
@@ -128,6 +131,9 @@ describe('listDownloadedModels', () => {
       ['click', false, false],
       ['ben2', false, false],
       ['video-person', false, false],
+      ['birefnet-general', false, false],
+      ['birefnet-lite', false, false],
+      ['birefnet-toonout', false, false],
     ]);
     expect(models[2].staleUrls).toEqual([stalePin]);
     expect(oldFiles).toEqual([{ url: FP32_KEY, fileName: 'isnetis.onnx', bytes: 176_069_933 }]);
