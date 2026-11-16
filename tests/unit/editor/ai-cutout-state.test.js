@@ -57,6 +57,7 @@ describe('AI cutout editor state', () => {
       edge: 3,
       clickScope: 'whole',
       objects: [],
+      cleanup: { minIslandArea: 0, maxHoleArea: 0 },
       picks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
     });
     // Mirrored into the clip like every edit

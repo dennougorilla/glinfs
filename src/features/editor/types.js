@@ -205,6 +205,8 @@
  *   being tracked (null: none)
  * @property {Record<string, number[]>} objectLost - Per tracked object: frames
  *   where its last tracking lost it, sorted
+ * @property {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion[]} cleanupSuggestions
+ *   One-tap clean-ups found in the last full build (at most 4)
  */
 
 /**

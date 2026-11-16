@@ -34,6 +34,14 @@ export const TRACK_JOIN_IOU = 0.3;
 export const PICK_SNAP_RADIUS_FRACTION = 0.02;
 
 /**
+ * Growth guard of remove picks: a remove pick never joins a component more
+ * than this many times the area of its last selection. Without it, a blob
+ * that merges into the character on one frame (overlap or centroid) takes
+ * the character with it on that frame.
+ */
+export const REMOVE_PICK_MAX_GROWTH = 3;
+
+/**
  * @typedef {Object} PackedMask
  * @property {Uint8Array} bits - ceil(width * height / 8) bytes, MSB first
  * @property {number} width
@@ -331,9 +339,10 @@ export function findPickedComponent(comps, width, height, pick) {
  * @param {number} width
  * @param {number} height
  * @param {TrackRef} ref
+ * @param {number} [maxArea] - Components larger than this never join
  * @returns {number[]} Labels, ascending
  */
-function followSelection(comps, width, height, ref) {
+function followSelection(comps, width, height, ref, maxArea = Number.POSITIVE_INFINITY) {
   if (!ref.mask || comps.count === 0) return [];
   const { labels, areas, count } = comps;
   const overlap = new Int32Array(count + 1);
@@ -353,6 +362,7 @@ function followSelection(comps, width, height, ref) {
   /** @type {number[]} */
   const joined = [];
   for (let l = 1; l <= count; l++) {
+    if (areas[l] > maxArea) continue;
     const inter = overlap[l];
     const iou = inter / (areas[l] + ref.area - inter);
     if (iou >= TRACK_JOIN_IOU || l === centroidLabel) joined.push(l);
@@ -400,6 +410,62 @@ function rememberSelection(ref, comps, width, selected) {
     }
   }
   Object.assign(ref, { mask, minX, minY, boxW, boxH, area, cx: sx / area, cy: sy / area });
+}
+
+/**
+ * Drop the components smaller than `minArea` pixels. The largest component
+ * always stays, so a frame where the character itself is small keeps it.
+ * @param {Uint8Array} binary - 0/1, the mask `comps` was labelled from
+ * @param {Components} comps
+ * @param {number} minArea - Pixels
+ * @param {Uint8Array} [out]
+ * @returns {Uint8Array} 0/1
+ */
+export function removeSmallComponents(binary, comps, minArea, out = new Uint8Array(binary.length)) {
+  const { labels, areas, count } = comps;
+  let largest = 0;
+  for (let l = 1; l <= count; l++) if (largest === 0 || areas[l] > areas[largest]) largest = l;
+  const keep = new Uint8Array(count + 1);
+  for (let l = 1; l <= count; l++) keep[l] = areas[l] >= minArea || l === largest ? 1 : 0;
+  for (let i = 0; i < binary.length; i++) out[i] = keep[labels[i]];
+  return out;
+}
+
+/**
+ * Fill the holes of at most `maxArea` pixels: background components that do
+ * not touch the frame border (a gap open to the border is background, not a
+ * hole)
+ * @param {Uint8Array} binary - 0/1, width * height
+ * @param {number} width
+ * @param {number} height
+ * @param {number} maxArea - Pixels
+ * @param {Int32Array} [labels] - Scratch (width * height)
+ * @param {Uint8Array} [out] - Must not be `binary`
+ * @returns {Uint8Array} 0/1
+ */
+export function fillSmallHoles(
+  binary,
+  width,
+  height,
+  maxArea,
+  labels,
+  out = new Uint8Array(width * height),
+) {
+  const size = width * height;
+  for (let i = 0; i < size; i++) out[i] = binary[i] ? 0 : 1;
+  const holes = labelComponents(out, width, height, labels);
+  const fill = new Uint8Array(holes.count + 1);
+  for (let l = 1; l <= holes.count; l++) {
+    const b = 4 * l;
+    const border =
+      holes.bboxes[b] === 0 ||
+      holes.bboxes[b + 1] === 0 ||
+      holes.bboxes[b + 2] === width - 1 ||
+      holes.bboxes[b + 3] === height - 1;
+    fill[l] = !border && holes.areas[l] <= maxArea ? 1 : 0;
+  }
+  for (let i = 0; i < size; i++) out[i] = binary[i] ? 1 : fill[holes.labels[i]];
+  return out;
 }
 
 /**
@@ -452,7 +518,10 @@ export function createPickTracker({ picks, width, height }) {
         if (label) seeded[k] = true;
         selected = label ? [label] : [];
       } else {
-        selected = followSelection(comps, width, height, refs[k]);
+        const ref = refs[k];
+        const maxArea =
+          pick.mode === 'remove' ? REMOVE_PICK_MAX_GROWTH * ref.area : Number.POSITIVE_INFINITY;
+        selected = followSelection(comps, width, height, ref, maxArea);
       }
       rememberSelection(refs[k], comps, width, selected);
       chosen[pick.mode === 'remove' ? 'remove' : 'keep'].push(...selected);

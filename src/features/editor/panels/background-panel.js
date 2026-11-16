@@ -46,6 +46,7 @@ import {
   createDefaultEdits,
   EDIT_LIMITS,
 } from '../../../shared/edits/model.js';
+import { MAX_SUGGESTIONS } from '../../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
@@ -64,6 +65,7 @@ import { getActiveAiObject } from '../state.js';
 /** @typedef {import('../../../shared/edits/model.js').CutoutPick} CutoutPick */
 /** @typedef {import('../../../shared/edits/model.js').CutoutObject} CutoutObject */
 /** @typedef {import('../../../shared/edits/model.js').AiCutout} AiCutout */
+/** @typedef {import('../../../shared/masks/cleanup-suggestions.js').CleanupSuggestion} CleanupSuggestion */
 /** @typedef {'none' | 'anime' | 'portrait' | 'general' | 'click' | 'color'} Subject */
 
 /**
@@ -895,6 +897,28 @@ export function renderBackgroundPanel(handlers) {
     [smoothing, createElement('span', {}, ['Reduce flicker between frames'])],
   );
 
+  // --- Clean up: one-tap fixes found in the last build (at most 4 chips) ---
+  const cleanupList = createElement('ul', {
+    id: 'ai-cleanup-list',
+    className: 'editor-cutout-picks',
+    'aria-labelledby': 'ai-cleanup-title',
+  });
+  const cleanupGroup = createElement('div', { id: 'ai-cleanup', hidden: 'true' }, [
+    createElement('h3', { className: 'editor-cutout-label', id: 'ai-cleanup-title' }, ['Clean up']),
+    cleanupList,
+  ]);
+  cleanups.push(
+    on(cleanupList, 'click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const item = target?.closest('[data-cleanup]');
+      if (!(item instanceof HTMLElement) || !target?.closest('button')) return;
+      const chip = cleanupChips.get(cleanupList)?.[Number(item.dataset.index)];
+      if (!chip) return;
+      if (chip.applied) handlers.onClearCleanup?.(/** @type {'specks' | 'holes'} */ (chip.kind));
+      else if (chip.suggestion) handlers.onApplyCleanup?.(chip.suggestion);
+    }),
+  );
+
   // --- Click to select: Whole / Part and the frames that need a click ---
   const scopes = /** @type {const} */ ([
     { value: 'whole', label: 'Whole', title: 'The whole thing you clicked' },
@@ -975,6 +999,7 @@ export function renderBackgroundPanel(handlers) {
       notice,
       fit.row,
       smoothingRow,
+      cleanupGroup,
     ],
   );
 
@@ -1436,6 +1461,109 @@ function updateObjectList(list, objects, activeId, fps, fallbackFocus) {
 }
 
 /**
+ * @typedef {Object} CleanupChip
+ * @property {CleanupSuggestion['kind']} kind
+ * @property {string} label
+ * @property {boolean} applied - A clean-up that is on (tapping turns it off)
+ * @property {CleanupSuggestion | null} suggestion - What tapping applies
+ */
+
+/**
+ * The chips of each Clean up list's most recent update (its click handler
+ * reads them)
+ * @type {WeakMap<HTMLElement, CleanupChip[]>}
+ */
+const cleanupChips = new WeakMap();
+
+/**
+ * @param {number} n
+ * @param {string} one
+ * @param {string} many
+ */
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The Clean up chips: the clean-ups that are on (checked), then the
+ * suggestions for what is off (a blob suggestion only where picks select
+ * pieces, not with click to select), at most MAX_SUGGESTIONS
+ * @param {AiCutout} ai
+ * @param {CleanupSuggestion[]} suggestions
+ * @returns {CleanupChip[]}
+ */
+export function getCleanupChips(ai, suggestions) {
+  /** @type {CleanupChip[]} */
+  const chips = [];
+  const cleanup = ai.cleanup ?? { minIslandArea: 0, maxHoleArea: 0 };
+  if (cleanup.minIslandArea > 0) {
+    chips.push({
+      kind: 'specks',
+      label: 'Specks removed · every frame',
+      applied: true,
+      suggestion: null,
+    });
+  }
+  if (cleanup.maxHoleArea > 0) {
+    chips.push({
+      kind: 'holes',
+      label: 'Small holes filled · every frame',
+      applied: true,
+      suggestion: null,
+    });
+  }
+  for (const s of suggestions) {
+    if (s.kind === 'specks' && cleanup.minIslandArea > 0) continue;
+    if (s.kind === 'holes' && cleanup.maxHoleArea > 0) continue;
+    if (s.kind === 'blob' && ai.model === 'click') continue;
+    const label =
+      s.kind === 'specks'
+        ? `Remove ${plural(s.count, 'speck', 'specks')} · every frame`
+        : s.kind === 'holes'
+          ? `Fill ${plural(s.count, 'small hole', 'small holes')} · every frame`
+          : s.kind === 'blob'
+            ? `Remove blob near ${s.where} · on ${plural(s.frames, 'frame', 'frames')}`
+            : `Check ${plural(s.frames, 'frame', 'frames')} where the character shrinks`;
+    chips.push({ kind: s.kind, label, applied: false, suggestion: s });
+  }
+  return chips.slice(0, MAX_SUGGESTIONS);
+}
+
+/**
+ * @param {HTMLElement} list
+ * @param {CleanupChip[]} chips
+ */
+function updateCleanupList(list, chips) {
+  cleanupChips.set(list, chips);
+  const signature = chips.map((c) => `${c.applied ? 1 : 0}:${c.label}`).join('|');
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  list.replaceChildren(
+    ...chips.map((chip, index) =>
+      createElement(
+        'li',
+        {
+          className: `editor-cutout-pick editor-cutout-pick--${chip.kind === 'shrink' ? 'keep' : 'remove'}${chip.applied ? ' is-active' : ''}`,
+          'data-cleanup': chip.kind,
+          'data-index': String(index),
+        },
+        [
+          createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'editor-cutout-pick-go',
+              ...(chip.kind === 'specks' || chip.kind === 'holes'
+                ? { 'aria-pressed': chip.applied ? 'true' : 'false' }
+                : {}),
+            },
+            [chip.label],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/**
  * Whether Reset has anything to do for the current method
  * @param {import('../types.js').EditorState} state
  * @returns {boolean}
@@ -1603,6 +1731,11 @@ export function updateBackgroundPanel(container, state, fps) {
   const list = /** @type {HTMLElement} */ (q(root, '#ai-pick-list'));
   updatePickList(list, isAi ? ai.picks : [], fps, q(root, '#ai-pick-keep'));
   setHidden(list, !isAi || ai.picks.length === 0);
+
+  // Clean up chips
+  const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? []) : [];
+  updateCleanupList(/** @type {HTMLElement} */ (q(root, '#ai-cleanup-list')), chips);
+  setHidden(q(root, '#ai-cleanup'), chips.length === 0);
 
   // Tracked objects: the list, Whole / Part of the active one, lost frames
   const active = isAi ? getActiveAiObject(state) : null;

@@ -111,7 +111,7 @@ async function pickDiscA(page, mode) {
   await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
   await page.locator(`label[for="ai-pick-${mode}"]`).click();
   await expect(page.locator(`#ai-pick-${mode}`)).toBeChecked();
-  await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
+  await expect(page.locator('#preview-tool-hint')).toContainText(/Click a (character|blob)/);
   const point = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
   await page.mouse.click(point.x, point.y);
   // One pick, the tool is left afterwards
@@ -181,7 +181,9 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     const overlay = page.locator('.editor-canvas-overlay');
     await expect(overlay).toBeFocused();
     await expect(overlay).toHaveAttribute('aria-label', /Arrow keys move the marker/);
-    await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
+    await expect(page.locator('#preview-tool-hint')).toContainText(
+      'Anything not attached to it disappears on every frame',
+    );
 
     // Marker from the centre (0.5, 0.5) to disc A (≈ 0.27, 0.31)
     for (const key of ['Shift+ArrowLeft', 'Shift+ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {

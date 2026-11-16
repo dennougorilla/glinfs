@@ -38,6 +38,7 @@ describe('createDefaultEdits', () => {
           picks: [],
           clickScope: 'whole',
           objects: [],
+          cleanup: { minIslandArea: 0, maxHoleArea: 0 },
         },
       },
       touchUps: [],
@@ -629,5 +630,35 @@ describe('AiCutout.objects', () => {
     const clicks = Array.from({ length: 20 }, (_, i) => keep(i % 10));
     expect(objectsOf([{ id: 'y', clicks }])[0].clicks).toHaveLength(EDIT_LIMITS.aiObjectClicks.max);
     expect(typeof objectsOf([{ clicks: [keep()] }])[0].id).toBe('string');
+  });
+});
+
+describe('AiCutout.cleanup', () => {
+  /** @param {unknown} cleanup */
+  const cleanupOf = (cleanup) =>
+    normalizeEdits({ background: { ai: { cleanup } } }, 10).background.ai.cleanup;
+
+  it('is off by default and for anything that is not a number', () => {
+    expect(createDefaultEdits().background.ai.cleanup).toEqual({
+      minIslandArea: 0,
+      maxHoleArea: 0,
+    });
+    expect(cleanupOf(undefined)).toEqual({ minIslandArea: 0, maxHoleArea: 0 });
+    expect(cleanupOf({ minIslandArea: 'x', maxHoleArea: null })).toEqual({
+      minIslandArea: 0,
+      maxHoleArea: 0,
+    });
+  });
+
+  it('clamps both areas into the limit', () => {
+    const { max } = EDIT_LIMITS.aiCleanupArea;
+    expect(cleanupOf({ minIslandArea: 0.001, maxHoleArea: 0.004 })).toEqual({
+      minIslandArea: 0.001,
+      maxHoleArea: 0.004,
+    });
+    expect(cleanupOf({ minIslandArea: 5, maxHoleArea: -1 })).toEqual({
+      minIslandArea: max,
+      maxHoleArea: 0,
+    });
   });
 });

@@ -96,6 +96,17 @@
  *   clicked thing or the part under the click
  * @property {CutoutObject[]} objects - at most EDIT_LIMITS.aiObjects.max
  *   tracked objects removed from / added to the mask, applied in order
+ * @property {CutoutCleanup} cleanup - whole-clip clean-up of the final masks
+ */
+
+/**
+ * Whole-clip clean-up of the AI cutout, applied to every frame after the
+ * picks and before the edge. Areas are fractions of the frame, 0 = off.
+ * @typedef {Object} CutoutCleanup
+ * @property {number} minIslandArea - separate pieces smaller than this go
+ *   (the largest piece of a frame always stays)
+ * @property {number} maxHoleArea - holes up to this size are filled (a hole
+ *   touching the frame border is never filled)
  */
 
 /**
@@ -186,6 +197,7 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiPicks: { max: 16 },
   aiObjects: { max: 4 },
   aiObjectClicks: { max: 16 },
+  aiCleanupArea: { min: 0, max: 0.01 },
   touchUpRadius: { min: 0.0025, max: 0.15 },
   touchUps: { max: 200 },
   touchUpPoints: { max: 500 },
@@ -338,7 +350,31 @@ export function createDefaultEdits() {
  * @returns {AiCutout}
  */
 export function createDefaultAiCutout() {
-  return { ...AI_DEFAULTS, picks: [], objects: [] };
+  return { ...AI_DEFAULTS, picks: [], objects: [], cleanup: createDefaultCleanup() };
+}
+
+/**
+ * Clean-up off
+ * @returns {CutoutCleanup}
+ */
+export function createDefaultCleanup() {
+  return { minIslandArea: 0, maxHoleArea: 0 };
+}
+
+/**
+ * Normalize the clean-up: each area clamped into EDIT_LIMITS.aiCleanupArea
+ * (anything else is off)
+ * @param {unknown} cleanup
+ * @returns {CutoutCleanup}
+ */
+function normalizeCleanup(cleanup) {
+  const c =
+    cleanup && typeof cleanup === 'object' ? /** @type {Record<string, unknown>} */ (cleanup) : {};
+  const { min, max } = EDIT_LIMITS.aiCleanupArea;
+  return {
+    minIslandArea: clampNumber(c.minIslandArea, min, max, 0),
+    maxHoleArea: clampNumber(c.maxHoleArea, min, max, 0),
+  };
 }
 
 /**
@@ -500,6 +536,7 @@ function normalizeAiCutout(ai, frameCount) {
       .slice(0, aiPicks.max),
     clickScope: normalizeEnum(a.clickScope, CLICK_SCOPES, AI_DEFAULTS.clickScope),
     objects: normalizeObjects(a.objects, frameCount),
+    cleanup: normalizeCleanup(a.cleanup),
   };
 }
 

@@ -162,6 +162,7 @@ export function createAiCutoutStatus() {
     lostFrames: [],
     objectTracking: null,
     objectLost: {},
+    cleanupSuggestions: [],
   };
 }
 

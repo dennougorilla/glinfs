@@ -862,3 +862,48 @@ describe('tracked objects', () => {
     expect(added[8 * W + 5]).toBe(0);
   });
 });
+
+describe('whole-clip clean-up', () => {
+  const W = 40;
+  const H = 20;
+  /** A character with a 2x2 hole and a 2x2 speck */
+  const getProb = () => {
+    const prob = probOf(W, H, [
+      [4, 4, 12, 12],
+      [30, 2, 2, 2],
+    ]);
+    for (const y of [8, 9]) prob.data.fill(10, y * W + 8, y * W + 10);
+    return prob;
+  };
+  const cleaned = binaryOf(W, H, [[4, 4, 12, 12]]);
+
+  it('keys the params by the clean-up', () => {
+    const base = aiOf();
+    expect(getAiParamsKey(aiOf({ cleanup: { minIslandArea: 0.01, maxHoleArea: 0 } }))).not.toBe(
+      getAiParamsKey(base),
+    );
+    expect(getAiParamsKey(aiOf({ cleanup: { minIslandArea: 0, maxHoleArea: 0.01 } }))).not.toBe(
+      getAiParamsKey(base),
+    );
+  });
+
+  it('drops specks and fills holes on every frame, in builds and drafts alike', async () => {
+    const ai = aiOf({ cleanup: { minIslandArea: 5 / (W * H), maxHoleArea: 4 / (W * H) } });
+    const full = await buildFinalMasks({ frameCount: 2, getProb, ai, ...noYield });
+    const draft = createDraftMaskSource({ frameCount: 2, getProb, ai });
+    for (let f = 0; f < 2; f++) {
+      expect(full.masks[f]).toEqual(packMask(cleaned, W, H));
+      expect(draft.getFinalMask(f)).toEqual(full.masks[f]);
+    }
+    // Off: as the model gave it
+    const off = await buildFinalMasks({ frameCount: 1, getProb, ai: aiOf(), ...noYield });
+    expect(off.masks[0]).not.toEqual(packMask(cleaned, W, H));
+  });
+
+  it('cleans up before the edge grows the cutout', async () => {
+    const ai = aiOf({ edge: 1, cleanup: { minIslandArea: 5 / (W * H), maxHoleArea: 0 } });
+    const full = await buildFinalMasks({ frameCount: 1, getProb, ai, ...noYield });
+    // The speck does not come back grown
+    expect(unpackMask(/** @type {any} */ (full.masks[0]))[3 * W + 31]).toBe(0);
+  });
+});

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyMaskToRegion,
   createPickTracker,
+  fillSmallHoles,
   findPickedComponent,
   labelComponents,
   maskBit,
@@ -9,6 +10,8 @@ import {
   PICK_SNAP_RADIUS_FRACTION,
   packedMaskBytes,
   packMask,
+  REMOVE_PICK_MAX_GROWTH,
+  removeSmallComponents,
   resampleNearest,
   smoothTemporal,
   TRACK_JOIN_IOU,
@@ -653,5 +656,66 @@ describe('applyMaskToRegion', () => {
     expect(applyMaskToRegion(rgba, 1, 1, bits, 0, 1, region, 1, 1)).toBe(0);
     expect(applyMaskToRegion(rgba, 1, 1, bits, 1, 1, region, 0, 1)).toBe(0);
     expect(rgba[3]).toBe(255);
+  });
+});
+
+describe('removeSmallComponents', () => {
+  it('drops pieces under the area and always keeps the largest', () => {
+    const { binary, width } = fromRows(['##.....#', '##......', '........', '...#....']);
+    const comps = labelComponents(binary, width, 4);
+    expect(toRows(removeSmallComponents(binary, comps, 2), width)).toEqual([
+      '##......',
+      '##......',
+      '........',
+      '........',
+    ]);
+    // Even when the largest is under the area
+    expect(toRows(removeSmallComponents(binary, comps, 10), width)).toEqual([
+      '##......',
+      '##......',
+      '........',
+      '........',
+    ]);
+  });
+});
+
+describe('fillSmallHoles', () => {
+  it('fills enclosed holes up to the area, never a gap open to the border', () => {
+    const { binary, width, height } = fromRows([
+      '.#######..',
+      '.#.#...#..',
+      '.#######..',
+      '.#.....#..',
+      '.#.....#..',
+      '.###.###..',
+    ]);
+    expect(toRows(fillSmallHoles(binary, width, height, 3), width)).toEqual([
+      '.#######..',
+      '.#######..',
+      '.#######..',
+      '.#.....#..',
+      '.#.....#..',
+      '.###.###..',
+    ]);
+  });
+});
+
+describe('remove pick growth guard', () => {
+  const W = 40;
+  const H = 20;
+
+  it('a remove pick does not take a piece more than 3x its size (a blob merged into the character)', () => {
+    /** @type {Rect} */
+    const blob = [30, 2, 4, 4];
+    /** @type {Rect} */
+    const character = [4, 2, 14, 16];
+    // Frame 1: the blob touches the character and merges with it
+    const rectsAt = (/** @type {number} */ f) =>
+      f === 1 ? [character, [18, 2, 16, 4]] : [character, blob];
+    const { selections } = track(3, W, H, rectsAt, [pickAt(0, blob, W, H, 'remove')]);
+    expect(REMOVE_PICK_MAX_GROWTH).toBe(3);
+    // The merged piece stays (character and blob), the separate blob goes elsewhere
+    expect(selections[1]).toEqual(scene(W, H, rectsAt(1)));
+    expect(selections[2]).toEqual(scene(W, H, [character]));
   });
 });

@@ -449,7 +449,9 @@ describe('AI cutout in the mounted editor', () => {
     expect($('label[for="ai-pick-keep"]').classList.contains('is-active')).toBe(true);
     expect($('.editor-canvas-container').dataset.tool).toBe('keep');
     expect($('#preview-tool-hint').hidden).toBe(false);
-    expect($('#preview-tool-hint').textContent).toContain('click a character');
+    expect($('#preview-tool-hint').textContent).toContain(
+      'Anything not attached to it disappears on every frame',
+    );
     expect($('.editor-canvas-container').classList.contains('editor-ai-picking')).toBe(true);
 
     overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 30, clientY: 70, bubbles: true }));
@@ -657,6 +659,48 @@ describe('AI cutout in the mounted editor', () => {
       picks: [],
     });
     expect(/** @type {HTMLButtonElement} */ ($('#background-reset')).disabled).toBe(true);
+  });
+
+  it('Clean up chips: specks and holes toggle the whole-clip clean-up, a blob becomes a remove pick', async () => {
+    mount(6);
+    await chooseAi();
+    await vi.waitFor(async () => {
+      await settle();
+      expect(getEditorState()?.aiCutout.maskVersion).toBeGreaterThan(0);
+    });
+    // Let the suggestion pass of that build finish (a clean mask: none)
+    await vi.advanceTimersByTimeAsync(2000);
+    const suggestions = [
+      { kind: 'specks', count: 2, minIslandArea: 0.001 },
+      { kind: 'blob', frames: 2, where: 'left', pick: { frame: 4, x: 0.1, y: 0.5 } },
+    ];
+    window.__TEST_HOOKS__.setEditorState({
+      aiCutout: { ...getEditorState()?.aiCutout, cleanupSuggestions: suggestions },
+    });
+    await settle();
+    const chip = (/** @type {string} */ kind) =>
+      /** @type {HTMLElement} */ ($(`#ai-cleanup-list [data-cleanup="${kind}"] button`));
+    expect($('#ai-cleanup').hidden).toBe(false);
+
+    chip('specks').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.cleanup).toEqual({
+      minIslandArea: 0.001,
+      maxHoleArea: 0,
+    });
+    expect(chip('specks').getAttribute('aria-pressed')).toBe('true');
+
+    chip('blob').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toEqual([
+      { frame: 4, x: 0.1, y: 0.5, mode: 'remove' },
+    ]);
+    expect(getEditorState()?.currentFrame).toBe(4);
+
+    // Tapping the checked chip turns the clean-up off
+    chip('specks').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.cleanup.minIslandArea).toBe(0);
   });
 
   it('Hold to compare shows the original while held; Show mask tints what is removed', async () => {

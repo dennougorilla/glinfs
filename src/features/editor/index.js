@@ -978,6 +978,8 @@ function render(container) {
       onGoToObjectLost: handleGoToObjectLost,
       onRemoveAiObject: handleRemoveAiObject,
       onSetAiObjectScope: handleSetAiObjectScope,
+      onApplyCleanup: handleApplyCleanup,
+      onClearCleanup: handleClearCleanup,
       onClearAiPicks: handleClearAiPicks,
       onSetBrush: handleSetBrush,
       onBrushStrokeStart: handleBrushStrokeStart,
@@ -1840,7 +1842,11 @@ function handleSetAiPickTool(tool, options = {}) {
         : `Click the thing in the preview to ${tool === 'remove-object' ? 'remove it from' : 'add it to'} every frame`,
     );
   } else if (tool) {
-    announce(`Click a character in the preview to ${tool === 'keep' ? 'keep' : 'remove'} it`);
+    announce(
+      tool === 'keep'
+        ? 'Click a character in the preview to keep it. Anything not attached to it disappears on every frame'
+        : 'Click a blob in the preview to remove it from every frame',
+    );
   }
 }
 
@@ -2036,6 +2042,47 @@ function handleSetAiObjectScope(scope) {
   const object = getActiveAiObject(store.getState());
   if (!object) return;
   store.setState((state) => setAiObjectScope(state, object.id, scope));
+}
+
+/**
+ * A Clean up chip: specks and holes set the whole-clip clean-up, a blob
+ * becomes a remove pick on it (on the frame where it is largest, shown),
+ * a shrink goes to its first frame
+ * @param {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion} suggestion
+ */
+function handleApplyCleanup(suggestion) {
+  if (!store) return;
+  const { cleanup } = store.getState().edits.background.ai;
+  if (suggestion.kind === 'specks') {
+    handleSetAiParams({ cleanup: { ...cleanup, minIslandArea: suggestion.minIslandArea } });
+    announce('Specks removed on every frame');
+  } else if (suggestion.kind === 'holes') {
+    handleSetAiParams({ cleanup: { ...cleanup, maxHoleArea: suggestion.maxHoleArea } });
+    announce('Small holes filled on every frame');
+  } else if (suggestion.kind === 'blob') {
+    if (store.getState().edits.background.ai.picks.length >= EDIT_LIMITS.aiPicks.max) {
+      announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
+      return;
+    }
+    store.setState((s) => addAiPick(s, { ...suggestion.pick, mode: 'remove' }));
+    handleFrameChange(suggestion.pick.frame);
+    announce(`Blob near ${suggestion.where} removed`);
+  } else {
+    handleFrameChange(suggestion.frame);
+  }
+}
+
+/**
+ * Turn a whole-clip clean-up off (its chip tapped again)
+ * @param {'specks' | 'holes'} kind
+ */
+function handleClearCleanup(kind) {
+  if (!store) return;
+  const { cleanup } = store.getState().edits.background.ai;
+  handleSetAiParams({
+    cleanup: { ...cleanup, ...(kind === 'specks' ? { minIslandArea: 0 } : { maxHoleArea: 0 }) },
+  });
+  announce(kind === 'specks' ? 'Specks are back' : 'Holes are back');
 }
 
 /** Click to select: go to the first frame that lost the object, Keep tool on */

@@ -15,6 +15,7 @@ import {
   describeFit,
   FIT_STEPS,
   fitFromAi,
+  getCleanupChips,
   getDownloadPrompt,
   getLostFramesInSelection,
   getLostFramesText,
@@ -95,6 +96,8 @@ beforeEach(() => {
     onGoToObjectLost: vi.fn(),
     onRemoveAiObject: vi.fn(),
     onSetAiObjectScope: vi.fn(),
+    onApplyCleanup: vi.fn(),
+    onClearCleanup: vi.fn(),
   };
   document.body.innerHTML = '';
   root = document.createElement('div');
@@ -753,5 +756,69 @@ describe('tracked objects', () => {
     updateBackgroundPanel(root, stateWith(many), 10);
     expect($('#ai-object-remove').disabled).toBe(true);
     expect($('#ai-object-add').disabled).toBe(true);
+  });
+});
+
+describe('Clean up chips', () => {
+  const specks = { kind: 'specks', count: 3, minIslandArea: 0.001 };
+  const holes = { kind: 'holes', count: 1, maxHoleArea: 0.002 };
+  const blob = { kind: 'blob', frames: 2, where: 'top-right', pick: { frame: 4, x: 0.8, y: 0.2 } };
+  const shrink = { kind: 'shrink', frames: 3, frame: 7 };
+  /** @param {Record<string, unknown>} ai @param {any[]} suggestions */
+  const stateWith = (ai, suggestions) =>
+    makeState(
+      { enabled: true, method: 'ai', ai: { model: 'general', ...ai } },
+      { aiCutout: { ...createAiCutoutStatus(), cleanupSuggestions: suggestions } },
+    );
+
+  it('words each suggestion and puts the clean-ups that are on first', () => {
+    const ai = /** @type {any} */ ({
+      model: 'general',
+      cleanup: { minIslandArea: 0.001, maxHoleArea: 0 },
+    });
+    const chips = getCleanupChips(ai, /** @type {any} */ ([specks, holes, blob, shrink]));
+    expect(chips.map((c) => [c.label, c.applied])).toEqual([
+      ['Specks removed · every frame', true],
+      ['Fill 1 small hole · every frame', false],
+      ['Remove blob near top-right · on 2 frames', false],
+      ['Check 3 frames where the character shrinks', false],
+    ]);
+  });
+
+  it('shows no blob chip with click to select, and at most four chips', () => {
+    const click = /** @type {any} */ ({
+      model: 'click',
+      cleanup: { minIslandArea: 0, maxHoleArea: 0 },
+    });
+    expect(getCleanupChips(click, /** @type {any} */ ([blob, shrink])).map((c) => c.kind)).toEqual([
+      'shrink',
+    ]);
+    const on = /** @type {any} */ ({
+      model: 'general',
+      cleanup: { minIslandArea: 0.001, maxHoleArea: 0.001 },
+    });
+    expect(getCleanupChips(on, /** @type {any} */ ([blob, blob, shrink]))).toHaveLength(4);
+  });
+
+  it('hides the row without chips; a tap applies a suggestion or turns a clean-up off', () => {
+    updateBackgroundPanel(root, stateWith({}, []), 10);
+    expect($('#ai-cleanup').hidden).toBe(true);
+    updateBackgroundPanel(
+      root,
+      stateWith({ cleanup: { minIslandArea: 0, maxHoleArea: 0.002 } }, [specks, holes]),
+      10,
+    );
+    expect($('#ai-cleanup').hidden).toBe(false);
+    const buttons = [...root.querySelectorAll('#ai-cleanup-list button')];
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      'Small holes filled · every frame',
+      'Remove 3 specks · every frame',
+    ]);
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
+    expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
+    /** @type {HTMLElement} */ (buttons[0]).click();
+    expect(handlers.onClearCleanup).toHaveBeenCalledWith('holes');
+    /** @type {HTMLElement} */ (buttons[1]).click();
+    expect(handlers.onApplyCleanup).toHaveBeenCalledWith(specks);
   });
 });

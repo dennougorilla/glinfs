@@ -72,8 +72,11 @@ export function getPreviewToolHint(state) {
       ? 'Click the thing you want to keep · Esc to cancel'
       : 'Keep: click to add to the selection · Esc to cancel';
   }
-  if (state.aiPickTool === 'keep') return 'Keep: click a character · Esc to cancel';
-  if (state.aiPickTool === 'remove') return 'Remove: click a character · Esc to cancel';
+  if (state.aiPickTool === 'keep') {
+    return 'Click a character to keep it. Anything not attached to it disappears on every frame · Esc to cancel';
+  }
+  if (state.aiPickTool === 'remove')
+    return 'Click a blob to remove it from every frame · Esc to cancel';
   if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
   return '';
 }

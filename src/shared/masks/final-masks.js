@@ -4,7 +4,8 @@
  * Turns a clip's probability masks (one per analyzed frame, from the
  * segmentation model) and the AI cutout parameters into the final 1-bit
  * mask of every frame: threshold (optionally averaged with the neighbouring
- * frames), follow the picks, grow/shrink by the edge, subtract / add the
+ * frames), follow the picks, clean up (small pieces, small holes),
+ * grow/shrink by the edge, subtract / add the
  * tracked objects (see object-masks.js), bit-pack.
  *
  * Building runs on the main thread in slices: it yields to the event loop
@@ -23,10 +24,12 @@
 import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
   createPickTracker,
+  fillSmallHoles,
   findPickedComponent,
   labelComponents,
   morphMask,
   packMask,
+  removeSmallComponents,
   resampleNearest,
   smoothTemporal,
   thresholdMask,
@@ -97,7 +100,7 @@ let buildCounter = 0;
  * task's priority), else a macrotask
  * @returns {Promise<void>}
  */
-function defaultYieldToMain() {
+export function defaultYieldToMain() {
   const scheduler = /** @type {any} */ (globalThis).scheduler;
   if (scheduler && typeof scheduler.yield === 'function') {
     return scheduler.yield();
@@ -106,7 +109,7 @@ function defaultYieldToMain() {
 }
 
 /** @returns {number} */
-function defaultNow() {
+export function defaultNow() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
@@ -141,7 +144,53 @@ export function getAiParamsKey(ai) {
   // Like the click model's picks, an object's clicks change its masks (the
   // store version), not the build: only which objects apply, and how
   const objects = (ai.objects ?? []).map((o) => `${o.id}:${o.mode}`).join(',');
-  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}`;
+  const cleanup = `${ai.cleanup?.minIslandArea ?? 0}:${ai.cleanup?.maxHoleArea ?? 0}`;
+  return `${getAiModel(ai)}|${ai.threshold}|${ai.smoothing ? 1 : 0}|${ai.edge}|${picks}${click}|${objects}|${cleanup}`;
+}
+
+/**
+ * @typedef {Object} CleanupScratch
+ * @property {Int32Array} labels
+ * @property {Uint8Array} islands
+ * @property {Uint8Array} holes
+ */
+
+/**
+ * Scratch buffers for applyCleanup, or null when the clean-up is off
+ * @param {AiCutout} ai
+ * @param {number} size - width * height
+ * @returns {CleanupScratch | null}
+ */
+function createCleanupScratch(ai, size) {
+  if (!(ai.cleanup?.minIslandArea > 0) && !(ai.cleanup?.maxHoleArea > 0)) return null;
+  return {
+    labels: new Int32Array(size),
+    islands: new Uint8Array(size),
+    holes: new Uint8Array(size),
+  };
+}
+
+/**
+ * The whole-clip clean-up of one frame's selection: small separate pieces
+ * go, small holes are filled (areas are fractions of the frame)
+ * @param {Uint8Array} mask - 0/1, width * height (not modified)
+ * @param {number} width
+ * @param {number} height
+ * @param {import('../edits/model.js').CutoutCleanup} cleanup
+ * @param {CleanupScratch} scratch
+ * @returns {Uint8Array}
+ */
+export function applyCleanup(mask, width, height, cleanup, scratch) {
+  const size = width * height;
+  let out = mask;
+  const minIsland = cleanup.minIslandArea * size;
+  if (minIsland > 0) {
+    const comps = labelComponents(out, width, height, scratch.labels);
+    out = removeSmallComponents(out, comps, minIsland, scratch.islands);
+  }
+  const maxHole = cleanup.maxHoleArea * size;
+  if (maxHole > 0) out = fillSmallHoles(out, width, height, maxHole, scratch.labels, scratch.holes);
+  return out;
 }
 
 /**
@@ -320,6 +369,7 @@ export async function buildFinalMasks(options) {
   const selected = new Uint8Array(size);
   const morphed = new Uint8Array(size);
   const objectScratch = objectMasks.length > 0 ? createObjectScratch(size) : null;
+  const cleanupScratch = createCleanupScratch(ai, size);
 
   let done = 0;
   let sliceStart = now();
@@ -351,6 +401,9 @@ export async function buildFinalMasks(options) {
       let mask = bin;
       if (tracker) {
         mask = tracker.selectForward(f, labelComponents(bin, width, height, labels), selected);
+      }
+      if (cleanupScratch) {
+        mask = applyCleanup(mask, width, height, ai.cleanup, cleanupScratch);
       }
       if (radius !== 0) {
         mask = morphMask(mask, width, height, radius, morphed);
@@ -451,7 +504,7 @@ export function createDraftMaskSource({
   const picks = getRegionPicks(ai);
   /** @type {Map<number, PackedMask | null>} */
   const computed = new Map();
-  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array, objects: import('./object-masks.js').ObjectScratch | null } | null} */
+  /** @type {{ labels: Int32Array, selected: Uint8Array, morphed: Uint8Array, objects: import('./object-masks.js').ObjectScratch | null, cleanup: CleanupScratch | null } | null} */
   let scratch = null;
 
   /**
@@ -469,6 +522,7 @@ export function createDraftMaskSource({
       selected: new Uint8Array(size),
       morphed: new Uint8Array(size),
       objects: objects.length > 0 ? createObjectScratch(size) : null,
+      cleanup: createCleanupScratch(ai, size),
     };
     let mask = bin;
     const previous = picks.length > 0 ? (base?.getFinalMask(frameIndex) ?? null) : null;
@@ -482,6 +536,7 @@ export function createDraftMaskSource({
         scratch.selected,
       );
     }
+    if (scratch.cleanup) mask = applyCleanup(mask, width, height, ai.cleanup, scratch.cleanup);
     const radius = edgeRadiusInMaskPixels(ai.edge, width, sourceWidth ?? width);
     if (radius !== 0) mask = morphMask(mask, width, height, radius, scratch.morphed);
     if (scratch.objects) {

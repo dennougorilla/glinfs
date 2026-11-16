@@ -79,6 +79,8 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(id: string) => void} [onGoToObjectLost] - Tracked object: go to the first frame where tracking lost it, its tool aimed at it
  * @property {(id: string) => void} [onRemoveAiObject] - Delete a tracked object
  * @property {(scope: import('../../shared/edits/model.js').ClickScope) => void} [onSetAiObjectScope] - Whole / Part of the active tracked object
+ * @property {(suggestion: import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion) => void} [onApplyCleanup] - A Clean up chip tapped
+ * @property {(kind: 'specks' | 'holes') => void} [onClearCleanup] - A whole-clip clean-up turned off
  * @property {(patch: Partial<import('./types.js').BrushState>) => void} [onSetBrush] - Mask brush on/off, mode, size, scope
  * @property {(point: { x: number, y: number } | null) => void} [onBrushStrokeStart] - A brush gesture starts (fractions of the source frame; null off the frame)
  * @property {(points: ({ x: number, y: number } | null)[]) => void} [onBrushStrokeMove] - More of the gesture: points over the frame, null where the stroke breaks (the pointer left the frame)

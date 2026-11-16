@@ -16,6 +16,7 @@ import {
   BUILDING_STATUS_DELAY_MS,
   createAiCutoutSession,
   STORE_REBUILD_DELAY_MS,
+  SUGGESTIONS_DELAY_MS,
 } from '../../../src/features/editor/ai-cutout-session.js';
 import { normalizeEdits } from '../../../src/shared/edits/model.js';
 import { createFinalMaskCache } from '../../../src/shared/masks/final-masks.js';
@@ -265,6 +266,43 @@ describe('AI cutout session', () => {
     const before = session.maskSource;
     session.requestBuild();
     expect(session.maskSource).toBe(before);
+  });
+
+  it('finds clean-up suggestions a moment after a full build, and drops them when AI is off', async () => {
+    // 100x60 masks: a character and a 3x3 speck on every frame
+    const BW = 100;
+    const BH = 60;
+    state = {
+      clip: {
+        frames: makeFrames(4).map((f) => ({ ...f, width: BW, height: BH })),
+      },
+    };
+    setBackground();
+    for (const frame of state.clip.frames) {
+      const data = new Uint8Array(BW * BH);
+      for (let y = 10; y < 50; y++) data.fill(255, y * BW + 10, y * BW + 40);
+      for (let y = 5; y < 8; y++) data.fill(255, y * BW + 70, y * BW + 73);
+      maskStore.set(`anime:${frame.id}`, { data, width: BW, height: BH }, 'clip-1');
+    }
+    session.requestBuild();
+    await vi.waitFor(() => expect(session.maskSource).not.toBeNull());
+    expect(status.cleanupSuggestions).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(SUGGESTIONS_DELAY_MS);
+    await vi.waitFor(() =>
+      expect(status.cleanupSuggestions).toEqual([
+        { kind: 'specks', count: 1, minIslandArea: expect.any(Number) },
+      ]),
+    );
+
+    // A new build aborts a pending pass; AI off stops it
+    status.cleanupSuggestions = undefined;
+    setBackground({ ai: { cleanup: { minIslandArea: 0.002, maxHoleArea: 0 } } });
+    session.requestBuild();
+    await vi.waitFor(() => expect(session.maskSource?.getFinalMask(0)).not.toBeNull());
+    state = { ...state, edits: normalizeEdits({ background: { enabled: false } }, 4) };
+    session.requestBuild();
+    await vi.advanceTimersByTimeAsync(SUGGESTIONS_DELAY_MS * 2);
+    expect(status.cleanupSuggestions).toBeUndefined();
   });
 
   it('aborts the build in flight when a parameter changes', async () => {
