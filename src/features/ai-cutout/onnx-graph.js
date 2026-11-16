@@ -161,8 +161,10 @@ function readAttribute(buf, from, to) {
   eachField(buf, from, to, (field, wire, value, a, b) => {
     if (field === 1 && wire === 2) name = decoder.decode(buf.subarray(a, b));
     else if (field === 3 && wire === 0) attribute.i = value;
-    else if (field === 8) pushInts(buf, wire, value, a, b, (attribute.ints ??= []));
-    else if (field === 5 && wire === 2) attribute.dims = readTensorHeader(buf, a, b).dims;
+    else if (field === 8) {
+      if (!attribute.ints) attribute.ints = [];
+      pushInts(buf, wire, value, a, b, attribute.ints);
+    } else if (field === 5 && wire === 2) attribute.dims = readTensorHeader(buf, a, b).dims;
   });
   return [name, attribute];
 }
