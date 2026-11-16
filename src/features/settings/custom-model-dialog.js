@@ -710,8 +710,12 @@ export function openAddModelDialog(deps = {}) {
     );
     const testButton = button('Test', { id: 'add-model-test' }, true);
 
+    // Bumped on every change a test depends on: a test of older settings
+    // that finishes late is dropped
+    let settingsVersion = 0;
     /** Settings changed: the last test no longer applies */
     const invalidate = () => {
+      settingsVersion += 1;
       state.test = null;
       testLine.textContent = '';
       testLine.removeAttribute('data-kind');
@@ -755,6 +759,7 @@ export function openAddModelDialog(deps = {}) {
       testLine.textContent = 'Testing on one generated frame…';
       testLine.removeAttribute('data-kind');
       paintFooter();
+      const version = settingsVersion;
       try {
         const result = await probe.test({
           inputName: form.inputName,
@@ -763,7 +768,7 @@ export function openAddModelDialog(deps = {}) {
           normalization: form.normalization,
           output: form.output,
         });
-        if (closed) return;
+        if (closed || version !== settingsVersion) return;
         state.test = result;
         const where =
           result.backend === 'webgpu'
@@ -780,7 +785,7 @@ export function openAddModelDialog(deps = {}) {
           preview.hidden = true;
         }
       } catch (error) {
-        if (closed) return;
+        if (closed || version !== settingsVersion) return;
         state.test = null;
         testLine.textContent = `Failed: ${/** @type {any} */ (error)?.message ?? error}`;
         testLine.setAttribute('data-kind', 'error');
