@@ -72,8 +72,9 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(tool: import('./types.js').AiPickTool | null, options?: { fromKeyboard?: boolean, target?: string | null }) => void} [onSetAiPickTool] - Enter/leave a pick tool (fromKeyboard: move focus to the preview for keyboard picks; target: an object tool re-anchors this tracked object)
  * @property {(point: { x: number, y: number }, options?: { alt?: boolean }) => void} [onAiPick] - Keep / Remove
  *   clicked at a point (fractions of the source frame); alt: the opposite tool
- * @property {(box: { x0: number, y0: number, x1: number, y1: number }, options?: { alt?: boolean }) => void} [onAiBox] - Keep /
- *   Remove dragged a box (fractions of the source frame)
+ * @property {() => void} [onAiPickStart] - Keep / Remove pressed on the preview (stops playback)
+ * @property {(box: { x0: number, y0: number, x1: number, y1: number }, options?: { alt?: boolean, frame?: number }) => void} [onAiBox] - Keep /
+ *   Remove dragged a box (fractions of the source frame; frame: where the drag started)
  * @property {(index: number) => void} [onRemoveAiPick] - Remove a pick
  * @property {() => void} [onGoToLostFrame] - Click to select: go to the first frame
  *   where tracking lost the object, with the Keep tool on

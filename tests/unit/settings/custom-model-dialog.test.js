@@ -174,3 +174,46 @@ describe('Add model dialog (review #196, finding 2)', () => {
     close();
   });
 });
+
+describe('Add model dialog (release review 0.17.0, finding 1)', () => {
+  it('a test still running when a setting changes does not enable Save for the new settings', async () => {
+    const { probes, createProbe } = fakeProbes();
+    const { dialog, close } = openAddModelDialog({ createProbe });
+    pick(
+      /** @type {HTMLInputElement} */ (dialog.querySelector('#add-model-file')),
+      new File([new Uint8Array(10)], 'a.onnx'),
+    );
+    await Promise.resolve();
+    const probe = probes.at(-1);
+    probe.finish(opened('a', 1));
+    await vi.waitFor(() => expect(dialog.querySelector('#add-model-summary')).not.toBeNull());
+    /** @type {(value: unknown) => void} */
+    let pass = () => {};
+    probe.test.mockImplementation(() => new Promise((resolve) => (pass = resolve)));
+    /** @type {HTMLButtonElement} */ (dialog.querySelector('#add-model-test')).click();
+    await vi.waitFor(() => expect(probe.test).toHaveBeenCalledTimes(1));
+    const tested = probe.test.mock.calls[0][0].normalization;
+    // Changed while the test runs: the running test is of the old settings
+    const normalization = /** @type {HTMLSelectElement} */ (
+      dialog.querySelector('#add-model-normalization')
+    );
+    normalization.value = tested === 'unit' ? 'imagenet' : 'unit';
+    normalization.dispatchEvent(new Event('change'));
+    pass({ ok: true, problem: null, message: 'ok', backend: 'webgpu' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const save = /** @type {HTMLButtonElement} */ (dialog.querySelector('#add-model-save'));
+    expect(save.disabled).toBe(true);
+    expect(dialog.querySelector('#add-model-test-result')?.getAttribute('data-kind')).toBeNull();
+    // Testing the new settings enables it
+    probe.test.mockImplementation(async () => ({
+      ok: true,
+      problem: null,
+      message: 'ok',
+      backend: 'webgpu',
+    }));
+    /** @type {HTMLButtonElement} */ (dialog.querySelector('#add-model-test')).click();
+    await vi.waitFor(() => expect(save.disabled).toBe(false));
+    expect(probe.test.mock.calls[1][0].normalization).toBe(normalization.value);
+    close();
+  });
+});

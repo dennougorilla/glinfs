@@ -85,6 +85,7 @@ import { initLiveMonitor } from './live-monitor.js';
 import { getObjectColor } from './object-colors.js';
 import { drawRegions } from './object-overlay.js';
 import {
+  getClipModelChoice,
   getLostFramesInSelection,
   getModelSubject,
   getObjectFrame,
@@ -1010,6 +1011,7 @@ function render(container) {
       onSetAiParams: handleSetAiParams,
       onSetAiPickTool: handleSetAiPickTool,
       onAiPick: handleAiPick,
+      onAiPickStart: handleAiPickStart,
       onAiBox: handleAiBox,
       onHighlightAiObject: handleHighlightAiObject,
       onRemoveAiPick: handleRemoveAiPick,
@@ -1795,7 +1797,7 @@ async function handleChooseSubject(subject) {
     if (store !== current || seq !== modelChoiceSeq) return;
   }
   const state = current.getState();
-  const modelId = getSubjectModel(subject, state.edits?.background.ai ?? null, {
+  const modelId = getSubjectModel(subject, getClipModelChoice(state.edits?.background), {
     remembered: getRememberedModels(),
     availability: state.aiCutout.models ?? null,
   });
@@ -2118,18 +2120,28 @@ async function handleAiPick(point, options = {}) {
 }
 
 /**
+ * Keep or Remove pressed on the preview (a click or a box follows): it is
+ * for the frame on screen, so playback stops before the frame moves on
+ */
+function handleAiPickStart() {
+  if (!store?.getState().isPlaying) return;
+  stopPlayback();
+  store.setState((s) => setPlaying(s, false));
+}
+
+/**
  * Keep or Remove dragged a box on the preview: a tracked object around
  * it (Keep adds it, Remove removes it), or with an object selected, one
  * more region of it
  * @param {{ x0: number, y0: number, x1: number, y1: number }} box - Fractions of the SOURCE frame
- * @param {{ alt?: boolean }} [options]
+ * @param {{ alt?: boolean, frame?: number }} [options] - frame: where the drag started
  */
 function handleAiBox(box, options = {}) {
   if (!store) return;
   const state = store.getState();
   const tool = state.aiPickTool;
   if (!tool) return;
-  const cutoutBox = { frame: state.currentFrame, ...box };
+  const cutoutBox = { frame: options.frame ?? state.currentFrame, ...box };
   const selected = getSelectedAiObject(state);
   if (selected) {
     handleObjectCorrection(selected, { box: cutoutBox, alt: false });

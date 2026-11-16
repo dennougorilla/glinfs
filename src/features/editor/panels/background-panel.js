@@ -230,6 +230,19 @@ export function getSubjectModel(subject, ai = null, prefs = {}) {
 }
 
 /**
+ * The clip's own AI choice for getSubjectModel, or null while it has made
+ * none: a fresh clip's edits already name the Anime model, which must not
+ * outrank the remembered and downloaded ones. A clip has chosen once it was
+ * AI (edits saved before cards had no subject) or an AI card was applied.
+ * @param {import('../../../shared/edits/model.js').BackgroundRemoval | null | undefined} background
+ * @returns {import('../../../shared/edits/model.js').AiCutout | null}
+ */
+export function getClipModelChoice(background) {
+  if (!background) return null;
+  return background.method === 'ai' || background.ai.subject !== null ? background.ai : null;
+}
+
+/**
  * The models the user chose last, from user settings (#187)
  * @returns {import('../../ai-cutout/model-preference.js').RememberedModels}
  */
@@ -1762,7 +1775,9 @@ export function updateBackgroundPanel(container, state, fps) {
     const model =
       promptCard === card.value && prompt
         ? prompt
-        : /** @type {string} */ (getSubjectModel(card.value, background.ai, modelPrefs));
+        : /** @type {string} */ (
+            getSubjectModel(card.value, getClipModelChoice(background), modelPrefs)
+          );
     const readiness = getModelReadiness(model, status?.models?.[model]);
     const option = q(root, `label[data-subject="${card.value}"]`);
     const tooltip = getModelTooltip(model);

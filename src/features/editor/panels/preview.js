@@ -427,7 +427,7 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
    * Keep / Remove pressed on the preview: a click, or a box once the
    * pointer moves PICK_DRAG_MIN_PX (frame pixels; client pixels for the
    * threshold)
-   * @type {{ start: { x: number, y: number }, end: { x: number, y: number }, clientX: number, clientY: number, alt: boolean, dragging: boolean } | null}
+   * @type {{ frame: number, start: { x: number, y: number }, end: { x: number, y: number }, clientX: number, clientY: number, alt: boolean, dragging: boolean } | null}
    */
   let pickDrag = null;
   /** Keyboard pick marker, fractions of the source frame (see onKeyDown) */
@@ -734,8 +734,11 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
     const coords = getFrameCoords(e);
 
     if (state?.aiPickTool) {
-      // A click or a box: decided on release (see onMouseUp)
+      // A click or a box: decided on release (see onMouseUp). It is for the
+      // frame on screen now: playback stops, and a box keeps this frame
+      handlers.onAiPickStart?.();
       pickDrag = {
+        frame: getCurrentState()?.currentFrame ?? state.currentFrame,
         start: coords,
         end: coords,
         clientX: e.clientX,
@@ -897,7 +900,9 @@ function setupCropInteraction(overlayCanvas, baseCanvas, handlers, initialFrame,
           y1: fy(Math.max(drag.start.y, end.y)),
         };
         renderOverlayWithState();
-        if (box.x1 > box.x0 && box.y1 > box.y0) handlers.onAiBox?.(box, { alt });
+        if (box.x1 > box.x0 && box.y1 > box.y0) {
+          handlers.onAiBox?.(box, { alt, frame: drag.frame });
+        }
       } else {
         handlers.onAiPick?.({ x: fx(drag.start.x), y: fy(drag.start.y) }, { alt });
       }

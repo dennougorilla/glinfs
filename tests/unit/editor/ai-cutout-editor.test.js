@@ -425,6 +425,20 @@ describe('AI cutout in the mounted editor', () => {
     });
   });
 
+  it('Anime on a fresh clip starts with the model chosen last for it, not the untouched default (release review 0.17.0)', async () => {
+    rememberAiCutoutModel('birefnet-lite', 'anime');
+    mount(2);
+    await chooseAi('anime');
+    expect(getEditorState()?.edits.background.ai.model).toBe('birefnet-lite');
+    expect(fake.analyzeFrames.mock.calls.at(-1)[1]).toMatchObject({ modelId: 'birefnet-lite' });
+    // A clip that has made its choice keeps it: Off, then Anime again
+    check('subject-none');
+    await settle();
+    rememberAiCutoutModel('birefnet-toonout', 'anime');
+    await chooseAi('anime');
+    expect(getEditorState()?.edits.background.ai.model).toBe('birefnet-lite');
+  });
+
   it('a model that fails on WebGPU asks for the slow choice for that model only', async () => {
     fake.getCapabilities.mockResolvedValue({ webgpu: true });
     mount(2);
@@ -687,6 +701,28 @@ describe('AI cutout in the mounted editor', () => {
     await settle();
     await settle();
     expect(getEditorState()?.edits.background.ai.objects).toHaveLength(1);
+  });
+
+  it('a Keep / Remove box stops playback when the drag starts and goes on that frame (release review 0.17.0)', async () => {
+    mount(4);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    check('ai-pick-remove');
+    await settle();
+    window.__TEST_HOOKS__.setEditorState({ isPlaying: true, currentFrame: 1 });
+    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 20, clientY: 20, bubbles: true }));
+    expect(getEditorState()?.isPlaying).toBe(false);
+    overlay.dispatchEvent(new MouseEvent('mousemove', { clientX: 60, clientY: 70, bubbles: true }));
+    // A frame step that was already on its way lands mid-drag
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 3 });
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 60, clientY: 70, bubbles: true }));
+    await settle();
+    const [object] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(object.boxes).toEqual([{ frame: 1, x0: 0.2, y0: 0.2, x1: 0.6, y1: 0.7 }]);
   });
 
   it('a click dropped because the frame changed while it was judged says so (review #195 r2)', async () => {
