@@ -222,7 +222,7 @@ export function createAiCutoutSession(options) {
     if (!(/** @type {any} */ (source).draft)) {
       fullSource = source;
       scheduleSuggestions(source);
-      report({ colourShares: source.colourShares ?? {} });
+      report({ colourLevels: source.colourLevels ?? {} });
     }
     report({ maskVersion: source.version });
     onMaskSource?.(source);

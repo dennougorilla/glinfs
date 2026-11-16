@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
 import {
+  COLOUR_GUARD_MORE,
   COLOUR_GUARD_SHARE,
   COLOUR_PASS,
   COLOUR_REMOVE,
@@ -12,7 +13,7 @@ import {
   COLOUR_STOP,
   createColourMatcher,
   fillColourRegion,
-  getColourGuardShares,
+  getColourGuardLevels,
   getDiscPixels,
   packRgb,
   samplePoint,
@@ -222,7 +223,7 @@ describe('Colour fix-ups in a build', () => {
       expect(keptIn(mask, SHIRT_RECT)).toBe(1);
       expect(keptIn(mask, HAIR_RECT)).toBe(1);
     }
-    expect(Math.max(...result.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+    expect(Math.max(...result.colourLevels.c1)).toBeLessThanOrEqual(1);
   });
 
   it('a protect point keeps the hair a pillar of nearly its colour shares', async () => {
@@ -273,13 +274,13 @@ describe('Colour fix-ups in a build', () => {
     const point = { frame: 2, x: 40, y: 24 };
     const eats = await build(clip, colourObject([point], 64));
     expect(keptIn(eats.masks[2], SHIRT_RECT)).toBeLessThan(0.5);
-    const shares = eats.colourShares.c1;
+    const shares = eats.colourLevels.c1;
     expect(shares).toHaveLength(FRAMES);
-    for (const share of shares) expect(share).toBeGreaterThan(COLOUR_GUARD_SHARE);
+    for (const share of shares) expect(share).toBeGreaterThan(1);
     // Lower: the shirt stays and the guard is quiet
     const fine = await build(clip, colourObject([point], 16));
     expect(keptIn(fine.masks[2], SHIRT_RECT)).toBe(1);
-    for (const share of fine.colourShares.c1) expect(share).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+    for (const share of fine.colourLevels.c1) expect(share).toBeLessThanOrEqual(1);
   });
 
   it('follows a panning patch with a second point placed where it went', async () => {
@@ -368,21 +369,33 @@ describe('Colour fix-ups in a build', () => {
   });
 });
 
-describe('getColourGuardShares', () => {
-  it('is what a frame removes in colours not sampled, of what it leaves plus that', () => {
+describe('getColourGuardLevels', () => {
+  it('is the larger of (a) colours not sampled and (b) more removed than on the point frame', () => {
     const stats = new Map([
       [0, { mask: 1000, removed: 300, far: 0 }],
-      [1, { mask: 2000, removed: 1600, far: 0 }],
+      [1, { mask: 1000, removed: 340, far: 0 }],
       [2, { mask: 1000, removed: 500, far: 100 }],
-      [3, { mask: 400, removed: 400, far: 0 }],
+      [3, { mask: 1200, removed: 400, far: 0 }],
+      [4, { mask: 300, removed: 300, far: 0 }],
     ]);
-    const shares = getColourGuardShares(stats);
-    expect(shares.get(0)).toBe(0);
-    // More removed than elsewhere, but all of sampled colours: nothing to say
-    expect(shares.get(1)).toBe(0);
-    expect(shares.get(2)).toBeCloseTo(100 / 600);
-    // The whole cutout removed in sampled colours (the subject left): 0
-    expect(shares.get(3)).toBe(0);
+    const levels = getColourGuardLevels(stats, [0]);
+    expect(levels.get(0)).toBe(0);
+    // (b) 40 more of the point frame's 1000: 0.04, under COLOUR_GUARD_MORE
+    expect(levels.get(1)).toBeCloseTo(0.04 / COLOUR_GUARD_MORE);
+    // (a) 100 / 600 over COLOUR_GUARD_SHARE beats (b) 0.2 over COLOUR_GUARD_MORE? No: (b) is 4
+    expect(levels.get(2)).toBeCloseTo(
+      Math.max(100 / 600 / COLOUR_GUARD_SHARE, 0.2 / COLOUR_GUARD_MORE),
+    );
+    expect(levels.get(3)).toBeCloseTo(0.1 / COLOUR_GUARD_MORE);
+    // Less removed (the subject left, the leftover is all that is left): 0
+    expect(levels.get(4)).toBe(0);
+    // No point frame measured: the frame of the median count is the reference
+    stats.delete(0);
+    const median = getColourGuardLevels(stats, [0]);
+    expect(median.get(1)).toBe(0);
+    expect(median.get(2)).toBeCloseTo(
+      Math.max(100 / 600 / COLOUR_GUARD_SHARE, 0.16 / COLOUR_GUARD_MORE),
+    );
   });
 });
 
@@ -429,14 +442,14 @@ describe('Review #197 round 1', () => {
     };
     const result = await build(clip, colourObject([{ frame: 0, x: 42, y: 16 }]));
     for (let f = 0; f < FRAMES; f++) {
-      const shares = result.colourShares.c1;
+      const shares = result.colourLevels.c1;
       if (f < 3) {
         expect(keptIn(result.masks[f], body(f))).toBe(1);
-        expect(shares[f]).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+        expect(shares[f]).toBeLessThanOrEqual(1);
       } else {
         // Skin is 13 RGB from the wall: eaten, and the guard says so
         expect(keptIn(result.masks[f], body(f))).toBe(0);
-        expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+        expect(shares[f]).toBeGreaterThan(1);
       }
     }
   });
@@ -457,9 +470,9 @@ describe('Review #197 round 1', () => {
       objects: [object.input],
       ...noYield,
     });
-    const shares = result.colourShares.c1;
+    const shares = result.colourLevels.c1;
     expect(shares[0]).toBe(-1);
-    for (let f = 1; f < FRAMES; f++) expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+    for (let f = 1; f < FRAMES; f++) expect(shares[f]).toBeGreaterThan(1);
   });
 
   it('a protect point on a thin strand does not protect the pillar beside it (finding 4)', async () => {
@@ -586,12 +599,12 @@ describe('Review #197 round 2', () => {
       0,
     );
     const result = await build(clip, colourObject([{ frame: 0, x: 50, y: 16 }]));
-    const shares = result.colourShares.c1;
+    const shares = result.colourLevels.c1;
     for (let f = 0; f < FRAMES; f++) {
       if (f < 3) expect(shares[f]).toBe(0);
       else {
         expect(keptIn(result.masks[f], [28, 12, 12, 8])).toBe(0);
-        expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+        expect(shares[f]).toBeGreaterThan(1);
       }
     }
   });
@@ -611,13 +624,12 @@ describe('Review #197 round 2', () => {
         { rect: LEFTOVER, color: WALL },
       ],
     ],
-    ['the leftover grows', (f) => [...character, { rect: [32, 6, 4 + 4 * f, 22], color: WALL }]],
   ])) {
     it(`B: no alarm when ${name} and nothing of it is eaten`, async () => {
       const result = await build(clipOf(paints), colourObject([{ frame: 0, x: 33, y: 16 }]));
       for (let f = 0; f < FRAMES; f++) {
-        const shares = result.colourShares.c1;
-        expect(shares[f]).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+        const shares = result.colourLevels.c1;
+        expect(shares[f]).toBeLessThanOrEqual(1);
       }
     });
   }
@@ -637,23 +649,27 @@ describe('Review #197 round 2', () => {
       objects: [object.input],
       ...noYield,
     });
-    const shares = result.colourShares.c1;
+    const shares = result.colourLevels.c1;
     expect(shares[0]).toBe(-1);
     expect(shares[1]).toBe(0);
     for (let f = 2; f < FRAMES; f++) {
       expect(keptIn(result.masks[f], [32, 4, 12, 24])).toBe(0);
-      expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+      expect(shares[f]).toBeGreaterThan(1);
     }
   });
 
-  it('limit: a subject of nearly the leftover colour looks exactly like more leftover', async () => {
-    // Pixel for pixel the same clip: one reads as a person (8 RGB from the
-    // wall) walking onto it, the other as the wall growing. No guard by
-    // colour can flag the first without flagging the second.
+  it('fix 3: says where Colour removes more, a subject of the leftover colour or the leftover growing', async () => {
+    // Pixel for pixel alike: a person 8 RGB from the wall walking onto it,
+    // and the wall growing. Both are pointed at: "Colour removes more" is
+    // true of both, and the user looks.
     const NEAR_WALL = [205, 174, 143];
-    const person = await build(
+    const still = await build(
       clipOf(withLeftover([]), 3),
       colourObject([{ frame: 0, x: 40, y: 16 }]),
+    );
+    const grows = await build(
+      clipOf((f) => [...character, { rect: [32, 6, 4 + 4 * f, 22], color: WALL }]),
+      colourObject([{ frame: 0, x: 33, y: 16 }]),
     );
     const walksOn = await build(
       clipOf((f) => [
@@ -663,9 +679,13 @@ describe('Review #197 round 2', () => {
       ]),
       colourObject([{ frame: 0, x: 40, y: 16 }]),
     );
-    expect(Math.max(...person.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+    expect(Math.max(...still.colourLevels.c1)).toBeLessThanOrEqual(1);
     expect(keptIn(walksOn.masks[4], [46, 6, 8, 22])).toBe(0);
-    expect(Math.max(...walksOn.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+    const walks = walksOn.colourLevels.c1;
+    expect(walks.slice(0, 3).every((l) => l <= 1)).toBe(true);
+    expect(walks.slice(3).every((l) => l > 1)).toBe(true);
+    expect(Math.max(...grows.colourLevels.c1)).toBeGreaterThan(1);
+    expect(grows.colourLevels.c1[0]).toBe(0);
   });
 });
 

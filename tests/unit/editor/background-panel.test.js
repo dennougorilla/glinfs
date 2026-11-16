@@ -972,21 +972,24 @@ describe('tracked objects', () => {
     expect($('#ai-object-tolerance-row').hidden).toBe(true);
   });
 
-  it('warns where a Colour fix-up takes much of the subject, with a button that goes there', () => {
+  it('says where a Colour fix-up removes more (its worst frame), with a button that goes there', () => {
     const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
-    const shares = new Array(40).fill(0.02);
-    shares[25] = 0.38;
-    shares[30] = 0.12;
+    // Levels: 1 or more is the notice
+    const shares = new Array(40).fill(0.2);
+    shares[25] = 3.8;
+    shares[30] = 1.2;
+    shares[12] = 1;
     const status = {
       ...createAiCutoutStatus(),
-      colourShares: { a: shares },
+      colourLevels: { a: shares },
     };
     updateBackgroundPanel(root, stateWith([colour], { aiCutout: status }), 10);
     expect($('#ai-object-lost').hidden).toBe(false);
-    expect($('#ai-object-lost').textContent).toContain('Colour takes 38% of the subject at 02:05.');
+    expect($('#ai-object-lost').textContent).toContain('Colour removes more at 02:05.');
+    expect($('#ai-object-lost').textContent).not.toMatch(/%|subject/);
     $('#ai-object-lost-go').click();
     expect(handlers.onGoToColourGuard).toHaveBeenCalledWith('a', 25);
-    // Outside the selection does not count; at or below the share is quiet
+    // Outside the selection does not count; a level of 1 or less is quiet
     expect(getColourGuard([colour], { a: shares }, { start: 26, end: 39 })).toMatchObject({
       frame: 30,
     });
@@ -997,10 +1000,10 @@ describe('tracked objects', () => {
     // Nothing to warn about: the notice goes (a tracked object's lost note would show)
     updateBackgroundPanel(
       root,
-      stateWith([colour], { aiCutout: { ...status, colourShares: { a: new Array(40).fill(0) } } }),
+      stateWith([colour], { aiCutout: { ...status, colourLevels: { a: new Array(40).fill(0) } } }),
       10,
     );
-    expect($('#ai-object-lost').textContent).not.toContain('Colour takes');
+    expect($('#ai-object-lost').textContent).not.toContain('Colour removes');
   });
 
   it('shows a lost tracked fix-up and a Colour warning together; Go there takes turns (C)', () => {
@@ -1009,17 +1012,17 @@ describe('tracked objects', () => {
     const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
     const tracked = object('b', 'remove', 5);
     const shares = new Array(40).fill(0);
-    shares[25] = 0.38;
+    shares[25] = 3.8;
     const lostToEnd = Array.from({ length: 28 }, (_, i) => 12 + i);
     const status = {
       ...createAiCutoutStatus(),
-      colourShares: { a: shares },
+      colourLevels: { a: shares },
       objectLost: { a: [4], b: lostToEnd },
     };
     updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
     const text = $('#ai-object-lost').textContent;
     expect(text).toContain('What you removed was lost at 28 places, first at 01:02.');
-    expect(text).toContain('Colour takes 38% of the subject at 02:05.');
+    expect(text).toContain('Colour removes more at 02:05.');
     $('#ai-object-lost-go').click();
     expect(handlers.onGoToObjectLost).toHaveBeenLastCalledWith('b');
     $('#ai-object-lost-go').click();

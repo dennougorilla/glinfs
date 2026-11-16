@@ -2291,8 +2291,9 @@ function handleRemoveAiObject(id) {
 }
 
 /**
- * A Colour fix-up takes much of the subject on a frame: go there with it
+ * A Colour fix-up removes more on a frame than expected: go there with it
  * selected, so its tolerance and a protect point (Alt-click) are at hand
+ * if what it removes there is the subject
  * @param {string} id
  * @param {number} frame
  */
@@ -2302,7 +2303,7 @@ function handleGoToColourGuard(id, frame) {
   if (!object) return;
   store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
   handleFrameChange(frame);
-  announce('Lower Similar colors, or Alt-click what to keep');
+  announce('Colour removes more here. If it is the subject, lower Similar colors or Alt-click it.');
 }
 
 /**

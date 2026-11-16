@@ -48,7 +48,7 @@ import {
   EDIT_LIMITS,
 } from '../../../shared/edits/model.js';
 import { MAX_SUGGESTIONS } from '../../../shared/masks/cleanup-suggestions.js';
-import { COLOUR_GUARD_SHARE, COLOUR_TOLERANCE } from '../../../shared/masks/colour-fill.js';
+import { COLOUR_TOLERANCE } from '../../../shared/masks/colour-fill.js';
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
@@ -490,38 +490,38 @@ export function describeObjectTracking(tracking) {
 }
 
 /**
- * The Colour fix-up to warn about: the one that, on a frame of the
- * selection, takes the largest share of the subject above
- * COLOUR_GUARD_SHARE (see shared/masks/colour-fill), and that frame
+ * The Colour fix-up to point at: the one that, on a frame of the selection,
+ * removes the most more than expected (its notice level above 1, see
+ * getColourGuardLevels in shared/masks/colour-fill), and that frame
  * @param {import('../../../shared/edits/model.js').CutoutObject[]} objects
- * @param {Record<string, number[]> | undefined} shares
+ * @param {Record<string, number[]> | undefined} levels
  * @param {{ start: number, end: number }} range
- * @returns {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, share: number } | null}
+ * @returns {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, level: number } | null}
  */
-export function getColourGuard(objects, shares, range) {
-  /** @type {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, share: number } | null} */
+export function getColourGuard(objects, levels, range) {
+  /** @type {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, level: number } | null} */
   let worst = null;
   for (const object of objects) {
     if (object.scope !== 'colour' || object.mode !== 'remove') continue;
-    const perFrame = shares?.[object.id];
+    const perFrame = levels?.[object.id];
     if (!perFrame) continue;
     for (let f = range.start; f <= range.end && f < perFrame.length; f++) {
-      const share = perFrame[f];
-      if (share > COLOUR_GUARD_SHARE && (!worst || share > worst.share)) {
-        worst = { object, frame: f, share };
-      }
+      const level = perFrame[f];
+      if (level > 1 && (!worst || level > worst.level)) worst = { object, frame: f, level };
     }
   }
   return worst;
 }
 
 /**
- * @param {{ frame: number, share: number }} guard
+ * What the notice says: a fact (Colour removes more there), not a claim
+ * about the subject
+ * @param {{ frame: number }} guard
  * @param {number} fps
  * @returns {string}
  */
 export function getColourGuardText(guard, fps) {
-  return `Colour takes ${Math.round(guard.share * 100)}% of the subject at ${frameToTimecode(guard.frame, fps)}.`;
+  return `Colour removes more at ${frameToTimecode(guard.frame, fps)}.`;
 }
 
 /**
@@ -1892,13 +1892,13 @@ export function updateBackgroundPanel(container, state, fps) {
     input.setAttribute('aria-valuetext', String(selected.tolerance));
   }
   // The notice: a tracked fix-up that lost its object and a Colour one
-  // that takes much of the subject somewhere, both when both (a fix-up whose
+  // that removes more somewhere than expected, both when both (a fix-up whose
   // object left the shot stays lost to the end and must not hide the other)
   const lostObject =
     isAi && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)
       : null;
-  const guard = isAi ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
+  const guard = isAi ? getColourGuard(objects, status?.colourLevels, state.selectedRange) : null;
   setHidden(q(root, '#ai-object-lost'), !lostObject && !guard);
   setText(
     q(root, '#ai-object-lost-text'),

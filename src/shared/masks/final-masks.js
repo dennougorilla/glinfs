@@ -26,7 +26,7 @@ import {
   COLOUR_NEAR,
   createColourMatcher,
   fillColourRegion,
-  getColourGuardShares,
+  getColourGuardLevels,
   getDiscPixels,
   getSampleRadius,
   samplePoint,
@@ -83,9 +83,9 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  *   mask of an absolute clip frame (covering the whole source frame), or
  *   null when that frame has no analysis yet
  * @property {number} version - Unique per build; equal versions mean equal masks
- * @property {Record<string, number[]>} [colourShares] - Full builds: per
- *   Colour fix-up id, the guard's share per frame (-1 where it did not
- *   run; see getColourGuardShares)
+ * @property {Record<string, number[]>} [colourLevels] - Full builds: per
+ *   Colour fix-up id, the notice's level per frame (1 or more: Colour
+ *   removes more there; -1 where it did not run; see getColourGuardLevels)
  */
 
 /**
@@ -653,6 +653,7 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
     return {
       id: object.id ?? '',
       seeds,
+      pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
       matches: createColourMatcher(samples, protects, object.colour.tolerance),
       /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
       stats: options.guard ? new Map() : null,
@@ -698,18 +699,18 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
       };
     },
     /**
-     * The guard's share per frame of each Colour fix-up (full builds)
+     * The notice's level per frame of each Colour fix-up (full builds)
      * @param {number} frameCount
      * @returns {Record<string, number[]>}
      */
-    shares(frameCount) {
+    levels(frameCount) {
       /** @type {Record<string, number[]>} */
       const out = {};
       for (const layer of layers) {
         if (!layer?.stats) continue;
-        const shares = getColourGuardShares(layer.stats);
+        const levels = getColourGuardLevels(layer.stats, layer.pointFrames);
         const perFrame = new Array(frameCount).fill(-1);
-        for (const [f, share] of shares) perFrame[f] = Math.round(share * 1000) / 1000;
+        for (const [f, level] of levels) perFrame[f] = Math.round(level * 1000) / 1000;
         out[layer.id] = perFrame;
         layer.stats.clear();
       }
@@ -751,7 +752,7 @@ export function getColourRegion(options, object, frameIndex) {
  * work on one snapshot of the probability masks (createFrameBinarySource).
  *
  * @param {BuildOptions} options
- * @returns {Promise<{ masks: (PackedMask | null)[], width: number, height: number, bytes: number, colourShares: Record<string, number[]> }>}
+ * @returns {Promise<{ masks: (PackedMask | null)[], width: number, height: number, bytes: number, colourLevels: Record<string, number[]> }>}
  * @throws {DOMException} AbortError when cancelled
  */
 export async function buildFinalMasks(options) {
@@ -842,7 +843,7 @@ export async function buildFinalMasks(options) {
     await stepDone();
   }
 
-  return { masks, width, height, bytes, colourShares: colour.shares(frameCount) };
+  return { masks, width, height, bytes, colourLevels: colour.levels(frameCount) };
 }
 
 /**
@@ -858,14 +859,14 @@ export function nextMaskVersion() {
 /**
  * Wrap built masks as a MaskSource with a fresh version
  * @param {(PackedMask | null)[]} masks
- * @param {Record<string, number[]>} [colourShares]
+ * @param {Record<string, number[]>} [colourLevels]
  * @returns {MaskSource}
  */
-function createMaskSource(masks, colourShares = {}) {
+function createMaskSource(masks, colourLevels = {}) {
   return {
     version: nextMaskVersion(),
     getFinalMask: (frameIndex) => masks[frameIndex] ?? null,
-    colourShares,
+    colourLevels,
   };
 }
 
@@ -1066,7 +1067,7 @@ export function createFinalMaskCache() {
         },
       });
       throwIfAborted(entry.controller.signal);
-      const source = createMaskSource(result.masks, result.colourShares);
+      const source = createMaskSource(result.masks, result.colourLevels);
       current = { key: entry.key, clipId: entry.clipId, source, bytes: result.bytes };
       return source;
     } finally {

@@ -15,7 +15,8 @@
  * bake-off (RGB distance d on decoded GIF frames, a disc of radius 4 px)
  * fixed flat leftovers in 1-3 strokes with 0-0.4 % of the character eaten,
  * and failed on dithered shelves, a pillar the colour of the hair and a
- * patch that pans. The guard (see getColourGuardShares) is there for those.
+ * patch that pans. The notice (see getColourGuardLevels) points at the
+ * frames to look at.
  *
  * No DOM access: tested without a browser.
  *
@@ -40,13 +41,24 @@ export const COLOUR_SAMPLE_RADIUS_PX = 4;
 export const COLOUR_SAMPLES_PER_POINT = 48;
 
 /**
- * The guard: a frame where the fill takes more than this share of the
- * cutout it is applied to beyond what is expected (see
- * getColourGuardShares) is shown to the user. Between the prototype's
- * successes (at most 1.4 % of the character eaten at d = 32, 3.9 % at
- * d = 16) and its failures (19.6 % to 94 %).
+ * The notice, (a): a frame where the fill removes colours the points did
+ * not sample, more than this share of what it leaves plus those (see
+ * getColourGuardLevels). Between the prototype's successes (at most 1.4 %
+ * of the character eaten at d = 32, 3.9 % at d = 16) and its failures
+ * (19.6 % to 94 %).
  */
 export const COLOUR_GUARD_SHARE = 0.1;
+
+/**
+ * The notice, (b): a frame where the fill removes more pixels than on the
+ * reference frame (the nearest analysed point frame), by more than this
+ * share of that frame's cutout. Picked on 30 generated scenes (antialiased,
+ * jagged, moving, growing, shrinking, drifting palettes): the smallest
+ * excess where more than 5 % of the subject was eaten was 0.068 (an arm 10
+ * RGB from the wall), the largest where nothing changed 0.000. A leftover
+ * that grows passes it too, and "removes more" is then just as true.
+ */
+export const COLOUR_GUARD_MORE = 0.05;
 
 /**
  * Share of the region a dither's other colour covers at least, and how
@@ -96,7 +108,7 @@ function isDitherFamily(family, width, regionSize) {
  * per-frame GIF palettes and noise (a generated drift of +-6 per channel
  * and frame plus noise of +-3 reached 10 RGB; 8 raised false alarms on
  * it). A subject within this distance of the leftover's colour is not seen
- * by colour at all (see getColourGuardShares).
+ * by colour at all (see getColourGuardLevels).
  */
 export const COLOUR_NEAR = 12;
 
@@ -382,28 +394,49 @@ export function fillColourRegion(
  */
 
 /**
- * The guard's share per frame: what the fill removes there in colours the
- * points did not sample (farther than COLOUR_NEAR from all of them),
- * of the subject as far as colour can tell (what the fill leaves, plus
- * that). Shelf rows that run into the shirt, a subject of another colour
- * that moves onto the leftover, a cut: on every frame on its own, whatever
- * the other frames hold, so a subject that grows, shrinks or leaves, a
- * leftover that grows, or a point frame without a mask change nothing.
- *
- * What it cannot see, by construction: a subject within COLOUR_NEAR
- * of the leftover's colours. Its pixels are those of more leftover (a
- * leftover that grows looks the same), so no statistic of colours, counts
- * or positions tells them apart. It also counts the far end of a leftover
- * whose colours run beyond the disc (a lit wall at a high tolerance).
+ * The notice's level per frame: 1 or more is a frame where Colour removes
+ * more than it should be expected to, the larger of
+ * (a) what it removes in colours the points did not sample (farther than
+ *     COLOUR_NEAR from all of them), of what it leaves plus that, over
+ *     COLOUR_GUARD_SHARE: shelf rows that run into the shirt, a subject of
+ *     another colour on the leftover;
+ * (b) how many more pixels it removes than on the reference frame (the
+ *     nearest point frame it ran on, else the frame of the median count),
+ *     of that frame's cutout, over COLOUR_GUARD_MORE: anything that joins
+ *     the leftover after the point frame, a subject of the leftover's own
+ *     colour too.
+ * The notice says only that: Colour removes more there. Whether that is
+ * the subject or the leftover growing, no statistic of colours, counts or
+ * positions can tell (their pixels are the same), so the user looks.
  * @param {Map<number, ColourFrameStats>} stats - per frame the fill ran on
- * @returns {Map<number, number>} frame -> share 0..1
+ * @param {number[]} pointFrames - frames of the fix-up's points
+ * @returns {Map<number, number>} frame -> level (1 or more: the notice)
  */
-export function getColourGuardShares(stats) {
+export function getColourGuardLevels(stats, pointFrames) {
   /** @type {Map<number, number>} */
-  const shares = new Map();
-  for (const [f, s] of stats) {
-    const subject = s.mask - s.removed + s.far;
-    shares.set(f, subject > 0 ? s.far / subject : 0);
+  const levels = new Map();
+  if (stats.size === 0) return levels;
+  const refs = [...new Set(pointFrames)].filter((f) => stats.has(f));
+  let ref = -1;
+  if (refs.length === 0) {
+    const byCount = [...stats.keys()].sort(
+      (a, b) =>
+        /** @type {ColourFrameStats} */ (stats.get(a)).removed -
+        /** @type {ColourFrameStats} */ (stats.get(b)).removed,
+    );
+    ref = byCount[Math.floor((byCount.length - 1) / 2)];
   }
-  return shares;
+  for (const [f, s] of stats) {
+    let r = ref;
+    if (refs.length > 0) {
+      r = refs[0];
+      for (const p of refs) if (Math.abs(p - f) < Math.abs(r - f)) r = p;
+    }
+    const reference = /** @type {ColourFrameStats} */ (stats.get(r));
+    const subject = s.mask - s.removed + s.far;
+    const far = subject > 0 ? s.far / subject : 0;
+    const more = reference.mask > 0 ? (s.removed - reference.removed) / reference.mask : 0;
+    levels.set(f, Math.max(far / COLOUR_GUARD_SHARE, more / COLOUR_GUARD_MORE, 0));
+  }
+  return levels;
 }
