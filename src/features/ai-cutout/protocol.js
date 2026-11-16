@@ -48,6 +48,12 @@ export const SegmentationErrorCode = Object.freeze({
    * allowed. It concerns this model only: another model may run on WebGPU.
    */
   WEBGPU_MODEL_FAILED: 'webgpu-model-failed',
+  /**
+   * The model runs on WebGPU only (`webgpuOnly`: too large for the CPU
+   * fallback) and WebGPU is not available, or failed for it. Nothing is
+   * offered instead: the user chooses another model.
+   */
+  WEBGPU_REQUIRED: 'webgpu-required',
   /** The model could not be downloaded (network error, HTTP error) */
   DOWNLOAD_FAILED: 'download-failed',
   /**

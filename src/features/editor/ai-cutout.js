@@ -470,6 +470,8 @@ const ERROR_COPY = {
   [SegmentationErrorCode.INFERENCE_FAILED]: 'Analyzing a frame failed.',
   [SegmentationErrorCode.INVALID_OUTPUT]:
     'The model returned an invalid result for a frame, so the analysis stopped instead of saving an empty cutout. Try another model.',
+  [SegmentationErrorCode.WEBGPU_REQUIRED]:
+    'This model needs WebGPU, which this browser does not provide, and is too large to run on the CPU. Choose another model.',
   [SegmentationErrorCode.MODEL_UNAVAILABLE]:
     'This custom model is not in this browser. Add it again in Settings → AI models, or choose another model.',
   [SegmentationErrorCode.WORKER_CRASHED]:
@@ -488,8 +490,22 @@ export function describeAnalysisError(error) {
   const code = typeof e?.code === 'string' ? e.code : 'unknown';
   const copy = /** @type {Record<string, string>} */ (ERROR_COPY)[code];
   const detail = e instanceof Error ? e.message : String(error ?? '');
-  // Says which custom model is gone and what to do: shown as it is
-  if (code === SegmentationErrorCode.MODEL_UNAVAILABLE && detail) return { code, message: detail };
+  // Say which model and what to do: shown as they are
+  if (
+    (code === SegmentationErrorCode.MODEL_UNAVAILABLE ||
+      code === SegmentationErrorCode.WEBGPU_REQUIRED) &&
+    detail
+  ) {
+    return { code, message: detail };
+  }
+  // WebAssembly memory is limited to 4 GB: a large model fails on the CPU
+  if (code === SegmentationErrorCode.INFERENCE_FAILED && /bad_alloc|out of memory/i.test(detail)) {
+    return {
+      code,
+      message:
+        'The model ran out of memory on the CPU (without WebGPU a model has at most 4 GB). Choose a smaller model, or use a browser with WebGPU.',
+    };
+  }
   if (copy) return { code, message: copy };
   return { code, message: detail ? `The analysis failed: ${detail}` : 'The analysis failed.' };
 }

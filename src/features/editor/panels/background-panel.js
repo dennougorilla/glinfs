@@ -54,6 +54,7 @@ import { frameToTimecode } from '../../../shared/utils/format.js';
 import { isModelOffered } from '../../ai-cutout/model-config.js';
 import { pickPreferredModel } from '../../ai-cutout/model-preference.js';
 import { getCustomModelEntries, getModelEntry } from '../../ai-cutout/model-registry.js';
+import { SegmentationErrorCode } from '../../ai-cutout/protocol.js';
 import {
   describeAnalysisProgress,
   getAiModelId,
@@ -405,9 +406,15 @@ export function getDownloadPrompt(modelId, subject = null) {
  * an analysis stopped because the browser has none, or it has none
  * @param {{ needsWasmChoice: boolean, webgpuModelFailed: boolean }} status
  * @param {string} modelLabel
+ * @param {boolean} [webgpuOnly] - The model has no CPU fallback (BiRefNet)
  * @returns {string}
  */
-export function getWebgpuWarning(status, modelLabel) {
+export function getWebgpuWarning(status, modelLabel, webgpuOnly = false) {
+  if (webgpuOnly) {
+    return status.webgpuModelFailed
+      ? `The ${modelLabel} model could not run on WebGPU in this browser, and it is too large to run on the CPU. Choose another model.`
+      : `The ${modelLabel} model needs WebGPU, which this browser does not provide, and it is too large to run on the CPU. Choose another model.`;
+  }
   const slow = 'It can run on the CPU instead, but very slowly (about 14 seconds per frame).';
   if (status.webgpuModelFailed) {
     return `The ${modelLabel} model could not run on WebGPU in this browser. ${slow}`;
@@ -1903,9 +1910,11 @@ function updateAiSettings(root, state, _fps) {
   const analyzeBtn = /** @type {HTMLButtonElement} */ (q(root, '#ai-analyze'));
   const pending = cover.pendingInSelection;
   // Click to select tracks only once something was clicked
+  // A WebGPU-only model cannot run in a browser known to have no WebGPU
+  const cannotRun = Boolean(entry.webgpuOnly) && status.webgpu === false;
   setHidden(
     analyzeBtn,
-    running || Boolean(tracking) || pending === 0 || (click && line.kind === 'hint'),
+    running || Boolean(tracking) || pending === 0 || (click && line.kind === 'hint') || cannotRun,
   );
   const ready = getModelReadiness(modelId, status.models?.[modelId]).ready || entry.missing;
   const verb = click ? 'Track' : 'Analyze';
@@ -1918,16 +1927,19 @@ function updateAiSettings(root, state, _fps) {
   // WebGPU warning: known missing adapter, an analysis stopped on it, or
   // the chosen model could not run on the adapter
   const noWebgpu = status.webgpu === false || status.needsWasmChoice || status.webgpuModelFailed;
-  setHidden(q(root, '#ai-webgpu-warning'), !noWebgpu || status.wasmAllowed);
-  setText(
-    q(root, '#ai-webgpu-warning-text'),
-    getWebgpuWarning(status, getModelEntry(modelId).label),
-  );
+  // A WebGPU-only model (BiRefNet) has no CPU choice: the warning says to
+  // choose another model, also when the CPU was allowed for another one
+  const webgpuOnly = Boolean(entry.webgpuOnly);
+  setHidden(q(root, '#ai-webgpu-warning'), !noWebgpu || (status.wasmAllowed && !webgpuOnly));
+  setText(q(root, '#ai-webgpu-warning-text'), getWebgpuWarning(status, entry.label, webgpuOnly));
   /** @type {HTMLButtonElement} */ (q(root, '#ai-run-wasm')).disabled = running;
-  setHidden(q(root, '#ai-wasm-note'), !(noWebgpu && status.wasmAllowed));
+  setHidden(q(root, '#ai-run-wasm'), webgpuOnly);
+  setHidden(q(root, '#ai-wasm-note'), !(noWebgpu && status.wasmAllowed) || webgpuOnly);
 
   const error = status.phase === 'error' ? status.error : null;
-  setHidden(q(root, '#ai-error'), !error);
+  // The WebGPU warning already says what WEBGPU_REQUIRED would
+  const said = error?.code === SegmentationErrorCode.WEBGPU_REQUIRED && webgpuOnly && noWebgpu;
+  setHidden(q(root, '#ai-error'), !error || said);
   setText(q(root, '#ai-error-text'), error?.message ?? '');
   // Only refused picks and cancellations: the outcome of an analysis is the
   // status line

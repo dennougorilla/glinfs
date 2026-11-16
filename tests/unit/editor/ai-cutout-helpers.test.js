@@ -319,12 +319,30 @@ describe('AI cutout helpers', () => {
 
   it('turns failures into user copy', () => {
     for (const code of Object.values(SegmentationErrorCode)) {
-      if (code === SegmentationErrorCode.MODEL_UNAVAILABLE) continue;
+      if (
+        code === SegmentationErrorCode.MODEL_UNAVAILABLE ||
+        code === SegmentationErrorCode.WEBGPU_REQUIRED
+      ) {
+        continue;
+      }
       const described = describeAnalysisError(new SegmentationError(code, 'internal'));
       expect(described.code).toBe(code);
       expect(described.message).not.toContain('internal');
       expect(described.message.length).toBeGreaterThan(10);
     }
+    // WebGPU-only models and running out of WASM memory say so
+    const needs = 'Busy backgrounds needs WebGPU, which this browser does not provide.';
+    expect(
+      describeAnalysisError(new SegmentationError(SegmentationErrorCode.WEBGPU_REQUIRED, needs)),
+    ).toEqual({ code: SegmentationErrorCode.WEBGPU_REQUIRED, message: needs });
+    expect(
+      describeAnalysisError(
+        new SegmentationError(
+          SegmentationErrorCode.INFERENCE_FAILED,
+          'failed to call OrtRun(). ERROR_CODE: 6, ERROR_MESSAGE: std::bad_alloc',
+        ),
+      ).message,
+    ).toMatch(/ran out of memory on the CPU/);
     // A missing custom model: its own message says which one and what to do
     const gone = 'The file of the custom model "Mine" is no longer in this browser.';
     expect(

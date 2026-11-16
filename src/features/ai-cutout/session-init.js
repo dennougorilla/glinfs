@@ -165,6 +165,13 @@ export async function createModelSession({
 }) {
   /** @type {string | null} */
   let webgpuError = null;
+  const label = spec.label ?? 'This model';
+  if (spec.webgpuOnly && !adapter) {
+    throw new SegmentationError(
+      SegmentationErrorCode.WEBGPU_REQUIRED,
+      `${label} needs WebGPU, which this browser does not provide, and is too large to run on the CPU. Choose another model.`,
+    );
+  }
   if (adapter) {
     /** @type {SessionLike | null} */
     let session = null;
@@ -194,6 +201,12 @@ export async function createModelSession({
     }
   }
 
+  if (spec.webgpuOnly) {
+    throw new SegmentationError(
+      SegmentationErrorCode.WEBGPU_REQUIRED,
+      `${label} could not run on WebGPU in this browser (${webgpuError}), and it is too large to run on the CPU. Choose another model.`,
+    );
+  }
   if (!allowWasm) {
     throw webgpuError
       ? new SegmentationError(SegmentationErrorCode.WEBGPU_MODEL_FAILED, webgpuError)

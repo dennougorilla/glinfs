@@ -126,6 +126,12 @@
  *   cards that list it
  * @property {true} [missing] - A custom model id that no longer names a
  *   model (getModelEntry's placeholder; it cannot be loaded)
+ * @property {true} [webgpuOnly] - Runs on WebGPU only: never on the CPU
+ *   (WASM) fallback, and the "Run on the CPU" choice is not offered for
+ *   it. Without WebGPU it is refused before anything is downloaded
+ *   (WEBGPU_REQUIRED). The BiRefNet models: on WASM, whose memory is
+ *   limited to 4 GB, their first frame fails with std::bad_alloc after the
+ *   download (measured 2026-11-16, Chrome 157, general and lite)
  * @property {true} [devOnly] - Offered only in development builds
  *   (`npm run dev`): its file is not in the `models-v1` release, so
  *   `npm run models:fetch` and the Pages deploy leave it out, and it is
@@ -582,6 +588,8 @@ const BIREFNET_COMMON = /** @type {const} */ ({
   inputName: 'input_image',
   outputName: 'output_image',
   inputSize: 1024,
+  // On the CPU (WASM, 4 GB of memory) the first frame runs out of memory
+  webgpuOnly: true,
 });
 
 /**

@@ -123,6 +123,7 @@ export function getModelUrl(modelId, baseUrl) {
  * @property {string} [sha256] - Expected lowercase hex SHA-256 (single-file models)
  * @property {boolean} [localOnly] - Never downloaded (see ModelFileSpec)
  * @property {boolean} [keepOtherPins] - A custom model (see ModelFileSpec)
+ * @property {boolean} [webgpuOnly] - Never on the CPU fallback (model-registry.js)
  * @property {ModelFileSpec[]} files - Every file, in load order
  * @property {string} [inputName]
  * @property {string} [outputName]
@@ -196,6 +197,7 @@ export function getModelSpec(modelId, baseUrl) {
     bytes: entry.bytes,
     sha256: entry.sha256,
     ...(localOnly ? { localOnly } : {}),
+    ...(entry.webgpuOnly ? { webgpuOnly: true } : {}),
     files,
     inputName: entry.inputName,
     outputName: entry.outputName,
