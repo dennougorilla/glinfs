@@ -26,6 +26,18 @@
  * 3. Lost: a frame whose mask area jumps by more than half (or is empty)
  *    stops that pass; the frame is reported as needing a click and gets no
  *    mask.
+ * 4. Seeds (`seedOf`, see object-seeds.js): an anchor frame that has an
+ *    answer from earlier prompts which these prompts extend (one more click
+ *    or box, the same scope) is prompted with that answer: its grown box
+ *    (stretched over the new keep points and boxes), its inside and
+ *    background points except those right at a new point, the frame's own
+ *    points, and its low-res logits as `mask_input`; the best-scoring
+ *    answer is kept (refineAnchorPrompt). A correction then refines what
+ *    the frame showed instead of starting over from its own points (which
+ *    answers a click beside a region with that piece alone, or the whole
+ *    frame). A frame with only remove points starts from its seed's mask
+ *    (not its logits) when it has no mask of these prompts. The seed only
+ *    shapes the prompt: the answer is this run's, stored like any other.
  *
  * Masks of a click model depend on the clicks, not only on the frame, so a
  * run first drops the selection's masks it is about to redo (all but the
@@ -93,10 +105,17 @@ import {
  *   over a few frames as the old mask_input fades.
  * @property {(frameIndex: number, prompt: { points: SamPoint[], box: SamBox | null, maskInput?: Float32Array | null }) => Promise<SamCandidate[]>} prompt
  * @property {(frameIndex: number) => string} keyOf - Pixel identity of a frame
- * @property {(frameIndex: number, mask: ClickMask) => void} store
+ * @property {(frameIndex: number, mask: ClickMask, lowRes: Float32Array | null) => void} store -
+ *   lowRes: the answer's low-res logits (for a seed of a later run), null when none
  * @property {(frameIndex: number) => void} clear - Drop a frame's mask (no-op when none)
  * @property {(frameIndex: number) => ClickMask | null} [peek] - The mask a frame has
  *   before this run, to refine a frame that has only remove points
+ * @property {(frameIndex: number) => { mask: ClickMask, lowRes: Float32Array | null } | null} [seedOf] -
+ *   An answer on the frame from earlier prompts that these extend (see
+ *   object-seeds.js): prompts the frame when it is an anchor, never stored
+ * @property {'off' | 'score'} [seedGuard] - 'score': an anchor prompted from
+ *   its seed is also decoded without it, and the seeded answer is kept only
+ *   when its predicted IoU is not lower
  * @property {() => boolean} [superseded] - On an early stop: whether another
  *   run with new clicks starts right away (the masks this run had not redone
  *   stay until that run redoes them, instead of flashing off)
@@ -126,6 +145,9 @@ export function isScoreDrop(peak, score, minRatio) {
 
 /** Closest a mask's inside point may be to a remove point (frame fraction) */
 const REFINE_POINT_CLEARANCE = 0.05;
+
+/** A seeded anchor's box reaches this far past a keep point outside it (frame fraction) */
+const KEEP_POINT_MARGIN = 0.02;
 
 /**
  * @param {AbortSignal | undefined} signal
@@ -199,6 +221,42 @@ export function refinePrompt(base, removes) {
 }
 
 /**
+ * The prompt of an anchor frame that has a seed (an answer of earlier
+ * prompts): the seed's grown box stretched over the frame's boxes and keep
+ * points, its inside / background points (trackingPrompt) except those
+ * within REFINE_POINT_CLEARANCE of one of the frame's points, then the
+ * frame's points
+ * @param {ClickMask} seed
+ * @param {{ points: SamPoint[], boxes: SamBox[] }} anchor
+ * @returns {{ points: SamPoint[], box: SamBox } | null} null when the seed is empty
+ */
+export function refineAnchorPrompt(seed, anchor) {
+  const tracked = trackingPrompt(seed.data, seed.width, seed.height);
+  if (!tracked) return null;
+  const far = (/** @type {SamPoint} */ q) =>
+    anchor.points.every((r) => Math.hypot(r.x - q.x, r.y - q.y) > REFINE_POINT_CLEARANCE);
+  let [x0, y0, x1, y1] = tracked.box;
+  for (const b of anchor.boxes) {
+    x0 = Math.min(x0, b[0]);
+    y0 = Math.min(y0, b[1]);
+    x1 = Math.max(x1, b[2]);
+    y1 = Math.max(y1, b[3]);
+  }
+  for (const k of anchor.points) {
+    if (k.mode !== 'keep') continue;
+    x0 = Math.min(x0, k.x - KEEP_POINT_MARGIN);
+    y0 = Math.min(y0, k.y - KEEP_POINT_MARGIN);
+    x1 = Math.max(x1, k.x + KEEP_POINT_MARGIN);
+    y1 = Math.max(y1, k.y + KEEP_POINT_MARGIN);
+  }
+  const clamp = (/** @type {number} */ v) => Math.max(0, Math.min(1, v));
+  return {
+    points: [...tracked.points.filter(far), ...anchor.points],
+    box: [clamp(x0), clamp(y0), clamp(x1), clamp(y1)],
+  };
+}
+
+/**
  * The decoder's most confident non-empty answer (a box with points leaves
  * little ambiguity, and the answer overlapping the old mask most would be
  * the one that ignores the remove points)
@@ -233,6 +291,8 @@ export async function trackClicks({
   store,
   clear,
   peek,
+  seedOf,
+  seedGuard = 'off',
   superseded,
   onProgress,
   signal,
@@ -243,14 +303,20 @@ export async function trackClicks({
   if (anchors.length === 0) return { tracked: 0, lost: [], anchors: 0 };
   const anchorFrames = new Set(anchors.map((a) => a.frame));
 
-  // A frame with only remove points starts from the mask it has now: read
-  // it before the old masks go
-  /** @type {Map<number, ClickMask>} */
+  // A frame with only remove points starts from the mask it has now (or,
+  // without one, its seed); a frame with a keep point or a box from its
+  // seed: read them all before this run stores anything
+  /** @type {Map<number, { mask: ClickMask, lowRes: Float32Array | null }>} */
   const seeds = new Map();
   for (const anchor of anchors) {
-    if (isPositive(anchor)) continue;
+    const seed = seedOf?.(anchor.frame) ?? null;
+    if (isPositive(anchor)) {
+      if (seed) seeds.set(anchor.frame, seed);
+      continue;
+    }
     const mask = peek?.(anchor.frame);
-    if (mask) seeds.set(anchor.frame, mask);
+    if (mask) seeds.set(anchor.frame, { mask, lowRes: null });
+    else if (seed) seeds.set(anchor.frame, seed);
   }
 
   // Redone below: drop now what would otherwise stay from the old clicks
@@ -286,7 +352,7 @@ export async function trackClicks({
   const record = (frame, mask, area, lowRes = null, peak = null) => {
     done.set(frame, { mask, area, lowRes, peak });
     doneKeys.set(keyOf(frame), frame);
-    store(frame, mask);
+    store(frame, mask, lowRes);
     onProgress?.({ done: done.size, total, frame });
   };
 
@@ -374,12 +440,28 @@ export async function trackClicks({
   const run = async () => {
     for (const anchor of anchors) {
       throwIfAborted(signal);
+      const seed = seeds.get(anchor.frame);
       if (!isPositive(anchor)) {
-        const seed = seeds.get(anchor.frame);
-        if (!seed || !(await refine(anchor.frame, seed, anchor.points))) {
+        // Without the seed's logits, like a mask the frame has now: they hold
+        // the old answer and pull against the new remove points
+        if (!seed || !(await refine(anchor.frame, seed.mask, anchor.points))) {
           refineOnPass.set(anchor.frame, anchor.points);
         }
         continue;
+      }
+      /** @type {SamCandidate | null} */
+      let seeded = null;
+      const next = seed ? refineAnchorPrompt(seed.mask, anchor) : null;
+      if (seed && next) {
+        const candidates = await prompt(anchor.frame, { ...next, maskInput: seed.lowRes });
+        throwIfAborted(signal);
+        const best = bestScoring(candidates);
+        if (maskStats(best.data, best.width, best.height).area > 0) seeded = best;
+        if (seeded && seedGuard !== 'score') {
+          const { area } = maskStats(seeded.data, seeded.width, seeded.height);
+          record(anchor.frame, toMask(seeded), area, seeded.lowRes ?? null, seeded.score);
+          continue;
+        }
       }
       // One prompt per box and per lone keep point, joined into one region.
       // A box marks the extent: its answer is the whole of what it holds
@@ -393,7 +475,9 @@ export async function trackClicks({
           chooseCandidate(candidates, { scope: p.box ? 'whole' : scope, wholeMinScoreRatio }),
         );
       }
-      const chosen = joinCandidates(parts);
+      const joined = joinCandidates(parts);
+      // seedGuard 'score': the seeded answer only when it scores at least as well
+      const chosen = seeded && seeded.score >= joined.score ? seeded : joined;
       const { area } = maskStats(chosen.data, chosen.width, chosen.height);
       record(anchor.frame, toMask(chosen), area, chosen.lowRes ?? null, chosen.score);
     }

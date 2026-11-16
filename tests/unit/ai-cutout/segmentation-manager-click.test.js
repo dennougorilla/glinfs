@@ -434,3 +434,155 @@ describe('getObjectTrackRange', () => {
     expect(getObjectTrackRange({ start: 2, end: 5 }, [])).toEqual({ start: 2, end: 5 });
   });
 });
+
+describe('SegmentationManager.analyzeObject: seeds (a correction refines the earlier answers)', () => {
+  const k0 = { frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') };
+  const k3 = { frame: 3, x: 0.3, y: 0.5, mode: /** @type {const} */ ('keep') };
+  const base = { objectId: 'o1', range: { start: 0, end: 5 }, clipId: 'clip' };
+  /** @param {any[]} list */
+  const promptsOf = (list) =>
+    list.map((m) => JSON.stringify([...m.coords, ...m.labels, m.maskInput ? 'mask' : 'none']));
+  /** @param {ReturnType<typeof harness>} h */
+  const masksOf = (h) =>
+    h.frames.map((f) => [...(h.maskStore.get(`object:o1:${f.id}`)?.data ?? [])].join(''));
+
+  it('prompts the corrected anchor frames with their earlier answers; every stored mask carries the new tag', async () => {
+    const h = harness();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    const before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    const second = h.workers[0].prompts.slice(before);
+    // Both anchors (3 first, the frame on screen; then 0) are prompted from their seeds
+    expect(second[0].maskInput).toBeInstanceOf(Float32Array);
+    expect(second[1].maskInput).toBeInstanceOf(Float32Array);
+    // A seeded anchor: the seed's box (labels 2, 3) and points, then the frame's click
+    expect([...second[0].labels].slice(-3)).toEqual([1, 2, 3]);
+    for (const f of h.frames) expect(h.maskStore.getTag(`object:o1:${f.id}`)).toBe('t2');
+  });
+
+  it('a scope change or an undone click is redone exactly as a fresh run (no seed)', async () => {
+    const h = harness();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    // Part with the same clicks
+    let before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'part',
+      tag: 't3',
+    });
+    const part = harness();
+    await part.manager.analyzeObject(part.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'part',
+      tag: 't3',
+    });
+    expect(promptsOf(h.workers[0].prompts.slice(before))).toEqual(
+      promptsOf(part.workers[0].prompts),
+    );
+    expect(masksOf(h)).toEqual(masksOf(part));
+    // Undo the second click (back to Whole first, then undo)
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    const undone = harness();
+    await undone.manager.analyzeObject(undone.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    expect(promptsOf(h.workers[0].prompts.slice(before))).toEqual(
+      promptsOf(undone.workers[0].prompts),
+    );
+    expect(masksOf(h)).toEqual(masksOf(undone));
+  });
+
+  it('a frame the last run did not reach has no seed (not an older one)', async () => {
+    // Masks for the anchor (frame 0) and frame 1, then the object is lost
+    const h = harness({ blankAfter: 2 });
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    expect(h.maskStore.has('object:o1:f3')).toBe(false);
+    const before = h.workers[0].prompts.length;
+    h.workers[0].blankAfter = Number.POSITIVE_INFINITY;
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    const second = h.workers[0].prompts.slice(before);
+    // Frame 3 (never reached): decoded from its own click; frame 0: from its seed
+    expect(second[0].maskInput).toBeNull();
+    expect(second[1].maskInput).toBeInstanceOf(Float32Array);
+  });
+
+  it("a deleted object's seeds go: a new object with the same id starts from scratch", async () => {
+    const h = harness();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    h.manager.dropObjectSeeds('o1');
+    const before = h.workers[0].prompts.length;
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 3,
+      clicks: [k0, k3],
+      scope: 'whole',
+      tag: 't2',
+    });
+    expect(h.workers[0].prompts.slice(before)[0].maskInput).toBeNull();
+  });
+});

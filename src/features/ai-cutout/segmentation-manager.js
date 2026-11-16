@@ -37,7 +37,10 @@
  * through the selection, whatever model the clip's cutout uses. Its masks
  * are decoded at the small object size (see object-masks.js) and stored
  * under objectMaskKey, in the mask store group (clip, `object:<id>`), so
- * they evict and clear with the clip like any model's masks.
+ * they evict and clear with the clip like any model's masks. Each answer is
+ * also kept as a seed (object-seeds.js, apart from the mask store): a later
+ * run whose prompts extend this run's (a correction) prompts its anchor
+ * frames with it.
  *
  * FRAME OWNERSHIP: the manager never closes, clones or transfers a
  * VideoFrame. For each frame it creates an ImageBitmap (scaled to the mask
@@ -49,6 +52,7 @@
 
 import {
   getObjectMaskSize,
+  OBJECT_SEED_GUARD,
   OBJECT_TRACK_MIN_SCORE_RATIO,
   OBJECT_WHOLE_MIN_SCORE_RATIO,
 } from '../../shared/masks/object-masks.js';
@@ -57,6 +61,7 @@ import { trackClicks } from './click-tracker.js';
 import { getSharedMaskStore } from './mask-store.js';
 import { DEFAULT_MODEL_ID, getModelSpec, getSpecFiles } from './model-config.js';
 import { requestPersistentStorage } from './model-storage.js';
+import { createObjectSeeds } from './object-seeds.js';
 import { computeMaskSize } from './preprocess.js';
 import {
   createAbortError,
@@ -534,6 +539,9 @@ export class SegmentationManager {
    */
   #releasedClips = new Set();
 
+  /** Tracked objects' last answers, to prompt their corrections (never results) */
+  #objectSeeds = createObjectSeeds();
+
   /** The backend the last analysis ran on, or null before the first one. */
   get backend() {
     return this.#lastReady?.backend ?? null;
@@ -797,6 +805,10 @@ export class SegmentationManager {
         maskSizeOf: (frame) => getObjectMaskSize(frame.width, frame.height),
         minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
         wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
+        seeds: {
+          objectId,
+          prompts: { clicks: options.clicks, boxes: options.boxes ?? [], scope: options.scope },
+        },
       });
       // Finished: the frames it could not reach from an anchor are marked
       // as tried (a run that started from no anchor tried nothing)
@@ -822,7 +834,7 @@ export class SegmentationManager {
 
   /**
    * @param {Frame[]} frames
-   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, boxes?: ObjectAnalyzeOptions['boxes'], keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number }} options
+   * @param {ClickAnalyzeOptions & { modelId: string, group: string, tag?: string, boxes?: ObjectAnalyzeOptions['boxes'], keyOf: (frame: Frame) => string, maskSizeOf: (frame: Frame) => { width: number, height: number }, minScoreRatio?: number, wholeMinScoreRatio?: number, seeds?: { objectId: string, prompts: import('./object-seeds.js').SeedPrompts } }} options
    *   group: mask store group of the masks; keyOf: their store key;
    *   maskSizeOf: the size the decoder answers at; minScoreRatio and
    *   wholeMinScoreRatio: see trackClicks
@@ -872,12 +884,32 @@ export class SegmentationManager {
           lastMs = answer.totalMs;
           return answer.candidates;
         },
-        store: (f, mask) => {
+        // A tracked object's earlier answer on an anchor frame, when these
+        // prompts extend the ones that made it (see object-seeds.js)
+        seedOf: options.seeds
+          ? (f) => {
+              const { objectId, prompts } = /** @type {NonNullable<typeof options.seeds>} */ (
+                options.seeds
+              );
+              const seed = this.#objectSeeds.get(objectId, keyOf(frames[f]), prompts);
+              const size = maskSizeOf(frames[f]);
+              return seed && seed.mask.width === size.width && seed.mask.height === size.height
+                ? seed
+                : null;
+            }
+          : undefined,
+        seedGuard: OBJECT_SEED_GUARD,
+        store: (f, mask, lowRes) => {
           if (released()) return;
           this.#maskStore.set(keyOf(frames[f]), mask, clipId, group, options.tag);
+          if (options.seeds) {
+            const { objectId, prompts } = options.seeds;
+            this.#objectSeeds.set(objectId, keyOf(frames[f]), mask, lowRes, prompts);
+          }
         },
         clear: (f) => {
           this.#maskStore.delete(keyOf(frames[f]));
+          if (options.seeds) this.#objectSeeds.delete(options.seeds.objectId, keyOf(frames[f]));
         },
         // A frame with only remove points starts from the mask it has, but
         // only one its current prompts made (a tracked object's tag): a mask
@@ -1279,6 +1311,14 @@ export class SegmentationManager {
    */
   forgetClip(clipId) {
     this.#releasedClips.add(clipId);
+  }
+
+  /**
+   * Drop a tracked object's seeds (the object was deleted)
+   * @param {string} objectId
+   */
+  dropObjectSeeds(objectId) {
+    this.#objectSeeds.dropObject(objectId);
   }
 
   /**
