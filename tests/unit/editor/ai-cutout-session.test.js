@@ -810,6 +810,25 @@ describe('AI cutout session: tracked objects', () => {
     for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(10);
   };
 
+  it('never tracks a Colour fix-up; back to Whole it tracks again', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'colour', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(0);
+    expect(status.objectTracking ?? null).toBeNull();
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'whole', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    // Turned to Colour while tracked: nothing new runs, the masks stay
+    manager.calls = [];
+    setObjects([{ id: 'o1', mode: 'remove', scope: 'colour', clicks: [click(), click(2)] }]);
+    session.syncObjects({ force: true });
+    await settle();
+    expect(manager.calls).toHaveLength(0);
+    expect(maskStore.get(`object:o1:${state.clip.frames[0].id}`)).not.toBeNull();
+  });
+
   it('tracks a new object through the selection and reports its lost frames', async () => {
     manager.lostAt = new Set([3]);
     setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);

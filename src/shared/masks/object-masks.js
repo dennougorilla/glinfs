@@ -64,6 +64,9 @@ export const OBJECT_REMOVE_GROW_PX = 2;
  * @property {{ data: Uint8Array, width: number, height: number } | null} mask - The
  *   object's 0..255 probability on this frame, any size (null: not tracked
  *   here, the frame keeps the base mask)
+ * @property {((out: Uint8Array) => void) | null} [fill] - Instead of a mask:
+ *   clears pixels of the mask as it stands at this layer, in place (a
+ *   Colour fix-up, which depends on the mask it is applied to)
  */
 
 /**
@@ -189,6 +192,14 @@ export function applyObjectMasks(mask, width, height, layers, scratch) {
   const size = width * height;
   let out = mask;
   for (const layer of layers) {
+    if (layer.fill) {
+      if (out === mask) {
+        scratch.result.set(mask.subarray(0, size));
+        out = scratch.result;
+      }
+      layer.fill(out);
+      continue;
+    }
     const object = layer.mask;
     if (!object || object.width <= 0 || object.height <= 0) continue;
     if (out === mask) {

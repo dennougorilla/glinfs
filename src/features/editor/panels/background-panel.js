@@ -48,6 +48,7 @@ import {
   EDIT_LIMITS,
 } from '../../../shared/edits/model.js';
 import { MAX_SUGGESTIONS } from '../../../shared/masks/cleanup-suggestions.js';
+import { COLOUR_GUARD_SHARE, COLOUR_TOLERANCE } from '../../../shared/masks/colour-fill.js';
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
@@ -421,6 +422,41 @@ export function describeObjectTracking(tracking) {
     });
   }
   return 'Finding the object…';
+}
+
+/**
+ * The Colour fix-up to warn about: the one that, on a frame of the
+ * selection, takes the largest share of the subject above
+ * COLOUR_GUARD_SHARE (see shared/masks/colour-fill), and that frame
+ * @param {import('../../../shared/edits/model.js').CutoutObject[]} objects
+ * @param {Record<string, number[]> | undefined} shares
+ * @param {{ start: number, end: number }} range
+ * @returns {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, share: number } | null}
+ */
+export function getColourGuard(objects, shares, range) {
+  /** @type {{ object: import('../../../shared/edits/model.js').CutoutObject, frame: number, share: number } | null} */
+  let worst = null;
+  for (const object of objects) {
+    if (object.scope !== 'colour' || object.mode !== 'remove') continue;
+    const perFrame = shares?.[object.id];
+    if (!perFrame) continue;
+    for (let f = range.start; f <= range.end && f < perFrame.length; f++) {
+      const share = perFrame[f];
+      if (share > COLOUR_GUARD_SHARE && (!worst || share > worst.share)) {
+        worst = { object, frame: f, share };
+      }
+    }
+  }
+  return worst;
+}
+
+/**
+ * @param {{ frame: number, share: number }} guard
+ * @param {number} fps
+ * @returns {string}
+ */
+export function getColourGuardText(guard, fps) {
+  return `Colour takes ${Math.round(guard.share * 100)}% of the subject at ${frameToTimecode(guard.frame, fps)}.`;
 }
 
 /**
@@ -1147,6 +1183,10 @@ export function renderBackgroundPanel(handlers) {
       }),
     ),
   );
+  const objectScopes = /** @type {const} */ ([
+    ...scopes,
+    { value: 'colour', label: 'Colour', title: 'The colours under the points, on every frame' },
+  ]);
   const objectScope = createElement(
     'fieldset',
     { className: 'editor-cutout-segmented-group', id: 'ai-object-scope', hidden: 'true' },
@@ -1155,7 +1195,7 @@ export function renderBackgroundPanel(handlers) {
       createElement(
         'div',
         { className: 'editor-cutout-segmented' },
-        scopes.map(({ value, label, title }) => {
+        objectScopes.map(({ value, label, title }) => {
           const id = `ai-object-scope-${value}`;
           const input = /** @type {HTMLInputElement} */ (
             createElement('input', { type: 'radio', name: 'ai-object-scope', id, value })
@@ -1173,6 +1213,25 @@ export function renderBackgroundPanel(handlers) {
       ),
     ],
   );
+  const objectTolerance = endLabelSlider({
+    id: 'ai-object-tolerance',
+    label: 'Similar colors',
+    min: COLOUR_TOLERANCE.min,
+    max: COLOUR_TOLERANCE.max,
+    left: 'Fewer',
+    right: 'More',
+  });
+  objectTolerance.row.id = 'ai-object-tolerance-row';
+  objectTolerance.row.hidden = true;
+  objectTolerance.input.step = String(COLOUR_TOLERANCE.step);
+  cleanups.push(
+    on(objectTolerance.input, 'input', () =>
+      handlers.onSetAiObjectTolerance?.(Number(objectTolerance.input.value), { live: true }),
+    ),
+    on(objectTolerance.input, 'change', () =>
+      handlers.onSetAiObjectTolerance?.(Number(objectTolerance.input.value)),
+    ),
+  );
   const objectLostGo = createElement(
     'button',
     { type: 'button', id: 'ai-object-lost-go', className: 'editor-cutout-status-btn' },
@@ -1181,7 +1240,9 @@ export function renderBackgroundPanel(handlers) {
   cleanups.push(
     on(objectLostGo, 'click', () => {
       const id = objectLostGo.dataset.objectId;
-      if (id) handlers.onGoToObjectLost?.(id);
+      const frame = objectLostGo.dataset.frame;
+      if (id && frame) handlers.onGoToColourGuard?.(id, Number(frame));
+      else if (id) handlers.onGoToObjectLost?.(id);
     }),
   );
   const objectLost = createElement(
@@ -1290,6 +1351,7 @@ export function renderBackgroundPanel(handlers) {
       createElement('p', { className: 'editor-cutout-note', id: 'background-tools-hint' }),
       pickList,
       objectScope,
+      objectTolerance.row,
       objectLost,
       createElement('p', { className: 'editor-cutout-note', id: 'touchup-entry-summary' }),
     ],
@@ -1742,19 +1804,39 @@ export function updateBackgroundPanel(container, state, fps) {
   const active = isAi ? getActiveAiObject(state) : null;
   const selected = selectedId ? objects.find((o) => o.id === selectedId) : undefined;
   setHidden(q(root, '#ai-object-scope'), !selected);
-  setChecked(q(root, '#ai-object-scope-whole'), selected?.scope !== 'part');
-  setChecked(q(root, '#ai-object-scope-part'), selected?.scope === 'part');
+  const scopeOf = selected?.scope ?? 'whole';
+  setChecked(q(root, '#ai-object-scope-whole'), scopeOf === 'whole');
+  setChecked(q(root, '#ai-object-scope-part'), scopeOf === 'part');
+  setChecked(q(root, '#ai-object-scope-colour'), scopeOf === 'colour');
+  // Colour removes only
+  const colourSegment = q(root, '#ai-object-scope-colour')?.closest('.editor-cutout-segment');
+  setHidden(/** @type {HTMLElement} */ (colourSegment), selected?.mode !== 'remove');
+  const colourSelected = selected?.scope === 'colour' && selected.mode === 'remove';
+  setHidden(q(root, '#ai-object-tolerance-row'), !colourSelected);
+  if (selected && colourSelected) {
+    const input = /** @type {HTMLInputElement} */ (q(root, '#ai-object-tolerance'));
+    setValue(input, String(selected.tolerance));
+    input.setAttribute('aria-valuetext', String(selected.tolerance));
+  }
+  // The notice: a Colour fix-up that takes much of the subject somewhere,
+  // else a tracked one lost
+  const guard = isAi ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
   const lostObject =
-    isAi && !status?.objectTracking
+    isAi && !guard && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)
       : null;
-  setHidden(q(root, '#ai-object-lost'), !lostObject);
+  setHidden(q(root, '#ai-object-lost'), !lostObject && !guard);
   setText(
     q(root, '#ai-object-lost-text'),
-    lostObject ? getObjectLostText(lostObject.object, lostObject.frames, fps) : '',
+    guard
+      ? getColourGuardText(guard, fps)
+      : lostObject
+        ? getObjectLostText(lostObject.object, lostObject.frames, fps)
+        : '',
   );
-  /** @type {HTMLElement} */ (q(root, '#ai-object-lost-go')).dataset.objectId =
-    lostObject?.object.id ?? '';
+  const go = /** @type {HTMLElement} */ (q(root, '#ai-object-lost-go'));
+  go.dataset.objectId = guard?.object.id ?? lostObject?.object.id ?? '';
+  go.dataset.frame = guard ? String(guard.frame) : '';
 
   setHidden(q(root, '#background-alpha-note'), !state.clip?.hasAlpha);
 

@@ -76,6 +76,7 @@ import {
   getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
+  isColourObject,
   isWasmAllowed,
   isWasmChoiceError,
   peekClipMaskSource,
@@ -221,6 +222,7 @@ export function createAiCutoutSession(options) {
     if (!(/** @type {any} */ (source).draft)) {
       fullSource = source;
       scheduleSuggestions(source);
+      report({ colourShares: source.colourShares ?? {} });
     }
     report({ maskVersion: source.version });
     onMaskSource?.(source);
@@ -848,6 +850,17 @@ export function createAiCutoutSession(options) {
     }
     if (!isAiCutoutActive(state.edits.background)) return;
     for (const object of objects) {
+      if (isColourObject(object)) {
+        // Not tracked: a run of it stops; its tracked masks stay for a
+        // return to Whole / Part
+        objectQueue = objectQueue.filter((queued) => queued !== object.id);
+        if (objectRun?.id === object.id) objectController?.abort();
+        if (object.id in objectLost) {
+          const { [object.id]: _colour, ...rest } = objectLost;
+          reportLost(rest);
+        }
+        continue;
+      }
       const signature = getObjectSignature(object);
       const known = objectSignatures.get(object.id);
       // A new mount: the stored masks were made with these clicks

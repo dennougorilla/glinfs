@@ -1,0 +1,403 @@
+/**
+ * Colour fix-ups: the pure fill, the guard, and how a build applies them
+ * @see src/shared/masks/colour-fill.js
+ */
+import { describe, expect, it } from 'vitest';
+import { createDefaultAiCutout } from '../../../../src/shared/edits/model.js';
+import {
+  COLOUR_GUARD_SHARE,
+  COLOUR_PASS,
+  COLOUR_REMOVE,
+  COLOUR_STOP,
+  coarseGrid,
+  createColourMatcher,
+  fillColourRegion,
+  getColourGuardShares,
+  getDiscPixels,
+  packRgb,
+  sampleColours,
+} from '../../../../src/shared/masks/colour-fill.js';
+import {
+  buildFinalMasks,
+  createDraftMaskSource,
+  getAiParamsKey,
+  getColourRegion,
+} from '../../../../src/shared/masks/final-masks.js';
+import { unpackMask } from '../../../../src/shared/masks/mask-ops.js';
+
+const W = 64;
+const H = 32;
+const FRAMES = 6;
+
+/** @typedef {[number, number, number, number]} Rect x, y, w, h */
+/** @typedef {{ rect: Rect, color: number[] | ((x: number, y: number) => number[]), inMask?: boolean }} Paint */
+
+const BG = [30, 140, 60];
+const SHIRT = [40, 80, 200];
+const HAIR = [70, 45, 30];
+/** The character: hair on top of a shirt, columns 20-31 */
+const character = /** @type {Paint[]} */ ([
+  { rect: [20, 4, 12, 6], color: HAIR },
+  { rect: [20, 10, 12, 20], color: SHIRT },
+]);
+
+/**
+ * A frame: RGBA pixels (with a little noise) and the base model's
+ * probability (230 on everything painted with inMask, 10 elsewhere)
+ * @param {Paint[]} paints
+ * @param {number} seed
+ */
+function makeFrame(paints, seed) {
+  const rgba = new Uint8ClampedArray(W * H * 4);
+  const prob = new Uint8Array(W * H).fill(10);
+  let s = seed >>> 0;
+  const noise = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return Math.round((s / 2 ** 32) * 6 - 3);
+  };
+  for (let i = 0; i < W * H; i++) {
+    for (let k = 0; k < 3; k++) rgba[i * 4 + k] = BG[k] + noise();
+    rgba[i * 4 + 3] = 255;
+  }
+  for (const { rect, color, inMask = true } of paints) {
+    const [rx, ry, rw, rh] = rect;
+    for (let y = Math.max(0, ry); y < Math.min(H, ry + rh); y++) {
+      for (let x = Math.max(0, rx); x < Math.min(W, rx + rw); x++) {
+        const i = y * W + x;
+        const c = typeof color === 'function' ? color(x, y) : color;
+        for (let k = 0; k < 3; k++) rgba[i * 4 + k] = c[k] + noise();
+        if (inMask) prob[i] = 230;
+      }
+    }
+  }
+  return { rgba, prob: { data: prob, width: W, height: H } };
+}
+
+/**
+ * A clip of FRAMES frames
+ * @param {(f: number) => Paint[]} patches - the leftovers on frame f
+ */
+function makeClip(patches) {
+  const frames = Array.from({ length: FRAMES }, (_, f) =>
+    makeFrame([...character, ...patches(f)], 7 + f),
+  );
+  return {
+    getProb: (/** @type {number} */ f) => frames[f]?.prob ?? null,
+    getPixels: (/** @type {number} */ f) => frames[f]?.rgba ?? null,
+  };
+}
+
+const aiOf = (over = {}) => ({ ...createDefaultAiCutout(), smoothing: false, ...over });
+const noYield = { now: () => 0, yieldToMain: async () => {} };
+
+/**
+ * @param {{ frame: number, x: number, y: number, mode?: 'keep' | 'remove' }[]} points - pixel positions
+ * @param {number} [tolerance]
+ */
+function colourObject(points, tolerance = 32) {
+  const clicks = points.map((p) => ({
+    frame: p.frame,
+    x: (p.x + 0.5) / W,
+    y: (p.y + 0.5) / H,
+    mode: p.mode ?? /** @type {const} */ ('keep'),
+  }));
+  return {
+    edit: { id: 'c1', mode: 'remove', scope: 'colour', clicks, boxes: [], tolerance },
+    input: {
+      id: 'c1',
+      mode: /** @type {const} */ ('remove'),
+      getMask: () => null,
+      colour: { clicks, tolerance },
+    },
+  };
+}
+
+/**
+ * Build with one Colour fix-up
+ * @param {ReturnType<typeof makeClip>} clip
+ * @param {ReturnType<typeof colourObject>} object
+ */
+async function build(clip, object) {
+  return buildFinalMasks({
+    frameCount: FRAMES,
+    getProb: clip.getProb,
+    getPixels: clip.getPixels,
+    ai: aiOf({ objects: [object.edit] }),
+    objects: [object.input],
+    ...noYield,
+  });
+}
+
+/**
+ * Share of a rectangle still in a final mask
+ * @param {any} packed
+ * @param {Rect} rect
+ */
+function keptIn(packed, [rx, ry, rw, rh]) {
+  const mask = unpackMask(packed);
+  let n = 0;
+  let kept = 0;
+  for (let y = ry; y < ry + rh; y++) {
+    for (let x = rx; x < rx + rw; x++) {
+      n++;
+      kept += mask[y * W + x];
+    }
+  }
+  return kept / n;
+}
+
+const FLAT = [200, 200, 190];
+/** @type {Rect} */
+const PATCH = [32, 14, 16, 14];
+/** @type {Rect} */
+const SHIRT_RECT = [20, 10, 12, 20];
+/** @type {Rect} */
+const HAIR_RECT = [20, 4, 12, 6];
+
+describe('fillColourRegion', () => {
+  it('takes the mask pixels connected to a seed through matching colours only', () => {
+    const { rgba } = makeFrame([...character, { rect: PATCH, color: FLAT }], 1);
+    const mask = new Uint8Array(W * H);
+    for (const [rx, ry, rw, rh] of [PATCH, SHIRT_RECT, HAIR_RECT]) {
+      for (let y = ry; y < ry + rh; y++) mask.fill(1, y * W + rx, y * W + rx + rw);
+    }
+    // A second patch of the same colour that does not touch the first
+    const far = /** @type {Rect} */ ([52, 2, 6, 6]);
+    for (let y = far[1]; y < far[1] + far[3]; y++) {
+      for (let x = far[0]; x < far[0] + far[2]; x++) {
+        const i = y * W + x;
+        rgba.set([...FLAT, 255], i * 4);
+        mask[i] = 1;
+      }
+    }
+    const disc = getDiscPixels(W, H, { x: 40 / W, y: 20 / H }, 1);
+    const matches = createColourMatcher(sampleColours(rgba, disc), [], 32);
+    const { region, count } = fillColourRegion(mask, W, H, rgba, disc, matches);
+    expect(count).toBe(PATCH[2] * PATCH[3]);
+    expect(region[20 * W + 40]).toBe(1);
+    // Not the character, not the unconnected patch
+    expect(region[20 * W + 25]).toBe(0);
+    expect(region[4 * W + 54]).toBe(0);
+  });
+
+  it('protects colours nearer to a protect colour than to every sampled one', () => {
+    const near = packRgb(80, 50, 35);
+    const hair = packRgb(70, 45, 30);
+    const matches = createColourMatcher([near], [hair], 32);
+    expect(matches(packRgb(82, 52, 36))).toBe(COLOUR_REMOVE);
+    expect(matches(packRgb(70, 44, 31))).toBe(COLOUR_PASS);
+    expect(matches(packRgb(200, 200, 200))).toBe(COLOUR_STOP);
+    // Without the protect colour the hair goes too
+    expect(createColourMatcher([near], [], 32)(packRgb(70, 44, 31))).toBe(COLOUR_REMOVE);
+  });
+
+  it('passes through protected pixels without removing them', () => {
+    // A row: seed | protected | removable, all in the mask
+    const w = 6;
+    const rgba = new Uint8ClampedArray(w * 4);
+    const colours = [
+      [82, 52, 36],
+      [82, 52, 36],
+      [70, 45, 30],
+      [70, 45, 30],
+      [82, 52, 36],
+      [82, 52, 36],
+    ];
+    for (const [i, c] of colours.entries()) rgba.set([...c, 255], i * 4);
+    const matches = createColourMatcher([packRgb(82, 52, 36)], [packRgb(70, 45, 30)], 32);
+    const { region, count } = fillColourRegion(new Uint8Array(w).fill(1), w, 1, rgba, [0], matches);
+    expect([...region]).toEqual([1, 1, 0, 0, 1, 1]);
+    expect(count).toBe(4);
+  });
+});
+
+describe('Colour fix-ups in a build', () => {
+  it('removes a flat patch attached to the subject on every frame and nothing of the subject', async () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const result = await build(clip, colourObject([{ frame: 2, x: 40, y: 20 }]));
+    for (const mask of result.masks) {
+      expect(keptIn(mask, PATCH)).toBe(0);
+      expect(keptIn(mask, SHIRT_RECT)).toBe(1);
+      expect(keptIn(mask, HAIR_RECT)).toBe(1);
+    }
+    expect(Math.max(...result.colourShares.c1)).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+  });
+
+  it('a protect point keeps the hair a pillar of nearly its colour shares', async () => {
+    const pillar = [82, 52, 36];
+    /** @type {Rect} */
+    const PILLAR = [10, 0, 10, 30];
+    const clip = makeClip(() => [{ rect: PILLAR, color: pillar }]);
+    const onPillar = { frame: 1, x: 14, y: 20 };
+    const without = await build(clip, colourObject([onPillar]));
+    expect(keptIn(without.masks[3], PILLAR)).toBe(0);
+    expect(keptIn(without.masks[3], HAIR_RECT)).toBe(0);
+    const protectedHair = await build(
+      clip,
+      colourObject([onPillar, { frame: 1, x: 25, y: 6, mode: 'remove' }]),
+    );
+    for (const mask of protectedHair.masks) {
+      expect(keptIn(mask, PILLAR)).toBe(0);
+      expect(keptIn(mask, HAIR_RECT)).toBe(1);
+      expect(keptIn(mask, SHIRT_RECT)).toBe(1);
+    }
+  });
+
+  it('the tolerance decides how far from the sampled colours it reaches', async () => {
+    // A gradient patch: 8 RGB steps per column
+    const gradient = (/** @type {number} */ x) => [140 + (x - 32) * 5, 140 + (x - 32) * 5, 150];
+    const clip = makeClip(() => [{ rect: PATCH, color: gradient }]);
+    // The disc (radius 4) stays inside the patch: columns 32-40
+    const at = { frame: 0, x: 36, y: 20 };
+    const low = await build(clip, colourObject([at], 8));
+    const high = await build(clip, colourObject([at], 96));
+    expect(keptIn(low.masks[0], PATCH)).toBeGreaterThan(0.25);
+    expect(keptIn(high.masks[0], PATCH)).toBe(0);
+    expect(keptIn(high.masks[0], SHIRT_RECT)).toBe(1);
+  });
+
+  it('the guard flags a frame where the fill takes the subject beyond its reference frame', async () => {
+    // Shelf rows: the lower row's colours are near the shirt's, so a large
+    // tolerance runs from the shelf into the shirt
+    const rows = (/** @type {number} */ x, /** @type {number} */ y) =>
+      y < 20
+        ? (x + y) % 2
+          ? [150, 100, 60]
+          : [205, 175, 120]
+        : (x + y) % 2
+          ? [60, 95, 185]
+          : [95, 120, 210];
+    const clip = makeClip(() => [{ rect: PATCH, color: rows }]);
+    const point = { frame: 2, x: 40, y: 24 };
+    const eats = await build(clip, colourObject([point], 64));
+    expect(keptIn(eats.masks[2], SHIRT_RECT)).toBeLessThan(0.5);
+    const shares = eats.colourShares.c1;
+    expect(shares).toHaveLength(FRAMES);
+    for (const share of shares) expect(share).toBeGreaterThan(COLOUR_GUARD_SHARE);
+    // Lower: the shirt stays and the guard is quiet
+    const fine = await build(clip, colourObject([point], 16));
+    expect(keptIn(fine.masks[2], SHIRT_RECT)).toBe(1);
+    for (const share of fine.colourShares.c1) expect(share).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+  });
+
+  it('follows a panning patch with a second point placed where it went', async () => {
+    const PAN = [100, 180, 225];
+    // Moves 4 px right per frame; stays attached to the shirt by a bar
+    const pan = (/** @type {number} */ f) =>
+      /** @type {Paint[]} */ ([
+        { rect: [32, 26, 2 + f * 4, 2], color: PAN },
+        { rect: [34 + f * 4, 14, 8, 14], color: PAN },
+      ]);
+    const clip = makeClip(pan);
+    const first = { frame: 0, x: 37, y: 18 };
+    const one = await build(clip, colourObject([first]));
+    // The patch has left the first point's position by frame 4
+    expect(keptIn(one.masks[0], [34, 14, 8, 14])).toBe(0);
+    expect(keptIn(one.masks[5], [54, 14, 8, 14])).toBeGreaterThan(0.9);
+    // Placed on frame 3, where it had gone: its disc reaches frames 2-5
+    const two = await build(clip, colourObject([first, { frame: 3, x: 50, y: 18 }]));
+    for (let f = 0; f < FRAMES; f++) {
+      expect(keptIn(two.masks[f], [34 + f * 4, 14, 8, 14])).toBe(0);
+      expect(keptIn(two.masks[f], SHIRT_RECT)).toBe(1);
+    }
+  });
+
+  it('applies in order with tracked fix-ups: a later Add wins over an earlier Colour', async () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const colour = colourObject([{ frame: 0, x: 40, y: 20 }]);
+    const add = { data: new Uint8Array(W * H).fill(0), width: W, height: H };
+    for (let y = 14; y < 20; y++) add.data.fill(255, y * W + 32, y * W + 48);
+    const addInput = { id: 'a1', mode: /** @type {const} */ ('add'), getMask: () => add };
+    const addEdit = { id: 'a1', mode: 'add', scope: 'whole', clicks: [], boxes: [], tolerance: 32 };
+    const result = await buildFinalMasks({
+      frameCount: FRAMES,
+      getProb: clip.getProb,
+      getPixels: clip.getPixels,
+      ai: aiOf({ objects: [colour.edit, addEdit] }),
+      objects: [colour.input, addInput],
+      ...noYield,
+    });
+    expect(keptIn(result.masks[1], [32, 14, 16, 6])).toBe(1);
+    expect(keptIn(result.masks[1], [32, 20, 16, 8])).toBe(0);
+  });
+
+  it('a draft frame equals the build', async () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const object = colourObject([{ frame: 2, x: 40, y: 20 }]);
+    const built = await build(clip, object);
+    const draft = createDraftMaskSource({
+      frameCount: FRAMES,
+      getProb: clip.getProb,
+      getPixels: clip.getPixels,
+      ai: aiOf({ objects: [object.edit] }),
+      objects: [object.input],
+    });
+    for (let f = 0; f < FRAMES; f++) {
+      expect(unpackMask(/** @type {any} */ (draft.getFinalMask(f)))).toEqual(
+        unpackMask(/** @type {any} */ (built.masks[f])),
+      );
+    }
+  });
+
+  it('changes nothing where the pixels are not available', async () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const object = colourObject([{ frame: 2, x: 40, y: 20 }]);
+    const result = await buildFinalMasks({
+      frameCount: FRAMES,
+      getProb: clip.getProb,
+      getPixels: () => null,
+      ai: aiOf({ objects: [object.edit] }),
+      objects: [object.input],
+      ...noYield,
+    });
+    expect(keptIn(result.masks[0], PATCH)).toBe(1);
+  });
+
+  it('shows its region on a frame for Show mask', () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const object = colourObject([{ frame: 2, x: 40, y: 20 }]);
+    const region = getColourRegion(
+      { frameCount: FRAMES, getProb: clip.getProb, getPixels: clip.getPixels, ai: aiOf() },
+      object.input,
+      4,
+    );
+    expect(region?.data[20 * W + 40]).toBe(255);
+    expect(region?.data[20 * W + 25]).toBe(0);
+  });
+});
+
+describe('getColourGuardShares', () => {
+  it('measures each frame against the nearest point frame', () => {
+    const kept = new Uint8Array(W * H);
+    kept.fill(1, 0, W * 8);
+    const none = new Uint8Array(W * H);
+    const half = new Uint8Array(W * H);
+    half.fill(1, 0, W * 4);
+    const removed = new Map([
+      [0, coarseGrid(none, W, H)],
+      [5, coarseGrid(half, W, H)],
+    ]);
+    const shares = getColourGuardShares(removed, new Map([[0, coarseGrid(kept, W, H)]]), [0]);
+    expect(shares.get(0)).toBe(0);
+    expect(shares.get(5)).toBe(0.5);
+  });
+});
+
+describe('getAiParamsKey and Colour fix-ups', () => {
+  const object = colourObject([{ frame: 0, x: 40, y: 20 }]).edit;
+  const key = (/** @type {any} */ o) => getAiParamsKey(aiOf({ objects: [o] }));
+
+  it('changes with the points and the tolerance of a Colour fix-up', () => {
+    expect(key({ ...object, tolerance: 40 })).not.toBe(key(object));
+    expect(
+      key({ ...object, clicks: [...object.clicks, { ...object.clicks[0], frame: 3 }] }),
+    ).not.toBe(key(object));
+    expect(key({ ...object, scope: 'part' })).not.toBe(key(object));
+  });
+
+  it('not with the clicks of a tracked one (they change its masks, not the build)', () => {
+    const tracked = { ...object, scope: 'whole' };
+    expect(key({ ...tracked, clicks: [{ ...tracked.clicks[0], x: 0.1 }] })).toBe(key(tracked));
+    expect(key({ ...tracked, tolerance: 60 })).toBe(key(tracked));
+  });
+});

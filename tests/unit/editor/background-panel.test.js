@@ -17,6 +17,7 @@ import {
   FIT_STEPS,
   fitFromAi,
   getCleanupChips,
+  getColourGuard,
   getDownloadPrompt,
   getLostFramesInSelection,
   getLostFramesText,
@@ -99,6 +100,8 @@ beforeEach(() => {
     onGoToObjectLost: vi.fn(),
     onRemoveAiObject: vi.fn(),
     onSetAiObjectScope: vi.fn(),
+    onSetAiObjectTolerance: vi.fn(),
+    onGoToColourGuard: vi.fn(),
     onApplyCleanup: vi.fn(),
     onClearCleanup: vi.fn(),
   };
@@ -873,6 +876,69 @@ describe('tracked objects', () => {
     expect(handlers.onGoToObjectLost).toHaveBeenCalledWith('a');
     updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)]), 10);
     expect($('#ai-object-lost').hidden).toBe(true);
+  });
+
+  it('offers Colour beside Whole / Part for a selected Remove fix-up, with its tolerance', () => {
+    const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 44 };
+    updateBackgroundPanel(
+      root,
+      stateWith([colour, object('b', 'add', 0)], { aiActiveObjectId: 'a', aiPickTool: 'remove' }),
+      10,
+    );
+    const segment = (/** @type {string} */ v) =>
+      /** @type {HTMLElement} */ ($(`#ai-object-scope-${v}`).closest('.editor-cutout-segment'));
+    expect(segment('colour').hidden).toBe(false);
+    expect($('#ai-object-scope-colour').checked).toBe(true);
+    expect($('#ai-object-scope-whole').checked).toBe(false);
+    expect($('#ai-object-tolerance-row').hidden).toBe(false);
+    expect($('#ai-object-tolerance').value).toBe('44');
+    $('#ai-object-tolerance').value = '20';
+    fire($('#ai-object-tolerance'), 'input');
+    expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20, { live: true });
+    fire($('#ai-object-tolerance'), 'change');
+    expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20);
+    $('#ai-object-scope-part').click();
+    expect(handlers.onSetAiObjectScope).toHaveBeenLastCalledWith('part');
+    // An Add fix-up: no Colour, no tolerance
+    updateBackgroundPanel(
+      root,
+      stateWith([colour, object('b', 'add', 0)], { aiActiveObjectId: 'b', aiPickTool: 'keep' }),
+      10,
+    );
+    expect(segment('colour').hidden).toBe(true);
+    expect($('#ai-object-tolerance-row').hidden).toBe(true);
+  });
+
+  it('warns where a Colour fix-up takes much of the subject, with a button that goes there', () => {
+    const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 64 };
+    const shares = new Array(40).fill(0.02);
+    shares[25] = 0.38;
+    shares[30] = 0.12;
+    const status = {
+      ...createAiCutoutStatus(),
+      colourShares: { a: shares },
+      objectLost: { a: [2] },
+    };
+    updateBackgroundPanel(root, stateWith([colour], { aiCutout: status }), 10);
+    expect($('#ai-object-lost').hidden).toBe(false);
+    expect($('#ai-object-lost').textContent).toContain('Colour takes 38% of the subject at 02:05.');
+    $('#ai-object-lost-go').click();
+    expect(handlers.onGoToColourGuard).toHaveBeenCalledWith('a', 25);
+    // Outside the selection does not count; at or below the share is quiet
+    expect(getColourGuard([colour], { a: shares }, { start: 26, end: 39 })).toMatchObject({
+      frame: 30,
+    });
+    expect(getColourGuard([colour], { a: shares }, { start: 0, end: 20 })).toBeNull();
+    expect(
+      getColourGuard([{ ...colour, scope: 'part' }], { a: shares }, { start: 0, end: 39 }),
+    ).toBeNull();
+    // Nothing to warn about: the notice goes (a tracked object's lost note would show)
+    updateBackgroundPanel(
+      root,
+      stateWith([colour], { aiCutout: { ...status, colourShares: { a: new Array(40).fill(0) } } }),
+      10,
+    );
+    expect($('#ai-object-lost').textContent).not.toContain('Colour takes');
   });
 
   it('says when the tracked fix-ups are full; Keep / Remove stay on for picks', () => {

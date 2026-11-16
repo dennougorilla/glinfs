@@ -37,6 +37,7 @@ import {
   startStrokePath,
 } from '../../shared/edits/touch-ups.js';
 import { announce } from '../../shared/live-region.js';
+import { getAiParamsKey } from '../../shared/masks/final-masks.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
 import { loadSettings, rememberAiCutoutModel } from '../../shared/user-settings.js';
@@ -51,11 +52,14 @@ import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
   classifyFixUp,
+  clearPixelCache,
   getAiModelId,
+  getClipColourRegion,
   getClipObjectSources,
   getModelSizeLabel,
   getSharedFinalMaskCache,
   isAbortError,
+  isColourObject,
   isFrameAnalyzed,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
@@ -119,6 +123,7 @@ import {
   selectTextLayer,
   setActiveAiObject,
   setAiObjectScope,
+  setAiObjectTolerance,
   setAiParams,
   setAiPickTool,
   setBackground,
@@ -991,6 +996,8 @@ function render(container) {
       onGoToLostFrame: handleGoToLostFrame,
       onGoToObject: handleGoToObject,
       onGoToObjectLost: handleGoToObjectLost,
+      onGoToColourGuard: handleGoToColourGuard,
+      onSetAiObjectTolerance: handleSetAiObjectTolerance,
       onRemoveAiObject: handleRemoveAiObject,
       onSetAiObjectScope: handleSetAiObjectScope,
       onApplyCleanup: handleApplyCleanup,
@@ -1066,7 +1073,9 @@ function drawObjectRegions(ctx, state, frame) {
   const regions = [];
   let highlight = -1;
   objects.forEach((object, index) => {
-    const mask = sources[index].getMask(state.currentFrame);
+    const mask = isColourObject(object)
+      ? getColourOverlayRegion(state, object)
+      : sources[index].getMask(state.currentFrame);
     if (!mask) return;
     if (object.id === (state.aiHighlightObjectId ?? state.aiActiveObjectId)) {
       highlight = regions.length;
@@ -1074,6 +1083,35 @@ function drawObjectRegions(ctx, state, frame) {
     regions.push({ mode: object.mode, color: getObjectColor(objects, object.id), mask });
   });
   drawRegions(ctx, frame.width, frame.height, regions, highlight);
+}
+
+/** The last Colour region drawn in Show mask (redraws reuse it) */
+let colourOverlay = {
+  key: '',
+  mask: /** @type {import('../../shared/masks/final-masks.js').ProbMask | null} */ (null),
+};
+
+/**
+ * The region a Colour fix-up takes on the frame on screen, for Show mask
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ */
+function getColourOverlayRegion(state, object) {
+  if (!state.clip) return null;
+  const { ai } = state.edits.background;
+  const key = `${state.clip.id}|${state.currentFrame}|${getSharedMaskStore().version}|${getAiParamsKey(ai)}|${object.id}`;
+  if (colourOverlay.key !== key) {
+    colourOverlay = {
+      key,
+      mask: getClipColourRegion({
+        frames: state.clip.frames,
+        ai,
+        object,
+        frameIndex: state.currentFrame,
+      }),
+    };
+  }
+  return colourOverlay.mask;
 }
 
 /**
@@ -2231,8 +2269,41 @@ function handleRemoveAiObject(id) {
 }
 
 /**
- * Whole / Part of the active tracked object
- * @param {import('../../shared/edits/model.js').ClickScope} scope
+ * A Colour fix-up takes much of the subject on a frame: go there with it
+ * selected, so its tolerance and a protect point (Alt-click) are at hand
+ * @param {string} id
+ * @param {number} frame
+ */
+function handleGoToColourGuard(id, frame) {
+  if (!store) return;
+  const object = store.getState().edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object) return;
+  store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
+  handleFrameChange(frame);
+  announce('Lower Similar colors, or Alt-click what to keep');
+}
+
+/**
+ * Tolerance of the active Colour fix-up
+ * @param {number} tolerance
+ * @param {{ live?: boolean }} [options] - live: the slider is being dragged
+ */
+function handleSetAiObjectTolerance(tolerance, options = {}) {
+  if (!store) return;
+  const state = store.getState();
+  const object = getActiveAiObject(state);
+  if (!object) return;
+  const next = setAiObjectTolerance(state, object.id, tolerance);
+  if (next === state) {
+    if (!options.live) aiSession?.setInteractive(false);
+    return;
+  }
+  handleSetAiParams({ objects: next.edits.background.ai.objects }, options);
+}
+
+/**
+ * Whole / Part / Colour of the active fix-up
+ * @param {import('../../shared/edits/model.js').ObjectScope} scope
  */
 function handleSetAiObjectScope(scope) {
   if (!store) return;
@@ -3134,6 +3205,9 @@ function cleanup() {
   // A Keep / Remove click still being judged belongs to this mount
   fixUpClick?.abort();
   fixUpClick = null;
+  // Frame pixels read for Colour fix-ups
+  clearPixelCache();
+  colourOverlay = { key: '', mask: null };
   // The Export dialog lives over this editor: close it first (aborting a
   // running export) so nothing of it outlives the mount
   if (exportDialog) {

@@ -14,6 +14,7 @@ import {
   TOUCH_UP_MODES,
 } from '../../shared/edits/model.js';
 import { removeTouchUpsFromFrame } from '../../shared/edits/touch-ups.js';
+import { COLOUR_TOLERANCE } from '../../shared/masks/colour-fill.js';
 import { createStore } from '../../shared/store.js';
 import { clamp } from '../../shared/utils/math.js';
 import { clampCropArea, createClip, setFrameRange } from './core.js';
@@ -171,6 +172,7 @@ export function createAiCutoutStatus() {
     lostFrames: [],
     objectTracking: null,
     objectLost: {},
+    colourShares: {},
     cleanupSuggestions: [],
   };
 }
@@ -561,6 +563,7 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
     id,
     mode,
     scope: mode === 'remove' && selection.click && !selection.box ? 'part' : 'whole',
+    tolerance: COLOUR_TOLERANCE.default,
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
   };
@@ -611,16 +614,35 @@ export function addAiObjectClick(state, id, click) {
 }
 
 /**
- * Whole / Part of a tracked object
+ * Whole / Part / Colour of a fix-up (Colour: Remove only)
  * @param {import('./types.js').EditorState} state
  * @param {string} id
- * @param {import('../../shared/edits/model.js').ClickScope} scope
+ * @param {import('../../shared/edits/model.js').ObjectScope} scope
  * @returns {import('./types.js').EditorState}
  */
 export function setAiObjectScope(state, id, scope) {
   const object = state.edits.background.ai.objects?.find((o) => o.id === id);
   if (!object || object.scope === scope) return state;
+  // Colour removes only
+  if (scope === 'colour' && object.mode !== 'remove') return state;
   return updateAiObject(state, id, (o) => ({ ...o, scope }));
+}
+
+/**
+ * Tolerance of a Colour fix-up (clamped and rounded like normalization)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {number} tolerance
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiObjectTolerance(state, id, tolerance) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || !Number.isFinite(tolerance)) return state;
+  const value = Math.round(
+    Math.min(COLOUR_TOLERANCE.max, Math.max(COLOUR_TOLERANCE.min, tolerance)),
+  );
+  if (object.tolerance === value) return state;
+  return updateAiObject(state, id, (o) => ({ ...o, tolerance: value }));
 }
 
 /**

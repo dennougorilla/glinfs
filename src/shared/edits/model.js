@@ -9,6 +9,8 @@
  * @module shared/edits/model
  */
 
+import { COLOUR_TOLERANCE } from '../masks/colour-fill.js';
+
 /** @typedef {'sans'|'serif'|'mono'|'impact'} TextFont */
 /** @typedef {'left'|'center'|'right'} TextAlign */
 /** @typedef {'connected'|'global'} BackgroundMode */
@@ -31,6 +33,12 @@
  * Click to select: how much of what was clicked to keep — the whole thing
  * (the person whose face was clicked) or the part under the click
  * @typedef {'whole'|'part'} ClickScope
+ */
+/**
+ * How a fix-up selects its region: tracked by the click-to-select model
+ * (the whole clicked thing or the part under the click), or, for Remove
+ * only, by colour (no model: see shared/masks/colour-fill)
+ * @typedef {'whole'|'part'|'colour'} ObjectScope
  */
 /** @typedef {'erase'|'restore'} TouchUpMode */
 /**
@@ -86,7 +94,11 @@
  * @property {CutoutBox[]} boxes - at most EDIT_LIMITS.aiObjectBoxes.max:
  *   rough regions on a frame (each one SAM box prompt); with the keep
  *   points they add up to one region
- * @property {ClickScope} scope - the whole clicked thing or the part under the click
+ * @property {ObjectScope} scope - the whole clicked thing, the part under
+ *   the click, or (Remove only) Colour: not tracked, its keep points sample
+ *   the colours to remove and its remove points the colours to protect
+ * @property {number} tolerance - Colour only: Euclidean RGB distance,
+ *   COLOUR_TOLERANCE.min..max (kept when the scope changes)
  */
 
 /**
@@ -192,6 +204,9 @@ export const PICK_MODES = /** @type {const} */ (['keep', 'remove']);
 
 /** @type {readonly ClickScope[]} */
 export const CLICK_SCOPES = /** @type {const} */ (['whole', 'part']);
+
+/** @type {readonly ObjectScope[]} */
+export const OBJECT_SCOPES = /** @type {const} */ (['whole', 'part', 'colour']);
 
 /** @type {readonly AiModel[]} */
 export const AI_MODELS = /** @type {const} */ ([
@@ -544,12 +559,23 @@ function normalizeObject(object, frameCount) {
     .slice(-EDIT_LIMITS.aiObjectBoxes.max);
   const first = boxes.length > 0 ? 0 : clicks.findIndex((click) => click.mode === 'keep');
   if (first < 0) return null;
+  const mode = normalizeEnum(o.mode, OBJECT_MODES, 'remove');
+  const scope = normalizeEnum(o.scope, OBJECT_SCOPES, 'whole');
   return {
     id: typeof o.id === 'string' && o.id ? o.id : createLayerId(),
-    mode: normalizeEnum(o.mode, OBJECT_MODES, 'remove'),
+    mode,
     clicks: clicks.slice(first, first + EDIT_LIMITS.aiObjectClicks.max),
     boxes,
-    scope: normalizeEnum(o.scope, CLICK_SCOPES, 'whole'),
+    // Colour removes only: an Add fix-up is always tracked
+    scope: scope === 'colour' && mode !== 'remove' ? 'whole' : scope,
+    tolerance: Math.round(
+      clampNumber(
+        o.tolerance,
+        COLOUR_TOLERANCE.min,
+        COLOUR_TOLERANCE.max,
+        COLOUR_TOLERANCE.default,
+      ),
+    ),
   };
 }
 

@@ -209,6 +209,8 @@
  *   where its last tracking lost it, sorted
  * @property {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion[]} cleanupSuggestions
  *   One-tap clean-ups found in the last full build (at most 4)
+ * @property {Record<string, number[]>} colourShares - Per Colour fix-up, from
+ *   the last full build: the guard's share per frame (-1: not run there)
  */
 
 /**

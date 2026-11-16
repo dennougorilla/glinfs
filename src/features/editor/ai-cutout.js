@@ -17,6 +17,7 @@ import { getAiModel } from '../../shared/edits/model.js';
 import {
   createDraftMaskSource,
   createFinalMaskCache,
+  getColourRegion,
   getFinalMaskParamsKey,
   getPickedPieceRole,
   getSurvivingMask,
@@ -118,13 +119,133 @@ export function getClipProbSource(frames, maskStore, modelId = DEFAULT_MODEL_ID)
  * @returns {import('../../shared/masks/final-masks.js').ObjectMaskInput[]}
  */
 export function getClipObjectSources(frames, ai, maskStore) {
-  return (ai.objects ?? []).map((object) => ({
-    mode: object.mode,
-    getMask: (frameIndex) => {
-      const frame = frames[frameIndex];
-      return frame ? maskStore.get(objectMaskKey(frame, object.id)) : null;
+  return (ai.objects ?? []).map((object) =>
+    isColourObject(object)
+      ? {
+          id: object.id,
+          mode: object.mode,
+          getMask: () => null,
+          colour: { clicks: object.clicks, tolerance: object.tolerance },
+        }
+      : {
+          id: object.id,
+          mode: object.mode,
+          getMask: (frameIndex) => {
+            const frame = frames[frameIndex];
+            return frame ? maskStore.get(objectMaskKey(frame, object.id)) : null;
+          },
+        },
+  );
+}
+
+/**
+ * A Colour fix-up: removed by colour on every frame, never tracked
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @returns {boolean}
+ */
+export function isColourObject(object) {
+  return object.scope === 'colour' && object.mode === 'remove';
+}
+
+/** Frames whose pixels stay read (a build reads each frame once; drafts and Show mask re-read the one on screen) */
+const PIXEL_CACHE_FRAMES = 4;
+
+/** @type {Map<string, Uint8ClampedArray>} */
+const pixelCache = new Map();
+
+/** @type {{ canvas: OffscreenCanvas | HTMLCanvasElement, ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D } | null} */
+let pixelCanvas = null;
+
+/**
+ * A 2D context to read frame pixels with (null without a canvas)
+ * @param {number} width
+ * @param {number} height
+ */
+function getPixelContext(width, height) {
+  if (!pixelCanvas) {
+    /** @type {OffscreenCanvas | HTMLCanvasElement | null} */
+    let canvas = null;
+    if (typeof OffscreenCanvas !== 'undefined') canvas = new OffscreenCanvas(width, height);
+    else if (typeof document !== 'undefined') canvas = document.createElement('canvas');
+    const ctx = /** @type {any} */ (canvas)?.getContext('2d', { willReadFrequently: true });
+    if (!canvas || !ctx) return null;
+    pixelCanvas = { canvas, ctx };
+  }
+  const { canvas, ctx } = pixelCanvas;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  return ctx;
+}
+
+/**
+ * The clip's frame pixels at a mask size (what Colour fix-ups read): the
+ * frame drawn at that size, RGBA. Null when the frame cannot be drawn.
+ * @param {Frame[]} frames - The whole clip
+ * @returns {import('../../shared/masks/final-masks.js').PixelSource}
+ */
+export function getClipPixelSource(frames) {
+  return (frameIndex, width, height) => {
+    const frame = frames[frameIndex];
+    if (!frame?.frame) return null;
+    const key = `${frame.id}|${width}x${height}`;
+    const hit = pixelCache.get(key);
+    if (hit) {
+      pixelCache.delete(key);
+      pixelCache.set(key, hit);
+      return hit;
+    }
+    const ctx = getPixelContext(width, height);
+    if (!ctx) return null;
+    /** @type {Uint8ClampedArray} */
+    let data;
+    try {
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(/** @type {any} */ (frame.frame), 0, 0, width, height);
+      data = ctx.getImageData(0, 0, width, height).data;
+    } catch {
+      return null;
+    }
+    pixelCache.set(key, data);
+    while (pixelCache.size > PIXEL_CACHE_FRAMES) {
+      pixelCache.delete(/** @type {string} */ (pixelCache.keys().next().value));
+    }
+    return data;
+  };
+}
+
+/** Forget the read pixels (a clip's frames were closed) */
+export function clearPixelCache() {
+  pixelCache.clear();
+}
+
+/**
+ * The region a Colour fix-up takes on a frame, for Show mask
+ * @param {{ frames: Frame[], ai: AiCutout, object: import('../../shared/edits/model.js').CutoutObject, frameIndex: number, maskStore?: MaskStore }} options
+ * @returns {import('../../shared/masks/final-masks.js').ProbMask | null}
+ */
+export function getClipColourRegion({
+  frames,
+  ai,
+  object,
+  frameIndex,
+  maskStore = getSharedMaskStore(),
+}) {
+  return getColourRegion(
+    {
+      frameCount: frames.length,
+      getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+      ai,
+      getPixels: getClipPixelSource(frames),
+      sourceWidth: frames[0]?.width,
     },
-  }));
+    {
+      id: object.id,
+      mode: 'remove',
+      getMask: () => null,
+      colour: { clicks: object.clicks, tolerance: object.tolerance },
+    },
+    frameIndex,
+  );
 }
 
 /**
@@ -147,6 +268,7 @@ export function countUntrackedObjectFrames(
   maskStore = getSharedMaskStore(),
   options = {},
 ) {
+  if (isColourObject(object)) return 0;
   const tag = getObjectSignature(object);
   return getStaleObjectFrames(frames, range, object.id, tag, maskStore, options).length;
 }
@@ -201,6 +323,7 @@ function buildInputs({ frames, ai, maskStore = getSharedMaskStore(), clipId }) {
     storeVersion: maskStore.version,
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
     objects: getClipObjectSources(frames, ai, maskStore),
+    getPixels: getClipPixelSource(frames),
   };
 }
 
@@ -264,6 +387,7 @@ export function createClipDraftMaskSource({
     getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
     ai,
     objects: getClipObjectSources(frames, ai, maskStore),
+    getPixels: getClipPixelSource(frames),
     sourceWidth: frames[0]?.width,
     base,
   });

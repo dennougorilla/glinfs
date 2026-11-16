@@ -82,7 +82,9 @@ import { renderEditorToolbar } from './panels/toolbar.js';
  * @property {(id: string | null) => void} [onHighlightAiObject] - A tracked fix-up's chip is hovered or focused (null: none)
  * @property {(id: string) => void} [onGoToObjectLost] - Tracked object: go to the first frame where tracking lost it, its tool aimed at it
  * @property {(id: string) => void} [onRemoveAiObject] - Delete a tracked object
- * @property {(scope: import('../../shared/edits/model.js').ClickScope) => void} [onSetAiObjectScope] - Whole / Part of the active tracked object
+ * @property {(scope: import('../../shared/edits/model.js').ObjectScope) => void} [onSetAiObjectScope] - Whole / Part / Colour of the active fix-up
+ * @property {(tolerance: number, options?: { live?: boolean }) => void} [onSetAiObjectTolerance] - Tolerance of the active Colour fix-up (live: being dragged)
+ * @property {(id: string, frame: number) => void} [onGoToColourGuard] - Go to the frame where a Colour fix-up takes much of the subject, with it selected
  * @property {(suggestion: import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion) => void} [onApplyCleanup] - A Clean up chip tapped
  * @property {(kind: 'specks' | 'holes') => void} [onClearCleanup] - A whole-clip clean-up turned off
  * @property {(patch: Partial<import('./types.js').BrushState>) => void} [onSetBrush] - Mask brush on/off, mode, size, scope
