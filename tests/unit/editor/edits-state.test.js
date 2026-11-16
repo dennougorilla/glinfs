@@ -55,6 +55,7 @@ describe('createClip with edits', () => {
           picks: [],
           clickScope: 'whole',
           objects: [],
+          cleanup: { minIslandArea: 0, maxHoleArea: 0 },
           subject: null,
         },
       },
@@ -183,6 +184,7 @@ describe('background reducers', () => {
         picks: [],
         clickScope: 'whole',
         objects: [],
+        cleanup: { minIslandArea: 0, maxHoleArea: 0 },
         subject: null,
       },
     });

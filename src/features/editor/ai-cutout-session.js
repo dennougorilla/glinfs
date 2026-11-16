@@ -53,11 +53,17 @@
  */
 
 import { isAiCutoutActive } from '../../shared/edits/model.js';
+import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { maskKey, objectMaskKey, resolveModelSpec } from '../ai-cutout/segmentation-manager.js';
+import {
+  frameKey,
+  maskKey,
+  objectMaskKey,
+  resolveModelSpec,
+} from '../ai-cutout/segmentation-manager.js';
 import {
   buildClipMaskSource,
   countUntrackedObjectFrames,
@@ -66,6 +72,7 @@ import {
   estimateRemainingMs,
   getAiModelId,
   getBuildParamsKey,
+  getClipProbSource,
   getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
@@ -97,6 +104,12 @@ export const ANALYSIS_REBUILD_INTERVAL_MS = 1500;
 export const BUILDING_STATUS_DELAY_MS = 300;
 
 export { getObjectSignature };
+
+/**
+ * The clean-up suggestion pass starts this long after a full build lands
+ * (a quick change of mind aborts it before it starts)
+ */
+export const SUGGESTIONS_DELAY_MS = 500;
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -205,9 +218,61 @@ export function createAiCutoutSession(options) {
   const publish = (source) => {
     if (disposed || source === maskSource) return;
     maskSource = source;
-    if (!(/** @type {any} */ (source).draft)) fullSource = source;
+    if (!(/** @type {any} */ (source).draft)) {
+      fullSource = source;
+      scheduleSuggestions(source);
+    }
     report({ maskVersion: source.version });
     onMaskSource?.(source);
+  };
+
+  /** @type {AbortController | null} */
+  let suggestController = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let suggestTimer = null;
+
+  /** Stop the suggestion pass (a new one starts with the next build) */
+  const abortSuggestions = () => {
+    if (suggestTimer !== null) clearTimeout(suggestTimer);
+    suggestTimer = null;
+    suggestController?.abort();
+    suggestController = null;
+  };
+
+  /**
+   * Find the clean-up suggestions of a full build, a moment after it lands
+   * @param {MaskSource} source
+   */
+  const scheduleSuggestions = (source) => {
+    abortSuggestions();
+    suggestTimer = setTimeout(() => {
+      suggestTimer = null;
+      const state = getState();
+      const frames = state?.clip?.frames;
+      if (disposed || !state || !frames || maskSource !== source) return;
+      const { ai } = state.edits.background;
+      const controller = new AbortController();
+      suggestController = controller;
+      // Measured where picks and clean-up act (before Fit and the objects)
+      suggestCleanups({
+        frameCount: frames.length,
+        getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+        ai,
+        keyOf: (f) => frameKey(frames[f]),
+        signal: controller.signal,
+      }).then(
+        (suggestions) => {
+          if (suggestController !== controller) return;
+          suggestController = null;
+          report({ cleanupSuggestions: suggestions });
+        },
+        (error) => {
+          if (suggestController === controller) suggestController = null;
+          if (!isAbortError(error))
+            console.error('[AI cutout] Clean-up suggestions failed:', error);
+        },
+      );
+    }, SUGGESTIONS_DELAY_MS);
   };
 
   /** Report `building` only if the build is still running after a moment */
@@ -272,6 +337,7 @@ export function createAiCutoutSession(options) {
     const state = getState();
     if (!state?.clip || !isAiCutoutActive(state.edits.background)) {
       abortBuild();
+      abortSuggestions();
       return;
     }
     const frames = state.clip.frames;
@@ -690,6 +756,7 @@ export function createAiCutoutSession(options) {
         // The frame on screen first when it is in the selection
         currentFrame: state.currentFrame,
         clicks: object.clicks,
+        boxes: object.boxes ?? [],
         scope: object.scope,
         tag: signature,
         superseded: () => objectQueue.includes(id),
@@ -884,6 +951,7 @@ export function createAiCutoutSession(options) {
 
     /** Abort everything; the session writes nothing afterwards */
     dispose() {
+      abortSuggestions();
       queuedFrames = null;
       analysisController?.abort();
       objectQueue = [];

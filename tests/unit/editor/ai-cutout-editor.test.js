@@ -14,6 +14,7 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
     getCapabilities: vi.fn(async () => ({ webgpu: false })),
     getReadyInfo: vi.fn(() => null),
     analyzeFrames: vi.fn(),
+    analyzeObject: vi.fn(async () => ({ tracked: 0, lost: [], anchors: 0, backend: 'wasm' })),
     dispose: vi.fn(),
     forgetClip: vi.fn(),
   };
@@ -86,6 +87,29 @@ function check(id, checked = true) {
   const input = /** @type {HTMLInputElement} */ ($(`#${id}`));
   input.checked = checked;
   input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/**
+ * A Keep / Remove click on the preview: press on the overlay, release
+ * (picks are decided on release: a click or a dragged box)
+ * @param {Element} overlay
+ * @param {number} x
+ * @param {number} y
+ * @param {{ toX?: number, toY?: number, altKey?: boolean }} [options] - toX/toY: drag there first
+ */
+function clickPreview(overlay, x, y, options = {}) {
+  const { toX = x, toY = y, altKey = false } = options;
+  overlay.dispatchEvent(
+    new MouseEvent('mousedown', { clientX: x, clientY: y, altKey, bubbles: true }),
+  );
+  if (toX !== x || toY !== y) {
+    overlay.dispatchEvent(
+      new MouseEvent('mousemove', { clientX: toX, clientY: toY, altKey, bubbles: true }),
+    );
+  }
+  window.dispatchEvent(
+    new MouseEvent('mouseup', { clientX: toX, clientY: toY, altKey, bubbles: true }),
+  );
 }
 
 describe('AI cutout in the mounted editor', () => {
@@ -481,10 +505,12 @@ describe('AI cutout in the mounted editor', () => {
     expect($('label[for="ai-pick-keep"]').classList.contains('is-active')).toBe(true);
     expect($('.editor-canvas-container').dataset.tool).toBe('keep');
     expect($('#preview-tool-hint').hidden).toBe(false);
-    expect($('#preview-tool-hint').textContent).toContain('click a character');
+    expect($('#preview-tool-hint').textContent).toContain(
+      'Anything not attached to it disappears on every frame',
+    );
     expect($('.editor-canvas-container').classList.contains('editor-ai-picking')).toBe(true);
 
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 30, clientY: 70, bubbles: true }));
+    clickPreview(overlay, 30, 70);
     await settle();
     let state = getEditorState();
     expect(state?.edits.background.ai.picks).toEqual([{ frame: 2, x: 0.3, y: 0.7, mode: 'keep' }]);
@@ -507,7 +533,7 @@ describe('AI cutout in the mounted editor', () => {
     getSharedMaskStore().delete('anime:a4');
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 4 });
     check('ai-pick-remove');
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, clientY: 50, bubbles: true }));
+    clickPreview(overlay, 50, 50);
     await settle();
     state = getEditorState();
     expect(state?.edits.background.ai.picks).toHaveLength(1);
@@ -526,13 +552,16 @@ describe('AI cutout in the mounted editor', () => {
     expect($('#ai-pick-list').hidden).toBe(true);
   });
 
-  it('refuses a pick on the background with a notice and keeps the tool on', async () => {
+  it('Keep / Remove choose the mechanism from what the click lands on', async () => {
     mount(3);
     fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
     await chooseAi();
-    // Frame 1 analyzed: a character on the left half, background on the right
+    // Frame 1 analyzed: a character on the left half, a separate blob top
+    // right, background elsewhere
     const data = new Uint8Array(100);
     for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 5);
+    data.fill(255, 8, 10);
+    data.fill(255, 18, 20);
     getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
     await settle();
 
@@ -541,19 +570,211 @@ describe('AI cutout in the mounted editor', () => {
       /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
     const overlay = $('.editor-canvas-overlay');
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
-    check('ai-pick-keep');
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 90, clientY: 50, bubbles: true }));
+    const ai = () => getEditorState()?.edits.background.ai;
+
+    // Remove on nothing: refused, the tool stays on
+    check('ai-pick-remove');
+    clickPreview(overlay, 70, 70);
     await settle();
-    expect(getEditorState()?.edits.background.ai.picks).toEqual([]);
-    expect(getEditorState()?.aiPickTool).toBe('keep');
+    expect(ai()?.picks).toEqual([]);
+    expect(ai()?.objects).toEqual([]);
+    expect(getEditorState()?.aiPickTool).toBe('remove');
     expect($('#ai-notice').textContent).toBe('No character here. Click on a character.');
 
-    // On the character: added, and the notice goes
-    overlay.dispatchEvent(new MouseEvent('mousedown', { clientX: 20, clientY: 50, bubbles: true }));
+    // Remove on the separate blob: a remove pick
+    clickPreview(overlay, 90, 10);
     await settle();
-    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    expect(ai()?.picks).toEqual([{ frame: 1, x: 0.9, y: 0.1, mode: 'remove' }]);
     expect(getEditorState()?.aiPickTool).toBeNull();
     expect($('#ai-notice').textContent).toBe('');
+
+    // Remove on the subject: a tracked fix-up, not selected
+    check('ai-pick-remove');
+    clickPreview(overlay, 20, 50);
+    await settle();
+    // With a pick, the subject is judged after the picks (asynchronously)
+    await settle();
+    expect(ai()?.objects).toMatchObject([
+      { mode: 'remove', clicks: [{ frame: 1, x: 0.2, y: 0.5, mode: 'keep' }] },
+    ]);
+    expect(getEditorState()?.aiActiveObjectId).toBeNull();
+
+    // Keep on the subject: a keep pick; Keep on nothing: a tracked fix-up
+    check('ai-pick-keep');
+    clickPreview(overlay, 30, 50);
+    await settle();
+    expect(ai()?.picks).toHaveLength(2);
+    check('ai-pick-keep');
+    clickPreview(overlay, 70, 70);
+    await settle();
+    expect(ai()?.objects?.map((o) => o.mode)).toEqual(['remove', 'add']);
+
+    // A drag always makes a tracked fix-up around the box
+    check('ai-pick-remove');
+    clickPreview(overlay, 60, 40, { toX: 90, toY: 90 });
+    await settle();
+    expect(ai()?.objects?.[2]).toMatchObject({
+      mode: 'remove',
+      clicks: [],
+      boxes: [{ frame: 1, x0: 0.6, y0: 0.4, x1: 0.9, y1: 0.9 }],
+    });
+    // One list: two picks, three tracked fix-ups with swatches
+    expect($('#ai-pick-list').children).toHaveLength(5);
+    expect($('#ai-pick-list').querySelectorAll('.editor-cutout-pick-swatch')).toHaveLength(3);
+  });
+
+  it('Remove on a Keep-picked character smaller than what the pick dropped is tracked, not a pick (review #195)', async () => {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    // Frame 1: a big shelf on the left (columns 0-5), a small character on the right (8-9)
+    const data = new Uint8Array(100);
+    for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 6);
+    for (let y = 2; y < 8; y++) data.fill(255, y * 10 + 8, y * 10 + 10);
+    getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
+    await settle();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    const ai = () => getEditorState()?.edits.background.ai;
+
+    check('ai-pick-keep');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    expect(ai()?.picks).toEqual([{ frame: 1, x: 0.9, y: 0.5, mode: 'keep' }]);
+    check('ai-pick-remove');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    await settle();
+    // The kept character is the subject: a tracked fix-up, the pick list unchanged
+    expect(ai()?.picks).toHaveLength(1);
+    expect(ai()?.objects).toMatchObject([{ mode: 'remove' }]);
+  });
+
+  /**
+   * Frame 1 of 3: a big shelf (columns 0-5) and a small character (8-9),
+   * the character Keep-picked; the Remove tool on
+   */
+  async function keptCharacterOnFrame1() {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    const data = new Uint8Array(100);
+    for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 6);
+    for (let y = 2; y < 8; y++) data.fill(255, y * 10 + 8, y * 10 + 10);
+    getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
+    await settle();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    check('ai-pick-keep');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toHaveLength(1);
+    check('ai-pick-remove');
+    return overlay;
+  }
+
+  it('a Keep / Remove click stops playback, so the frame it is judged on stays (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    window.__TEST_HOOKS__.setEditorState({ isPlaying: true, currentFrame: 1 });
+    clickPreview(overlay, 90, 50);
+    expect(getEditorState()?.isPlaying).toBe(false);
+    await settle();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.objects).toHaveLength(1);
+  });
+
+  it('a click dropped because the frame changed while it was judged says so (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    clickPreview(overlay, 90, 50);
+    // The judgement (picks tracked up to the frame) is still running
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    await settle();
+    await settle();
+    const ai = getEditorState()?.edits.background.ai;
+    expect(ai?.objects).toEqual([]);
+    expect(ai?.picks).toHaveLength(1);
+    expect(getEditorState()?.aiCutout.notice).toBe(
+      'The frame or the cutout changed before that click was added. Click again.',
+    );
+  });
+
+  it('closing the editor while a click is judged does not throw (review #195 r2)', async () => {
+    const overlay = await keptCharacterOnFrame1();
+    clickPreview(overlay, 90, 50);
+    cleanup?.();
+    cleanup = null;
+    // Before the fix the click went on and read the closed editor's store:
+    // vitest reports that as an unhandled rejection and the run fails
+    for (let i = 0; i < 5; i++) await settle();
+    expect(getEditorState()).toBeFalsy();
+  });
+
+  it('a selected fix-up takes corrections: its tool adds, Alt or the other tool takes away, a drag adds a box', async () => {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({
+      currentFrame: 0,
+      edits: normalizeEdits(
+        {
+          ...getEditorState()?.edits,
+          background: {
+            ...getEditorState()?.edits.background,
+            ai: {
+              ...getEditorState()?.edits.background.ai,
+              objects: [
+                {
+                  id: 'o1',
+                  mode: 'remove',
+                  scope: 'whole',
+                  clicks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }],
+                },
+              ],
+            },
+          },
+        },
+        3,
+      ),
+    });
+    await settle();
+    // Its chip selects it, on its own tool (Remove for a removed region)
+    /** @type {HTMLElement} */ ($('[data-object-id="o1"] .editor-cutout-pick-go')).click();
+    await settle();
+    expect(getEditorState()?.aiActiveObjectId).toBe('o1');
+    expect(getEditorState()?.aiPickTool).toBe('remove');
+    expect($('[data-object-id="o1"]').classList.contains('is-active')).toBe(true);
+
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
+    clickPreview(overlay, 10, 10);
+    clickPreview(overlay, 20, 20, { altKey: true });
+    await settle();
+    check('ai-pick-keep');
+    clickPreview(overlay, 30, 30);
+    clickPreview(overlay, 50, 50, { toX: 80, toY: 70 });
+    await settle();
+    const [object] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(object.clicks.map((c) => [c.frame, c.mode])).toEqual([
+      [0, 'keep'],
+      [2, 'keep'],
+      [2, 'remove'],
+      [2, 'remove'],
+    ]);
+    expect(object.boxes).toEqual([{ frame: 2, x0: 0.5, y0: 0.5, x1: 0.8, y1: 0.7 }]);
+    // Still selected; Escape finishes
+    expect(getEditorState()?.aiActiveObjectId).toBe('o1');
+    press('Escape');
+    expect(getEditorState()?.aiActiveObjectId).toBeNull();
+    expect(getEditorState()?.aiPickTool).toBeNull();
   });
 
   it('keeps keyboard focus in the panel when the focused control hides itself', async () => {
@@ -689,6 +910,48 @@ describe('AI cutout in the mounted editor', () => {
       picks: [],
     });
     expect(/** @type {HTMLButtonElement} */ ($('#background-reset')).disabled).toBe(true);
+  });
+
+  it('Clean up chips: specks and holes toggle the whole-clip clean-up, a blob becomes a remove pick', async () => {
+    mount(6);
+    await chooseAi();
+    await vi.waitFor(async () => {
+      await settle();
+      expect(getEditorState()?.aiCutout.maskVersion).toBeGreaterThan(0);
+    });
+    // Let the suggestion pass of that build finish (a clean mask: none)
+    await vi.advanceTimersByTimeAsync(2000);
+    const suggestions = [
+      { kind: 'specks', count: 2, minIslandArea: 0.001 },
+      { kind: 'blob', frames: 2, where: 'left', pick: { frame: 4, x: 0.1, y: 0.5 } },
+    ];
+    window.__TEST_HOOKS__.setEditorState({
+      aiCutout: { ...getEditorState()?.aiCutout, cleanupSuggestions: suggestions },
+    });
+    await settle();
+    const chip = (/** @type {string} */ kind) =>
+      /** @type {HTMLElement} */ ($(`#ai-cleanup-list [data-cleanup="${kind}"] button`));
+    expect($('#ai-cleanup').hidden).toBe(false);
+
+    chip('specks').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.cleanup).toEqual({
+      minIslandArea: 0.001,
+      maxHoleArea: 0,
+    });
+    expect(chip('specks').getAttribute('aria-pressed')).toBe('true');
+
+    chip('blob').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.picks).toEqual([
+      { frame: 4, x: 0.1, y: 0.5, mode: 'remove' },
+    ]);
+    expect(getEditorState()?.currentFrame).toBe(4);
+
+    // Tapping the checked chip turns the clean-up off
+    chip('specks').click();
+    await settle();
+    expect(getEditorState()?.edits.background.ai.cleanup.minIslandArea).toBe(0);
   });
 
   it('Hold to compare shows the original while held; Show mask tints what is removed', async () => {

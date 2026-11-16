@@ -18,6 +18,8 @@ import {
   createDraftMaskSource,
   createFinalMaskCache,
   getFinalMaskParamsKey,
+  getPickedPieceRole,
+  getSurvivingMask,
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -156,7 +158,8 @@ export function countUntrackedObjectFrames(
  */
 export function getObjectSignature(object) {
   const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
-  return `${object.scope}|${clicks}`;
+  const boxes = (object.boxes ?? []).map((b) => `${b.frame}:${b.x0}:${b.y0}:${b.x1}:${b.y1}`);
+  return `${object.scope}|${clicks}|${boxes.join(',')}`;
 }
 
 /**
@@ -330,6 +333,58 @@ export function isFrameAnalyzed(
   { modelId = DEFAULT_MODEL_ID, maskStore = getSharedMaskStore() } = {},
 ) {
   return Boolean(frame) && maskStore.has(maskKey(/** @type {Frame} */ (frame), modelId));
+}
+
+/**
+ * @typedef {'keep-pick' | 'remove-pick' | 'add-object' | 'remove-object' | 'none'} FixUpKind
+ */
+
+/**
+ * What a Keep or Remove click becomes (one pair of tools; the app picks
+ * the mechanism): Remove on a piece apart from the subject is a remove
+ * pick (instant), Remove on the subject itself (something attached to it)
+ * a tracked Remove object; Keep on a piece is a keep pick, Keep where the
+ * mask is empty a tracked Add object; Remove on nothing does nothing.
+ * @param {'none' | 'main' | 'separate'} role - What the click lands on
+ * @param {'keep' | 'remove'} tool
+ * @returns {FixUpKind}
+ */
+export function chooseFixUp(role, tool) {
+  if (tool === 'keep') return role === 'none' ? 'add-object' : 'keep-pick';
+  if (role === 'none') return 'none';
+  return role === 'main' ? 'remove-object' : 'remove-pick';
+}
+
+/**
+ * chooseFixUp for a click on a clip frame, judged on the binary mask the
+ * picks read (threshold and smoothing of the build). For Remove with picks
+ * the subject is judged after the picks (getSurvivingMask): the picks are
+ * tracked up to the frame, so this can take a moment on a long clip.
+ * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, point: { x: number, y: number }, tool: 'keep' | 'remove', maskStore?: MaskStore, signal?: AbortSignal }} options
+ * @returns {Promise<FixUpKind>}
+ */
+export async function classifyFixUp({
+  frames,
+  ai,
+  frameIndex,
+  point,
+  tool,
+  maskStore = getSharedMaskStore(),
+  signal,
+}) {
+  const options = {
+    frameCount: frames.length,
+    getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+    ai,
+  };
+  const pick = { frame: frameIndex, x: point.x, y: point.y };
+  // Keep only needs piece / no piece; without picks the largest raw piece
+  // is the subject
+  const survivor =
+    tool === 'remove' && ai.picks.length > 0
+      ? await getSurvivingMask({ ...options, signal }, frameIndex)
+      : null;
+  return chooseFixUp(getPickedPieceRole(options, pick, survivor), tool);
 }
 
 /**

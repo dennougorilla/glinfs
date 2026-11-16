@@ -44,6 +44,7 @@ import {
   isTrackingLost,
   maskStats,
   planAnchors,
+  splitAnchorPrompts,
   trackingPrompt,
 } from './sam-prompts.js';
 
@@ -78,6 +79,9 @@ import {
  * @property {{ start: number, end: number }} range - Selection, inclusive
  * @property {number} currentFrame - Frame on screen (worked on first)
  * @property {{ frame: number, x: number, y: number, mode: 'keep' | 'remove' }[]} picks
+ * @property {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]} [boxes] - A
+ *   box prompt per frame (with that frame's points); a frame with a box is
+ *   an anchor like one with a keep point
  * @property {'whole' | 'part'} [scope]
  * @property {number} [wholeMinScoreRatio] - Whole on a clicked frame: see
  *   chooseCandidate (default WHOLE_MIN_SCORE_RATIO)
@@ -131,11 +135,46 @@ function throwIfAborted(signal) {
 }
 
 /**
- * @param {SamPoint[]} points
+ * Whether an anchor says where the object is (a keep point or a box), not
+ * only where it is not
+ * @param {{ points: SamPoint[], boxes: unknown[] }} anchor
  * @returns {boolean}
  */
-function hasKeepPoint(points) {
-  return points.some((p) => p.mode === 'keep');
+function isPositive(anchor) {
+  return anchor.boxes.length > 0 || anchor.points.some((p) => p.mode === 'keep');
+}
+
+/**
+ * One region from the answers chosen for an anchor's prompts: the union of
+ * their masks, the maximum of their low-res logits (the union, for the
+ * next frame's mask_input; none unless every answer has them) and the
+ * lowest score (a later frame's score drop is judged against the weakest
+ * part)
+ * @param {SamCandidate[]} chosen - At least one, all the same size
+ * @returns {SamCandidate}
+ */
+export function joinCandidates(chosen) {
+  if (chosen.length === 1) return chosen[0];
+  const [first] = chosen;
+  const data = new Uint8Array(first.data.length);
+  for (const c of chosen) {
+    for (let i = 0; i < data.length; i++) if (c.data[i] > data[i]) data[i] = c.data[i];
+  }
+  /** @type {Float32Array | null} */
+  let lowRes = null;
+  if (chosen.every((c) => c.lowRes && c.lowRes.length === first.lowRes?.length)) {
+    lowRes = Float32Array.from(/** @type {Float32Array} */ (first.lowRes));
+    for (const c of chosen) {
+      const l = /** @type {Float32Array} */ (c.lowRes);
+      for (let i = 0; i < lowRes.length; i++) if (l[i] > lowRes[i]) lowRes[i] = l[i];
+    }
+  }
+  return {
+    ...first,
+    data,
+    lowRes,
+    score: Math.min(...chosen.map((c) => c.score)),
+  };
 }
 
 /**
@@ -185,6 +224,7 @@ export async function trackClicks({
   range,
   currentFrame,
   picks,
+  boxes = [],
   scope = 'whole',
   minScoreRatio = 0,
   wholeMinScoreRatio,
@@ -199,7 +239,7 @@ export async function trackClicks({
 }) {
   throwIfAborted(signal);
   const total = range.end - range.start + 1;
-  const anchors = planAnchors(picks, range, currentFrame);
+  const anchors = planAnchors(picks, range, currentFrame, boxes);
   if (anchors.length === 0) return { tracked: 0, lost: [], anchors: 0 };
   const anchorFrames = new Set(anchors.map((a) => a.frame));
 
@@ -208,7 +248,7 @@ export async function trackClicks({
   /** @type {Map<number, ClickMask>} */
   const seeds = new Map();
   for (const anchor of anchors) {
-    if (hasKeepPoint(anchor.points)) continue;
+    if (isPositive(anchor)) continue;
     const mask = peek?.(anchor.frame);
     if (mask) seeds.set(anchor.frame, mask);
   }
@@ -334,16 +374,26 @@ export async function trackClicks({
   const run = async () => {
     for (const anchor of anchors) {
       throwIfAborted(signal);
-      if (!hasKeepPoint(anchor.points)) {
+      if (!isPositive(anchor)) {
         const seed = seeds.get(anchor.frame);
         if (!seed || !(await refine(anchor.frame, seed, anchor.points))) {
           refineOnPass.set(anchor.frame, anchor.points);
         }
         continue;
       }
-      const candidates = await prompt(anchor.frame, { points: anchor.points, box: null });
-      throwIfAborted(signal);
-      const chosen = chooseCandidate(candidates, { scope, wholeMinScoreRatio });
+      // One prompt per box and per lone keep point, joined into one region.
+      // A box marks the extent: its answer is the whole of what it holds
+      // (Part would pick a piece inside it).
+      /** @type {SamCandidate[]} */
+      const parts = [];
+      for (const p of splitAnchorPrompts(anchor)) {
+        const candidates = await prompt(anchor.frame, p);
+        throwIfAborted(signal);
+        parts.push(
+          chooseCandidate(candidates, { scope: p.box ? 'whole' : scope, wholeMinScoreRatio }),
+        );
+      }
+      const chosen = joinCandidates(parts);
       const { area } = maskStats(chosen.data, chosen.width, chosen.height);
       record(anchor.frame, toMask(chosen), area, chosen.lowRes ?? null, chosen.score);
     }

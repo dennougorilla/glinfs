@@ -102,17 +102,20 @@ async function exportAndSample(page, extraPoints = () => []) {
 }
 
 /**
- * Add a pick on disc A of the middle frame through the preview
+ * Add a pick on a disc of the middle frame through the preview
  * @param {import('@playwright/test').Page} page
  * @param {'keep' | 'remove'} mode
+ * @param {typeof discA} [disc] - Remove needs disc B: the discs are the same
+ *   size, so disc A (found first) counts as the subject, and Remove on the
+ *   subject becomes a tracked fix-up instead of a pick
  */
-async function pickDiscA(page, mode) {
+async function pickDisc(page, mode, disc = discA) {
   const middle = FRAME_COUNT / 2;
   await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
   await page.locator(`label[for="ai-pick-${mode}"]`).click();
   await expect(page.locator(`#ai-pick-${mode}`)).toBeChecked();
-  await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
-  const point = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
+  await expect(page.locator('#preview-tool-hint')).toContainText(/Click (a character|or drag)/);
+  const point = await editorFramePointToViewport(page, disc(middle).x, disc(middle).y);
   await page.mouse.click(point.x, point.y);
   // One pick, the tool is left afterwards
   await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
@@ -125,7 +128,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
   // Every test compiles ONNX Runtime's WASM binary in a fresh context
   test.describe.configure({ mode: 'default', timeout: 240_000 });
 
-  test('analyze, export, then Keep and Remove picks follow disc A through the clip', async ({
+  test('analyze, export, then Keep and Remove picks follow their disc through the clip', async ({
     page,
   }) => {
     await analyzeDiscClip(page);
@@ -144,19 +147,19 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
 
     // Keep pick on disc A in the middle frame: only disc A is left, also
     // on the frames before the pick
-    await pickDiscA(page, 'keep');
+    await pickDisc(page, 'keep');
     const kept = await exportAndSample(page);
     for (const frame of kept) {
       expect(frame).toMatchObject({ a: 255, b: 0, bg: 0 });
     }
 
-    // Remove pick instead: disc A disappears, disc B stays
+    // Remove pick instead: disc B disappears, disc A stays
     await page.locator('.editor-cutout-pick-delete').click();
     await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
-    await pickDiscA(page, 'remove');
+    await pickDisc(page, 'remove', discB);
     const removed = await exportAndSample(page);
     for (const frame of removed) {
-      expect(frame).toMatchObject({ a: 0, b: 255, bg: 0 });
+      expect(frame).toMatchObject({ a: 255, b: 0, bg: 0 });
     }
 
     // Picks persist in the edits
@@ -181,7 +184,9 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     const overlay = page.locator('.editor-canvas-overlay');
     await expect(overlay).toBeFocused();
     await expect(overlay).toHaveAttribute('aria-label', /Arrow keys move the marker/);
-    await expect(page.locator('#preview-tool-hint')).toContainText('click a character');
+    await expect(page.locator('#preview-tool-hint')).toContainText(
+      'Anything not attached to it disappears on every frame',
+    );
 
     // Marker from the centre (0.5, 0.5) to disc A (≈ 0.27, 0.31)
     for (const key of ['Shift+ArrowLeft', 'Shift+ArrowLeft', 'ArrowLeft', 'ArrowLeft']) {
@@ -211,28 +216,31 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     await expect(page.locator('#ai-pick-keep')).toBeFocused();
   });
 
-  test('a pick on the background is refused with a notice; a pick on a character then lands', async ({
+  test('Remove on the background is refused with a notice; a Keep pick on a character then lands', async ({
     page,
   }) => {
     await analyzeDiscClip(page);
     const middle = FRAME_COUNT / 2;
     await page.evaluate((f) => window.__TEST_HOOKS__.setEditorState({ currentFrame: f }), middle);
-    await page.locator('label[for="ai-pick-keep"]').click();
-    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+    await page.locator('label[for="ai-pick-remove"]').click();
+    await expect(page.locator('#ai-pick-remove')).toBeChecked();
 
     // Top middle: black background, far from both discs
     const background = await editorFramePointToViewport(page, 120, 12);
     await page.mouse.click(background.x, background.y);
     await expect(page.locator('#ai-notice')).toHaveText('No character here. Click on a character.');
     await expect(page.locator('#ai-pick-list li')).toHaveCount(0);
-    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+    await expect(page.locator('#ai-pick-remove')).toBeChecked();
     const edits = await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits);
     expect(edits.background.ai.picks).toEqual([]);
+    expect(edits.background.ai.objects).toEqual([]);
     // Nothing changed: both discs are still cut out
     expect(await editorPreviewAlpha(page, discA(middle).x, discA(middle).y)).toBe(255);
     expect(await editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(255);
 
-    // The tool is still on: a click on disc A adds the pick and ends the notice
+    // Keep on disc A adds the pick and ends the notice
+    await page.locator('label[for="ai-pick-keep"]').click();
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
     const onDisc = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
     await page.mouse.click(onDisc.x, onDisc.y);
     await expect(page.locator('#ai-pick-list li')).toHaveCount(1);

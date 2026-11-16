@@ -38,6 +38,7 @@ describe('createDefaultEdits', () => {
           picks: [],
           clickScope: 'whole',
           objects: [],
+          cleanup: { minIslandArea: 0, maxHoleArea: 0 },
           subject: null,
         },
       },
@@ -609,6 +610,7 @@ describe('AiCutout.objects', () => {
       mode: 'add',
       scope: 'part',
       clicks: [{ frame: 9, x: 1, y: 0, mode: 'keep' }],
+      boxes: [],
     });
     const [fallback] = objectsOf([{ id: 'b', mode: 'x', scope: 'y', clicks: [keep()] }]);
     expect(fallback.mode).toBe('remove');
@@ -631,6 +633,29 @@ describe('AiCutout.objects', () => {
     expect(object.clicks.map((c) => c.frame)).toEqual([3, 4]);
   });
 
+  it('keeps boxes as what selects the object, with normalized corners', () => {
+    const [object] = objectsOf([
+      {
+        id: 'a',
+        clicks: [{ ...keep(1), mode: 'remove' }],
+        boxes: [
+          { frame: 2, x0: 0.6, y0: 0.5, x1: 0.2, y1: 0.1 },
+          { frame: 2, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 },
+          { frame: 4, x0: 0.5, y0: 0.5, x1: 0.5, y1: 0.9 },
+          { frame: 99, x0: -1, y0: 0, x1: 2, y1: 0.5 },
+          { frame: 1 },
+        ],
+      },
+    ]);
+    // Remove points stay with a box; the zero-width box and the broken one go
+    expect(object.clicks).toHaveLength(1);
+    expect(object.boxes).toEqual([
+      { frame: 2, x0: 0.2, y0: 0.1, x1: 0.6, y1: 0.5 },
+      { frame: 2, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 },
+      { frame: 9, x0: 0, y0: 0, x1: 1, y1: 0.5 },
+    ]);
+  });
+
   it('limits objects and clicks, drops repeated ids and fills a missing id', () => {
     const many = Array.from({ length: 6 }, (_, i) => ({ id: `o${i}`, clicks: [keep()] }));
     expect(objectsOf(many).map((o) => o.id)).toEqual(
@@ -645,5 +670,35 @@ describe('AiCutout.objects', () => {
     const clicks = Array.from({ length: 20 }, (_, i) => keep(i % 10));
     expect(objectsOf([{ id: 'y', clicks }])[0].clicks).toHaveLength(EDIT_LIMITS.aiObjectClicks.max);
     expect(typeof objectsOf([{ clicks: [keep()] }])[0].id).toBe('string');
+  });
+});
+
+describe('AiCutout.cleanup', () => {
+  /** @param {unknown} cleanup */
+  const cleanupOf = (cleanup) =>
+    normalizeEdits({ background: { ai: { cleanup } } }, 10).background.ai.cleanup;
+
+  it('is off by default and for anything that is not a number', () => {
+    expect(createDefaultEdits().background.ai.cleanup).toEqual({
+      minIslandArea: 0,
+      maxHoleArea: 0,
+    });
+    expect(cleanupOf(undefined)).toEqual({ minIslandArea: 0, maxHoleArea: 0 });
+    expect(cleanupOf({ minIslandArea: 'x', maxHoleArea: null })).toEqual({
+      minIslandArea: 0,
+      maxHoleArea: 0,
+    });
+  });
+
+  it('clamps both areas into the limit', () => {
+    const { max } = EDIT_LIMITS.aiCleanupArea;
+    expect(cleanupOf({ minIslandArea: 0.001, maxHoleArea: 0.004 })).toEqual({
+      minIslandArea: 0.001,
+      maxHoleArea: 0.004,
+    });
+    expect(cleanupOf({ minIslandArea: 5, maxHoleArea: -1 })).toEqual({
+      minIslandArea: max,
+      maxHoleArea: 0,
+    });
   });
 });

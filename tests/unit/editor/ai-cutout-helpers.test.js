@@ -11,6 +11,7 @@ import {
 import {
   buildClipMaskSource,
   buildClipMaskSourceSettled,
+  chooseFixUp,
   countUntrackedObjectFrames,
   describeAnalysisError,
   describeAnalysisProgress,
@@ -417,5 +418,34 @@ describe('getObjectsToTrack (export with tracked objects)', () => {
     finishRun(store, whole, [0]);
     store.clear();
     expect(countUntrackedObjectFrames(frames, range, whole, store)).toBe(4);
+  });
+});
+
+describe('chooseFixUp', () => {
+  it('Remove: a separate piece is a pick, the subject a tracked fix-up, nothing nothing', () => {
+    expect(chooseFixUp('separate', 'remove')).toBe('remove-pick');
+    expect(chooseFixUp('main', 'remove')).toBe('remove-object');
+    expect(chooseFixUp('none', 'remove')).toBe('none');
+  });
+
+  it('Keep: any piece is a pick, an empty spot a tracked fix-up', () => {
+    expect(chooseFixUp('main', 'keep')).toBe('keep-pick');
+    expect(chooseFixUp('separate', 'keep')).toBe('keep-pick');
+    expect(chooseFixUp('none', 'keep')).toBe('add-object');
+  });
+});
+
+describe('getObjectSignature with boxes', () => {
+  it('changes when a box is added, so the masks of the old prompts go stale', () => {
+    const object = /** @type {any} */ ({
+      id: 'o1',
+      mode: 'remove',
+      scope: 'whole',
+      clicks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }],
+      boxes: [],
+    });
+    const boxed = { ...object, boxes: [{ frame: 0, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 }] };
+    expect(getObjectSignature(boxed)).not.toBe(getObjectSignature(object));
+    expect(getObjectSignature({ ...object, boxes: undefined })).toBe(getObjectSignature(object));
   });
 });

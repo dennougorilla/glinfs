@@ -12,6 +12,7 @@ import {
   maskStats,
   planAnchors,
   SAM_LABEL,
+  splitAnchorPrompts,
   toEncoderPoint,
   trackingPrompt,
 } from '../../../src/features/ai-cutout/sam-prompts.js';
@@ -279,5 +280,32 @@ describe('tracking', () => {
       { x: 0.4, y: 0.4, mode: 'remove' },
     ]);
     expect(planAnchors(picks, { start: 10, end: 20 }, 12)).toEqual([]);
+  });
+
+  it("puts boxes on their frame, alone or with the frame's points", () => {
+    const picks = [{ frame: 5, x: 0.4, y: 0.4, mode: /** @type {const} */ ('remove') }];
+    const boxes = [
+      { frame: 5, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.6 },
+      { frame: 8, x0: 0.2, y0: 0.2, x1: 0.3, y1: 0.3 },
+      { frame: 40, x0: 0, y0: 0, x1: 1, y1: 1 },
+    ];
+    expect(planAnchors(picks, { start: 0, end: 20 }, 8, boxes)).toEqual([
+      { frame: 8, points: [], boxes: [[0.2, 0.2, 0.3, 0.3]] },
+      { frame: 5, points: [{ x: 0.4, y: 0.4, mode: 'remove' }], boxes: [[0.1, 0.2, 0.5, 0.6]] },
+    ]);
+  });
+
+  it('splits an anchor into one prompt per box and per keep point outside the boxes', () => {
+    const keepIn = { x: 0.2, y: 0.2, mode: /** @type {const} */ ('keep') };
+    const keepOut = { x: 0.8, y: 0.8, mode: /** @type {const} */ ('keep') };
+    const off = { x: 0.5, y: 0.5, mode: /** @type {const} */ ('remove') };
+    const a = /** @type {[number, number, number, number]} */ ([0.1, 0.1, 0.3, 0.3]);
+    const b = /** @type {[number, number, number, number]} */ ([0.6, 0.1, 0.7, 0.2]);
+    expect(splitAnchorPrompts({ points: [keepIn, keepOut, off], boxes: [a, b] })).toEqual([
+      { points: [keepIn, off], box: a },
+      { points: [off], box: b },
+      { points: [keepOut, off], box: null },
+    ]);
+    expect(splitAnchorPrompts({ points: [off], boxes: [] })).toEqual([]);
   });
 });
