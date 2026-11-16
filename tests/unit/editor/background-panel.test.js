@@ -524,6 +524,69 @@ describe('AI status slot', () => {
     expect(handlers.onAiAnalyze).toHaveBeenCalled();
   });
 
+  it('offers no CPU choice for a WebGPU-only model (BiRefNet): it says to choose another', () => {
+    expect(
+      getWebgpuWarning(
+        { needsWasmChoice: true, webgpuModelFailed: false },
+        'Busy backgrounds',
+        true,
+      ),
+    ).toBe(
+      'The Busy backgrounds model needs WebGPU, which this browser does not provide, and it is too large to run on the CPU. Choose another model.',
+    );
+    expect(
+      getWebgpuWarning(
+        { needsWasmChoice: true, webgpuModelFailed: true },
+        'Busy backgrounds',
+        true,
+      ),
+    ).toMatch(/could not run on WebGPU in this browser, and it is too large to run on the CPU/);
+    for (const wasmAllowed of [false, true]) {
+      updateBackgroundPanel(
+        root,
+        makeState(
+          { enabled: true, method: 'ai', ai: { model: 'birefnet-general', subject: 'general' } },
+          { aiCutout: { ...status, webgpu: false, wasmAllowed } },
+        ),
+        10,
+      );
+      expect(root.querySelector('#ai-webgpu-warning')?.hasAttribute('hidden')).toBe(false);
+      expect(root.querySelector('#ai-webgpu-warning-text')?.textContent).toMatch(
+        /needs WebGPU.*Choose another model/,
+      );
+      expect(root.querySelector('#ai-run-wasm')?.hasAttribute('hidden')).toBe(true);
+      // Nothing to analyze with, and the refusal is said once
+      expect(root.querySelector('#ai-analyze')?.hasAttribute('hidden')).toBe(true);
+    }
+    updateBackgroundPanel(
+      root,
+      makeState(
+        { enabled: true, method: 'ai', ai: { model: 'birefnet-general', subject: 'general' } },
+        {
+          aiCutout: {
+            ...status,
+            webgpu: false,
+            needsWasmChoice: false,
+            phase: 'error',
+            error: { code: 'webgpu-required', message: 'Busy backgrounds needs WebGPU' },
+          },
+        },
+      ),
+      10,
+    );
+    expect(root.querySelector('#ai-error')?.hasAttribute('hidden')).toBe(true);
+    // Other models keep the CPU choice
+    updateBackgroundPanel(
+      root,
+      makeState(
+        { enabled: true, method: 'ai', ai: { model: 'general', subject: 'general' } },
+        { aiCutout: { ...status, webgpu: false } },
+      ),
+      10,
+    );
+    expect(root.querySelector('#ai-run-wasm')?.hasAttribute('hidden')).toBe(false);
+  });
+
   it('warns without WebGPU (with the CPU choice) and shows errors with Try again', () => {
     expect(getWebgpuWarning({ needsWasmChoice: true, webgpuModelFailed: true }, 'General')).toMatch(
       /^The General model could not run on WebGPU/,

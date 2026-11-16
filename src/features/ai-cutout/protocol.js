@@ -48,6 +48,12 @@ export const SegmentationErrorCode = Object.freeze({
    * allowed. It concerns this model only: another model may run on WebGPU.
    */
   WEBGPU_MODEL_FAILED: 'webgpu-model-failed',
+  /**
+   * The model runs on WebGPU only (`webgpuOnly`: too large for the CPU
+   * fallback) and WebGPU is not available, or failed for it. Nothing is
+   * offered instead: the user chooses another model.
+   */
+  WEBGPU_REQUIRED: 'webgpu-required',
   /** The model could not be downloaded (network error, HTTP error) */
   DOWNLOAD_FAILED: 'download-failed',
   /**
@@ -61,6 +67,13 @@ export const SegmentationErrorCode = Object.freeze({
    * download it (preloading never downloads)
    */
   MODEL_NOT_CACHED: 'model-not-cached',
+  /**
+   * A custom model cannot be loaded: its definition is gone (deleted, or
+   * added on another device) or, for one added from a local file, its
+   * bytes are no longer in this browser's storage (it has no URL to
+   * download them from again)
+   */
+  MODEL_UNAVAILABLE: 'model-unavailable',
   /** The downloaded model's size or SHA-256 is not the pinned one */
   HASH_MISMATCH: 'hash-mismatch',
   /** ONNX Runtime could not load or create a session for the model */

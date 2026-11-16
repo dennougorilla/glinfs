@@ -53,7 +53,8 @@ import { createElement, on } from '../../../shared/utils/dom.js';
 import { frameToTimecode } from '../../../shared/utils/format.js';
 import { isModelOffered } from '../../ai-cutout/model-config.js';
 import { pickPreferredModel } from '../../ai-cutout/model-preference.js';
-import { getModelEntry } from '../../ai-cutout/model-registry.js';
+import { getCustomModelEntries, getModelEntry } from '../../ai-cutout/model-registry.js';
+import { SegmentationErrorCode } from '../../ai-cutout/protocol.js';
 import {
   describeAnalysisProgress,
   getAiModelId,
@@ -72,14 +73,29 @@ import { getActiveAiObject } from '../state.js';
 /** @typedef {'none' | 'anime' | 'portrait' | 'general' | 'click' | 'color'} Subject */
 
 /**
+ * The models of a card that this build offers
+ * @param {string[]} ids
+ * @returns {readonly string[]}
+ */
+function offered(ids) {
+  return Object.freeze(ids.filter((id) => isModelOffered(id)));
+}
+
+const ANIME_MODELS = offered(['anime', 'birefnet-general', 'birefnet-lite', 'birefnet-toonout']);
+const PORTRAIT_MODELS = Object.freeze(['portrait', 'video-person']);
+const GENERAL_MODELS = offered(['general', 'ben2', 'birefnet-general', 'birefnet-lite']);
+
+/**
  * The subject cards, in the order shown (two columns). `model` is the AI
  * model a card uses by default and `models` every model it can use (the
  * default first; the AI settings show a Model choice when there are
  * several); the color card uses the color key. `name` is how the
  * download question names the model. A model may be on several cards (the
  * BiRefNet ones: Anime and Anything); the edits keep the card it was
- * chosen with (`ai.subject`). Models this build does not offer (the
- * development-only BiRefNet ones in a production build) are left out.
+ * chosen with (`ai.subject`). Models this build does not offer (a
+ * development-only one in a production build) are left out.
+ * Models the user added (Settings → AI models) follow the built-in ones on
+ * the cards they chose, so `models` is read anew each time.
  * @type {readonly { value: Exclude<Subject, 'none'>, label: string, hint: string, model: string | null, models: readonly string[], name?: string, icon: string }[]}
  */
 export const SUBJECT_CARDS = Object.freeze([
@@ -88,7 +104,9 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anime',
     hint: 'Characters, art',
     model: 'anime',
-    models: offered(['anime', 'birefnet-general', 'birefnet-lite', 'birefnet-toonout']),
+    get models() {
+      return withCustomModels('anime', ANIME_MODELS);
+    },
     icon: '<path d="M12 3l2.4 5.1 5.6.7-4.1 3.9 1 5.5L12 15.6 7.1 18.2l1-5.5L4 8.8l5.6-.7z"/>',
   },
   {
@@ -96,7 +114,9 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Person',
     hint: 'Real people, fast',
     model: 'portrait',
-    models: Object.freeze(['portrait', 'video-person']),
+    get models() {
+      return withCustomModels('portrait', PORTRAIT_MODELS);
+    },
     icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
   },
   {
@@ -104,7 +124,9 @@ export const SUBJECT_CARDS = Object.freeze([
     label: 'Anything',
     hint: 'People, pets, objects',
     model: 'general',
-    models: offered(['general', 'ben2', 'birefnet-general', 'birefnet-lite']),
+    get models() {
+      return withCustomModels('general', GENERAL_MODELS);
+    },
     icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="3.5"/>',
   },
   {
@@ -127,18 +149,22 @@ export const SUBJECT_CARDS = Object.freeze([
 ]);
 
 /**
- * The models of a card that this build offers
- * @param {string[]} ids
+ * A card's built-in models, then the user's models listed on it
+ * @param {string} card
+ * @param {readonly string[]} builtIn
  * @returns {readonly string[]}
  */
-function offered(ids) {
-  return Object.freeze(ids.filter((id) => isModelOffered(id)));
+function withCustomModels(card, builtIn) {
+  const custom = getCustomModelEntries()
+    .filter((entry) => entry.subjects?.includes(card))
+    .map((entry) => entry.id);
+  return custom.length === 0 ? builtIn : Object.freeze([...builtIn, ...custom]);
 }
 
 /** The first AI subject card that lists a model (in SUBJECT_CARDS order) */
-const CARD_BY_MODEL = Object.fromEntries(
-  [...SUBJECT_CARDS].reverse().flatMap((card) => card.models.map((model) => [model, card])),
-);
+function cardOfModel(/** @type {string} */ modelId) {
+  return SUBJECT_CARDS.find((card) => card.model && card.models.includes(modelId)) ?? null;
+}
 
 /**
  * The subject card of a model: `subject` when that card lists the model,
@@ -150,7 +176,11 @@ const CARD_BY_MODEL = Object.fromEntries(
 export function getModelSubject(modelId, subject = null) {
   const chosen = SUBJECT_CARDS.find((c) => c.value === subject);
   if (chosen?.models.includes(modelId)) return /** @type {any} */ (chosen.value);
-  return /** @type {any} */ (CARD_BY_MODEL[modelId]?.value ?? null);
+  // A custom model that is gone stays on the card it was chosen with
+  if (chosen?.model && chosen.value !== 'click' && getModelEntry(modelId).missing) {
+    return /** @type {any} */ (chosen.value);
+  }
+  return /** @type {any} */ (cardOfModel(modelId)?.value ?? null);
 }
 
 /**
@@ -222,7 +252,33 @@ export function getSubjectModels(subject) {
  */
 export function getModelOptionLabel(modelId) {
   const entry = getModelEntry(modelId);
+  if (entry.missing) return `${entry.label} (not in this browser)`;
   return `${entry.label} · ${entry.shortModelName} · ${getModelSizeLabel(modelId)}`;
+}
+
+/**
+ * The options of the Model choice: the card's models, grouped into the
+ * built-in ones and the user's own once the card has any (long lists stay
+ * readable), plus the clip's model when the card does not list it (a
+ * custom model that is gone)
+ * @param {readonly string[]} choices
+ * @param {string} current
+ * @returns {HTMLElement[]}
+ */
+export function renderModelOptions(choices, current) {
+  const ids = choices.includes(current) ? choices : [...choices, current];
+  const option = (/** @type {string} */ id) =>
+    createElement('option', { value: id }, [getModelOptionLabel(id)]);
+  const own = ids.filter((id) => getModelEntry(id).custom);
+  if (own.length === 0) return ids.map(option);
+  return [
+    createElement(
+      'optgroup',
+      { label: 'Built in' },
+      ids.filter((id) => !getModelEntry(id).custom).map(option),
+    ),
+    createElement('optgroup', { label: 'Your models' }, own.map(option)),
+  ];
 }
 
 // ------------------------------------------------------------------
@@ -312,6 +368,9 @@ export function getModelReadiness(modelId, availability) {
   if (availability === 'ready' || availability === 'cached') {
     return { ready: true, text: 'Ready', label: 'Ready' };
   }
+  if (getModelEntry(modelId).missing) {
+    return { ready: false, text: 'Missing', label: 'Not in this browser' };
+  }
   const size = getModelSizeLabel(modelId);
   return { ready: false, text: `↓ ${size}`, label: `Download ${size}` };
 }
@@ -347,9 +406,15 @@ export function getDownloadPrompt(modelId, subject = null) {
  * an analysis stopped because the browser has none, or it has none
  * @param {{ needsWasmChoice: boolean, webgpuModelFailed: boolean }} status
  * @param {string} modelLabel
+ * @param {boolean} [webgpuOnly] - The model has no CPU fallback (BiRefNet)
  * @returns {string}
  */
-export function getWebgpuWarning(status, modelLabel) {
+export function getWebgpuWarning(status, modelLabel, webgpuOnly = false) {
+  if (webgpuOnly) {
+    return status.webgpuModelFailed
+      ? `The ${modelLabel} model could not run on WebGPU in this browser, and it is too large to run on the CPU. Choose another model.`
+      : `The ${modelLabel} model needs WebGPU, which this browser does not provide, and it is too large to run on the CPU. Choose another model.`;
+  }
   const slow = 'It can run on the CPU instead, but very slowly (about 14 seconds per frame).';
   if (status.webgpuModelFailed) {
     return `The ${modelLabel} model could not run on WebGPU in this browser. ${slow}`;
@@ -540,7 +605,7 @@ export function describeAiStatus({ running, pending, analyzed, total, status }) 
 /** What the About (i) disclosure says */
 const ABOUT_TEXT = [
   'Pick what to keep and the rest turns transparent in the GIF.',
-  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, or RVM (steadier in video, GPL-3.0); Anything is ISNet, or BEN2 (finer hair and edges, a larger download, MIT); Something else is MobileSAM. The others are Apache-2.0.${isModelOffered('birefnet-general') ? ' This development build also offers BiRefNet and BiRefNet lite (Anime and Anything) and BiRefNet ToonOut (Anime): MIT, large downloads that need a strong GPU.' : ''} Manage them in Settings.`,
+  `AI subjects run a model in this browser: it downloads once (plus ${RUNTIME_SIZE_LABEL} for the runtime the first time) and your frames never leave this device. Models: Anime is ISNet anime, Person is MODNet, or RVM (steadier in video, GPL-3.0); Anything is ISNet, or BEN2 (finer hair and edges, a larger download, MIT); Something else is MobileSAM. The others are Apache-2.0.${isModelOffered('birefnet-general') ? ' Anime and Anything also offer BiRefNet and BiRefNet lite, and Anime BiRefNet ToonOut: MIT, large downloads (from Hugging Face) that need a strong GPU.' : ''} Models you add in Settings are listed on the cards you chose for them. Manage them in Settings.`,
   'Something else: click the thing you want to keep. It is followed through the clip; Keep and Remove add points to fix it.',
   'Solid color removes one backdrop color, such as a green screen.',
   'Hold \\ (or Hold to compare) to see the original; Show mask tints what is removed.',
@@ -1776,16 +1841,16 @@ function updateAiSettings(root, state, _fps) {
   // Model choice (rebuilt only when the subject's list changes)
   const choices = getSubjectModels(getSubject(background));
   const select = /** @type {HTMLSelectElement} */ (q(root, '#ai-model'));
-  setHidden(q(root, '#ai-model-row'), choices.length < 2);
-  if (select.dataset.models !== choices.join(',')) {
-    select.dataset.models = choices.join(',');
-    select.replaceChildren(
-      ...choices.map((id) => createElement('option', { value: id }, [getModelOptionLabel(id)])),
-    );
+  const listed = choices.includes(modelId) ? choices : [...choices, modelId];
+  setHidden(q(root, '#ai-model-row'), listed.length < 2);
+  if (select.dataset.models !== listed.join(',')) {
+    select.dataset.models = listed.join(',');
+    select.replaceChildren(...renderModelOptions(choices, modelId));
   }
   for (const option of select.options) {
     const { ready } = getModelReadiness(option.value, status.models?.[option.value]);
-    const text = `${getModelOptionLabel(option.value)}${ready ? '' : ' (download)'}`;
+    const missing = getModelEntry(option.value).missing;
+    const text = `${getModelOptionLabel(option.value)}${ready || missing ? '' : ' (download)'}`;
     if (option.textContent !== text) option.textContent = text;
   }
   setValue(select, modelId);
@@ -1845,11 +1910,13 @@ function updateAiSettings(root, state, _fps) {
   const analyzeBtn = /** @type {HTMLButtonElement} */ (q(root, '#ai-analyze'));
   const pending = cover.pendingInSelection;
   // Click to select tracks only once something was clicked
+  // A WebGPU-only model cannot run in a browser known to have no WebGPU
+  const cannotRun = Boolean(entry.webgpuOnly) && status.webgpu === false;
   setHidden(
     analyzeBtn,
-    running || Boolean(tracking) || pending === 0 || (click && line.kind === 'hint'),
+    running || Boolean(tracking) || pending === 0 || (click && line.kind === 'hint') || cannotRun,
   );
-  const ready = getModelReadiness(modelId, status.models?.[modelId]).ready;
+  const ready = getModelReadiness(modelId, status.models?.[modelId]).ready || entry.missing;
   const verb = click ? 'Track' : 'Analyze';
   setText(analyzeBtn, ready ? verb : `${verb} (↓ ${getModelSizeLabel(modelId)})`);
   analyzeBtn.setAttribute(
@@ -1860,16 +1927,19 @@ function updateAiSettings(root, state, _fps) {
   // WebGPU warning: known missing adapter, an analysis stopped on it, or
   // the chosen model could not run on the adapter
   const noWebgpu = status.webgpu === false || status.needsWasmChoice || status.webgpuModelFailed;
-  setHidden(q(root, '#ai-webgpu-warning'), !noWebgpu || status.wasmAllowed);
-  setText(
-    q(root, '#ai-webgpu-warning-text'),
-    getWebgpuWarning(status, getModelEntry(modelId).label),
-  );
+  // A WebGPU-only model (BiRefNet) has no CPU choice: the warning says to
+  // choose another model, also when the CPU was allowed for another one
+  const webgpuOnly = Boolean(entry.webgpuOnly);
+  setHidden(q(root, '#ai-webgpu-warning'), !noWebgpu || (status.wasmAllowed && !webgpuOnly));
+  setText(q(root, '#ai-webgpu-warning-text'), getWebgpuWarning(status, entry.label, webgpuOnly));
   /** @type {HTMLButtonElement} */ (q(root, '#ai-run-wasm')).disabled = running;
-  setHidden(q(root, '#ai-wasm-note'), !(noWebgpu && status.wasmAllowed));
+  setHidden(q(root, '#ai-run-wasm'), webgpuOnly);
+  setHidden(q(root, '#ai-wasm-note'), !(noWebgpu && status.wasmAllowed) || webgpuOnly);
 
   const error = status.phase === 'error' ? status.error : null;
-  setHidden(q(root, '#ai-error'), !error);
+  // The WebGPU warning already says what WEBGPU_REQUIRED would
+  const said = error?.code === SegmentationErrorCode.WEBGPU_REQUIRED && webgpuOnly && noWebgpu;
+  setHidden(q(root, '#ai-error'), !error || said);
   setText(q(root, '#ai-error-text'), error?.message ?? '');
   // Only refused picks and cancellations: the outcome of an analysis is the
   // status line

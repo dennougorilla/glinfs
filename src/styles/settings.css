@@ -275,6 +275,250 @@
   overflow-wrap: anywhere;
 }
 
+/* AI models: header buttons, "Your models" group, rename field */
+.settings-screen .settings-models-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-screen .settings-models-group {
+  padding: var(--space-3) var(--space-5) var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-panel-header);
+}
+
+.settings-screen .settings-models-group-title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.settings-screen .settings-models-state--missing-file,
+.settings-screen .settings-models-state--needs-webgpu {
+  color: var(--color-warning);
+}
+
+.settings-screen .settings-models-rename {
+  width: 100%;
+  max-width: 360px;
+}
+
+/* Add model dialog (custom-model-dialog.js): a native modal <dialog>; its
+   rows reuse .settings-item, its buttons the app's .btn */
+.settings-dialog {
+  /* reset.css zeroes the margin that centres a modal <dialog> */
+  margin: auto;
+  width: min(640px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-4));
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.settings-dialog:not([open]) {
+  display: none;
+}
+
+.settings-dialog::backdrop {
+  background: rgba(9, 9, 11, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.settings-dialog[data-dragging="true"] {
+  outline: 2px dashed var(--color-focus);
+  outline-offset: -6px;
+}
+
+.settings-dialog .settings-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-header);
+}
+
+.settings-dialog .settings-dialog-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.settings-dialog .settings-dialog-title:focus {
+  outline: none;
+}
+
+.settings-dialog .settings-dialog-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+}
+
+.settings-dialog .settings-dialog-close:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.settings-dialog .settings-dialog-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.settings-dialog .settings-dialog-drop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 96px;
+  margin: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.settings-dialog .settings-dialog-file-input {
+  display: none;
+}
+
+.settings-dialog .settings-dialog-url-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-dialog .settings-dialog-url,
+.settings-dialog .settings-dialog-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-dialog .settings-dialog-row:hover {
+  background: transparent;
+}
+
+.settings-dialog .settings-dialog-progress,
+.settings-dialog .settings-dialog-question,
+.settings-dialog .settings-dialog-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+}
+
+.settings-dialog .settings-dialog-summary {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.settings-dialog .settings-dialog-summary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog .settings-dialog-hash {
+  font-family: var(--font-mono, monospace);
+}
+
+.settings-dialog .settings-dialog-graph {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog .settings-models-progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--color-primary);
+}
+
+.settings-dialog .settings-dialog-problem {
+  margin: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog .settings-dialog-problem ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+}
+
+.settings-dialog .settings-dialog-problem-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.settings-dialog .settings-dialog-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.settings-dialog .settings-dialog-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.settings-dialog .settings-dialog-test .settings-item-note[data-kind="ok"] {
+  color: var(--color-success);
+}
+
+.settings-dialog .settings-dialog-test .settings-item-note[data-kind="error"] {
+  color: var(--color-error);
+}
+
+.settings-dialog .settings-dialog-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  image-rendering: pixelated;
+}
+
+.settings-dialog .settings-dialog-preview[hidden] {
+  display: none;
+}
+
+.settings-dialog .settings-dialog-status {
+  margin: 0;
+  padding: 0 var(--space-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+.settings-dialog .settings-dialog-status:empty {
+  display: none;
+}
+
+.settings-dialog .settings-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .settings-header {

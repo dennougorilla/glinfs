@@ -45,7 +45,7 @@ import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import { getModelEntry, isModelId } from '../ai-cutout/model-registry.js';
+import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
@@ -2344,7 +2344,7 @@ function startAiCutoutSession() {
   // for old parameters is aborted right away.
   /** @type {ReturnType<typeof setTimeout> | null} */
   let selectionSyncTimer = null;
-  aiEditsUnsubscribe = sessionStore.subscribe((state, prevState) => {
+  const unsubscribeEdits = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
       session.requestBuild();
       followClickSelection(session, state, prevState);
@@ -2361,6 +2361,16 @@ function startAiCutoutSession() {
       }, OBJECT_SELECTION_SYNC_MS);
     }
   });
+  // A model added, renamed or deleted (in another tab too): the cards and
+  // the Model choice list it, and its availability is checked
+  const unsubscribeModels = onCustomModelsChange(() => {
+    // The new availability record re-renders the Background tab
+    if (isCurrent()) void session.refreshModels();
+  });
+  aiEditsUnsubscribe = () => {
+    unsubscribeEdits();
+    unsubscribeModels();
+  };
 
   // Masks from an earlier visit are memoized: the first draw is keyed
   session.requestBuild();

@@ -450,3 +450,45 @@ describe('combineBackends', () => {
     expect(combineBackends(['wasm', 'webgpu'])).toBe('wasm');
   });
 });
+
+describe('WebGPU-only models (BiRefNet: no CPU fallback)', () => {
+  const BIREFNET = { ...getModelSpec('birefnet-general'), inputSize: SIZE };
+
+  it('the BiRefNet specs say so', () => {
+    for (const id of ['birefnet-general', 'birefnet-lite', 'birefnet-toonout']) {
+      expect(getModelSpec(id).webgpuOnly).toBe(true);
+    }
+    expect(getModelSpec('anime').webgpuOnly).toBeUndefined();
+  });
+
+  it('without an adapter: WEBGPU_REQUIRED, never a WASM session, even when WASM is allowed', async () => {
+    const { ort } = fakeOrt();
+    const error = await createModelSession({
+      ort: /** @type {any} */ (ort),
+      bytes,
+      spec: BIREFNET,
+      adapter: null,
+      allowWasm: true,
+    }).catch((e) => e);
+    expect(error).toMatchObject({
+      code: SegmentationErrorCode.WEBGPU_REQUIRED,
+      message: expect.stringMatching(/^Busy backgrounds needs WebGPU.*too large to run on the CPU/),
+    });
+    expect(ort.InferenceSession.create).not.toHaveBeenCalled();
+  });
+
+  it('a WebGPU failure is not followed by a WASM session', async () => {
+    const { ort } = fakeOrt({ webgpu: 'run-fails' });
+    const error = await createModelSession({
+      ort: /** @type {any} */ (ort),
+      bytes,
+      spec: BIREFNET,
+      adapter: {},
+      allowWasm: true,
+    }).catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_REQUIRED);
+    expect(ort.InferenceSession.create.mock.calls.map((c) => c[1].executionProviders[0])).toEqual([
+      'webgpu',
+    ]);
+  });
+});

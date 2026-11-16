@@ -177,6 +177,64 @@ describe('Settings → AI models', () => {
     return { section, manager, downloads };
   }
 
+  it('without WebGPU, does not download a WebGPU-only model and says why (review #196 r2)', async () => {
+    const birefnet = {
+      ...modelInfos({ general: false })[0],
+      id: 'birefnet-general',
+      label: 'Busy backgrounds',
+      modelName: 'BiRefNet (general)',
+      bytes: 519_348_204,
+      licenseNote: null,
+      cached: false,
+      webgpuOnly: true,
+    };
+    const list = async () => ({
+      models: [modelInfos({ general: false })[0], birefnet],
+      oldFiles: [],
+      cachedBytes: 0,
+    });
+    /** @param {boolean} webgpu */
+    const withWebgpu = (webgpu) => {
+      const manager = /** @type {any} */ (fakeManager());
+      manager.getCapabilities = async () => ({ webgpu });
+      return manager;
+    };
+    const { section, downloads } = mount({ list, manager: withWebgpu(false) });
+    await settle();
+    const r = row(section, 'birefnet-general');
+    expect(r.dataset.modelStatus).toBe('needs-webgpu');
+    expect(r.textContent).toContain('Needs WebGPU, which this browser does not provide');
+    expect(btn(section, 'download', 'birefnet-general')).toBeNull();
+    // Download all fetches the others only
+    /** @type {HTMLButtonElement} */ (
+      section.querySelector('#settings-models-download-all')
+    ).click();
+    await settle();
+    expect(downloads.start.mock.calls.map((c) => c[0])).toEqual(['general']);
+
+    // With WebGPU it downloads as usual
+    for (const cleanup of cleanups.splice(0)) cleanup();
+    document.body.innerHTML = '';
+    const other = mount({ list, manager: withWebgpu(true) });
+    await settle();
+    expect(row(other.section, 'birefnet-general').dataset.modelStatus).toBe('not-downloaded');
+    expect(btn(other.section, 'download', 'birefnet-general')).not.toBeNull();
+  });
+
+  it('says a built-in model’s file was kept when a custom model shares it', async () => {
+    const shared = { ...modelInfos()[1], sharedFile: true };
+    const { section } = mount({
+      list: async () => ({ models: [shared], oldFiles: [], cachedBytes: 0 }),
+      remove: vi.fn(async () => false),
+    });
+    await settle();
+    btn(section, 'delete', 'anime')?.click();
+    await settle();
+    expect(section.querySelector('.settings-models-status')?.textContent).toBe(
+      "The Anime model's file was kept: a custom model uses the same file.",
+    );
+  });
+
   it('lists each model purpose first, with name, description, size, license and state', async () => {
     const { section } = mount();
     expect(section.querySelector('h2')?.textContent).toBe('AI models');

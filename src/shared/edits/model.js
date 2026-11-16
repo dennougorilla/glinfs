@@ -16,8 +16,9 @@
 
 /**
  * AI cutout model id (see features/ai-cutout/model-registry.js; a unit test
- * keeps AI_MODELS equal to the registry's ids)
- * @typedef {'anime'|'general'|'portrait'|'click'|'ben2'|'video-person'|'birefnet-general'|'birefnet-lite'|'birefnet-toonout'} AiModel
+ * keeps AI_MODELS equal to the registry's built-in ids), or the id of a
+ * model the user added (`custom-…`, see CUSTOM_MODEL_ID_PATTERN)
+ * @typedef {'anime'|'general'|'portrait'|'click'|'ben2'|'video-person'|'birefnet-general'|'birefnet-lite'|'birefnet-toonout'|`custom-${string}`} AiModel
  */
 /**
  * The Background tab's AI subject card a cutout was chosen with (see
@@ -206,8 +207,28 @@ export const AI_MODELS = /** @type {const} */ ([
   'birefnet-toonout',
 ]);
 
+/**
+ * Id of a model the user added (features/ai-cutout/custom-models.js; a unit
+ * test keeps the two patterns equal). Edits keep such an id even when the
+ * model is not in this browser: analyzing then fails with a clear message
+ * instead of silently using another model.
+ */
+export const CUSTOM_MODEL_ID_PATTERN = /^custom-[0-9a-f]{16}-[0-9a-f]{8}$/;
+
+/**
+ * @param {unknown} model
+ * @returns {model is AiModel}
+ */
+function isAiModel(model) {
+  return (
+    AI_MODELS.includes(/** @type {AiModel} */ (model)) ||
+    (typeof model === 'string' && CUSTOM_MODEL_ID_PATTERN.test(model))
+  );
+}
+
 /** @type {readonly ObjectMode[]} */
 export const OBJECT_MODES = /** @type {const} */ (['remove', 'add']);
+
 /** @type {readonly AiSubject[]} */
 export const AI_SUBJECTS = /** @type {const} */ (['anime', 'portrait', 'general', 'click']);
 
@@ -270,8 +291,8 @@ const AI_DEFAULTS = /** @type {const} */ ({
  * @returns {AiModel}
  */
 export function getAiModel(ai) {
-  const model = /** @type {AiModel} */ (ai?.model);
-  return AI_MODELS.includes(model) ? model : AI_DEFAULTS.model;
+  const model = ai?.model;
+  return isAiModel(model) ? model : AI_DEFAULTS.model;
 }
 
 /**
@@ -590,7 +611,7 @@ function normalizeAiCutout(ai, frameCount) {
   const picks = Array.isArray(a.picks) ? a.picks : [];
   return {
     // Edits from before the general model have no model: they used the anime one
-    model: normalizeEnum(a.model, AI_MODELS, AI_DEFAULTS.model),
+    model: isAiModel(a.model) ? a.model : AI_DEFAULTS.model,
     threshold: clampNumber(a.threshold, aiThreshold.min, aiThreshold.max, AI_DEFAULTS.threshold),
     smoothing: typeof a.smoothing === 'boolean' ? a.smoothing : AI_DEFAULTS.smoothing,
     edge: Math.round(clampNumber(a.edge, aiEdge.min, aiEdge.max, AI_DEFAULTS.edge)),

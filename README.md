@@ -97,8 +97,9 @@ npm run build
 
 ### AI cutout model
 
-The AI cutout runs one of six models (nine in a development build, see
-below) in the browser with
+The AI cutout runs one of nine built-in models (six served by the site, the
+three BiRefNet ones downloaded from Hugging Face, see below), or a model you
+add yourself (see "Your own models"), in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/) (MIT), inside a Web Worker:
 
 - **General**: [DIS](https://github.com/xuebinqin/DIS) IS-Net general-use
@@ -219,21 +220,26 @@ live-action photo for the other models; `E2E_REAL_IMAGE` takes several comma-sep
 before pinning it; `E2E_REAL_MODEL_CHANNEL=chrome` uses the installed Chrome).
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the licenses.
 
-#### BiRefNet (development builds only)
+#### BiRefNet (downloaded from Hugging Face)
 
-`npm run dev` also offers three [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)
+The app also offers three [BiRefNet](https://github.com/ZhengPeng7/BiRefNet)
 models (MIT): **Busy backgrounds** (BiRefNet general, 519 MB) and **Busy
 backgrounds, faster** (BiRefNet lite, 122 MB) on the Anime and Anything cards,
 and **Anime hair** ([BiRefNet ToonOut](https://huggingface.co/joelseytre/toonout),
 519 MB) on the Anime card. They need WebGPU and a strong GPU (about 485 ms
 per frame and 7.7 GB of GPU memory at peak on an RTX 3080 Ti; lite 260 ms and
-5.8 GB). Production builds leave them out: the files are not in the
-`models-v1` release yet, and the two large ones cannot ship next to the
-other models on GitHub Pages (artifacts must stay under 1 GB). They are
-`devOnly` in the registry; `npm run models:fetch` keeps and verifies a copy
-in `public/models/` but never downloads one. To try them, put the three files
-in `public/models/` by hand (they are checked against the registry's SHA-256
-when first used) or export them:
+5.8 GB). The files are not part of the site: the two large ones cannot
+ship next to the other models on GitHub Pages (artifacts must stay under
+1 GB). The browser downloads them from
+[dennougorilla/glinfs-models](https://huggingface.co/dennougorilla/glinfs-models)
+at a pinned commit (`BIREFNET_HOST` in `model-registry.js`; Hugging Face
+sends CORS headers, and the page's `connect-src` allows Hugging Face and
+nothing else) and checks their size and SHA-256 against the registry before
+keeping them. They are not in the `models-v1` release, `npm run models:fetch`
+does not download them and the Pages deploy does not ship them. Setting
+`BIREFNET_HOST` to `null` makes them development-only again (`devOnly`:
+`npm run dev` then serves them from `public/models/`, where they are placed
+by hand). To make the files yourself, export them:
 
 ```bash
 python3.12 -m venv .venv-birefnet
@@ -256,6 +262,35 @@ turns to NaN). The output is byte-for-byte identical to the registry's pins
 The worker fails an analysis with "The model returned an invalid result"
 when a model's output contains NaN, instead of turning the frame into an
 empty mask.
+
+### Your own models
+
+Settings → AI models → **Add model** runs a model the registry does not
+have: an ONNX file from your computer (picked or dropped), or an `https`
+URL on Hugging Face (`…/resolve/<revision>/<file>.onnx`; other hosts are
+refused, because the page talks to no other site and GitHub release
+downloads send no CORS headers: add such a file from your computer). The
+app reads the graph with ONNX Runtime Web and proposes the settings, which
+you confirm: name, input size, resize (stretch or letterbox), normalization
+(0..1, ImageNet mean/std or -1..1), output kind (probability or logits) and
+the cards (Anime, Anything, Person) that list it. It supports one float32
+image input `[1, 3, S, S]` and one float32 mask output `[1, 1, S, S]` (one
+chosen among several) and says so when a file is outside that. Before
+saving, a test frame runs on WebGPU and fails with the reason when the
+model cannot run there, returns NaN, leaves 0..1 for a probability
+output, or comes out empty or full.
+
+The file is kept in this browser's model cache (a file from your computer
+too, so it survives a reload) and its definition in IndexedDB; it is never
+sent anywhere. Each model can be renamed, deleted, or exported as a small
+JSON definition (`*.glinfs-model.json`) that **Add model** imports again,
+on another device too: a URL model downloads again, a file model asks for
+its file, and either one is checked against the definition's size and
+SHA-256 and tested before it is saved. A model's id comes from its file and
+the settings that change its masks, so a clip analyzed with it finds its
+masks again under the same id; a clip whose custom model is gone keeps its
+id and its analysis says so instead of using another model. Files above
+1 GB are read only after you confirm, files above 2 GB not at all.
 
 ### Architecture
 
