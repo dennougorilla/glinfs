@@ -658,6 +658,18 @@ def build(entry: dict, src_dir: Path, out_dir: Path, keep_intermediate: bool) ->
         if current != fp32 and not keep_intermediate:
             current.unlink()
         current = target
+    # No BiRefNet Conv hits the WebGPU rule (scripts/webgpu_convs.py); a
+    # later checkpoint whose Convs do gets them padded here
+    import onnx
+    from webgpu_convs import assert_no_webgpu_conv_hazards, pad_webgpu_conv_hazards
+
+    print(f"{entry['id']}: WebGPU Conv check")
+    model = onnx.load(str(current))
+    padded = pad_webgpu_conv_hazards(model)
+    if padded:
+        print(f"{entry['id']}: Conv input channels zero-padded: {', '.join(padded)}")
+        onnx.save(model, str(current))
+    assert_no_webgpu_conv_hazards(model, entry["id"])
     final = out_dir / entry["asset"]
     current.replace(final)
     if not keep_intermediate:

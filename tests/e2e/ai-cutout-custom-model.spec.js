@@ -29,6 +29,9 @@ import {
 } from './helpers/app.js';
 
 const STUB_PATH = fileURLToPath(new URL('../fixtures/models/stub-seg.onnx', import.meta.url));
+const CONV6_PATH = fileURLToPath(
+  new URL('../fixtures/models/stub-seg-conv6.onnx', import.meta.url),
+);
 const N = 4;
 const { discA, discB, width, height } = discClip;
 
@@ -228,6 +231,28 @@ test.describe('Custom AI models', () => {
       'downloaded',
     );
     await expect(page.locator(`[data-model-id="${id}"] h3`)).toHaveText('Stub modelstub-seg.onnx');
+  });
+
+  test('a model with a Conv that WebGPU computes wrongly is flagged when it is read', async ({
+    page,
+  }) => {
+    await gotoCaptureWithStubModel(page, { allowWasm: true });
+    await openSettings(page);
+    await page.locator('#settings-models-add').click();
+    // The stub's interface through a 6-channel 3 × 3 Conv (scripts/generate-conv-rule-fixture.py)
+    await page.locator('#add-model-file').setInputFiles(CONV6_PATH);
+    const note = page.locator('#add-model-webgpu-conv');
+    await expect(note).toContainText('onnxruntime-web WebGPU computes this convolution wrongly', {
+      timeout: 30_000,
+    });
+    await expect(note).toContainText('conv6_3x3, 6 input and 4 output channels, kernel 3 × 3');
+    await expect(note).toContainText('Pad its input channels to a multiple of 4');
+    // Headless Chromium has no WebGPU: the note says the test can pass here
+    await expect(note).toContainText('without WebGPU');
+    // The plain stub has no such Conv
+    await page.locator('#add-model-file').setInputFiles(STUB_PATH);
+    await expect(page.locator('#add-model-label')).toHaveValue('stub-seg', { timeout: 30_000 });
+    await expect(page.locator('#add-model-webgpu-conv')).toHaveCount(0);
   });
 
   test('a file that is not a model, and a URL on a host the page may not use', async ({ page }) => {

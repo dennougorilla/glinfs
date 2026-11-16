@@ -20,6 +20,8 @@ import { fromErrorPayload, SegmentationErrorCode } from './protocol.js';
  * @property {'webgpu' | 'wasm'} backend - Where the graph was read
  * @property {boolean} hasAdapter - The browser has a WebGPU adapter
  * @property {string | null} webgpuError - Why WebGPU could not load it
+ * @property {string | null} webgpuConvNote - The graph has a Conv that WebGPU
+ *   computes wrong (see onnx-graph.js), described for the dialog
  * @property {GraphInfo} graph
  */
 
@@ -30,7 +32,8 @@ import { fromErrorPayload, SegmentationErrorCode } from './protocol.js';
 
 /**
  * @typedef {TestAssessment & { backend: 'webgpu' | 'wasm', inferenceMs?: number, preview?: { size: number, data: ArrayBuffer } | null }} TestResult
- *   - `problem` may also be 'webgpu', 'run' or 'shape' (the model did not run)
+ *   - `problem` may also be 'webgpu', 'run' or 'shape' (the model did not run), or
+ *   'webgpu-conv' (it runs on WebGPU, which computes one of its Convs wrong)
  */
 
 /** @returns {Worker} */
