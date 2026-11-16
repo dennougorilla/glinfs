@@ -55,6 +55,7 @@ import {
   getClipObjectSources,
   getModelSizeLabel,
   getSharedFinalMaskCache,
+  isAbortError,
   isFrameAnalyzed,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
@@ -1946,15 +1947,23 @@ function updateOverlayPickMode(container, tool, previousTool) {
 }
 
 /**
+ * The Keep / Remove click being judged (classifyFixUp can wait for the pick
+ * tracking): a newer click cancels it
+ * @type {AbortController | null}
+ */
+let fixUpClick = null;
+
+/**
  * Keep or Remove clicked the preview. With a tracked object selected the
  * click corrects it; with click to select it is a prompt point; else it
  * adds a fix-up, the app choosing the mechanism from what the click lands
  * on (classifyFixUp): a pick, or a tracked object. Needs the frame's
  * analysis.
- * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ * @param {{ alt?: boolean }} [options] - alt: the opposite of the tool
+ * @returns {Promise<void>}
  * @param {{ alt?: boolean }} [options] - alt: the opposite of the tool
  */
-function handleAiPick(point, options = {}) {
+async function handleAiPick(point, options = {}) {
   if (!store) return;
   const state = store.getState();
   const tool = state.aiPickTool;
@@ -1978,7 +1987,37 @@ function handleAiPick(point, options = {}) {
   }
   const frames = /** @type {import('../capture/types.js').Frame[]} */ (state.clip?.frames);
   const ai = state.edits.background.ai;
-  const kind = classifyFixUp({ frames, ai, frameIndex: state.currentFrame, point, tool: mode });
+  fixUpClick?.abort();
+  const click = new AbortController();
+  fixUpClick = click;
+  /** @type {import('./ai-cutout.js').FixUpKind} */
+  let kind;
+  try {
+    kind = await classifyFixUp({
+      frames,
+      ai,
+      frameIndex: state.currentFrame,
+      point,
+      tool: mode,
+      signal: click.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) return;
+    throw error;
+  } finally {
+    if (fixUpClick === click) fixUpClick = null;
+  }
+  // Judged on the state of the click: drop it when the frame, the tool or
+  // the cutout changed meanwhile
+  const now = store.getState();
+  if (
+    now.currentFrame !== state.currentFrame ||
+    now.aiPickTool !== tool ||
+    now.edits.background.ai !== ai ||
+    now.aiActiveObjectId
+  ) {
+    return;
+  }
   if (kind === 'none') {
     const message = PICK_NO_CHARACTER_NOTICE;
     announce(message);

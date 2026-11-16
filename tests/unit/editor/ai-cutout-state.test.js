@@ -23,6 +23,7 @@ import {
   setAiParams,
   setAiPickTool,
   setBackgroundMethod,
+  setBrush,
   setPickingKeyColor,
   updateAiCutoutStatus,
 } from '../../../src/features/editor/state.js';
@@ -232,6 +233,26 @@ describe('tracked objects', () => {
     expect(state.edits.background.ai.objects).toEqual([]);
     expect(state.aiPickTool).toBeNull();
     expect(state.aiActiveObjectId).toBeNull();
+  });
+
+  it('Brush and the eyedropper deselect the object too (review #195)', () => {
+    const enabled = {
+      ...makeState(),
+      edits: {
+        ...makeState().edits,
+        background: { ...makeState().edits.background, enabled: true },
+      },
+    };
+    let state = addAiObject(enabled, 'remove', { click: click() }, 'o1');
+    state = setAiPickTool(setActiveAiObject(state, 'o1'), 'remove');
+    const brushed = setBrush(state, { on: true });
+    expect(brushed.brush.on).toBe(true);
+    expect(brushed.aiActiveObjectId).toBeNull();
+    // Brush off again, then Remove: a new fix-up, not a point on o1
+    expect(setAiPickTool(setBrush(brushed, { on: false }), 'remove').aiActiveObjectId).toBeNull();
+    const picking = setPickingKeyColor(state, true);
+    expect(picking.aiPickTool).toBeNull();
+    expect(picking.aiActiveObjectId).toBeNull();
   });
 
   it('leaving the tool deselects the object; its own tool is Remove or Keep', () => {

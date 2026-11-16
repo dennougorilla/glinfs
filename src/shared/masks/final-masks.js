@@ -405,26 +405,88 @@ export async function createPreEdgeMaskSource(options) {
 }
 
 /**
- * What a pick on a frame lands on, judged on the binary mask the build
- * tracks picks on: 'none' (no piece under it or within the snap radius),
- * 'main' (the frame's largest piece, the subject) or 'separate' (another
- * piece)
+ * What a pick on a frame lands on: 'none' (no piece of the binary mask the
+ * build tracks picks on is under it or within the snap radius), 'main'
+ * (the subject) or 'separate' (another piece).
+ *
+ * The subject is the largest piece left after the picks (and clean-up):
+ * `survivor`, the frame's pre-edge mask (see getSurvivingMask). A Keep pick
+ * on a smaller character makes that character the subject even when a
+ * bigger piece it dropped is the largest of the raw mask. The clicked piece
+ * is 'main' when it holds most of the subject. Without `survivor` (no
+ * picks: then the largest raw piece survives) the largest raw piece is the
+ * subject.
  * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout }} options
  * @param {{ frame: number, x: number, y: number }} pick - x/y fractions of the frame
+ * @param {Uint8Array | null} [survivor] - 0/1 pre-edge mask of the frame, at
+ *   the binary mask's size
  * @returns {'none' | 'main' | 'separate'}
  */
-export function getPickedPieceRole(options, pick) {
+export function getPickedPieceRole(options, pick, survivor = null) {
   const source = createFrameBinarySource(options);
   const bin = source?.binaryAt(pick.frame);
   if (!source || !bin) return 'none';
-  const comps = labelComponents(bin, source.width, source.height);
-  const picked = findPickedComponent(comps, source.width, source.height, pick);
+  const { width, height } = source;
+  const comps = labelComponents(bin, width, height);
+  const picked = findPickedComponent(comps, width, height, pick);
   if (picked === 0) return 'none';
-  let largest = 0;
-  for (let l = 1; l <= comps.count; l++) {
-    if (!largest || comps.areas[l] > comps.areas[largest]) largest = l;
+  if (survivor && survivor.length === width * height) {
+    const kept = labelComponents(survivor, width, height);
+    const subject = largestComponent(kept.areas, kept.count);
+    if (subject > 0) {
+      let inside = 0;
+      for (let i = 0; i < kept.labels.length; i++) {
+        if (kept.labels[i] === subject && comps.labels[i] === picked) inside++;
+      }
+      return inside * 2 > kept.areas[subject] ? 'main' : 'separate';
+    }
   }
-  return picked === largest ? 'main' : 'separate';
+  return picked === largestComponent(comps.areas, comps.count) ? 'main' : 'separate';
+}
+
+/**
+ * Label of the largest component (the first of equal ones), 0 for none
+ * @param {ArrayLike<number>} areas - Indexed by label
+ * @param {number} count
+ * @returns {number}
+ */
+function largestComponent(areas, count) {
+  let largest = 0;
+  for (let l = 1; l <= count; l++) {
+    if (!largest || areas[l] > areas[largest]) largest = l;
+  }
+  return largest;
+}
+
+/**
+ * A frame's pre-edge mask (threshold, picks, clean-up: what remains for the
+ * edge), for getPickedPieceRole. The pick tracking runs from frame 0 up to
+ * `frame`, in time slices; null when the frame is not analyzed.
+ * @param {{ frameCount: number, getProb: (frameIndex: number) => ProbMask | null, ai: AiCutout, signal?: AbortSignal, sliceMs?: number, now?: () => number, yieldToMain?: () => Promise<void> }} options
+ * @param {number} frame
+ * @returns {Promise<Uint8Array | null>}
+ * @throws {DOMException} AbortError when cancelled
+ */
+export async function getSurvivingMask(options, frame) {
+  const {
+    signal,
+    sliceMs = BUILD_SLICE_MS,
+    now = defaultNow,
+    yieldToMain = defaultYieldToMain,
+  } = options;
+  const source = await createPreEdgeMaskSource(options);
+  if (!source) return null;
+  let sliceStart = now();
+  for (let f = 0; f < frame; f++) {
+    source.maskAt(f);
+    if (now() - sliceStart >= sliceMs) {
+      await yieldToMain();
+      sliceStart = now();
+    }
+    throwIfAborted(signal);
+  }
+  const mask = source.maskAt(frame);
+  return mask ? Uint8Array.from(mask) : null;
 }
 
 /**

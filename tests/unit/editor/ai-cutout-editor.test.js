@@ -592,6 +592,8 @@ describe('AI cutout in the mounted editor', () => {
     check('ai-pick-remove');
     clickPreview(overlay, 20, 50);
     await settle();
+    // With a pick, the subject is judged after the picks (asynchronously)
+    await settle();
     expect(ai()?.objects).toMatchObject([
       { mode: 'remove', clicks: [{ frame: 1, x: 0.2, y: 0.5, mode: 'keep' }] },
     ]);
@@ -619,6 +621,36 @@ describe('AI cutout in the mounted editor', () => {
     // One list: two picks, three tracked fix-ups with swatches
     expect($('#ai-pick-list').children).toHaveLength(5);
     expect($('#ai-pick-list').querySelectorAll('.editor-cutout-pick-swatch')).toHaveLength(3);
+  });
+
+  it('Remove on a Keep-picked character smaller than what the pick dropped is tracked, not a pick (review #195)', async () => {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    // Frame 1: a big shelf on the left (columns 0-5), a small character on the right (8-9)
+    const data = new Uint8Array(100);
+    for (let y = 0; y < 10; y++) data.fill(255, y * 10, y * 10 + 6);
+    for (let y = 2; y < 8; y++) data.fill(255, y * 10 + 8, y * 10 + 10);
+    getSharedMaskStore().set('anime:a1', { data, width: 10, height: 10 }, 'clip-a');
+    await settle();
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    const ai = () => getEditorState()?.edits.background.ai;
+
+    check('ai-pick-keep');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    expect(ai()?.picks).toEqual([{ frame: 1, x: 0.9, y: 0.5, mode: 'keep' }]);
+    check('ai-pick-remove');
+    clickPreview(overlay, 90, 50);
+    await settle();
+    await settle();
+    // The kept character is the subject: a tracked fix-up, the pick list unchanged
+    expect(ai()?.picks).toHaveLength(1);
+    expect(ai()?.objects).toMatchObject([{ mode: 'remove' }]);
   });
 
   it('a selected fix-up takes corrections: its tool adds, Alt or the other tool takes away, a drag adds a box', async () => {

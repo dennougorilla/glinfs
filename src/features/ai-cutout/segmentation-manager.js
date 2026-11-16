@@ -871,7 +871,14 @@ export class SegmentationManager {
         clear: (f) => {
           this.#maskStore.delete(keyOf(frames[f]));
         },
-        peek: (f) => this.#maskStore.get(keyOf(frames[f])) ?? null,
+        // A frame with only remove points starts from the mask it has, but
+        // only one its current prompts made (a tracked object's tag): a mask
+        // of older prompts would carry them into this run under the new tag
+        peek: (f) => {
+          const key = keyOf(frames[f]);
+          if (options.tag !== undefined && this.#maskStore.getTag(key) !== options.tag) return null;
+          return this.#maskStore.get(key) ?? null;
+        },
         superseded: options.superseded,
         onProgress: ({ done }) => report(done, lastMs),
         signal,

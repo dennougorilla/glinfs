@@ -10,6 +10,7 @@ import {
   getAiParamsKey,
   getFinalMaskParamsKey,
   getPickedPieceRole,
+  getSurvivingMask,
   pickFindsComponent,
 } from '../../../../src/shared/masks/final-masks.js';
 import {
@@ -493,6 +494,56 @@ describe('getPickedPieceRole', () => {
     expect(
       getPickedPieceRole({ ...options, getProb: () => null }, { frame: 0, x: 8 / W, y: 8 / H }),
     ).toBe('none');
+  });
+});
+
+describe('getPickedPieceRole after the picks (review #195)', () => {
+  const W = 40;
+  const H = 20;
+  /** @type {Rect} */
+  const shelf = [2, 2, 20, 16];
+  /** @type {Rect} */
+  const character = [28, 4, 8, 12];
+  const onCharacter = { frame: 2, x: 32 / W, y: 10 / H };
+  const onShelf = { frame: 2, x: 12 / W, y: 10 / H };
+  /** @param {any[]} picks */
+  const optionsWith = (picks) => ({
+    frameCount: 4,
+    getProb: () => probOf(W, H, [shelf, character]),
+    ai: aiOf({ picks }),
+  });
+
+  it('a Keep pick on a smaller character makes it the subject: Remove on it is tracked, never a pick', async () => {
+    // Keep pick on the character on frame 0: the bigger shelf drops out
+    const options = optionsWith([{ frame: 0, x: 32 / W, y: 10 / H, mode: 'keep' }]);
+    // The raw mask alone calls the character 'separate' (the old judgement)
+    expect(getPickedPieceRole(options, onCharacter)).toBe('separate');
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onCharacter, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, onShelf, survivor)).toBe('separate');
+    // What the old judgement did: a remove pick on the character wipes it
+    const wiped = await buildFinalMasks({
+      ...optionsWith([
+        { frame: 0, x: 32 / W, y: 10 / H, mode: 'keep' },
+        { frame: 2, x: 32 / W, y: 10 / H, mode: 'remove' },
+      ]),
+      ...noYield,
+    });
+    const area = (/** @type {any} */ m) => unpackMask(m).reduce((t, v) => t + v, 0);
+    expect(area(wiped?.masks[2])).toBe(0);
+  });
+
+  it('a Remove pick that took out a bigger piece leaves the character as the subject', async () => {
+    const options = optionsWith([{ frame: 0, x: 12 / W, y: 10 / H, mode: 'remove' }]);
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onCharacter, survivor)).toBe('main');
+  });
+
+  it('without picks the largest raw piece is the subject', async () => {
+    const options = optionsWith([]);
+    const survivor = await getSurvivingMask({ ...options, ...noYield }, 2);
+    expect(getPickedPieceRole(options, onShelf, survivor)).toBe('main');
+    expect(getPickedPieceRole(options, onCharacter)).toBe('separate');
   });
 });
 

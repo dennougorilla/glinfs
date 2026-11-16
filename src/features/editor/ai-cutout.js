@@ -19,6 +19,7 @@ import {
   createFinalMaskCache,
   getFinalMaskParamsKey,
   getPickedPieceRole,
+  getSurvivingMask,
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -356,27 +357,34 @@ export function chooseFixUp(role, tool) {
 
 /**
  * chooseFixUp for a click on a clip frame, judged on the binary mask the
- * picks read (threshold and smoothing of the build)
- * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, point: { x: number, y: number }, tool: 'keep' | 'remove', maskStore?: MaskStore }} options
- * @returns {FixUpKind}
+ * picks read (threshold and smoothing of the build). For Remove with picks
+ * the subject is judged after the picks (getSurvivingMask): the picks are
+ * tracked up to the frame, so this can take a moment on a long clip.
+ * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, point: { x: number, y: number }, tool: 'keep' | 'remove', maskStore?: MaskStore, signal?: AbortSignal }} options
+ * @returns {Promise<FixUpKind>}
  */
-export function classifyFixUp({
+export async function classifyFixUp({
   frames,
   ai,
   frameIndex,
   point,
   tool,
   maskStore = getSharedMaskStore(),
+  signal,
 }) {
-  const role = getPickedPieceRole(
-    {
-      frameCount: frames.length,
-      getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
-      ai,
-    },
-    { frame: frameIndex, x: point.x, y: point.y },
-  );
-  return chooseFixUp(role, tool);
+  const options = {
+    frameCount: frames.length,
+    getProb: getClipProbSource(frames, maskStore, getAiModelId(ai)),
+    ai,
+  };
+  const pick = { frame: frameIndex, x: point.x, y: point.y };
+  // Keep only needs piece / no piece; without picks the largest raw piece
+  // is the subject
+  const survivor =
+    tool === 'remove' && ai.picks.length > 0
+      ? await getSurvivingMask({ ...options, signal }, frameIndex)
+      : null;
+  return chooseFixUp(getPickedPieceRole(options, pick, survivor), tool);
 }
 
 /**

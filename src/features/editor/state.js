@@ -769,6 +769,8 @@ export function setPickingKeyColor(state, picking) {
     ...state,
     pickingKeyColor: picking,
     aiPickTool: picking ? null : state.aiPickTool,
+    // Leaving Keep / Remove ends the correction of a selected fix-up
+    aiActiveObjectId: picking ? null : state.aiActiveObjectId,
     brush: picking ? brushOff(state.brush) : state.brush,
   };
   return picking ? clearPickNotice(next) : next;
@@ -828,7 +830,13 @@ export function setBrush(state, patch) {
   }
   const withBrush = { ...state, brush: next };
   if (!next.on || current.on) return withBrush;
-  return clearPickNotice({ ...withBrush, pickingKeyColor: false, aiPickTool: null });
+  // Leaving Keep / Remove ends the correction of a selected fix-up
+  return clearPickNotice({
+    ...withBrush,
+    pickingKeyColor: false,
+    aiPickTool: null,
+    aiActiveObjectId: null,
+  });
 }
 
 /**
