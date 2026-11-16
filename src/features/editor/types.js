@@ -116,6 +116,9 @@
  *   selected: while a tool is on, clicks and drags correct it instead of
  *   adding a fix-up, and Whole / Part applies to it. Leaving the tool
  *   deselects it.
+ * @property {import('../../shared/edits/model.js').ObjectScope} [aiRemoveScope] -
+ *   The scope a new Remove fix-up starts in: the one chosen last (saved in
+ *   the user settings)
  * @property {string | null} [aiHighlightObjectId] - The tracked fix-up whose chip
  *   is hovered or focused: its region stands out in Show mask (view only)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)

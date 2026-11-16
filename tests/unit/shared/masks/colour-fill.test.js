@@ -9,13 +9,12 @@ import {
   COLOUR_PASS,
   COLOUR_REMOVE,
   COLOUR_STOP,
-  coarseGrid,
   createColourMatcher,
   fillColourRegion,
   getColourGuardShares,
   getDiscPixels,
   packRgb,
-  sampleColours,
+  samplePoint,
 } from '../../../../src/shared/masks/colour-fill.js';
 import {
   buildFinalMasks,
@@ -171,7 +170,8 @@ describe('fillColourRegion', () => {
       }
     }
     const disc = getDiscPixels(W, H, { x: 40 / W, y: 20 / H }, 1);
-    const matches = createColourMatcher(sampleColours(rgba, disc), [], 32);
+    const { colours } = samplePoint(rgba, W, H, { x: 40 / W, y: 20 / H }, 1, 16);
+    const matches = createColourMatcher(colours, [], 32);
     const { region, count } = fillColourRegion(mask, W, H, rgba, disc, matches);
     expect(count).toBe(PATCH[2] * PATCH[3]);
     expect(region[20 * W + 40]).toBe(1);
@@ -367,19 +367,148 @@ describe('Colour fix-ups in a build', () => {
 });
 
 describe('getColourGuardShares', () => {
-  it('measures each frame against the nearest point frame', () => {
-    const kept = new Uint8Array(W * H);
-    kept.fill(1, 0, W * 8);
-    const none = new Uint8Array(W * H);
-    const half = new Uint8Array(W * H);
-    half.fill(1, 0, W * 4);
-    const removed = new Map([
-      [0, coarseGrid(none, W, H)],
-      [5, coarseGrid(half, W, H)],
+  it('takes what a frame removes beyond the reference frame, or colours not sampled', () => {
+    const stats = new Map([
+      [0, { mask: 1000, removed: 300, far: 0 }],
+      [1, { mask: 1000, removed: 320, far: 0 }],
+      [4, { mask: 1000, removed: 700, far: 0 }],
+      [5, { mask: 1000, removed: 300, far: 250 }],
     ]);
-    const shares = getColourGuardShares(removed, new Map([[0, coarseGrid(kept, W, H)]]), [0]);
+    const shares = getColourGuardShares(stats, [0]);
     expect(shares.get(0)).toBe(0);
-    expect(shares.get(5)).toBe(0.5);
+    expect(shares.get(1)).toBeCloseTo(0.02);
+    expect(shares.get(4)).toBeCloseTo(0.4);
+    expect(shares.get(5)).toBe(0.25);
+    // The point's frame not measured (not analysed): the median frame is the reference
+    stats.delete(0);
+    const median = getColourGuardShares(stats, [0]);
+    expect(median.get(1)).toBe(0);
+    expect(median.get(4)).toBeCloseTo(0.38);
+  });
+});
+
+describe('Review #197 round 1', () => {
+  // A leftover attached to the subject: the shirt ends at x = 31, the patch starts at x = 32
+  it('a point near the subject edge samples only the colour under it (finding 1)', async () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const result = await build(clip, colourObject([{ frame: 0, x: 33, y: 20 }]));
+    for (const mask of result.masks) {
+      expect(keptIn(mask, PATCH)).toBe(0);
+      expect(keptIn(mask, SHIRT_RECT)).toBe(1);
+    }
+    const disc = getDiscPixels(W, H, { x: 33.5 / W, y: 20.5 / H }, 4);
+    expect(disc.some((i) => i % W < 32)).toBe(true);
+    const { colours, pixels } = samplePoint(
+      makeFrame([...character, { rect: PATCH, color: FLAT }], 1).rgba,
+      W,
+      H,
+      { x: 33.5 / W, y: 20.5 / H },
+      4,
+      16,
+    );
+    expect(pixels.every((i) => i % W >= 32)).toBe(true);
+    expect(createColourMatcher(colours, [], 32)(packRgb(...SHIRT))).toBe(COLOUR_STOP);
+  });
+
+  it('the guard sees a subject that moves onto the leftover after the point frame (finding 2)', async () => {
+    const WALL = [200, 170, 140];
+    const SKIN = [210, 176, 146];
+    /** @type {(f: number) => Rect} */
+    const body = (f) => [f < 3 ? 2 : 50, 4, 8, 24];
+    const frames = Array.from({ length: FRAMES }, (_, f) =>
+      makeFrame(
+        [
+          { rect: [36, 4, 14, 24], color: WALL },
+          { rect: body(f), color: SKIN },
+        ],
+        3 + f,
+      ),
+    );
+    const clip = {
+      getProb: (/** @type {number} */ f) => frames[f].prob,
+      getPixels: (/** @type {number} */ f) => frames[f].rgba,
+    };
+    const result = await build(clip, colourObject([{ frame: 0, x: 42, y: 16 }]));
+    for (let f = 0; f < FRAMES; f++) {
+      const shares = result.colourShares.c1;
+      if (f < 3) {
+        expect(keptIn(result.masks[f], body(f))).toBe(1);
+        expect(shares[f]).toBeLessThanOrEqual(COLOUR_GUARD_SHARE);
+      } else {
+        // Skin is 13 RGB from the wall: eaten, and the guard says so
+        expect(keptIn(result.masks[f], body(f))).toBe(0);
+        expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+      }
+    }
+  });
+
+  it('the guard measures every frame when the point frame has no mask (finding 3)', async () => {
+    const WALL = [200, 170, 140];
+    const SKIN = [230, 195, 160];
+    const clip = makeClip(() => [
+      { rect: [36, 4, 14, 24], color: WALL },
+      { rect: [32, 4, 4, 24], color: SKIN },
+    ]);
+    const object = colourObject([{ frame: 0, x: 42, y: 16 }], 64);
+    const result = await buildFinalMasks({
+      frameCount: FRAMES,
+      getProb: (f) => (f === 0 ? null : clip.getProb(f)),
+      getPixels: clip.getPixels,
+      ai: aiOf({ objects: [object.edit] }),
+      objects: [object.input],
+      ...noYield,
+    });
+    const shares = result.colourShares.c1;
+    expect(shares[0]).toBe(-1);
+    for (let f = 1; f < FRAMES; f++) expect(shares[f]).toBeGreaterThan(COLOUR_GUARD_SHARE);
+  });
+
+  it('a protect point on a thin strand does not protect the pillar beside it (finding 4)', async () => {
+    const PILLAR = [90, 60, 40];
+    const STRAND = [100, 70, 48];
+    /** @type {Rect} */
+    const PILLAR_RECT = [44, 0, 12, 32];
+    /** @type {Rect} */
+    const STRAND_RECT = [41, 4, 3, 24];
+    const clip = makeClip(() => [
+      { rect: STRAND_RECT, color: STRAND },
+      { rect: PILLAR_RECT, color: PILLAR },
+    ]);
+    const result = await build(
+      clip,
+      colourObject([
+        { frame: 0, x: 50, y: 16 },
+        { frame: 0, x: 42, y: 16, mode: 'remove' },
+      ]),
+    );
+    for (const mask of result.masks) {
+      expect(keptIn(mask, PILLAR_RECT)).toBe(0);
+      expect(keptIn(mask, STRAND_RECT)).toBe(1);
+    }
+  });
+
+  it('Show mask samples the points once per frame content, not on every frame change (note)', () => {
+    const clip = makeClip(() => [{ rect: PATCH, color: FLAT }]);
+    const object = colourObject([
+      { frame: 1, x: 40, y: 20 },
+      { frame: 2, x: 40, y: 20 },
+      { frame: 3, x: 40, y: 20 },
+    ]);
+    /** @type {number[]} */
+    const reads = [];
+    /** @type {import('../../../../src/shared/masks/final-masks.js').PixelSource} */
+    const getPixels = (f) => {
+      reads.push(f);
+      return clip.getPixels(f);
+    };
+    getPixels.frameKey = (f) => `memo-test-${f}`;
+    const options = { frameCount: FRAMES, getProb: clip.getProb, getPixels, ai: aiOf() };
+    getColourRegion(options, object.input, 4);
+    expect(reads).toEqual([1, 2, 3, 4]);
+    reads.length = 0;
+    const region = getColourRegion(options, object.input, 5);
+    expect(reads).toEqual([5]);
+    expect(region?.data[20 * W + 40]).toBe(255);
   });
 });
 

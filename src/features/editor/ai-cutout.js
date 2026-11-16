@@ -15,6 +15,7 @@
 
 import { getAiModel } from '../../shared/edits/model.js';
 import {
+  clearColourSamplings,
   createDraftMaskSource,
   createFinalMaskCache,
   getColourRegion,
@@ -184,7 +185,8 @@ function getPixelContext(width, height) {
  * @returns {import('../../shared/masks/final-masks.js').PixelSource}
  */
 export function getClipPixelSource(frames) {
-  return (frameIndex, width, height) => {
+  /** @type {import('../../shared/masks/final-masks.js').PixelSource} */
+  const source = (frameIndex, width, height) => {
     const frame = frames[frameIndex];
     if (!frame?.frame) return null;
     const key = `${frame.id}|${width}x${height}`;
@@ -211,11 +213,14 @@ export function getClipPixelSource(frames) {
     }
     return data;
   };
+  source.frameKey = (frameIndex) => frames[frameIndex]?.id;
+  return source;
 }
 
-/** Forget the read pixels (a clip's frames were closed) */
+/** Forget the read pixels and what Colour points sampled (a clip's frames were closed) */
 export function clearPixelCache() {
   pixelCache.clear();
+  clearColourSamplings();
 }
 
 /**

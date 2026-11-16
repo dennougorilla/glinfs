@@ -40,7 +40,11 @@ import { announce } from '../../shared/live-region.js';
 import { getAiParamsKey } from '../../shared/masks/final-masks.js';
 import { navigate, redirect } from '../../shared/router.js';
 import { showToast } from '../../shared/toast.js';
-import { loadSettings, rememberAiCutoutModel } from '../../shared/user-settings.js';
+import {
+  loadSettings,
+  rememberAiCutoutModel,
+  rememberRemoveScope,
+} from '../../shared/user-settings.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToTimecode } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -126,6 +130,7 @@ import {
   setAiObjectTolerance,
   setAiParams,
   setAiPickTool,
+  setAiRemoveScope,
   setBackground,
   setBackgroundMethod,
   setBrush,
@@ -308,6 +313,18 @@ const AI_LIVE_IDLE_MS = 800;
  * @type {import('./types.js').SidebarTab}
  */
 let lastSidebarTab = 'frame';
+
+/**
+ * Whole / Part / Colour chosen last for a Remove fix-up (user setting)
+ * @returns {string}
+ */
+function getRememberedRemoveScope() {
+  try {
+    return loadSettings().aiCutout.lastRemoveScope;
+  } catch {
+    return 'part';
+  }
+}
 
 /** Default FPS for editor */
 const DEFAULT_FPS = 30;
@@ -541,6 +558,8 @@ export function initEditor() {
 
   // The sidebar reopens on the tab chosen last in this page session
   store.setState((state) => setSidebarTab(state, lastSidebarTab));
+  // A Remove fix-up starts in the scope chosen last (Colour: no tracking model first)
+  store.setState((state) => setAiRemoveScope(state, getRememberedRemoveScope()));
 
   previewRenderer = createEditorFrameRenderer();
   cropDragging = false;
@@ -2179,8 +2198,11 @@ function addObjectFixUp(mode, selection) {
     return;
   }
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
+  const added = store.getState().edits.background.ai.objects?.at(-1);
   announce(
-    `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
+    added && isColourObject(added)
+      ? 'Removed by colour on every frame. Select its chip to add points or Alt-click what to keep.'
+      : `Selected. It is tracked through the selection and ${mode === 'remove' ? 'removed from' : 'added to'} every frame.`,
   );
 }
 
@@ -2310,6 +2332,7 @@ function handleSetAiObjectScope(scope) {
   const object = getActiveAiObject(store.getState());
   if (!object) return;
   store.setState((state) => setAiObjectScope(state, object.id, scope));
+  if (object.mode === 'remove') rememberRemoveScope(scope);
 }
 
 /**

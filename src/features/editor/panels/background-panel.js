@@ -539,6 +539,8 @@ export function getLostObject(objects, lost, range, activeId = null) {
     ...objects.filter((o) => o.id !== activeId),
   ];
   for (const object of ordered) {
+    // A Colour fix-up is not tracked: lost frames left from before it was Colour do not count
+    if (object.scope === 'colour' && object.mode === 'remove') continue;
     const frames = (lost?.[object.id] ?? []).filter((f) => f >= range.start && f <= range.end);
     if (frames.length > 0) return { object, frames };
   }
@@ -1883,24 +1885,25 @@ export function updateBackgroundPanel(container, state, fps) {
     setValue(input, String(selected.tolerance));
     input.setAttribute('aria-valuetext', String(selected.tolerance));
   }
-  // The notice: a Colour fix-up that takes much of the subject somewhere,
-  // else a tracked one lost
-  const guard = isAi ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
+  // The notice: a tracked fix-up that lost its object (certain), else a
+  // Colour one that takes much of the cutout somewhere (an estimate)
   const lostObject =
-    isAi && !guard && !status?.objectTracking
+    isAi && !status?.objectTracking
       ? getLostObject(objects, status?.objectLost, state.selectedRange, active?.id ?? null)
       : null;
+  const guard =
+    isAi && !lostObject ? getColourGuard(objects, status?.colourShares, state.selectedRange) : null;
   setHidden(q(root, '#ai-object-lost'), !lostObject && !guard);
   setText(
     q(root, '#ai-object-lost-text'),
-    guard
-      ? getColourGuardText(guard, fps)
-      : lostObject
-        ? getObjectLostText(lostObject.object, lostObject.frames, fps)
+    lostObject
+      ? getObjectLostText(lostObject.object, lostObject.frames, fps)
+      : guard
+        ? getColourGuardText(guard, fps)
         : '',
   );
   const go = /** @type {HTMLElement} */ (q(root, '#ai-object-lost-go'));
-  go.dataset.objectId = guard?.object.id ?? lostObject?.object.id ?? '';
+  go.dataset.objectId = lostObject?.object.id ?? guard?.object.id ?? '';
   go.dataset.frame = guard ? String(guard.frame) : '';
 
   setHidden(q(root, '#background-alpha-note'), !state.clip?.hasAlpha);

@@ -5,7 +5,8 @@
  * it clears the pixels of the current mask that are 4-connected (through
  * the mask) to its points and whose colour is within the tolerance of a
  * colour sampled under those points. Each point samples a small disc on
- * the frame it was placed on; every point seeds every frame at its
+ * the frame it was placed on, limited to the region of the colour under
+ * its centre (see samplePoint); every point seeds every frame at its
  * position, so a second point placed where a panning patch has moved
  * follows it. Protect points (Alt-click) sample colours that this fix-up
  * never removes.
@@ -39,33 +40,37 @@ export const COLOUR_SAMPLE_RADIUS_PX = 4;
 export const COLOUR_SAMPLES_PER_POINT = 48;
 
 /**
- * The guard: a frame where the fix-up removes more than this share of what
- * it leaves standing on its reference frame (see getColourGuardShares) is
- * shown to the user. Between the prototype's successes (at most 1.4 % of
- * the character eaten at d = 32, 3.9 % at d = 16) and its failures (19.6 %
- * to 94 %), with room for a character that moves a few pixels.
+ * The guard: a frame where the fill takes more than this share of the
+ * cutout it is applied to beyond what is expected (see
+ * getColourGuardShares) is shown to the user. Between the prototype's
+ * successes (at most 1.4 % of the character eaten at d = 32, 3.9 % at
+ * d = 16) and its failures (19.6 % to 94 %).
  */
 export const COLOUR_GUARD_SHARE = 0.1;
 
 /**
- * The guard's reference: the fill at this share of the tolerance (at least
- * COLOUR_TOLERANCE.min). A flat leftover is taken whole well inside the
- * tolerance (GIF noise is a few RGB steps), so what only the full
- * tolerance reaches is a colour the points did not sample.
+ * What a point samples: the colours within this share of the tolerance (at
+ * least COLOUR_TOLERANCE.min) of the one under its centre, connected to it
+ * (see samplePoint). A flat leftover lies well inside it (GIF noise is a
+ * few RGB steps).
  */
-export const COLOUR_GUARD_CORE = 0.5;
+export const COLOUR_SAMPLE_CORE = 0.5;
 
 /**
- * Tolerance of the guard's reference fill
+ * The colour distance a point samples within (see COLOUR_SAMPLE_CORE)
  * @param {number} tolerance
  * @returns {number}
  */
 export function getCoreTolerance(tolerance) {
-  return Math.max(COLOUR_TOLERANCE.min, tolerance * COLOUR_GUARD_CORE);
+  return Math.max(COLOUR_TOLERANCE.min, tolerance * COLOUR_SAMPLE_CORE);
 }
 
-/** Cell size (mask pixels) of the guard's coarse grids */
-export const COLOUR_GUARD_CELL = 4;
+/**
+ * The guard counts a removed pixel farther than this from every sampled
+ * colour as a colour the points did not sample (half the default
+ * tolerance: below a tolerance of 16 nothing counts)
+ */
+export const COLOUR_GUARD_NEAR = 16;
 
 /**
  * Pack an RGB colour into one integer
@@ -90,6 +95,19 @@ export function getSampleRadius(maskWidth, sourceWidth) {
 }
 
 /**
+ * The pixel under a point
+ * @param {number} width
+ * @param {number} height
+ * @param {{ x: number, y: number }} point - fractions 0..1 of the frame
+ * @returns {number}
+ */
+function pointPixel(width, height, point) {
+  const cx = Math.min(width - 1, Math.max(0, Math.floor(point.x * width)));
+  const cy = Math.min(height - 1, Math.max(0, Math.floor(point.y * height)));
+  return cy * width + cx;
+}
+
+/**
  * Pixel indices of the disc around a point (clipped to the frame)
  * @param {number} width
  * @param {number} height
@@ -98,8 +116,9 @@ export function getSampleRadius(maskWidth, sourceWidth) {
  * @returns {number[]}
  */
 export function getDiscPixels(width, height, point, radius) {
-  const cx = Math.min(width - 1, Math.max(0, Math.floor(point.x * width)));
-  const cy = Math.min(height - 1, Math.max(0, Math.floor(point.y * height)));
+  const centre = pointPixel(width, height, point);
+  const cx = centre % width;
+  const cy = (centre - cx) / width;
   /** @type {number[]} */
   const out = [];
   const r2 = radius * radius;
@@ -116,23 +135,78 @@ export function getDiscPixels(width, height, point, radius) {
 }
 
 /**
- * The colours under a disc: its distinct colours, most frequent first, at
- * most COLOUR_SAMPLES_PER_POINT
- * @param {Uint8ClampedArray | Uint8Array} rgba - width * height * 4
- * @param {number[]} disc - pixel indices (getDiscPixels)
- * @returns {number[]} packed RGB
+ * Squared RGB distance between two pixels of a frame
+ * @param {Uint8ClampedArray | Uint8Array} rgba
+ * @param {number} i
+ * @param {number} j
  */
-export function sampleColours(rgba, disc) {
+function pixelDistSq(rgba, i, j) {
+  const dr = rgba[i * 4] - rgba[j * 4];
+  const dg = rgba[i * 4 + 1] - rgba[j * 4 + 1];
+  const db = rgba[i * 4 + 2] - rgba[j * 4 + 2];
+  return dr * dr + dg * dg + db * db;
+}
+
+/**
+ * What a point samples: the pixels of its disc in the region of the colour
+ * under its centre, and their colours (most frequent first, at most
+ * COLOUR_SAMPLES_PER_POINT). The region is the disc pixels within `near`
+ * of the centre's colour and 8-connected to it, plus disc pixels with at
+ * least 3 of their 4 neighbours in it (the other colour of a dither). A
+ * point near the subject's edge (or a protect point on a thin strand next
+ * to a pillar) so never samples what lies across the edge.
+ * @param {Uint8ClampedArray | Uint8Array} rgba - width * height * 4
+ * @param {number} width
+ * @param {number} height
+ * @param {{ x: number, y: number }} point - fractions 0..1 of the frame
+ * @param {number} radius - mask pixels
+ * @param {number} near - Euclidean RGB distance
+ * @returns {{ colours: number[], pixels: number[] }}
+ */
+export function samplePoint(rgba, width, height, point, radius, near) {
+  const disc = getDiscPixels(width, height, point, radius);
+  const centre = pointPixel(width, height, point);
+  const inDisc = new Set(disc);
+  const near2 = near * near;
+  /** @type {Set<number>} */
+  const region = new Set([centre]);
+  const queue = [centre];
+  while (queue.length > 0) {
+    const i = /** @type {number} */ (queue.pop());
+    const x = i % width;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if ((dx === 0 && dy === 0) || x + dx < 0 || x + dx >= width) continue;
+        const j = i + dy * width + dx;
+        if (!inDisc.has(j) || region.has(j) || pixelDistSq(rgba, j, centre) > near2) continue;
+        region.add(j);
+        queue.push(j);
+      }
+    }
+  }
+  /** @type {number[]} */
+  const pixels = [...region];
+  for (const i of disc) {
+    if (region.has(i)) continue;
+    const x = i % width;
+    let around = 0;
+    if (x > 0 && region.has(i - 1)) around++;
+    if (x < width - 1 && region.has(i + 1)) around++;
+    if (region.has(i - width)) around++;
+    if (region.has(i + width)) around++;
+    if (around >= 3) pixels.push(i);
+  }
   /** @type {Map<number, number>} */
   const counts = new Map();
-  for (const i of disc) {
+  for (const i of pixels) {
     const c = packRgb(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
     counts.set(c, (counts.get(c) ?? 0) + 1);
   }
-  return [...counts.entries()]
+  const colours = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, COLOUR_SAMPLES_PER_POINT)
     .map(([c]) => c);
+  return { colours, pixels };
 }
 
 /**
@@ -158,16 +232,17 @@ function nearestSq(c, colours) {
 
 /** A colour the fill stops at */
 export const COLOUR_STOP = 0;
-/** A colour the fill removes */
+/** A colour the fill removes, near a sampled colour (see COLOUR_GUARD_NEAR) */
 export const COLOUR_REMOVE = 1;
 /**
  * A colour within the tolerance of a sampled colour but protected: the
  * fill passes through it without removing it. A GIF palette often maps a
  * few pixels of the leftover onto a protected colour (one shared palette
- * entry on every frame of the generated pillar clip); stopping there left
- * whole frames of the pillar.
+ * entry on every frame of the generated pillar clip).
  */
 export const COLOUR_PASS = 2;
+/** A colour the fill removes that is not near any sampled colour (the guard counts it) */
+export const COLOUR_REMOVE_FAR = 3;
 
 /**
  * What the fill does with a colour: remove it when it is within the
@@ -180,10 +255,11 @@ export const COLOUR_PASS = 2;
  * @param {number[]} samples - packed RGB
  * @param {number[]} protects - packed RGB
  * @param {number} tolerance - Euclidean RGB distance
- * @returns {(c: number) => number} COLOUR_STOP | COLOUR_REMOVE | COLOUR_PASS, memoized per colour
+ * @returns {(c: number) => number} COLOUR_STOP | COLOUR_REMOVE | COLOUR_REMOVE_FAR | COLOUR_PASS, memoized per colour
  */
 export function createColourMatcher(samples, protects, tolerance) {
   const t2 = tolerance * tolerance;
+  const near2 = COLOUR_GUARD_NEAR * COLOUR_GUARD_NEAR;
   /** @type {Map<number, number>} */
   const memo = new Map();
   return (c) => {
@@ -192,7 +268,8 @@ export function createColourMatcher(samples, protects, tolerance) {
       const ds = nearestSq(c, samples);
       const dp = nearestSq(c, protects);
       if (ds > t2) hit = COLOUR_STOP;
-      else hit = dp <= t2 && dp <= ds ? COLOUR_PASS : COLOUR_REMOVE;
+      else if (dp <= t2 && dp <= ds) hit = COLOUR_PASS;
+      else hit = ds <= near2 ? COLOUR_REMOVE : COLOUR_REMOVE_FAR;
       memo.set(c, hit);
     }
     return hit;
@@ -211,7 +288,7 @@ export function createColourMatcher(samples, protects, tolerance) {
  * @param {(c: number) => number} matches - createColourMatcher
  * @param {Uint8Array} [out] - 0/1 region, cleared here
  * @param {Int32Array} [queue] - scratch, width * height
- * @returns {{ region: Uint8Array, count: number }}
+ * @returns {{ region: Uint8Array, count: number, far: number }} far: removed pixels not near a sampled colour
  */
 export function fillColourRegion(
   mask,
@@ -228,6 +305,7 @@ export function fillColourRegion(
   let head = 0;
   let tail = 0;
   let count = 0;
+  let far = 0;
   const test = (/** @type {number} */ i) => {
     if (out[i] || !mask[i]) return;
     const c = packRgb(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
@@ -236,8 +314,13 @@ export function fillColourRegion(
       out[i] = 2;
       return;
     }
-    out[i] = hit === COLOUR_REMOVE ? 1 : 3;
-    if (hit === COLOUR_REMOVE) count++;
+    if (hit === COLOUR_PASS) {
+      out[i] = 3;
+    } else {
+      out[i] = 1;
+      count++;
+      if (hit === COLOUR_REMOVE_FAR) far++;
+    }
     queue[tail++] = i;
   };
   for (const seed of seeds) test(seed);
@@ -250,75 +333,51 @@ export function fillColourRegion(
     if (i + width < width * height) test(i + width);
   }
   for (let i = 0; i < out.length; i++) if (out[i] !== 1) out[i] = 0;
-  return { region: out, count };
+  return { region: out, count, far };
 }
 
-/** Set bits per byte value */
-const POPCOUNT = new Uint8Array(256).map((_, v) => {
-  let n = 0;
-  for (let b = v; b; b >>= 1) n += b & 1;
-  return n;
-});
-
 /**
- * Coarse grid of a 0/1 mask, packed 8 cells per byte: a cell is set when at
- * least half of its pixels are
- * @param {Uint8Array} mask
- * @param {number} width
- * @param {number} height
- * @param {number} [cell]
- * @returns {Uint8Array} ceil(cells / 8) bytes, cells = ceil(width / cell) * ceil(height / cell)
+ * What the guard records of one frame: the cutout the fill was applied to
+ * (pixels), what it removed, and how much of that was not near a sampled
+ * colour
+ * @typedef {{ mask: number, removed: number, far: number }} ColourFrameStats
  */
-export function coarseGrid(mask, width, height, cell = COLOUR_GUARD_CELL) {
-  const cw = Math.ceil(width / cell);
-  const ch = Math.ceil(height / cell);
-  const counts = new Uint16Array(cw * ch);
-  for (let y = 0; y < height; y++) {
-    const row = ((y / cell) | 0) * cw;
-    const o = y * width;
-    for (let x = 0; x < width; x++) if (mask[o + x]) counts[row + ((x / cell) | 0)]++;
-  }
-  const out = new Uint8Array(Math.ceil((cw * ch) / 8));
-  for (let cy = 0; cy < ch; cy++) {
-    const h = Math.min(cell, height - cy * cell);
-    for (let cx = 0; cx < cw; cx++) {
-      const w = Math.min(cell, width - cx * cell);
-      const i = cy * cw + cx;
-      if (counts[i] * 2 >= w * h) out[i >> 3] |= 1 << (i & 7);
-    }
-  }
-  return out;
-}
 
 /**
- * The guard's share per frame: how much of what the fix-up leaves standing
- * on its reference frame (the frame of the nearest of its points, which
- * the user looked at when placing it) it removes on this frame. The
- * background of a shot hardly moves (87-100 % of the background within
- * 8/255 of the median in the bake-off clips) and neither do the
- * characters, so what a fill takes there beyond its own frame is the
- * character; a leftover that is bigger on some frame does not count.
- * @param {Map<number, Uint8Array>} removed - frame -> coarseGrid of the removed region
- * @param {Map<number, Uint8Array>} kept - point frame -> coarseGrid of the mask left after the fix-up
+ * The guard's share per frame, of the cutout the fill is applied to there
+ * (the subject plus the leftover), the larger of:
+ * - what it removes that is not near any sampled colour: a colour the
+ *   points did not sample (shelf rows that run into the shirt);
+ * - what it removes beyond what it removes on the reference frame (the
+ *   nearest point frame with a cutout, else the median frame): the subject
+ *   moving onto the leftover, a cut. The background of a shot hardly moves
+ *   (87-100 % of it within 8/255 of the median in the bake-off clips), so
+ *   the leftover takes about the same share on every frame.
+ * Shares, not positions, so a subject that moves is still seen.
+ * @param {Map<number, ColourFrameStats>} stats - per frame the fill ran on
  * @param {number[]} pointFrames - frames of the fix-up's points
  * @returns {Map<number, number>} frame -> share 0..1
  */
-export function getColourGuardShares(removed, kept, pointFrames) {
+export function getColourGuardShares(stats, pointFrames) {
   /** @type {Map<number, number>} */
   const shares = new Map();
-  const refs = [...new Set(pointFrames)].filter((f) => kept.has(f)).sort((a, b) => a - b);
-  if (refs.length === 0) return shares;
-  for (const [frame, grid] of removed) {
-    let ref = refs[0];
-    for (const r of refs) if (Math.abs(r - frame) < Math.abs(ref - frame)) ref = r;
-    const base = /** @type {Uint8Array} */ (kept.get(ref));
-    let total = 0;
-    let hit = 0;
-    for (let i = 0; i < base.length; i++) {
-      total += POPCOUNT[base[i]];
-      hit += POPCOUNT[base[i] & grid[i]];
+  /** @type {Map<number, number>} */
+  const removedShare = new Map();
+  for (const [f, s] of stats) if (s.mask > 0) removedShare.set(f, s.removed / s.mask);
+  if (removedShare.size === 0) return shares;
+  const refs = [...new Set(pointFrames)].filter((f) => removedShare.has(f));
+  const sorted = [...removedShare.values()].sort((a, b) => a - b);
+  const median = sorted[Math.floor((sorted.length - 1) / 2)];
+  for (const [f, s] of stats) {
+    const share = removedShare.get(f);
+    if (share === undefined) continue;
+    let reference = median;
+    if (refs.length > 0) {
+      let ref = refs[0];
+      for (const r of refs) if (Math.abs(r - f) < Math.abs(ref - f)) ref = r;
+      reference = /** @type {number} */ (removedShare.get(ref));
     }
-    shares.set(frame, total > 0 ? hit / total : 0);
+    shares.set(f, Math.max(s.far / s.mask, share - reference, 0));
   }
   return shares;
 }

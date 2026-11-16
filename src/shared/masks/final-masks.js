@@ -23,14 +23,13 @@
 
 import { getAiModel, getRegionPicks, isClickModel } from '../edits/model.js';
 import {
-  coarseGrid,
   createColourMatcher,
   fillColourRegion,
   getColourGuardShares,
   getCoreTolerance,
   getDiscPixels,
   getSampleRadius,
-  sampleColours,
+  samplePoint,
 } from './colour-fill.js';
 import {
   createPickTracker,
@@ -73,8 +72,9 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
 
 /**
  * The frame's pixels at the mask's size, RGBA (null: not available, a
- * Colour fix-up then changes nothing on that frame)
- * @typedef {(frameIndex: number, width: number, height: number) => Uint8ClampedArray | Uint8Array | null} PixelSource
+ * Colour fix-up then changes nothing on that frame). frameKey, when set,
+ * names the frame's content (its id), so what points sample is memoized.
+ * @typedef {((frameIndex: number, width: number, height: number) => Uint8ClampedArray | Uint8Array | null) & { frameKey?: (frameIndex: number) => string | number | null | undefined }} PixelSource
  */
 
 /**
@@ -530,15 +530,105 @@ export async function getSurvivingMask(options, frame) {
 }
 
 /**
+ * What the points of one Colour fix-up sampled
+ * @typedef {{ samples: number[], protects: number[], seeds: number[] }} ColourSampling
+ */
+
+/** Samplings kept (Show mask re-reads them on every frame change otherwise) */
+const SAMPLING_CACHE_SIZE = 8;
+
+/** @type {Map<string, ColourSampling>} */
+const samplingCache = new Map();
+
+/** @type {{ size: number, region: Uint8Array, queue: Int32Array } | null} */
+let fillScratch = null;
+
+/**
+ * Scratch arrays of the fill, shared: a fill runs synchronously and is done
+ * with them when it returns
+ * @param {number} size
+ */
+function getFillScratch(size) {
+  if (fillScratch?.size !== size) {
+    fillScratch = { size, region: new Uint8Array(size), queue: new Int32Array(size) };
+  }
+  return fillScratch;
+}
+
+/**
+ * Sample the points of a Colour fix-up on the frames they were placed on.
+ * Memoized by the frames' identity (PixelSource.frameKey), the points, the
+ * tolerance and the size.
+ * @param {NonNullable<ObjectMaskInput['colour']>} colour
+ * @param {PixelSource} getPixels
+ * @param {(f: number) => Uint8ClampedArray | Uint8Array | null} pixelsOf
+ * @param {number} width
+ * @param {number} height
+ * @param {number} radius
+ * @returns {ColourSampling}
+ */
+function sampleColourPoints(colour, getPixels, pixelsOf, width, height, radius) {
+  const frameKey = getPixels.frameKey;
+  let key = '';
+  if (frameKey) {
+    const frames = colour.clicks.map((c) => frameKey(c.frame));
+    if (frames.every((k) => k !== null && k !== undefined)) {
+      key = `${width}x${height}:${radius}:${colour.tolerance}:${colour.clicks
+        .map((c, n) => `${frames[n]}:${c.x}:${c.y}:${c.mode}`)
+        .join(';')}`;
+      const hit = samplingCache.get(key);
+      if (hit) {
+        samplingCache.delete(key);
+        samplingCache.set(key, hit);
+        return hit;
+      }
+    }
+  }
+  const near = getCoreTolerance(colour.tolerance);
+  /** @type {number[]} */
+  const samples = [];
+  /** @type {number[]} */
+  const protects = [];
+  /** @type {Set<number>} */
+  const seeds = new Set();
+  for (const click of colour.clicks) {
+    const rgba = pixelsOf(click.frame);
+    if (!rgba || rgba.length < width * height * 4) continue;
+    const point = samplePoint(rgba, width, height, click, radius, near);
+    if (click.mode === 'keep') {
+      samples.push(...point.colours);
+      // The whole disc seeds: a pixel of a colour not sampled stops the fill
+      for (const i of getDiscPixels(width, height, click, radius)) seeds.add(i);
+    } else {
+      protects.push(...point.colours);
+    }
+  }
+  const sampling = { samples, protects, seeds: [...seeds] };
+  if (key) {
+    samplingCache.set(key, sampling);
+    while (samplingCache.size > SAMPLING_CACHE_SIZE) {
+      samplingCache.delete(/** @type {string} */ (samplingCache.keys().next().value));
+    }
+  }
+  return sampling;
+}
+
+/** Forget the samplings (a clip's frames were closed) */
+export function clearColourSamplings() {
+  samplingCache.clear();
+  fillScratch = null;
+}
+
+/**
  * The Colour fix-ups of a build or draft, at one mask size: their seeds
  * and colours (sampled once, on the frames their points were placed on),
- * and the guard's grids
+ * and what the guard records
  * @param {ObjectMaskInput[]} objects
  * @param {PixelSource | undefined} getPixels
  * @param {number} width - mask size
  * @param {number} height
  * @param {number | undefined} sourceWidth
- * @param {{ guard?: boolean }} [options] - guard: keep the guard's grids
+ * @param {{ guard?: boolean }} [options] - guard: record what each fill takes
  */
 function createColourStage(objects, getPixels, width, height, sourceWidth, options = {}) {
   const size = width * height;
@@ -551,46 +641,26 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
   };
   const layers = objects.map((object) => {
     if (!object.colour || !getPixels) return null;
-    /** @type {number[]} */
-    const samples = [];
-    /** @type {number[]} */
-    const protects = [];
-    /** @type {Set<number>} */
-    const seeds = new Set();
-    /** @type {Set<number>} */
-    const pointFrames = new Set();
-    for (const click of object.colour.clicks) {
-      const disc = getDiscPixels(width, height, click, radius);
-      const rgba = pixelsOf(click.frame);
-      if (click.mode === 'keep') {
-        for (const i of disc) seeds.add(i);
-        pointFrames.add(click.frame);
-        if (rgba) samples.push(...sampleColours(rgba, disc));
-      } else if (rgba) {
-        protects.push(...sampleColours(rgba, disc));
-      }
-    }
+    const { samples, protects, seeds } = sampleColourPoints(
+      object.colour,
+      getPixels,
+      pixelsOf,
+      width,
+      height,
+      radius,
+    );
     if (samples.length === 0) return null;
-    const { tolerance } = object.colour;
     return {
       id: object.id ?? '',
-      seeds: [...seeds],
-      pointFrames,
-      matches: createColourMatcher(samples, protects, tolerance),
-      core: options.guard
-        ? createColourMatcher(samples, protects, getCoreTolerance(tolerance))
-        : null,
-      /** @type {Map<number, Uint8Array>} */
-      removed: new Map(),
-      /** @type {Map<number, Uint8Array>} */
-      kept: new Map(),
+      seeds,
+      pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
+      matches: createColourMatcher(samples, protects, object.colour.tolerance),
+      /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
+      stats: options.guard ? new Map() : null,
     };
   });
   sampled.clear();
   const active = layers.some(Boolean);
-  const region = active ? new Uint8Array(size) : null;
-  const queue = active ? new Int32Array(size) : null;
-  const keptScratch = active && options.guard ? new Uint8Array(size) : null;
 
   return {
     active,
@@ -604,26 +674,12 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
      */
     fillFor(k, f, framePixels) {
       const layer = layers[k];
-      if (!layer || !region || !queue) return null;
+      if (!layer) return null;
       return (out) => {
         const rgba = framePixels();
         if (!rgba || rgba.length < size * 4) return;
-        if (layer.core && keptScratch && layer.pointFrames.has(f)) {
-          // The guard's reference: what the core fill leaves standing here
-          const core = fillColourRegion(
-            out,
-            width,
-            height,
-            rgba,
-            layer.seeds,
-            layer.core,
-            region,
-            queue,
-          );
-          for (let i = 0; i < size; i++) keptScratch[i] = out[i] && !core.region[i] ? 1 : 0;
-          layer.kept.set(f, coarseGrid(keptScratch, width, height));
-        }
-        const { region: removed } = fillColourRegion(
+        const { region, queue } = getFillScratch(size);
+        const { count, far } = fillColourRegion(
           out,
           width,
           height,
@@ -633,8 +689,13 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
           region,
           queue,
         );
-        if (layer.core) layer.removed.set(f, coarseGrid(removed, width, height));
-        for (let i = 0; i < size; i++) if (removed[i]) out[i] = 0;
+        if (layer.stats) {
+          // The guard's measure: the cutout this fill is applied to
+          let mask = 0;
+          for (let i = 0; i < size; i++) if (out[i]) mask++;
+          layer.stats.set(f, { mask, removed: count, far });
+        }
+        if (count > 0) for (let i = 0; i < size; i++) if (region[i]) out[i] = 0;
       };
     },
     /**
@@ -646,13 +707,12 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
       /** @type {Record<string, number[]>} */
       const out = {};
       for (const layer of layers) {
-        if (!layer?.core) continue;
-        const shares = getColourGuardShares(layer.removed, layer.kept, [...layer.pointFrames]);
+        if (!layer?.stats) continue;
+        const shares = getColourGuardShares(layer.stats, layer.pointFrames);
         const perFrame = new Array(frameCount).fill(-1);
         for (const [f, share] of shares) perFrame[f] = Math.round(share * 1000) / 1000;
         out[layer.id] = perFrame;
-        layer.removed.clear();
-        layer.kept.clear();
+        layer.stats.clear();
       }
       return out;
     },
