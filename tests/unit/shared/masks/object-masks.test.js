@@ -38,10 +38,11 @@ describe('getObjectMaskSize', () => {
 });
 
 describe('getRemoveGrowRadius', () => {
-  it('is 2 px at 1024 and at least 1 px', () => {
-    expect(getRemoveGrowRadius(1024)).toBe(2);
+  it('is 2 px of a 1024-wide mask, and at least 3 px (cutout-ux 6: no thin outline)', () => {
+    expect(getRemoveGrowRadius(1024)).toBe(3);
     expect(getRemoveGrowRadius(2048)).toBe(4);
-    expect(getRemoveGrowRadius(64)).toBe(1);
+    expect(getRemoveGrowRadius(604)).toBe(3);
+    expect(getRemoveGrowRadius(64)).toBe(3);
   });
 });
 
@@ -116,12 +117,12 @@ describe('applyObjectMasks', () => {
     );
     expect(mask).toEqual(before);
     for (let y = 0; y < H; y++) {
-      // Kept up to the grow radius (1 px at this width) before the shelf
-      expect(out[y * W + 14]).toBe(1);
-      expect(out[y * W + 15]).toBe(0);
+      // Kept up to the grow radius (3 px) before the shelf
+      expect(out[y * W + 12]).toBe(1);
+      expect(out[y * W + 13]).toBe(0);
       expect(out[y * W + 20]).toBe(0);
     }
-    expect(count(out)).toBe(15 * H);
+    expect(count(out)).toBe(13 * H);
   });
 
   it('adds an added object, read at any size', () => {
@@ -155,8 +156,8 @@ describe('applyObjectMasks', () => {
       createObjectScratch(W * H),
     );
     expect(146).toBeLessThan(OBJECT_MASK_THRESHOLD);
-    // Rows 0..3 plus the 1 px grow are removed, the rest stays
-    expect(count(out)).toBe(W * (H - 5));
+    // Rows 0..3 plus the 3 px grow are removed, the rest stays
+    expect(count(out)).toBe(W * (H - 7));
   });
 
   it('applies layers in order: a later one wins where they overlap', () => {
