@@ -112,6 +112,9 @@ const LOOP_OPTIONS = [0, 1, 2, 3, 5, 10];
  * @property {number} durationSeconds - Playback length of the GIF
  * @property {{ limited: boolean, effectiveSpeed: number }} speedLimit
  * @property {boolean} sizeLimited - A target size is set
+ * @property {'ready' | 'pending' | 'unknown'} [estimate='ready'] - The size
+ *   estimate (state.estimatedSizeMB): ready, still being sample-encoded, or
+ *   unknown until the AI cutout has analyzed the frames
  */
 
 /**
@@ -407,16 +410,31 @@ function renderSettings(params, cleanups) {
   root.appendChild(
     createElement('footer', { className: 'export-footer' }, [
       createElement('p', { className: 'export-estimate', id: 'export-estimate' }, [
-        facts.sizeLimited && settings.targetSizeMB
-          ? `Target ≤ ${formatFileSize(settings.targetSizeMB * BYTES_PER_MB)} (estimated ${formatFileSize(
-              state.estimatedSizeMB * BYTES_PER_MB,
-            )} with these settings)`
-          : `Estimated size ≈ ${formatFileSize(state.estimatedSizeMB * BYTES_PER_MB)}`,
+        estimateText(state, facts),
       ]),
       exportButton,
     ]),
   );
   return root;
+}
+
+/**
+ * The footer's size line
+ * @param {import('./types.js').ExportState} state
+ * @param {ExportSettingsFacts} facts
+ * @returns {string}
+ */
+function estimateText(state, facts) {
+  const status = facts.estimate ?? 'ready';
+  const estimate = formatFileSize(state.estimatedSizeMB * BYTES_PER_MB);
+  const targetMB = state.settings.targetSizeMB;
+  if (facts.sizeLimited && targetMB) {
+    const target = `Target ≤ ${formatFileSize(targetMB * BYTES_PER_MB)}`;
+    return status === 'ready' ? `${target} (estimated ${estimate} with these settings)` : target;
+  }
+  if (status === 'pending') return 'Estimating size…';
+  if (status === 'unknown') return 'Size known after the cutout is analyzed';
+  return `Estimated size ≈ ${estimate}`;
 }
 
 /**
@@ -565,10 +583,8 @@ function renderQualitySection(state, handlers, cleanups) {
   const dither = /** @type {HTMLInputElement} */ (
     createElement('input', { type: 'checkbox', id: 'export-dither', className: 'export-checkbox' })
   );
-  dither.checked = settings.dithering;
-  cleanups.push(
-    on(dither, 'change', () => handlers.onSettingsChange({ dithering: dither.checked })),
-  );
+  dither.checked = settings.dither;
+  cleanups.push(on(dither, 'change', () => handlers.onSettingsChange({ dither: dither.checked })));
 
   return section('export-quality-heading', 'Quality', [
     createElement('div', { className: 'export-field' }, [
@@ -582,9 +598,7 @@ function renderQualitySection(state, handlers, cleanups) {
     createElement('div', { className: 'export-check' }, [
       dither,
       createElement('label', { for: 'export-dither' }, ['Dithering']),
-      createElement('span', { className: 'export-hint' }, [
-        'Smoother gradients, slightly larger files',
-      ]),
+      createElement('span', { className: 'export-hint' }, ['Smoother gradients, larger files']),
     ]),
   ]);
 }

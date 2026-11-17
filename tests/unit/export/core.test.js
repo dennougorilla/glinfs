@@ -16,7 +16,7 @@ describe('createDefaultSettings', () => {
     expect(settings.quality).toBe(0.8);
     expect(settings.frameSkip).toBe(1);
     expect(settings.playbackSpeed).toBe(1);
-    expect(settings.dithering).toBe(true);
+    expect(settings.dither).toBe(false);
     expect(settings.loopCount).toBe(0);
     expect(settings.openInNewTab).toBe(false);
     expect(settings.encoderPreset).toBe('balanced');
@@ -29,7 +29,7 @@ describe('validateSettings', () => {
       quality: 0.8,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -44,7 +44,7 @@ describe('validateSettings', () => {
       quality: 0.05,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -59,7 +59,7 @@ describe('validateSettings', () => {
       quality: 1.5,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -74,7 +74,7 @@ describe('validateSettings', () => {
       quality: 0.8,
       frameSkip: 10,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -89,7 +89,7 @@ describe('validateSettings', () => {
       quality: 0.8,
       frameSkip: 1,
       playbackSpeed: 0.1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -104,7 +104,7 @@ describe('validateSettings', () => {
       quality: 0.8,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: -1,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -119,7 +119,7 @@ describe('validateSettings', () => {
       quality: 0.8,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: true,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: /** @type {any} */ ('invalid'),
@@ -136,7 +136,7 @@ describe('validateSettings', () => {
         quality: 0.8,
         frameSkip: 1,
         playbackSpeed: 1,
-        dithering: true,
+        dither: true,
         loopCount: 0,
         openInNewTab: false,
         encoderPreset: /** @type {any} */ (preset),
@@ -150,7 +150,7 @@ describe('validateSettings', () => {
       quality: 0.05,
       frameSkip: 10,
       playbackSpeed: 0.1,
-      dithering: true,
+      dither: true,
       loopCount: -1,
       openInNewTab: false,
       encoderPreset: /** @type {any} */ ('invalid'),
@@ -168,7 +168,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: true,
+      dither: true,
       frameSkip: 1,
     });
 
@@ -184,7 +184,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.3,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     });
 
@@ -193,7 +193,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 1.0,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     });
 
@@ -206,7 +206,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     });
 
@@ -215,7 +215,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: true,
+      dither: true,
       frameSkip: 1,
     });
 
@@ -228,7 +228,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     });
 
@@ -237,7 +237,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: false,
+      dither: false,
       frameSkip: 2,
     });
 
@@ -251,7 +251,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     };
 
@@ -267,7 +267,7 @@ describe('estimateSize', () => {
       width: 640,
       height: 480,
       quality: 0.8,
-      dithering: false,
+      dither: false,
       frameSkip: 1,
     };
 

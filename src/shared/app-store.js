@@ -151,6 +151,8 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {number} frameCount - Frame count, stable across compression
  * @property {CompressedClip|null} compressed - Compressed bytes ('compressed'/'decoding' only)
  * @property {number} [byteLengthMB] - Compressed size in MB (set once compressed)
+ * @property {boolean} [openFailed] - The last open (decode) failed; the
+ *   entry is 'compressed' again and shows it until the next open starts
  * @property {number} fps - Clip FPS (see ClipPayload.fps)
  * @property {number} capturedAt - Timestamp when clip was created
  * @property {boolean} [hasAlpha] - Carried with the clip; never compressed when true
@@ -790,6 +792,7 @@ export async function prepareQueuedClipForPromote(id) {
   }
 
   entry.status = 'decoding';
+  entry.openFailed = false;
   emitQueueChanged('decode-start');
 
   const compressed = entry.compressed;
@@ -798,14 +801,16 @@ export async function prepareQueuedClipForPromote(id) {
     config: compressed.config,
   });
   const live = state.clipQueue.includes(entry);
+  // The chunks were cloned into the worker, so the compressed bytes are
+  // intact on every exit but success. An entry deleted meanwhile still
+  // returns to 'compressed': the Undo hold owns it, and Undo must restore a
+  // clip that opens, not one stuck in 'decoding'
+  if (!live || !result.ok) entry.status = 'compressed';
+  // Shown on the entry itself until the next open starts
+  if (!result.ok) entry.openFailed = true;
 
   if (!result.ok) {
-    if (live) {
-      // The chunks were cloned into the worker, so the compressed bytes are
-      // intact — the entry simply returns to 'compressed'
-      entry.status = 'compressed';
-      emitQueueChanged('decode-error');
-    }
+    if (live) emitQueueChanged('decode-error');
     return { ok: false, reason: 'decode-failed' };
   }
 

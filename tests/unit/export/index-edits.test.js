@@ -14,6 +14,7 @@ import {
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
 import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
 import { GifEncoderManager } from '../../../src/workers/worker-manager.js';
+import { fakeGifBlob } from './fake-gif.js';
 
 /**
  * Export dialog wiring for edits, transparency, imported clips, the editor
@@ -58,6 +59,12 @@ function inject({ editorExtras = {}, clipExtras = {}, clipLevel = {}, range, cou
 /** @param {string} selector */
 function $(selector) {
   return /** @type {HTMLElement | null} */ (document.querySelector(selector));
+}
+
+/** The KB the estimate line shows, or NaN */
+function estimateKB() {
+  const match = /≈ ([\d.]+) KB$/.exec($('#export-estimate')?.textContent ?? '');
+  return match ? Number(match[1]) : Number.NaN;
 }
 
 function clickExport() {
@@ -126,7 +133,136 @@ describe('export dialog: plain screen captures', () => {
     inject({ count: 30 });
     dialog = openExportDialog();
     expect($('#export-summary')?.textContent).toBe('16×12 · 30 frames · 1.00s at 1×');
-    expect($('#export-estimate')?.textContent).toMatch(/^Estimated size ≈ /);
+    // Sample-encoded after a quiet moment; the heuristic number is not shown
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+  });
+
+  it('shows the size of a sample encode of consecutive frames, extrapolated', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(10_000 * (params.frameIndices?.length ?? 30), params.frameIndices?.length ?? 30),
+    );
+    dialog = openExportDialog();
+    await vi.waitFor(() =>
+      expect($('#export-estimate')?.textContent).toMatch(/^Estimated size ≈ /),
+    );
+
+    const sample = lastEncodeParams();
+    expect(sample.frameIndices).toEqual([0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 28, 29]);
+    // No color cap: the colors and the encoder come from the settings
+    expect(sample.maxColors).toBeUndefined();
+    // 30 frames of ~10 KB
+    expect(estimateKB()).toBeCloseTo(300, 0);
+  });
+
+  it('suggests half the sampled estimate as the target while the target is off', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(200_000 * params.frameIndices.length, params.frameIndices.length),
+    );
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect($('#export-estimate')?.textContent).toMatch(/≈ 6\.0 MB$/));
+
+    // 30 frames of ~200 KB: 6 MB, half of it 3 MB
+    expect(/** @type {HTMLInputElement} */ ($('#export-target-mb')).value).toBe('3');
+  });
+
+  it('estimates with the encoder the export uses when a target size forces gifenc', async () => {
+    updateSetting('export', 'encoderId', 'gifsicle-wasm');
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(10_000 * params.frameIndices.length, params.frameIndices.length),
+    );
+    const sampleEncoders = () =>
+      vi.mocked(encodeGif).mock.calls.map(([params]) => params.settings.encoderId);
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(sampleEncoders()).toEqual(['gifsicle-wasm']));
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+
+    // A target size exports with gifenc: the estimate follows
+    change('#export-target-enabled', true);
+    await vi.waitFor(() => expect(sampleEncoders()).toEqual(['gifsicle-wasm', 'gifenc-js']));
+
+    change('#export-target-enabled', false);
+    await vi.waitFor(() =>
+      expect(sampleEncoders()).toEqual(['gifsicle-wasm', 'gifenc-js', 'gifsicle-wasm']),
+    );
+  });
+
+  it('estimates again when an export started during sampling is cancelled', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(10_000 * params.frameIndices.length, params.frameIndices.length),
+    );
+    // The export's encode runs until it is cancelled
+    vi.mocked(encodeGif).mockImplementationOnce(
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('Encoding cancelled', 'AbortError')),
+          );
+        }),
+    );
+    dialog = openExportDialog();
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    clickExport();
+    await vi.waitFor(() => expect($('#export-cancel')).not.toBeNull());
+    $('#export-cancel')?.dispatchEvent(new MouseEvent('click'));
+
+    await vi.waitFor(() => expect($('#export-settings')).not.toBeNull());
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+  });
+
+  it.each([
+    ['Export', () => clickExport()],
+    ['Close', () => dialog?.close()],
+  ])('disposes the estimate worker on %s while the sample GIF is being read', async (_l, act) => {
+    inject({ count: 30 });
+    /** @type {any} */
+    let estimateManager = null;
+    vi.mocked(encodeGif).mockImplementation(async (params) => {
+      if (!params.frameIndices) return new Promise(() => {});
+      estimateManager = params.encoderManager;
+      // The encode is done; reading its bytes never finishes
+      return /** @type {Blob} */ (
+        /** @type {unknown} */ ({ size: 100, arrayBuffer: () => new Promise(() => {}) })
+      );
+    });
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(estimateManager).not.toBeNull());
+    const dispose = vi.spyOn(estimateManager, 'dispose');
+
+    act();
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it('does not offer dithering when the WASM encoder runs', () => {
+    updateSetting('export', 'encoderId', 'gifsicle-wasm');
+    inject({ count: 30 });
+    dialog = openExportDialog();
+    expect($('#export-dither')).toBeNull();
+
+    change('#export-target-enabled', true);
+    // A target size encodes with gifenc, which dithers
+    expect($('#export-dither')).not.toBeNull();
+  });
+
+  it('re-estimates when a setting that changes the size changes', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(
+        (params.settings.frameSkip === 2 ? 5_000 : 10_000) * params.frameIndices.length,
+        params.frameIndices.length,
+      ),
+    );
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+
+    change('#export-frame-skip', '2');
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    // 15 GIF frames of ~5 KB
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(75, 0));
   });
 });
 
@@ -399,7 +535,10 @@ describe('export dialog: target size', () => {
     vi.mocked(encodeGif).mockImplementation(async (params) => {
       if (params.frameIndices) {
         const perFrame = (200 * 1024 * (params.maxColors ?? 256)) / 256;
-        return new Blob([new Uint8Array(Math.round(perFrame * params.frameIndices.length))]);
+        return fakeGifBlob(
+          Math.round(perFrame * params.frameIndices.length),
+          params.frameIndices.length,
+        );
       }
       return new Blob([new Uint8Array(900 * 1024)], { type: 'image/gif' });
     });
@@ -412,7 +551,9 @@ describe('export dialog: target size', () => {
     const full = calls.filter((params) => !params.frameIndices);
     // 30 frames at 256 colors ≈ 6 MB, 128 ≈ 3 MB, 64 ≈ 1.5 MB, 32 ≈ 0.75 MB
     expect(samples.map((params) => params.maxColors)).toEqual([103, 64, 32]);
-    expect(samples[0].frameIndices).toHaveLength(6);
+    // Runs of consecutive frames across the clip (frame differencing makes a
+    // frame cost what changed since the one before)
+    expect(samples[0].frameIndices).toEqual([0, 1, 2, 9, 10, 11, 18, 19, 20, 27, 28, 29]);
     expect(samples[0].mergeIdenticalFrames).toBe(false);
     expect(full).toHaveLength(1);
     expect(full[0]).toMatchObject({ maxColors: 32, scale: 1 });
@@ -431,7 +572,7 @@ describe('export dialog: target size', () => {
     // Only the 50 % sample fits
     vi.mocked(encodeGif).mockImplementation(async (params) =>
       params.frameIndices
-        ? /** @type {any} */ ({ size: params.scale === 0.5 ? 100 : 50_000_000 })
+        ? fakeGifBlob(params.scale === 0.5 ? 100 : 2_000_000, params.frameIndices.length)
         : new Blob([new Uint8Array(900_000)], { type: 'image/gif' }),
     );
     dialog = openExportDialog();
@@ -464,7 +605,7 @@ describe('export dialog: target size', () => {
     // Estimates always fit; every real encode is 2 MB
     vi.mocked(encodeGif).mockImplementation(async (params) =>
       params.frameIndices
-        ? new Blob([new Uint8Array(100)])
+        ? fakeGifBlob(100, params.frameIndices.length)
         : new Blob([new Uint8Array(2 * 1024 * 1024)], { type: 'image/gif' }),
     );
     dialog = openExportDialog();
@@ -487,7 +628,7 @@ describe('export dialog: target size', () => {
     // upload limit, though under 10 MiB
     vi.mocked(encodeGif).mockImplementation(async (params) =>
       params.frameIndices
-        ? new Blob([new Uint8Array(100)])
+        ? fakeGifBlob(100, params.frameIndices.length)
         : new Blob([new Uint8Array(10_200_000)], { type: 'image/gif' }),
     );
     dialog = openExportDialog();

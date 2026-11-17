@@ -17,7 +17,9 @@
  *   from the editor's playback speed (the editor speed IS the GIF speed);
  *   the stored user setting of the same name is only the default speed of a
  *   new clip
- * @property {boolean} dithering - Enable dithering for smoother gradients
+ * @property {boolean} dither - Ordered dithering for smoother gradients (gifenc).
+ *   Stored as `dither`, not the old `dithering`: that setting never reached an
+ *   encoder and defaulted to on, so stored values must not switch dithering on
  * @property {number} loopCount - 0 for infinite, 1+ for specific count
  * @property {boolean} openInNewTab - Open result in new tab vs download
  * @property {EncoderPreset} encoderPreset - Selected encoder preset

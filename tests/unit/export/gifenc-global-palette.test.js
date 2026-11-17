@@ -10,11 +10,19 @@ vi.mock('gifenc', async (importOriginal) => {
   return {
     ...actual,
     quantize: vi.fn(actual.quantize),
-    applyPalette: vi.fn(actual.applyPalette),
   };
 });
 
-import { applyPalette, quantize } from 'gifenc';
+vi.mock('../../../src/features/export/encoders/apply-palette.js', async (importOriginal) => {
+  const actual =
+    /** @type {typeof import('../../../src/features/export/encoders/apply-palette.js')} */ (
+      await importOriginal()
+    );
+  return { applyPaletteFast: vi.fn(actual.applyPaletteFast) };
+});
+
+import { quantize } from 'gifenc';
+import { applyPaletteFast as applyPalette } from '../../../src/features/export/encoders/apply-palette.js';
 import { createGifencEncoder } from '../../../src/features/export/encoders/gifenc-encoder.js';
 
 /**
