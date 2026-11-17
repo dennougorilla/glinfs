@@ -4,7 +4,7 @@ import { initEditor } from '../../../src/features/editor/index.js';
 import { initEditorState } from '../../../src/features/editor/state.js';
 import { renderEditorScreen, updateTimelineHeader } from '../../../src/features/editor/ui.js';
 import { resetAppStore, setClipPayload } from '../../../src/shared/app-store.js';
-import { frameToTimecode } from '../../../src/shared/utils/format.js';
+import { frameToClock, frameToTimecode } from '../../../src/shared/utils/format.js';
 
 /**
  * Create mock ImageData for testing
@@ -105,7 +105,19 @@ describe('Toolbar time display updates (issue #44)', () => {
 
       const totalEl = container.querySelector('.time-display .total');
       expect(totalEl).not.toBeNull();
-      expect(totalEl?.textContent).toBe(frameToTimecode(30, 30)); // "01:00"
+      expect(totalEl?.textContent).toBe(frameToClock(30, 30)); // "0:01.0"
+    });
+
+    it('shows the clock in seconds with tenths and keeps frames in the IN / OUT fields', () => {
+      // A 4.1 s clip used to read "00:00 / 04:04", like four minutes
+      const state = initEditorState(createClip(createTestFrames(124), 30));
+      const result = renderEditorScreen(container, state, createHandlers(), 30);
+      cleanup = result.cleanup;
+
+      expect(container.querySelector('.time-display .current')?.textContent).toBe('0:00.0');
+      expect(container.querySelector('.time-display .total')?.textContent).toBe('0:04.1');
+      expect(container.querySelector('.timeline-in-value')?.textContent).toBe('00:00');
+      expect(container.querySelector('.timeline-out-value')?.textContent).toBe('04:03');
     });
 
     it('updateTimelineHeader recomputes current and total time from its arguments', () => {
@@ -118,8 +130,8 @@ describe('Toolbar time display updates (issue #44)', () => {
 
       const currentEl = container.querySelector('.time-display .current');
       const totalEl = container.querySelector('.time-display .total');
-      expect(currentEl?.textContent).toBe(frameToTimecode(3, 30)); // "00:03"
-      expect(totalEl?.textContent).toBe(frameToTimecode(10, 30)); // "00:10"
+      expect(currentEl?.textContent).toBe(frameToClock(3, 30)); // "0:00.1"
+      expect(totalEl?.textContent).toBe(frameToClock(10, 30)); // "0:00.3"
 
       // Existing timeline header fields keep working
       expect(container.querySelector('.timeline-in-value')?.textContent).toBe(
@@ -139,7 +151,7 @@ describe('Toolbar time display updates (issue #44)', () => {
       updateTimelineHeader(container, { start: 0, end: 9 }, 20, 30);
 
       const currentEl = container.querySelector('.time-display .current');
-      expect(currentEl?.textContent).toBe(frameToTimecode(9, 30)); // clamped to last position
+      expect(currentEl?.textContent).toBe(frameToClock(9, 30)); // clamped to last position
     });
   });
 
@@ -175,7 +187,7 @@ describe('Toolbar time display updates (issue #44)', () => {
       const container = /** @type {HTMLElement} */ (document.querySelector('#main-content'));
 
       expect(container.querySelector('.time-display .total')?.textContent).toBe(
-        frameToTimecode(30, 30),
+        frameToClock(30, 30),
       );
 
       // Move the playhead inside the future selection (leading throttle call)
@@ -186,10 +198,10 @@ describe('Toolbar time display updates (issue #44)', () => {
       vi.advanceTimersByTime(20);
 
       expect(container.querySelector('.time-display .current')?.textContent).toBe(
-        frameToTimecode(3, 30), // frame 8 is 3 frames past the IN point
+        frameToClock(3, 30), // frame 8 is 3 frames past the IN point
       );
       expect(container.querySelector('.time-display .total')?.textContent).toBe(
-        frameToTimecode(10, 30), // 10 selected frames
+        frameToClock(10, 30), // 10 selected frames
       );
     });
 
@@ -214,10 +226,10 @@ describe('Toolbar time display updates (issue #44)', () => {
       vi.advanceTimersByTime(20);
 
       expect(container.querySelector('.time-display .total')?.textContent).toBe(
-        frameToTimecode(10, 30),
+        frameToClock(10, 30),
       );
       expect(container.querySelector('.time-display .current')?.textContent).toBe(
-        frameToTimecode(4, 30), // frame 9 is 4 frames past the IN point
+        frameToClock(4, 30), // frame 9 is 4 frames past the IN point
       );
     });
   });
