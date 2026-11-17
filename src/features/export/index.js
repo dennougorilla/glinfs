@@ -574,6 +574,7 @@ function getEstimateDims() {
     frameCount: clipInfo.frameCount,
     width: clipInfo.width,
     height: clipInfo.height,
+    transparent: clipInfo.transparent === true,
     ...(mergeIdenticalFrames ? { countFrames: countGifFrames } : {}),
   };
 }
@@ -1123,10 +1124,13 @@ function cancelDialogEstimate() {
   if (dialogEstimate.timer !== null) clearTimeout(dialogEstimate.timer);
   dialogEstimate.timer = null;
   if (dialogEstimate.controller) {
-    // The abandoned encode disposes its worker; the next estimate starts
-    // on a new manager, so nothing left of this one can reach it
+    // The next estimate starts on a new manager, so nothing left of this
+    // one can reach it. Disposed here too: an aborted encode disposes its
+    // worker, but one that already finished (its GIF still being read)
+    // would leave it running (a second dispose is harmless)
     dialogEstimate.controller.abort();
     dialogEstimate.controller = null;
+    dialogEstimate.encoder?.dispose();
     dialogEstimate.encoder = null;
   }
 }

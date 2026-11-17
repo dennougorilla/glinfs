@@ -103,6 +103,33 @@ describe('updateSettings', () => {
   });
 });
 
+describe('updateSettings: dithering only where gifenc encodes', () => {
+  const dims = { frameCount: 20, width: 200, height: 100 };
+  const mb = (/** @type {Record<string, unknown>} */ patch, extra = {}) =>
+    updateSettings(initExportState(), patch, { ...dims, ...extra }).estimatedSizeMB;
+
+  it('counts dithering for gifenc', () => {
+    expect(mb({ encoderId: 'gifenc-js', dither: true })).toBeGreaterThan(
+      mb({ encoderId: 'gifenc-js', dither: false }),
+    );
+  });
+
+  it('ignores it for the WASM encoder, which does not dither', () => {
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true })).toBe(
+      mb({ encoderId: 'gifsicle-wasm', dither: false }),
+    );
+  });
+
+  it('counts it when a target size or a cutout makes gifenc encode', () => {
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true, targetSizeMB: 2 })).toBeGreaterThan(
+      mb({ encoderId: 'gifsicle-wasm', dither: false, targetSizeMB: 2 }),
+    );
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true }, { transparent: true })).toBeGreaterThan(
+      mb({ encoderId: 'gifsicle-wasm', dither: false }, { transparent: true }),
+    );
+  });
+});
+
 describe('updateSettings with an output scale and merged frames', () => {
   const dims = { frameCount: 10, width: 1000, height: 500 };
 

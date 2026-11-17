@@ -214,6 +214,40 @@ describe('export dialog: plain screen captures', () => {
     await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
   });
 
+  it.each([
+    ['Export', () => clickExport()],
+    ['Close', () => dialog?.close()],
+  ])('disposes the estimate worker on %s while the sample GIF is being read', async (_l, act) => {
+    inject({ count: 30 });
+    /** @type {any} */
+    let estimateManager = null;
+    vi.mocked(encodeGif).mockImplementation(async (params) => {
+      if (!params.frameIndices) return new Promise(() => {});
+      estimateManager = params.encoderManager;
+      // The encode is done; reading its bytes never finishes
+      return /** @type {Blob} */ (
+        /** @type {unknown} */ ({ size: 100, arrayBuffer: () => new Promise(() => {}) })
+      );
+    });
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(estimateManager).not.toBeNull());
+    const dispose = vi.spyOn(estimateManager, 'dispose');
+
+    act();
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it('does not offer dithering when the WASM encoder runs', () => {
+    updateSetting('export', 'encoderId', 'gifsicle-wasm');
+    inject({ count: 30 });
+    dialog = openExportDialog();
+    expect($('#export-dither')).toBeNull();
+
+    change('#export-target-enabled', true);
+    // A target size encodes with gifenc, which dithers
+    expect($('#export-dither')).not.toBeNull();
+  });
+
   it('re-estimates when a setting that changes the size changes', async () => {
     inject({ count: 30 });
     vi.mocked(encodeGif).mockImplementation(async (params) =>
