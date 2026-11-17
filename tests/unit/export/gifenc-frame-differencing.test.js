@@ -181,6 +181,58 @@ describe('gifenc frame differencing', () => {
     expect(differenced.length).toBeLessThanOrEqual(plain.length);
   });
 
+  it.each([
+    ['every frame', 1],
+    ['the balanced schedule', 10],
+  ])('never grows flat colors with few transitions (review case, palette %s)', (_l, interval) => {
+    // 20 frames at 480x240: solid black, then black with a white left third
+    const width = 480;
+    const height = 240;
+    /** @param {number} f */
+    const flat = (f) => {
+      const px = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0; i < width * height; i++) {
+        const white = f % 2 === 1 && i % width < width / 3;
+        px.fill(white ? 255 : 0, i * 4, i * 4 + 3);
+        px[i * 4 + 3] = 255;
+      }
+      return px;
+    };
+    /** @param {boolean} frameDifferencing */
+    const run = (frameDifferencing) => {
+      const encoder = createGifencEncoder();
+      encoder.init({
+        width,
+        height,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb565',
+        paletteInterval: interval,
+        frameDifferencing,
+      });
+      for (let f = 0; f < 20; f++) encoder.addFrame({ rgba: flat(f), width, height }, f);
+      return encoder.finish();
+    };
+    const plain = run(false);
+    const differenced = run(true);
+    process.stderr.write(
+      `[flat ${interval}] plain ${plain.length} B, differenced ${differenced.length} B\n`,
+    );
+
+    expect(differenced.length).toBeLessThanOrEqual(plain.length);
+    const a = renderGifFrames(plain);
+    const b = renderGifFrames(differenced);
+    expect(b).toHaveLength(a.length);
+    // Count mismatches in a loop: a deep equal of 20 large frames is slow
+    const differing = a.reduce((n, frame, f) => {
+      let d = 0;
+      for (let i = 0; i < frame.length; i++) if (frame[i] !== b[f][i]) d++;
+      return n + d;
+    }, 0);
+    expect(differing).toBe(0);
+  });
+
   it('is off for transparent exports, which clear pixels with dispose 2', () => {
     /** @param {number} f */
     const cutout = (f) => {
