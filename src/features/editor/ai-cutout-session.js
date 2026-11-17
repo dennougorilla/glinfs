@@ -114,6 +114,19 @@ export { getObjectSignature };
 export const SUGGESTIONS_DELAY_MS = 500;
 
 /**
+ * Run `task` after the browser has painted the next frame (a frame, then a
+ * task), or soon where there are no animation frames
+ * @param {() => void} task
+ */
+function afterNextPaint(task) {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => setTimeout(task, 0));
+  } else {
+    setTimeout(task, 0);
+  }
+}
+
+/**
  * @typedef {Object} AiCutoutSessionOptions
  * @property {() => import('./types.js').EditorState | null} getState
  * @property {(patch: Partial<AiCutoutStatus>) => void} setStatus
@@ -755,10 +768,16 @@ export function createAiCutoutSession(options) {
     manager.dropObjectSeeds?.(id);
   };
 
+  /** A whole-clip build waiting for the draft to be painted first */
+  let draftBuildRequest = 0;
+
   /**
    * Publish a draft of the current parameters and masks at once (the frame
-   * on screen is computed when drawn), then the whole-clip build. A build in
-   * flight started before the new masks: it is dropped, so it cannot
+   * on screen is computed when drawn), then the whole-clip build once the
+   * draft has been painted: a build started at once holds the main thread
+   * for its first slice and replaced the draft before it was ever drawn
+   * (measured: the next paint came 156 ms later, with the build's masks). A
+   * build in flight started before the new masks is dropped, so it cannot
    * replace the draft with older masks.
    */
   const showDraftNow = () => {
@@ -775,7 +794,10 @@ export function createAiCutoutSession(options) {
         base: fullSource,
       }),
     );
-    requestBuild();
+    const request = ++draftBuildRequest;
+    afterNextPaint(() => {
+      if (request === draftBuildRequest) requestBuild();
+    });
   };
 
   /**
