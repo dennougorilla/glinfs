@@ -754,8 +754,6 @@ export function createAiCutoutSession(options) {
    * @type {Map<string, string>}
    */
   const objectRuns = new Map();
-  /** @type {Record<string, number[]>} */
-  let objectLost = {};
   /**
    * Per fix-up: the tracker's answers on its clicked frame, small to large
    * (what the picker steps through; kept for this mount only)
@@ -801,7 +799,6 @@ export function createAiCutoutSession(options) {
       const gone = object && frames.length ? getGoneFrames(frames, range, object, maskStore) : null;
       shown[id] = gone && gone.size > 0 ? lost.filter((f) => !gone.has(f)) : lost;
     }
-    objectLost = shown;
     report({ objectLost: shown });
   };
 
