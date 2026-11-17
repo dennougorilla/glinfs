@@ -259,7 +259,7 @@ async function handleDecode({ jobId, chunks, config }) {
     if (typeof decoder.addEventListener === 'function')
       decoder.addEventListener('dequeue', progress);
 
-    decoder.configure(await decoderConfigFor(config));
+    decoder.configure(decoderConfigFor(config));
 
     for (const chunk of chunks) {
       decoder.decode(
@@ -294,34 +294,25 @@ async function handleDecode({ jobId, chunks, config }) {
 }
 
 /**
- * The decoder configuration: software decoding when the browser has it.
- * Every output is copied into CPU memory anyway (ownedCopy), and measured
- * on 300 x 1080p VP9 (Mac M3, Chrome 157) a software decode plus that copy
- * took 565-572 ms against 792-795 ms for a hardware decode plus reading
- * its frames back from the GPU, at the same memory (I420 or NV12, 3.1 MB
- * per 1080p frame). It also keeps hardware decoders, whose picture pools
- * caused the hang, out of the path. Without a software decoder the default
- * (any decoder) is used; the copies keep that safe too.
+ * The decoder configuration: the browser's choice of decoder (hardware
+ * where it has one). Every output is copied into worker memory anyway
+ * (ownedCopy), so a hardware decoder's picture pool cannot stall it.
+ * Measured on a Mac M3 (Chrome 157, 1080p VP9), opening a 155-frame clip
+ * in the app while capture runs in the background: decode plus copy took
+ * 490-590 ms with the default decoder against 620-650 ms with
+ * 'prefer-software' (a CPU decode competes with the capture loop), though
+ * an isolated 300-frame decode with nothing else running favoured software
+ * (565-572 against 792-795 ms). The pixels match main's either way.
  * @param {{codec: string, codedWidth: number, codedHeight: number, description?: ArrayBuffer}} config
- * @returns {Promise<VideoDecoderConfig>}
+ * @returns {VideoDecoderConfig}
  */
-async function decoderConfigFor(config) {
-  /** @type {VideoDecoderConfig} */
-  const base = {
+function decoderConfigFor(config) {
+  return {
     codec: config.codec,
     codedWidth: config.codedWidth,
     codedHeight: config.codedHeight,
     ...(config.description ? { description: config.description } : {}),
   };
-  /** @type {VideoDecoderConfig} */
-  const software = { ...base, hardwareAcceleration: 'prefer-software' };
-  try {
-    const support = await VideoDecoder.isConfigSupported(software);
-    if (support?.supported) return software;
-  } catch {
-    // Fall back to the default
-  }
-  return base;
 }
 
 /**
