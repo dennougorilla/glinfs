@@ -135,6 +135,10 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {{ frame: number, x0: number, y0: number, x1: number, y1: number }[]} [boxes] - Box
  *   prompts (one per frame)
  * @property {'whole' | 'part'} [scope]
+ * @property {number | null} [candidate] - The user's pick among the clicked
+ *   frame's answers (see trackClicks)
+ * @property {(frame: number, candidates: import('./sam-prompts.js').SamCandidate[]) => void} [onAnswers] -
+ *   The answers to the first prompt on the frame on screen (see trackClicks)
  * @property {(progress: AnalysisProgress) => void} [onProgress]
  * @property {AbortSignal} [signal]
  * @property {boolean} [allowWasm=false]
@@ -805,9 +809,18 @@ export class SegmentationManager {
         maskSizeOf: (frame) => getObjectMaskSize(frame.width, frame.height),
         minScoreRatio: OBJECT_TRACK_MIN_SCORE_RATIO,
         wholeMinScoreRatio: OBJECT_WHOLE_MIN_SCORE_RATIO,
+        // A different pick among the answers is a different set of prompts
+        // (no seed from the other pick)
         seeds: {
           objectId,
-          prompts: { clicks: options.clicks, boxes: options.boxes ?? [], scope: options.scope },
+          prompts: {
+            clicks: options.clicks,
+            boxes: options.boxes ?? [],
+            scope:
+              typeof options.candidate === 'number'
+                ? `${options.scope}#${options.candidate}`
+                : options.scope,
+          },
         },
       });
       // Finished: the frames it could not reach from an anchor are marked
@@ -874,6 +887,8 @@ export class SegmentationManager {
         picks: options.picks,
         boxes: options.boxes,
         scope: options.scope,
+        candidate: options.candidate ?? null,
+        onAnswers: options.onAnswers,
         minScoreRatio: options.minScoreRatio,
         wholeMinScoreRatio: options.wholeMinScoreRatio,
         keyOf: (f) => frameKey(frames[f]),

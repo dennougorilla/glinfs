@@ -10,6 +10,7 @@ import {
   logitsToProbability,
   maskIoU,
   maskStats,
+  orderCandidatesBySize,
   planAnchors,
   SAM_LABEL,
   splitAnchorPrompts,
@@ -187,6 +188,18 @@ describe('chooseCandidate', () => {
     expect(
       chooseCandidate([cand(whole, 0.9, 1), cand(empty, 0.99, 2)], { scope: 'part' }).index,
     ).toBe(1);
+  });
+
+  it("rank: the user's pick among the answers, small to large, the largest when fewer (cutout-ux 2)", () => {
+    // A poor-scoring largest answer is still pickable: no score rule hides it
+    const c = [cand(part, 0.9, 0), cand(whole, 0.5, 1), cand(sub, 0.95, 2), cand(empty, 0.99, 3)];
+    expect(orderCandidatesBySize(c).map((x) => x.index)).toEqual([2, 0, 1]);
+    expect(chooseCandidate(c, { rank: 0 }).index).toBe(2);
+    expect(chooseCandidate(c, { rank: 1 }).index).toBe(0);
+    expect(chooseCandidate(c, { rank: 2 }).index).toBe(1);
+    expect(chooseCandidate(c, { rank: 3 }).index).toBe(1);
+    // A tracked frame follows the previous mask, whatever the pick
+    expect(chooseCandidate(c, { rank: 0, previous: whole }).index).toBe(1);
   });
 
   it('never picks an empty mask while a non-empty one exists', () => {

@@ -119,6 +119,11 @@
  * @property {import('../../shared/edits/model.js').ObjectScope} [aiRemoveScope] -
  *   The scope a new Remove fix-up starts in: the one chosen last (saved in
  *   the user settings)
+ * @property {string | null} [aiPickerId] - The tracked fix-up whose answers on
+ *   its clicked frame the wheel and 1-4 step through (the one just made, or
+ *   the selected one); null: none
+ * @property {number | null} [aiPickerRank] - The answer stepped to and shown,
+ *   not yet stored in the edits (it is after a short pause)
  * @property {string | null} [aiHighlightObjectId] - The tracked fix-up whose chip
  *   is hovered or focused: its region stands out in Show mask (view only)
  * @property {AiCutoutStatus} aiCutout - AI cutout runtime status (not persisted)
@@ -213,6 +218,8 @@
  * @property {Record<string, { covered: number, selection: number }>} objectCoverage -
  *   Per tracked fix-up: selection frames with a mask of its current prompts
  *   (see getObjectCoverage)
+ * @property {number} [objectAnswersVersion] - Bumped when a fix-up's
+ *   answers on its clicked frame arrive (the picker redraws)
  * @property {number} objectShort - Selection frames where some tracked
  *   fix-up has no mask (0: every fix-up reaches every frame)
  * @property {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion[]} cleanupSuggestions

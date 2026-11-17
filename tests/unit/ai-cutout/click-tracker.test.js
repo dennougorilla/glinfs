@@ -221,6 +221,27 @@ describe('trackClicks', () => {
     expect(masks.get(3)?.data).toEqual(top);
   });
 
+  it("candidate: the user's pick among the clicked frame's answers, small to large (cutout-ux 2)", async () => {
+    // Answers on frame 3, small to large: the 1-pixel speck, the top half,
+    // the object, the whole frame
+    /** @type {any[]} */
+    const answered = [];
+    const pick = run({ candidate: 3, onAnswers: (frame, c) => answered.push({ frame, c }) });
+    await pick.promise;
+    expect(pick.masks.get(3)?.data).toEqual(rect(0, 0, W, H));
+    // The answers to the clicked frame's own prompt, handed out once
+    expect(answered).toHaveLength(1);
+    expect(answered[0].frame).toBe(3);
+    expect(answered[0].c).toHaveLength(4);
+    const object = run({ candidate: 2 });
+    await object.promise;
+    expect(object.masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+    // The pick replaces Part
+    const part = run({ candidate: 2, scope: 'part' });
+    await part.promise;
+    expect(part.masks.get(3)?.data).toEqual(rect(8, 6, 18, 14));
+  });
+
   it('Whole with a stricter wholeMinScoreRatio leaves out an answer that scores lower', async () => {
     // The object (0.88) is within 0.8 of the best (0.9) but not within 0.99
     const { promise, masks } = run({ wholeMinScoreRatio: 0.99 });

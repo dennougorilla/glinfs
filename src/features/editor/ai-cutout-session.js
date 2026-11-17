@@ -58,6 +58,7 @@ import { loadSettings } from '../../shared/user-settings.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
+import { orderCandidatesBySize } from '../ai-cutout/sam-prompts.js';
 import {
   frameKey,
   maskKey,
@@ -740,6 +741,13 @@ export function createAiCutoutSession(options) {
   const objectRuns = new Map();
   /** @type {Record<string, number[]>} */
   let objectLost = {};
+  /**
+   * Per fix-up: the tracker's answers on its clicked frame, small to large
+   * (what the picker steps through; kept for this mount only)
+   * @type {Map<string, { frame: number, answers: import('../../shared/masks/final-masks.js').ProbMask[] }>}
+   */
+  const objectAnswers = new Map();
+  let answersVersion = 0;
 
   /**
    * @param {import('../../shared/edits/model.js').CutoutObject} object
@@ -853,6 +861,20 @@ export function createAiCutoutSession(options) {
         clicks: object.clicks,
         boxes: object.boxes ?? [],
         scope: object.scope,
+        candidate: typeof object.candidate === 'number' ? object.candidate : null,
+        onAnswers: (frame, candidates) => {
+          if (disposed || objectController !== controller) return;
+          objectAnswers.set(id, {
+            frame,
+            answers: orderCandidatesBySize(candidates).map((c) => ({
+              data: c.data,
+              width: c.width,
+              height: c.height,
+            })),
+          });
+          answersVersion += 1;
+          report({ objectAnswersVersion: answersVersion });
+        },
         tag: signature,
         superseded: () => objectQueue.includes(id),
         onProgress: (progress) => {
@@ -935,6 +957,7 @@ export function createAiCutoutSession(options) {
       if (ids.has(id)) continue;
       objectSignatures.delete(id);
       objectRuns.delete(id);
+      objectAnswers.delete(id);
       objectQueue = objectQueue.filter((queued) => queued !== id);
       if (objectRun?.id === id) objectController?.abort();
       dropObjectMasks(id);
@@ -1000,6 +1023,16 @@ export function createAiCutoutSession(options) {
     preload,
     preloadTracker,
     refreshModels,
+
+    /**
+     * A fix-up's answers on its clicked frame, small to large (null: none
+     * kept, e.g. after a reload)
+     * @param {string} id
+     * @returns {{ frame: number, answers: import('../../shared/masks/final-masks.js').ProbMask[] } | null}
+     */
+    getObjectAnswers(id) {
+      return objectAnswers.get(id) ?? null;
+    },
     requestBuild,
 
     /**
