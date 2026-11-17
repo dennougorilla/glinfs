@@ -3,6 +3,8 @@
  * @module features/capture/ui
  */
 
+import { getClipPayload, getClipQueue } from '../../shared/app-store.js';
+import { on as onBus } from '../../shared/bus.js';
 import { navigate } from '../../shared/router.js';
 import { createElement, on } from '../../shared/utils/dom.js';
 import { formatDuration } from '../../shared/utils/format.js';
@@ -93,8 +95,13 @@ function createHeartIcon() {
 export function renderCaptureScreen(container, state, handlers) {
   const cleanups = [];
 
-  // Update step indicator
-  updateStepIndicator('capture', { hasFrames: state.stats.frameCount > 0 });
+  // The Edit step leads back to the clips: reachable whenever there is one
+  // to edit (the open clip or a queued one), shared screen or not. The
+  // capture buffer is not a clip (Create Clip makes one), and the queue can
+  // change while Capture is on screen (Clip Now, Undo, a removal).
+  const showSteps = () => updateStepIndicator('capture', { hasFrames: hasClipToEdit() });
+  showSteps();
+  cleanups.push(onBus('queue:changed', showSteps));
 
   // Main layout
   const screen = createElement('div', { className: 'capture-screen screen' });
@@ -304,6 +311,15 @@ function renderVideoPreview(state, importAvailable = false, cleanups = []) {
         : null,
     ].filter(Boolean),
   );
+}
+
+/**
+ * Whether there is a clip to edit: the open one or a queued one (the
+ * editor adopts the newest queued clip when none is open)
+ * @returns {boolean}
+ */
+function hasClipToEdit() {
+  return getClipPayload() !== null || getClipQueue().length > 0;
 }
 
 /**
