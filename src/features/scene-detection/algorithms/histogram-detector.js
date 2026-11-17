@@ -137,23 +137,35 @@ export const ADAPTIVE_THRESHOLD = Object.freeze({
  * max(floor, medianScale x median of the recent distances + medianOffset), and
  * it is neither a flash (the picture before it returns within flashFrames
  * frames) nor the return from one (it matches the picture 2..flashFrames+1
- * frames back). A missing histogram (no pixels) breaks no comparison chain
- * and starts no scene.
+ * frames back). Flash lengths count clip frames (`frameIndices`), so a
+ * sampled clip's positions do not stretch the window. A missing histogram
+ * (no pixels) starts no scene, and the next frame is compared with the last
+ * frame that had pixels.
  *
  * `fixedThreshold` runs the old detector instead (distance above a fixed
  * value, no flash handling); it exists for comparison in tests only.
  *
  * @param {(Float32Array | null)[]} histograms
- * @param {{ fixedThreshold?: number }} [options]
+ * @param {{ fixedThreshold?: number, frameIndices?: number[] }} [options]
+ *   frameIndices: the clip frame of each position (default: the position)
  * @returns {number[]} positions in `histograms` that start a new scene
  */
 export function findSceneBreaks(histograms, options = {}) {
   const n = histograms.length;
+  const frameAt = (/** @type {number} */ i) => options.frameIndices?.[i] ?? i;
+  /** Position of the last frame before i that has pixels, or -1 */
+  const previous = new Int32Array(n);
   /** @type {(number | null)[]} */
-  const distances = histograms.map((h, i) => {
-    const prev = histograms[i - 1];
-    return i > 0 && h && prev ? compareHistograms(prev, h) : null;
-  });
+  const distances = [];
+  let last = -1;
+  for (let i = 0; i < n; i++) {
+    previous[i] = last;
+    const h = histograms[i];
+    distances.push(
+      h && last >= 0 ? compareHistograms(/** @type {Float32Array} */ (histograms[last]), h) : null,
+    );
+    if (h) last = i;
+  }
 
   if (options.fixedThreshold !== undefined) {
     const threshold = options.fixedThreshold;
@@ -182,12 +194,16 @@ export function findSceneBreaks(histograms, options = {}) {
     const median = recent.length > 0 ? recent[recent.length >> 1] : 0;
     if (d <= Math.max(floor, medianScale * median + medianOffset)) continue;
 
+    const before = previous[i];
     let flash = false;
-    for (let k = 1; k <= flashFrames && !flash; k++) {
-      // Into a flash: the picture before it comes back
-      if (i + k < n && similar(i - 1, i + k)) flash = true;
-      // Out of a flash: this picture was there just before it
-      if (i - k - 1 >= 0 && similar(i - k - 1, i)) flash = true;
+    // Into a flash: the picture before it comes back within flashFrames
+    for (let j = i + 1; j < n && frameAt(j) - frameAt(i) <= flashFrames && !flash; j++) {
+      flash = similar(before, j);
+    }
+    // Out of a flash: this picture was there just before a flash of at most
+    // flashFrames frames
+    for (let j = before - 1; j >= 0 && frameAt(i) - frameAt(j) <= flashFrames + 1 && !flash; j--) {
+      flash = similar(j, i);
     }
     if (!flash) breaks.push(i);
   }
@@ -232,9 +248,11 @@ export async function detectScenesFromHistograms(items, params) {
     }
   }
 
-  const breaks = findSceneBreaks(histograms, { fixedThreshold: params.fixedThreshold }).map(
-    (position) => indexOf(items[position]),
-  );
+  const frameIndices = items.map(indexOf);
+  const breaks = findSceneBreaks(histograms, {
+    fixedThreshold: params.fixedThreshold,
+    frameIndices,
+  }).map((position) => frameIndices[position]);
   // First frame always starts a scene; an exclusive end keeps the last frame
   const ranges = buildSceneRanges([0, ...breaks, totalFrames], minSceneDuration);
   const lastIndex = items.length > 0 ? indexOf(items[items.length - 1]) : 0;
