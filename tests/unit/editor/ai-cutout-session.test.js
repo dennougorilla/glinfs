@@ -1084,6 +1084,46 @@ describe('AI cutout session: tracked objects', () => {
     expect(build.mock.calls.length - before).toBeLessThanOrEqual(2);
   });
 
+  it("a fix-up's new masks never redo the clean-up suggestions; a base mask does (cutout-ux 5)", async () => {
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
+    let suggested = 0;
+    session.dispose();
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => {
+        if ('cleanupSuggestions' in patch) suggested++;
+        Object.assign(status, patch);
+      },
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...manager,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
+        analyzeObject: manager.analyzeObject,
+      }),
+      maskStore,
+      cache: createFinalMaskCache(),
+    });
+    manager.hold = true;
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    session.requestBuild();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS * 2);
+    expect(suggested).toBe(1);
+    // The tracked fix-up's masks land over several cooldowns: builds, no suggestions
+    const tag = getObjectSignature(state.edits.background.ai.objects[0]);
+    for (let i = 0; i < 12; i++) {
+      const frame = state.clip.frames[i % state.clip.frames.length];
+      maskStore.set(`object:o1:${frame.id}`, prob(), 'clip-1', 'object:o1', tag);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(suggested).toBe(1);
+    // A base mask changes: suggested again
+    maskStore.set(`anime:${state.clip.frames[2].id}`, prob(), 'clip-1');
+    await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS * 3);
+    expect(suggested).toBe(2);
+  });
+
   it('frames confirmed gone are not lost, and count as done (cutout-ux 5)', async () => {
     manager.lostAt = new Set([2, 3]);
     setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
