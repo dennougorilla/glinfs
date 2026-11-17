@@ -279,13 +279,22 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     const id = await page.evaluate(
       () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].id,
     );
-    // A Remove click starts at Part: only disc A (the stub's Whole is both
-    // discs)
+    // A Remove click starts at the second smallest of the four answers
+    // (cutout-ux 2: the candidate picker replaced Whole / Part); the stub's
+    // second smallest is both discs, so pick the smallest with 1: disc A only
     expect(
       await page.evaluate(
-        () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].scope,
+        () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].candidate,
       ),
-    ).toBe('part');
+    ).toBe(1);
+    await page.keyboard.press('1');
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => window.__TEST_HOOKS__.getEditorState().edits.background.ai.objects[0].candidate,
+        ),
+      )
+      .toBe(0);
     const objectAt = (/** @type {number} */ i) =>
       page.evaluate(
         ({ i, group, p }) => window.__TEST_HOOKS__.aiCutout.sampleMask(i, p, group)?.values ?? null,
@@ -315,7 +324,9 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
       expect({ i, a: a > 200, b: b < 10 }).toEqual({ i, a: true, b: true });
     }
 
-    // Preview: disc A gone, disc B kept
+    // Preview: disc A gone, disc B kept (Escape ends the picker, whose tint
+    // shows the chosen answer on the preview)
+    await page.keyboard.press('Escape');
     await waitForAiMasks(page);
     await expect.poll(() => editorPreviewAlpha(page, discA(2).x, discA(2).y)).toBe(0);
     expect(await editorPreviewAlpha(page, discB(2).x, discB(2).y)).toBe(255);
