@@ -756,6 +756,34 @@ describe('promote of a compressed entry (prepare + decode)', () => {
     expect(decodedFrames[0].close).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    [
+      'the decode succeeds',
+      { ok: true, frames: [{ close: vi.fn(), closed: false, timestamp: 0 }] },
+    ],
+    ['the decode fails', { ok: false, error: 'bad bitstream' }],
+  ])('an entry deleted mid-decode and restored by Undo opens again (%s)', async (_l, result) => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const entry = await enqueueCompressed(codec);
+
+    const first = prepareQueuedClipForPromote(entry.id);
+    deleteQueuedClip(entry.id);
+    codec.decodeCalls[0].resolve(result);
+    await first;
+    expect(undoDelete()).toBe(true);
+
+    // Back as it was before the open, not stuck in 'decoding'
+    expect(entry.status).toBe('compressed');
+    const second = prepareQueuedClipForPromote(entry.id);
+    expect(codec.decodeCalls).toHaveLength(2);
+    codec.decodeCalls[1].resolve({
+      ok: true,
+      frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
+    });
+    await expect(second).resolves.toEqual({ ok: true });
+  });
+
   it('awaits an in-flight encode when promoting a still-compressing entry', async () => {
     const codec = createMockCodec();
     registerClipCodec(codec);

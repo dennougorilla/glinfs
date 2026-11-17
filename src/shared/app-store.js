@@ -798,14 +798,14 @@ export async function prepareQueuedClipForPromote(id) {
     config: compressed.config,
   });
   const live = state.clipQueue.includes(entry);
+  // The chunks were cloned into the worker, so the compressed bytes are
+  // intact on every exit but success. An entry deleted meanwhile still
+  // returns to 'compressed': the Undo hold owns it, and Undo must restore a
+  // clip that opens, not one stuck in 'decoding'
+  if (!live || !result.ok) entry.status = 'compressed';
 
   if (!result.ok) {
-    if (live) {
-      // The chunks were cloned into the worker, so the compressed bytes are
-      // intact — the entry simply returns to 'compressed'
-      entry.status = 'compressed';
-      emitQueueChanged('decode-error');
-    }
+    if (live) emitQueueChanged('decode-error');
     return { ok: false, reason: 'decode-failed' };
   }
 
