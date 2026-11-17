@@ -15,6 +15,7 @@ import {
   ANALYSIS_REBUILD_INTERVAL_MS,
   BUILDING_STATUS_DELAY_MS,
   createAiCutoutSession,
+  EXPECT_ANSWER_MAX_MS,
   STORE_REBUILD_DELAY_MS,
   SUGGESTIONS_DELAY_MS,
 } from '../../../src/features/editor/ai-cutout-session.js';
@@ -911,6 +912,36 @@ describe('AI cutout session: tracked objects', () => {
     // The whole-clip build follows
     await vi.advanceTimersByTimeAsync(1000);
     expect(published.at(-1).draft).toBeUndefined();
+  });
+
+  it('holds whole-clip builds after a click until its first answer, at most a moment (cutout-ux 1)', async () => {
+    session.dispose();
+    /** @type {any[]} */
+    const published = [];
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      onMaskSource: (source) => published.push(source),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...manager,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
+        // Never answers: the hold ends on its own
+        analyzeObject: () => new Promise(() => {}),
+      }),
+      maskStore,
+      cache: createFinalMaskCache(),
+    });
+    session.expectAnswer();
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.requestBuild();
+    session.syncObjects();
+    await vi.advanceTimersByTimeAsync(EXPECT_ANSWER_MAX_MS - 100);
+    expect(published).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(published.length).toBeGreaterThan(0);
   });
 
   it('prepares the tracker when asked (a tool turned on), only if it is downloaded (cutout-ux 1)', async () => {

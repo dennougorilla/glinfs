@@ -108,6 +108,12 @@ export const BUILDING_STATUS_DELAY_MS = 300;
 export { getObjectSignature };
 
 /**
+ * A click that starts a tracking run holds whole-clip builds until its
+ * first answer, at most this long (see expectAnswer)
+ */
+export const EXPECT_ANSWER_MAX_MS = 2000;
+
+/**
  * The clean-up suggestion pass starts this long after a full build lands
  * (a quick change of mind aborts it before it starts)
  */
@@ -377,6 +383,10 @@ export function createAiCutoutSession(options) {
   const requestBuild = () => {
     if (disposed) return;
     reportCoverage();
+    if (expectTimer !== null) {
+      buildAfterAnswer = true;
+      return;
+    }
     const state = getState();
     if (!state?.clip || !isAiCutoutActive(state.edits.background)) {
       abortBuild();
@@ -773,6 +783,25 @@ export function createAiCutoutSession(options) {
   let draftBuildRequest = 0;
 
   /**
+   * A Keep / Remove click is about to start a tracking run: builds wait for
+   * its first answer (then the draft is shown and the build follows), at
+   * most EXPECT_ANSWER_MAX_MS. A build started on the click itself only
+   * rebuilt the whole clip with the masks the run is about to redo, and
+   * held the main thread while the answer arrived.
+   * @type {ReturnType<typeof setTimeout> | null}
+   */
+  let expectTimer = null;
+  let buildAfterAnswer = false;
+
+  const stopExpecting = () => {
+    if (expectTimer !== null) clearTimeout(expectTimer);
+    expectTimer = null;
+    const wanted = buildAfterAnswer;
+    buildAfterAnswer = false;
+    return wanted;
+  };
+
+  /**
    * Publish a draft of the current parameters and masks at once (the frame
    * on screen is computed when drawn), then the whole-clip build once the
    * draft has been painted: a build started at once holds the main thread
@@ -785,6 +814,7 @@ export function createAiCutoutSession(options) {
     if (disposed) return;
     const state = getState();
     if (!state?.clip || !isAiCutoutActive(state.edits.background)) return;
+    stopExpecting();
     abortBuild();
     clearCooldown();
     publish(
@@ -902,6 +932,7 @@ export function createAiCutoutSession(options) {
         objectController = null;
         objectRun = null;
       }
+      stopExpecting();
       clearCooldown();
       requestBuild();
       reportCoverage();
@@ -1000,6 +1031,19 @@ export function createAiCutoutSession(options) {
     preload,
     preloadTracker,
     refreshModels,
+
+    /**
+     * A Keep / Remove click is about to (re)track a fix-up: hold whole-clip
+     * builds until its first answer (shown from a draft), or for at most
+     * EXPECT_ANSWER_MAX_MS
+     */
+    expectAnswer() {
+      if (disposed) return;
+      if (expectTimer !== null) clearTimeout(expectTimer);
+      expectTimer = setTimeout(() => {
+        if (stopExpecting()) requestBuild();
+      }, EXPECT_ANSWER_MAX_MS);
+    },
     requestBuild,
 
     /**
@@ -1073,6 +1117,7 @@ export function createAiCutoutSession(options) {
         storeTimer = null;
       }
       clearCooldown();
+      stopExpecting();
       if (buildingTimer !== null) clearTimeout(buildingTimer);
       buildingTimer = null;
       unsubscribeStore();
