@@ -40,6 +40,8 @@
  * @property {boolean} [transparent=false] - Write pixels with alpha < 128 as GIF
  *   transparency (one palette slot reserved, every frame disposed to background).
  *   Only encoders with capabilities.supportsTransparency honor it.
+ * @property {boolean} [frameDifferencing=false] - Write pixels unchanged since
+ *   the previous frame as transparency (opaque exports; gifenc only)
  */
 
 /**
