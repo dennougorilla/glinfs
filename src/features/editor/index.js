@@ -2459,6 +2459,13 @@ function addObjectFixUp(mode, selection) {
     announce(`The limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups is reached`);
     return;
   }
+  const willTrack = !(
+    mode === 'remove' &&
+    selection.click &&
+    !selection.box &&
+    state.aiRemoveScope === 'colour'
+  );
+  if (willTrack) aiSession?.expectAnswer();
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
   const added = store.getState().edits.background.ai.objects?.at(-1);
   if (added && !isColourObject(added)) {
@@ -2496,6 +2503,7 @@ function handleObjectCorrection(object, correction) {
       announce(`The limit of ${EDIT_LIMITS.aiObjectBoxes.max} boxes is reached`);
       return;
     }
+    if (!isColourObject(object)) aiSession?.expectAnswer();
     store.setState((s) => addAiObjectBox(s, object.id, box));
     startPulse(object.id, { box });
     announce('Box added. Tracking again.');
@@ -2508,6 +2516,7 @@ function handleObjectCorrection(object, correction) {
   const own = state.aiPickTool === getObjectTool(object);
   const mode = own !== correction.alt ? 'keep' : 'remove';
   const point = /** @type {{ x: number, y: number }} */ (correction.click);
+  if (!isColourObject(object)) aiSession?.expectAnswer();
   store.setState((s) =>
     addAiObjectClick(s, object.id, { frame: s.currentFrame, x: point.x, y: point.y, mode }),
   );
