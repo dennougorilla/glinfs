@@ -42,7 +42,7 @@ import { announce } from '../../shared/live-region.js';
 import { showToast } from '../../shared/toast.js';
 import { updateSetting } from '../../shared/user-settings.js';
 import { on } from '../../shared/utils/dom.js';
-import { frameToTimecode } from '../../shared/utils/format.js';
+import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { createEncoderManager } from '../../workers/worker-manager.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -823,7 +823,7 @@ async function prepareAiMasks(indices, signal) {
         throw new ClickTrackingError(
           result.anchors === 0
             ? 'Nothing is selected yet. Go back to editing and click the thing you want to keep.'
-            : `Tracking lost the selection at ${frameToTimecode(
+            : `Tracking lost the selection at ${frameToClock(
                 result.lost[0] ?? indices[exported.indexOf(untracked[0])],
                 clipInfo.fps,
               )}. Go back to editing and click it there, then export again.`,

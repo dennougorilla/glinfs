@@ -6,7 +6,7 @@
 
 import { isComposingEvent } from '../../shared/hotkeys.js';
 import { createElement, on } from '../../shared/utils/dom.js';
-import { frameToTimecode } from '../../shared/utils/format.js';
+import { frameToClock } from '../../shared/utils/format.js';
 import { clamp } from '../../shared/utils/math.js';
 import { getThumbnailSizes } from '../../shared/utils/quality-settings.js';
 import { getThumbnailCache } from '../../shared/utils/thumbnail-cache.js';
@@ -85,7 +85,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     if (isMajor) {
       const frameAtTick = Math.round(t * fps);
       tick.appendChild(
-        createElement('span', { className: 'tl-tick-label' }, [frameToTimecode(frameAtTick, fps)]),
+        createElement('span', { className: 'tl-tick-label' }, [frameToClock(frameAtTick, fps)]),
       );
     }
 
@@ -290,7 +290,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     // Show hover time during drag
     hoverIndicator.style.display = 'block';
     hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, fps);
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToClock(frameIndex, fps);
   };
 
   const onHandleMouseUp = () => {
@@ -334,7 +334,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
     // Show time at cursor
     hoverIndicator.style.display = 'block';
     hoverIndicator.style.left = `${percent}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToClock(
       state.dragStartFrame,
       fps,
     );
@@ -355,7 +355,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
     // Update hover time
     hoverIndicator.style.left = `${getPercentFromFrame(currentFrame)}%`;
-    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(currentFrame, fps);
+    hoverIndicator.querySelector('.tl-hover-time').textContent = frameToClock(currentFrame, fps);
 
     // Live update the actual selection
     if (endFrame - startFrame >= MIN_SELECTION_FRAMES) {
@@ -398,7 +398,7 @@ export function renderTimeline(container, clip, currentFrame, selectedRange, han
 
       hoverIndicator.style.display = 'block';
       hoverIndicator.style.left = `${getPercentFromFrame(frameIndex)}%`;
-      hoverIndicator.querySelector('.tl-hover-time').textContent = frameToTimecode(frameIndex, fps);
+      hoverIndicator.querySelector('.tl-hover-time').textContent = frameToClock(frameIndex, fps);
     }),
   );
 
