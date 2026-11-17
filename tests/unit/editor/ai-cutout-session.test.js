@@ -732,7 +732,7 @@ describe('AI cutout session: tracked objects', () => {
   let status;
   /** @type {ReturnType<typeof createAiCutoutSession>} */
   let session;
-  /** @type {{ calls: any[], lostAt: Set<number>, fail: unknown, analyzeObject: import('vitest').Mock }} */
+  /** @type {{ calls: any[], lostAt: Set<number>, fail: unknown, hold: boolean, analyzeObject: import('vitest').Mock }} */
   let manager;
 
   const click = (frame = 1) => ({ frame, x: 0.5, y: 0.5, mode: 'keep' });
@@ -754,8 +754,16 @@ describe('AI cutout session: tracked objects', () => {
       calls: [],
       lostAt: new Set(),
       fail: /** @type {unknown} */ (null),
+      // Keep the next run open (before its first frame) until it is aborted
+      hold: false,
       analyzeObject: vi.fn(async (frames, options) => {
         manager.calls.push(options);
+        if (manager.hold) {
+          manager.hold = false;
+          await new Promise((_resolve, reject) => {
+            options.signal?.addEventListener('abort', () => reject(createAbortError()));
+          });
+        }
         if (manager.fail) {
           const error = manager.fail;
           manager.fail = null;
@@ -989,6 +997,91 @@ describe('AI cutout session: tracked objects', () => {
     session.syncObjects();
     await settle();
     expect(manager.calls[2].range).toEqual({ start: 0, end: 3 });
+  });
+
+  it('a correction that supersedes an unfinished one keeps the frames outside both spans (cutout-ux 5)', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    // Correction A starts on frames 1-3 and is cut short by correction B
+    manager.hold = true;
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0), click(2)] }]);
+    session.syncObjects();
+    await settle();
+    setObjects([
+      { id: 'o1', mode: 'remove', clicks: [click(0), click(2), { ...click(3), x: 0.6 }] },
+    ]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls.map((c) => c.range)).toEqual([
+      { start: 0, end: 3 },
+      { start: 1, end: 3 },
+      { start: 1, end: 3 },
+    ]);
+    // Frame 0 (outside both spans) still counts for the current prompts
+    const frame0 = `object:o1:${state.clip.frames[0].id}`;
+    expect(maskStore.getTag(frame0)).toBe(getObjectSignature(state.edits.background.ai.objects[0]));
+    expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
+  });
+
+  it('after a whole run cut short, a correction still covers the frames that run reached (cutout-ux 5)', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    // Another pick re-tracks everything; held, then put back and corrected
+    manager.hold = true;
+    setObjects([{ id: 'o1', mode: 'remove', candidate: 2, clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    // (the held run wrote nothing; give frame 0 its tag as a run that reached it would)
+    const frame0 = `object:o1:${state.clip.frames[0].id}`;
+    maskStore.retag(
+      [frame0],
+      maskStore.getTag(frame0) ?? '',
+      getObjectSignature(state.edits.background.ai.objects[0]),
+    );
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0), click(2)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls.at(-1).range).toEqual({ start: 1, end: 3 });
+    expect(maskStore.getTag(frame0)).toBe(getObjectSignature(state.edits.background.ai.objects[0]));
+    expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
+  });
+
+  it('while a fix-up is tracked, its new masks rebuild the clip at most once per cooldown (cutout-ux 5)', async () => {
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
+    const cache = createFinalMaskCache();
+    const build = vi.spyOn(cache, 'build');
+    session.dispose();
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...manager,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
+        analyzeObject: manager.analyzeObject,
+      }),
+      maskStore,
+      cache,
+    });
+    manager.hold = true;
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    session.requestBuild();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS * 2);
+    const before = build.mock.calls.length;
+    // The tracker writes the fix-up's masks, one every 120 ms, for 1.2 s
+    // (the run is held: the fix-up is being tracked)
+    const tag = getObjectSignature(state.edits.background.ai.objects[0]);
+    for (let i = 0; i < 10; i++) {
+      const frame = state.clip.frames[i % state.clip.frames.length];
+      maskStore.set(`object:o1:${frame.id}`, prob(), 'clip-1', 'object:o1', tag);
+      await vi.advanceTimersByTimeAsync(120);
+    }
+    // One build when the cooldown allows, not one per mask
+    expect(build.mock.calls.length - before).toBeLessThanOrEqual(2);
   });
 
   it('frames confirmed gone are not lost, and count as done (cutout-ux 5)', async () => {
