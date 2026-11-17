@@ -262,6 +262,50 @@ describe('CaptureWorkerManager', () => {
     expect(worker._lastMessage('FRAME_RESPONSE')).toBeUndefined();
   });
 
+  it.each([
+    ['a change of source (stop, clear, init, start)', 'switch'],
+    ['a cleared buffer', 'clear'],
+  ])('drops a frame still being captured across %s', async (_label, kind) => {
+    // Review of #205: a capture started before the switch resolved after it
+    // and its old-source frame entered the restarted buffer
+    const bitmap = { width: 640, height: 480, close: vi.fn() };
+    /** @type {(b: typeof bitmap) => void} */
+    let resolveCapture = () => {};
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        }),
+      ),
+    );
+
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo(4));
+    manager.start(30, 450);
+    const worker = MockWorker.instances[0];
+
+    worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 42 } });
+    if (kind === 'switch') {
+      manager.stop();
+      manager.clear();
+      manager.init(createFakeVideo(4));
+      manager.start(30, 450);
+    } else {
+      manager.clear();
+    }
+    resolveCapture(bitmap);
+    await vi.waitFor(() => {
+      expect(worker._lastMessage('FRAME_RESPONSE')).toBeDefined();
+    });
+
+    // The worker still gets its answer (so it requests the next frame), empty
+    const response = worker._lastMessage('FRAME_RESPONSE');
+    expect(response?.message.payload).toEqual({ bitmap: null, timestamp: 42 });
+    expect(response?.transfer).toBeUndefined();
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
+  });
+
   it('terminate() terminates the worker and resets state', () => {
     const manager = new CaptureWorkerManager();
     manager.init(createFakeVideo());

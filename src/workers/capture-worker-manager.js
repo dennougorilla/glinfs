@@ -57,6 +57,11 @@ export class CaptureWorkerManager {
   /** @type {number} Maximum long edge for grabbed frames; 0 = native (#96) */
   #maxEdge = 0;
 
+  /** @type {number} Bumped by init (a new source), stop and clear: a frame
+   * whose capture started in an earlier generation is dropped, so it can
+   * never enter a buffer that was cleared or restarted meanwhile */
+  #generation = 0;
+
   /**
    * Initialize the worker with a video element
    * @param {HTMLVideoElement} video - Video element to capture from
@@ -68,6 +73,7 @@ export class CaptureWorkerManager {
    *   exist, rather than being shrunk after the memory was already spent.
    */
   init(video, options = {}) {
+    this.#generation++;
     this.#video = video;
     this.#onStatsUpdate = options.onStatsUpdate ?? null;
     this.#maxEdge = options.maxEdge ?? 0;
@@ -118,6 +124,7 @@ export class CaptureWorkerManager {
    * Stop capturing frames (preserves buffer)
    */
   stop() {
+    this.#generation++;
     this.#isRunning = false;
     this.#worker?.postMessage({ type: 'STOP' });
   }
@@ -152,6 +159,7 @@ export class CaptureWorkerManager {
    * Clear the frame buffer
    */
   clear() {
+    this.#generation++;
     this.#worker?.postMessage({ type: 'CLEAR' });
   }
 
@@ -306,6 +314,7 @@ export class CaptureWorkerManager {
       return;
     }
 
+    const generation = this.#generation;
     try {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
@@ -317,6 +326,13 @@ export class CaptureWorkerManager {
             resizeQuality: 'high',
           })
         : await createImageBitmap(this.#video);
+      if (generation !== this.#generation) {
+        // Grabbed before a change of source, stop or clear: answer the
+        // worker (it waits for one response per request) without the frame
+        bitmap.close();
+        this.#sendFrameResponse(null, timestamp);
+        return;
+      }
       this.#sendFrameResponse(bitmap, timestamp);
     } catch {
       this.#sendFrameResponse(null, timestamp);
