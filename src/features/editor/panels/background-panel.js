@@ -707,6 +707,7 @@ const TOOL_ICONS = {
   remove: '<circle cx="12" cy="12" r="8"/><path d="M8 12h8"/>',
   brush: '<path d="M14.5 4.5l5 5L10 19H5v-5z"/><path d="M12.5 6.5l5 5"/>',
   reset: '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/>',
+  colour: '<path d="M12 3.5c3 4 6 7.2 6 10.5a6 6 0 0 1-12 0c0-3.3 3-6.5 6-10.5z"/>',
   eyedropper:
     '<path d="M15 4.5a2.1 2.1 0 0 1 3 3L16 9.5l1 1-1.5 1.5-5-5L12 5.5l1 1z"/><path d="M11 8l-6 6v3h3l6-6"/>',
 };
@@ -1260,6 +1261,11 @@ export function renderBackgroundPanel(handlers) {
   const remove = toolToggle('ai-pick-remove', 'Remove', 'remove', {
     'aria-describedby': 'background-tools-hint',
   });
+  // Colour: a click removes the colours under it on every frame (a Colour
+  // fix-up, never tracked)
+  const colourTool = toolToggle('ai-pick-colour', 'Colour', 'colour', {
+    'aria-describedby': 'background-tools-hint',
+  });
   cleanups.push(
     on(keep.input, 'change', () =>
       handlers.onSetAiPickTool?.(keep.input.checked ? 'keep' : null, {
@@ -1269,6 +1275,11 @@ export function renderBackgroundPanel(handlers) {
     on(remove.input, 'change', () =>
       handlers.onSetAiPickTool?.(remove.input.checked ? 'remove' : null, {
         fromKeyboard: isKeyboardFocused(remove.input),
+      }),
+    ),
+    on(colourTool.input, 'change', () =>
+      handlers.onSetAiPickTool?.(colourTool.input.checked ? 'colour' : null, {
+        fromKeyboard: isKeyboardFocused(colourTool.input),
       }),
     ),
   );
@@ -1322,6 +1333,37 @@ export function renderBackgroundPanel(handlers) {
     on(objectTolerance.input, 'change', () =>
       handlers.onSetAiObjectTolerance?.(Number(objectTolerance.input.value)),
     ),
+  );
+  // Colour: where its colours go, touching its points or everywhere
+  const reaches = /** @type {const} */ ([
+    { value: 'touching', label: 'Touching', title: 'Only where the colours touch the points' },
+    { value: 'everywhere', label: 'Everywhere', title: 'Wherever the colours are' },
+  ]);
+  const objectReach = createElement(
+    'fieldset',
+    { className: 'editor-cutout-segmented-group', id: 'ai-object-reach', hidden: 'true' },
+    [
+      createElement('legend', { className: 'editor-cutout-label' }, ['Reach']),
+      createElement(
+        'div',
+        { className: 'editor-cutout-segmented' },
+        reaches.map(({ value, label, title }) => {
+          const id = `ai-object-reach-${value}`;
+          const input = /** @type {HTMLInputElement} */ (
+            createElement('input', { type: 'radio', name: 'ai-object-reach', id, value })
+          );
+          cleanups.push(
+            on(input, 'change', () => {
+              if (input.checked) handlers.onSetAiObjectEverywhere?.(value === 'everywhere');
+            }),
+          );
+          return createElement('label', { className: 'editor-cutout-segment', for: id, title }, [
+            input,
+            createElement('span', {}, [label]),
+          ]);
+        }),
+      ),
+    ],
   );
   const objectLostGo = createElement(
     'button',
@@ -1442,6 +1484,7 @@ export function renderBackgroundPanel(handlers) {
       createElement('div', { className: 'editor-cutout-tools' }, [
         keep.wrapper,
         remove.wrapper,
+        colourTool.wrapper,
         brush.wrapper,
         reset,
       ]),
@@ -1449,6 +1492,7 @@ export function renderBackgroundPanel(handlers) {
       pickList,
       objectScope,
       objectTolerance.row,
+      objectReach,
       objectLost,
       createElement('p', { className: 'editor-cutout-note', id: 'touchup-entry-summary' }),
     ],
@@ -1920,10 +1964,11 @@ export function updateBackgroundPanel(container, state, fps) {
   const full = ai.picks.length >= EDIT_LIMITS.aiPicks.max;
   const objectsFull = objects.length >= EDIT_LIMITS.aiObjects.max;
   const correcting = Boolean(state.aiActiveObjectId && state.aiPickTool);
-  for (const mode of /** @type {const} */ (['keep', 'remove'])) {
+  for (const mode of /** @type {const} */ (['keep', 'remove', 'colour'])) {
     const input = /** @type {HTMLInputElement} */ (q(root, `#ai-pick-${mode}`));
     const label = /** @type {HTMLElement} */ (input.closest('.editor-cutout-tool'));
-    setHidden(label, !isAi);
+    // Colour fix-ups go on another model's mask, not on click to select
+    setHidden(label, !isAi || (mode === 'colour' && getAiModelId(ai) === 'click'));
     setChecked(input, state.aiPickTool === mode);
     input.disabled = full && objectsFull && !correcting && state.aiPickTool !== mode;
     label.classList.toggle('is-active', state.aiPickTool === mode);
@@ -2000,6 +2045,12 @@ export function updateBackgroundPanel(container, state, fps) {
   /** @type {HTMLInputElement} */ (q(root, '#ai-object-scope-colour')).disabled =
     !selected || !canBeColourObject(selected);
   const colourSelected = selected?.scope === 'colour' && selected.mode === 'remove';
+  setHidden(q(root, '#ai-object-reach'), !colourSelected);
+  setChecked(
+    q(root, '#ai-object-reach-everywhere'),
+    colourSelected && selected?.everywhere === true,
+  );
+  setChecked(q(root, '#ai-object-reach-touching'), colourSelected && selected?.everywhere !== true);
   setHidden(q(root, '#ai-object-tolerance-row'), !colourSelected);
   if (selected && colourSelected) {
     const input = /** @type {HTMLInputElement} */ (q(root, '#ai-object-tolerance'));

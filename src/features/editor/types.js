@@ -143,7 +143,7 @@
 
 /**
  * A preview tool of the AI cutout: what to keep, what to remove
- * @typedef {'keep'|'remove'} AiPickTool
+ * @typedef {'keep'|'remove'|'colour'} AiPickTool
  */
 
 /**

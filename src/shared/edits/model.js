@@ -100,6 +100,9 @@ import { COLOUR_TOLERANCE } from '../masks/colour-fill.js';
  *   the colours to remove and its remove points the colours to protect
  * @property {number} tolerance - Colour only: Euclidean RGB distance,
  *   COLOUR_TOLERANCE.min..max (kept when the scope changes)
+ * @property {boolean} [everywhere] - Colour only: remove the sampled colours
+ *   wherever they are in the mask on every frame, not only where they
+ *   touch its points (sparkles, flames scattered over the frame)
  * @property {boolean} [only] - Keep fix-ups only: "only this". On every
  *   frame where it has its mask the final mask keeps only what lies inside
  *   it (grown a little); frames without its mask keep the base mask. Absent:
@@ -626,6 +629,7 @@ function normalizeObject(object, frameCount) {
     // Colour removes only and needs a point to sample: otherwise tracked
     scope: scope === 'colour' && !canBeColourObject({ mode, clicks: kept }) ? 'whole' : scope,
     ...(mode === 'add' && typeof o.only === 'boolean' ? { only: o.only } : {}),
+    ...(mode === 'remove' && o.everywhere === true ? { everywhere: true } : {}),
     ...(Number.isInteger(o.candidate) &&
     /** @type {number} */ (o.candidate) >= 0 &&
     /** @type {number} */ (o.candidate) < OBJECT_CANDIDATES

@@ -20,6 +20,7 @@ import {
   removeAiPick,
   setActiveAiObject,
   setAiObjectCandidate,
+  setAiObjectEverywhere,
   setAiObjectOnly,
   setAiObjectScope,
   setAiObjectTolerance,
@@ -324,27 +325,30 @@ describe('Colour fix-ups', () => {
     expect(state.edits.background.ai.objects[0].scope).toBe('colour');
   });
 
-  it('the next Remove fix-up starts in the scope chosen last (Colour: never tracked first)', () => {
+  it('a Remove click is never Colour by itself; the Colour tool makes Colour (cutout-ux 4)', () => {
     let state = makeState();
-    expect(state.aiRemoveScope).toBe('part');
     state = addAiObject(state, 'remove', { click }, 'r1');
     state = setAiObjectScope(state, 'r1', 'colour');
-    expect(state.aiRemoveScope).toBe('colour');
+    // A scope chosen on one fix-up (or clip) no longer carries over
     state = addAiObject(state, 'remove', { click }, 'r2');
-    expect(state.edits.background.ai.objects[1].scope).toBe('colour');
-    // An Add fix-up's scope is not remembered, and an Add never starts in Colour
-    state = addAiObject(state, 'add', { click }, 'a');
-    expect(state.edits.background.ai.objects[2].scope).toBe('whole');
-    state = setAiObjectScope(state, 'a', 'part');
-    expect(state.aiRemoveScope).toBe('colour');
-    // A box is Whole: Colour needs points
+    expect(state.edits.background.ai.objects[1].scope).toBe('whole');
+    // The Colour tool: Colour from the click, never tracked first
+    state = addAiObject(state, 'remove', { click, colour: true }, 'c');
+    expect(state.edits.background.ai.objects[2].scope).toBe('colour');
+    expect(getObjectTool(state.edits.background.ai.objects[2])).toBe('colour');
+    // A box is never Colour: Colour needs points
     const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 };
-    state = addAiObject(state, 'remove', { box }, 'b');
+    state = addAiObject(state, 'remove', { box, colour: true }, 'b');
     expect(state.edits.background.ai.objects[3].scope).toBe('whole');
-    // Restored from the user setting; unknown values are ignored
-    const restored = setAiRemoveScope(makeState(), 'whole');
-    expect(restored.aiRemoveScope).toBe('whole');
-    expect(setAiRemoveScope(restored, 'everything')).toBe(restored);
+    // Everywhere: on and off, kept through normalization
+    state = setAiObjectEverywhere(state, 'c', true);
+    expect(state.edits.background.ai.objects[2].everywhere).toBe(true);
+    expect(
+      normalizeEdits(JSON.parse(JSON.stringify(state.edits)), 10).background.ai.objects[2]
+        .everywhere,
+    ).toBe(true);
+    state = setAiObjectEverywhere(state, 'c', false);
+    expect('everywhere' in state.edits.background.ai.objects[2]).toBe(false);
   });
 
   it('a Colour fix-up takes keep (sample) and remove (protect) points like a tracked one', () => {

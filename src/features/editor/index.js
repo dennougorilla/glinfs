@@ -70,6 +70,7 @@ import {
   isColourObject,
   isFrameAnalyzed,
   ONLY_THIS_MIN_INSIDE,
+  pickFindsCharacter,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
@@ -133,6 +134,7 @@ import {
   selectTextLayer,
   setActiveAiObject,
   setAiObjectCandidate,
+  setAiObjectEverywhere,
   setAiObjectOnly,
   setAiObjectScope,
   setAiObjectTolerance,
@@ -1040,6 +1042,7 @@ function render(container) {
       onSetAiObjectTolerance: handleSetAiObjectTolerance,
       onRemoveAiObject: handleRemoveAiObject,
       onSetAiObjectScope: handleSetAiObjectScope,
+      onSetAiObjectEverywhere: handleSetAiObjectEverywhere,
       onApplyCleanup: handleApplyCleanup,
       onClearCleanup: handleClearCleanup,
       onClearAiPicks: handleClearAiPicks,
@@ -1099,6 +1102,57 @@ function drawPreview(state) {
   drawObjectRegions(ctx, state, frame);
   drawPickedAnswer(ctx, state, frame);
   drawOnlyThisLoss(ctx, state, frame);
+  drawColourPoints(ctx, state, frame);
+}
+
+/**
+ * The points of the selected Colour fix-up on the preview: a colour it
+ * removes is a dot filled with the colour under it, a colour it keeps a
+ * ring with a stroke through it. Each point acts on every frame, so all
+ * are drawn; those made on another frame are faint.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../capture/types.js').Frame} frame
+ */
+function drawColourPoints(ctx, state, frame) {
+  if (!isAiCutoutActive(state.edits.background)) return;
+  const id = state.aiActiveObjectId;
+  const object = id ? state.edits.background.ai.objects?.find((o) => o.id === id) : null;
+  if (!object || !isColourObject(object)) return;
+  const r = Math.max(4, Math.round(Math.min(frame.width, frame.height) / 60));
+  ctx.save();
+  for (const click of object.clicks) {
+    const x = click.x * frame.width;
+    const y = click.y * frame.height;
+    ctx.globalAlpha = click.frame === state.currentFrame ? 1 : 0.45;
+    ctx.lineWidth = Math.max(1.5, r / 3);
+    if (click.mode === 'keep') {
+      const [pr, pg, pb] = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgb(${pr}, ${pg}, ${pb})`;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, r + ctx.lineWidth, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.moveTo(x - r * 0.7, y + r * 0.7);
+      ctx.lineTo(x + r * 0.7, y - r * 0.7);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.lineWidth = Math.max(3, r / 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = Math.max(1.5, r / 3);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 /**
@@ -2359,8 +2413,14 @@ async function handleAiPick(point, options = {}) {
   }
   const state = editorStore.getState();
   const selected = getSelectedAiObject(state);
-  if (selected) {
+  // The Colour tool on a selected Colour fix-up adds a colour (Alt: one to
+  // keep); on anything else it makes a new Colour fix-up
+  if (selected && (tool !== 'colour' || isColourObject(selected))) {
     handleObjectCorrection(selected, { click: point, alt: options.alt === true });
+    return;
+  }
+  if (tool === 'colour') {
+    handleColourClick(point);
     return;
   }
   const mode = options.alt ? (tool === 'keep' ? 'remove' : 'keep') : tool;
@@ -2425,8 +2485,12 @@ async function handleAiPick(point, options = {}) {
     announce(`The limit of ${EDIT_LIMITS.aiPicks.max} picks is reached`);
     return;
   }
+  // The tool stays on for the next piece (Escape ends it)
+  // (a refusal notice from an earlier click is done with)
   store.setState((s) =>
-    setAiPickTool(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), null),
+    updateAiCutoutStatus(addAiPick(s, { frame: s.currentFrame, x: point.x, y: point.y, mode }), {
+      notice: '',
+    }),
   );
   announce(
     mode === 'keep'
@@ -2478,6 +2542,51 @@ function getSelectedAiObject(state) {
 }
 
 /**
+ * The Colour tool clicked the preview: a new Colour fix-up (never tracked)
+ * sampling the colours under the click, selected with the tool still on,
+ * so the next clicks add colours (Alt: colours to keep). A click where the
+ * mask has nothing would remove nothing and is refused.
+ * @param {{ x: number, y: number }} point - Fractions of the SOURCE frame
+ */
+function handleColourClick(point) {
+  if (!store) return;
+  const state = store.getState();
+  const frames = state.clip?.frames;
+  const frame = frames?.[state.currentFrame];
+  const ai = state.edits.background.ai;
+  if (!frames || !isFrameAnalyzed(frame, { modelId: getAiModelId(ai) })) {
+    announce(PICK_NEEDS_ANALYSIS_NOTICE);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: PICK_NEEDS_ANALYSIS_NOTICE }));
+    return;
+  }
+  if (!pickFindsCharacter({ frames, ai, frameIndex: state.currentFrame, point })) {
+    announce(PICK_NO_CHARACTER_NOTICE);
+    store.setState((s) => updateAiCutoutStatus(s, { notice: PICK_NO_CHARACTER_NOTICE }));
+    return;
+  }
+  const before = state.edits.background.ai.objects?.length ?? 0;
+  addObjectFixUp('remove', {
+    click: { frame: state.currentFrame, x: point.x, y: point.y },
+    colour: true,
+  });
+  const after = store.getState().edits.background.ai.objects ?? [];
+  const added = after.length > before ? after.at(-1) : null;
+  if (added) store.setState((s) => setAiPickTool(setActiveAiObject(s, added.id), 'colour'));
+}
+
+/**
+ * A Colour fix-up reaches its colours everywhere in the mask, or only where
+ * they touch its points
+ * @param {boolean} everywhere
+ */
+function handleSetAiObjectEverywhere(everywhere) {
+  if (!store) return;
+  const id = store.getState().aiActiveObjectId;
+  if (!id) return;
+  store.setState((s) => setAiObjectEverywhere(s, id, everywhere));
+}
+
+/**
  * Click to select: a click on the preview adds a keep (or remove) point on
  * the frame on screen. The store subscription then tracks again (see
  * startAiCutoutSession): the frame on screen shows its mask first. Until
@@ -2515,9 +2624,10 @@ const OBJECT_OUTSIDE_SELECTION_NOTICE =
  * selection); the tool goes off. The store subscription tracks it (see
  * startAiCutoutSession).
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
- * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean }} selection
  */
 function addObjectFixUp(mode, selection) {
+  // (selection.colour: a Colour fix-up from the Colour tool)
   if (!store) return;
   const state = store.getState();
   if (isCurrentFrameOutsideSelection(state)) {
@@ -2529,12 +2639,7 @@ function addObjectFixUp(mode, selection) {
     announce(`The limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups is reached`);
     return;
   }
-  const willTrack = !(
-    mode === 'remove' &&
-    selection.click &&
-    !selection.box &&
-    state.aiRemoveScope === 'colour'
-  );
+  const willTrack = !(mode === 'remove' && selection.click && !selection.box && selection.colour);
   if (willTrack) aiSession?.expectAnswer();
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
   const added = store.getState().edits.background.ai.objects?.at(-1);

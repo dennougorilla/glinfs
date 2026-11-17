@@ -528,9 +528,9 @@ describe('AI cutout in the mounted editor', () => {
     await settle();
     let state = getEditorState();
     expect(state?.edits.background.ai.picks).toEqual([{ frame: 2, x: 0.3, y: 0.7, mode: 'keep' }]);
-    expect(state?.aiPickTool).toBeNull();
-    expect($('#preview-tool-hint').hidden).toBe(true);
-    expect($('.editor-canvas-container').dataset.tool).toBe('');
+    // The tool stays on for the next piece (cutout-ux 4: 16 actions for 8 flames before)
+    expect(state?.aiPickTool).toBe('keep');
+    expect($('.editor-canvas-container').dataset.tool).toBe('keep');
     // The crop was not touched by the pick
     expect(state?.cropArea).toBeNull();
     expect($('#ai-pick-list').children).toHaveLength(1);
@@ -599,7 +599,7 @@ describe('AI cutout in the mounted editor', () => {
     clickPreview(overlay, 90, 10);
     await settle();
     expect(ai()?.picks).toEqual([{ frame: 1, x: 0.9, y: 0.1, mode: 'remove' }]);
-    expect(getEditorState()?.aiPickTool).toBeNull();
+    expect(getEditorState()?.aiPickTool).toBe('remove');
     expect($('#ai-notice').textContent).toBe('');
 
     // Remove on the subject: a tracked fix-up, not selected
@@ -877,6 +877,43 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.aiPickerId).toBeNull();
   });
 
+  it('the Colour tool makes a Colour fix-up at the click, never tracked; more clicks add colours (cutout-ux 4)', async () => {
+    mount(3);
+    await chooseAi();
+    await vi.waitFor(async () => {
+      await settle();
+      expect(getEditorState()?.aiCutout.maskVersion).toBeGreaterThan(0);
+    });
+    const base = /** @type {HTMLCanvasElement} */ ($('.editor-canvas'));
+    base.getBoundingClientRect = () =>
+      /** @type {DOMRect} */ ({ left: 0, top: 0, width: 100, height: 100 });
+    const overlay = $('.editor-canvas-overlay');
+    fake.analyzeObject.mockClear();
+    check('ai-pick-colour');
+    await settle();
+    expect(getEditorState()?.aiPickTool).toBe('colour');
+    clickPreview(overlay, 40, 40);
+    await settle();
+    const [object] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(object).toMatchObject({ mode: 'remove', scope: 'colour' });
+    // Selected with the tool on: the next clicks add a colour, Alt one to keep
+    expect(getEditorState()?.aiActiveObjectId).toBe(object.id);
+    expect(getEditorState()?.aiPickTool).toBe('colour');
+    clickPreview(overlay, 60, 40);
+    clickPreview(overlay, 70, 40, { altKey: true });
+    await settle();
+    const [after] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(after.clicks.map((c) => c.mode)).toEqual(['keep', 'keep', 'remove']);
+    expect(getEditorState()?.edits.background.ai.objects).toHaveLength(1);
+    // Never tracked
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fake.analyzeObject).not.toHaveBeenCalled();
+    // Its reach: Everywhere, from the panel
+    check('ai-object-reach-everywhere');
+    await settle();
+    expect(getEditorState()?.edits.background.ai.objects[0].everywhere).toBe(true);
+  });
+
   it('keeps keyboard focus in the panel when the focused control hides itself', async () => {
     mount(2);
     const held = holdNextAnalysis();
@@ -948,7 +985,10 @@ describe('AI cutout in the mounted editor', () => {
     expect(pick).toMatchObject({ frame: 2, mode: 'keep' });
     expect(pick.x).toBeCloseTo(0.6, 5);
     expect(pick.y).toBeCloseTo(0.54, 5);
-    // The tool ends: focus goes back to its toggle, the preview leaves the tab order
+    // The tool stays on for the next pick (cutout-ux 4); Escape ends it below
+    expect(getEditorState()?.aiPickTool).toBe('keep');
+    press('Escape');
+    await settle();
     expect(getEditorState()?.aiPickTool).toBeNull();
     expect(document.activeElement).toBe(keep);
     expect(overlay.hasAttribute('tabindex')).toBe(false);

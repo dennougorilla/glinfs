@@ -226,6 +226,34 @@ describe('Colour fix-ups in a build', () => {
     expect(Math.max(...result.colourLevels.c1)).toBeLessThanOrEqual(1);
   });
 
+  it('Everywhere removes the sampled colour in every separate piece, Touching only where it touches (cutout-ux 4)', async () => {
+    const FLAME = [240, 150, 30];
+    // Flames scattered around the subject, apart from it and from each other, moving
+    const flames = (/** @type {number} */ f) => [
+      { rect: /** @type {Rect} */ ([2 + f, 2, 3, 6]), color: FLAME },
+      { rect: /** @type {Rect} */ ([10, 20 + (f % 3), 3, 6]), color: FLAME },
+      { rect: /** @type {Rect} */ ([50 - f, 6, 3, 6]), color: FLAME },
+    ];
+    const clip = makeClip(flames);
+    const touching = colourObject([{ frame: 0, x: 3, y: 4 }]);
+    const everywhere = colourObject([{ frame: 0, x: 3, y: 4 }]);
+    everywhere.edit = { ...everywhere.edit, everywhere: true };
+    everywhere.input = {
+      ...everywhere.input,
+      colour: { ...everywhere.input.colour, everywhere: true },
+    };
+    const a = await build(clip, touching);
+    const b = await build(clip, everywhere);
+    for (let f = 0; f < FRAMES; f++) {
+      // Touching: the clicked flame follows (it overlaps the point), the others stay
+      expect(keptIn(a.masks[f], flames(f)[2].rect)).toBeGreaterThan(0.9);
+      // Everywhere: every flame goes, the subject stays whole
+      for (const flame of flames(f)) expect(keptIn(b.masks[f], flame.rect)).toBeLessThan(0.1);
+      expect(keptIn(b.masks[f], character[1].rect)).toBe(1);
+      expect(keptIn(b.masks[f], character[0].rect)).toBe(1);
+    }
+  });
+
   it('a protect point keeps the hair a pillar of nearly its colour shares', async () => {
     const pillar = [82, 52, 36];
     /** @type {Rect} */
