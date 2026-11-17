@@ -183,7 +183,9 @@ function combinedBreaks(s) {
 }
 
 /**
- * Break-finding methods by option id
+ * Break-finding methods by option id. Settings offers all but `comeback`,
+ * which is kept for the comparison table: colour and shape has fewer false
+ * cuts, higher precision and higher recall on both test sets.
  * @type {Record<string, (s: FrameSignals) => number[]>}
  */
 export const SCENE_METHODS = {

@@ -277,3 +277,14 @@ test('Scene detection offers its methods, colour and shape first', async ({ page
     )
     .toEqual({ scenes: 'fixed' });
 });
+
+test('Frame differencing offers smallest file first, then off', async ({ page }) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  const row = page.locator('[data-setting-key="gif.differencing"]');
+  await expect(row.locator('.settings-item-label')).toHaveText('Frame differencing');
+  await expect(row.locator('select option')).toHaveText(['Smallest file', 'Off']);
+  await expect(row.locator('select')).toHaveValue('smallest');
+});

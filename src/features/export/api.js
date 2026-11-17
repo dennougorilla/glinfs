@@ -22,6 +22,7 @@ import {
   sampleFramePixels,
   selectPaletteSampleIndices,
 } from './core.js';
+import { isFrameDifferencingOn } from './method.js';
 
 /**
  * Cached OffscreenCanvas + 2d context used by getFrameRGBA's non-copyTo
@@ -570,8 +571,10 @@ export async function encodeGif(params, signal) {
       paletteSample,
       transparent,
       // Opaque gifenc GIFs write unchanged pixels as transparency (smaller,
-      // decoded the same); a cutout clears pixels, which needs disposal instead
-      frameDifferencing: !transparent && (encoderId ?? 'gifenc-js') === 'gifenc-js',
+      // decoded the same) unless switched off in Settings; a cutout clears
+      // pixels, which needs disposal instead
+      frameDifferencing:
+        !transparent && (encoderId ?? 'gifenc-js') === 'gifenc-js' && isFrameDifferencingOn(),
       dithering: settings.dither === true,
     });
 
