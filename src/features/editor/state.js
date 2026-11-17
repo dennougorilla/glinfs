@@ -673,7 +673,7 @@ export function setAiObjectCandidate(state, id, candidate) {
  */
 export function setAiObjectOnly(state, id, only) {
   const object = state.edits.background.ai.objects?.find((o) => o.id === id);
-  if (!object || object.mode !== 'add' || object.only === only) return state;
+  if (object?.mode !== 'add' || object.only === only) return state;
   return updateAiObject(state, id, (o) => ({ ...o, only }));
 }
 

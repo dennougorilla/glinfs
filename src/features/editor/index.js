@@ -1434,7 +1434,7 @@ function decideOnlyThis(state) {
   if (!store || !state.clip) return;
   const id = state.aiPickerId;
   const object = id ? state.edits.background.ai.objects?.find((o) => o.id === id) : null;
-  if (!object || object.mode !== 'add' || typeof object.only === 'boolean') return;
+  if (object?.mode !== 'add' || typeof object.only === 'boolean') return;
   if ((object.boxes ?? []).length === 0) return;
   const kept = aiSession?.getObjectAnswers(object.id);
   if (!kept || kept.answers.length === 0) return;
@@ -1465,7 +1465,7 @@ function drawOnlyThisLoss(ctx, state, frame) {
   if (!isAiCutoutActive(state.edits.background) || !state.clip) return;
   const id = state.aiActiveObjectId ?? state.aiPickerId;
   const object = id ? state.edits.background.ai.objects?.find((o) => o.id === id) : null;
-  if (!object || object.mode !== 'add' || object.only !== true) return;
+  if (object?.mode !== 'add' || object.only !== true) return;
   // The answer stepped to on its frame, else its mask on this frame
   let mask = null;
   const picked = getPickerObject(state);
