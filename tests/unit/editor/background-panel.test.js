@@ -872,16 +872,16 @@ describe('tracked objects', () => {
   it('labels, finds the lost one (active first) and words its note', () => {
     const a = /** @type {any} */ (object('a', 'remove', 10));
     const b = /** @type {any} */ (object('b', 'add', 0));
-    expect(getObjectLabel(a, 10)).toBe('Remove at 01:00');
-    expect(getObjectLabel(b, 10)).toBe('Keep at 00:00');
+    expect(getObjectLabel(a, 10)).toBe('Remove at 0:01.0');
+    expect(getObjectLabel(b, 10)).toBe('Keep at 0:00.0');
     // A box-only object is labelled at its box; a box added later does not
     // move the label
     expect(getObjectLabel({ ...a, boxes: [{ frame: 20, x0: 0, y0: 0, x1: 1, y1: 1 }] }, 10)).toBe(
-      'Remove at 01:00',
+      'Remove at 0:01.0',
     );
     expect(
       getObjectLabel({ ...b, clicks: [], boxes: [{ frame: 20, x0: 0, y0: 0, x1: 1, y1: 1 }] }, 10),
-    ).toBe('Keep at 02:00');
+    ).toBe('Keep at 0:02.0');
     const lost = { a: [5], b: [7, 30] };
     expect(getLostObject([a, b], lost, { start: 0, end: 39 })).toEqual({ object: a, frames: [5] });
     expect(getLostObject([a, b], lost, { start: 0, end: 39 }, 'b')?.object).toBe(b);
@@ -889,10 +889,10 @@ describe('tracked objects', () => {
     expect(getLostObject([a, b], lost, { start: 6, end: 20 })).toEqual({ object: b, frames: [7] });
     expect(getLostObject([a], {}, { start: 0, end: 39 })).toBeNull();
     expect(getObjectLostText(a, [5], 10)).toBe(
-      'What you removed was lost at 00:05. Click it there to keep going.',
+      'What you removed was lost at 0:00.5. Click it there to keep going.',
     );
     expect(getObjectLostText(b, [7, 30], 10)).toBe(
-      'What you kept was lost at 2 places, first at 00:07. Click it there to keep going.',
+      'What you kept was lost at 2 places, first at 0:00.7. Click it there to keep going.',
     );
   });
 
@@ -909,7 +909,7 @@ describe('tracked objects', () => {
     const items = [...root.querySelectorAll('#ai-pick-list > li')];
     const [ta, tb] = state.edits.background.ai.objects;
     expect(items.map((li) => li.textContent)).toEqual([
-      'Remove at 00:04×',
+      'Remove at 0:00.4×',
       `${getObjectLabel(ta, 10)}×`,
       `${getObjectLabel(tb, 10)}×`,
     ]);
@@ -952,7 +952,7 @@ describe('tracked objects', () => {
     const status = { ...createAiCutoutStatus(), objectLost: { a: [12] } };
     updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)], { aiCutout: status }), 10);
     expect($('#ai-object-lost').hidden).toBe(false);
-    expect($('#ai-object-lost').textContent).toContain('lost at 01:02');
+    expect($('#ai-object-lost').textContent).toContain('lost at 0:01.2');
     $('#ai-object-lost-go').click();
     expect(handlers.onGoToObjectLost).toHaveBeenCalledWith('a');
     updateBackgroundPanel(root, stateWith([object('a', 'remove', 3)]), 10);
@@ -1023,7 +1023,7 @@ describe('tracked objects', () => {
     };
     updateBackgroundPanel(root, stateWith([colour], { aiCutout: status }), 10);
     expect($('#ai-object-lost').hidden).toBe(false);
-    expect($('#ai-object-lost').textContent).toContain('Colour removes more at 02:05.');
+    expect($('#ai-object-lost').textContent).toContain('Colour removes more at 0:02.5.');
     expect($('#ai-object-lost').textContent).not.toMatch(/%|subject/);
     $('#ai-object-lost-go').click();
     expect(handlers.onGoToColourGuard).toHaveBeenCalledWith('a', 25);
@@ -1059,8 +1059,8 @@ describe('tracked objects', () => {
     };
     updateBackgroundPanel(root, stateWith([colour, tracked], { aiCutout: status }), 10);
     const text = $('#ai-object-lost').textContent;
-    expect(text).toContain('What you removed was lost at 28 places, first at 01:02.');
-    expect(text).toContain('Colour removes more at 02:05.');
+    expect(text).toContain('What you removed was lost at 28 places, first at 0:01.2.');
+    expect(text).toContain('Colour removes more at 0:02.5.');
     $('#ai-object-lost-go').click();
     expect(handlers.onGoToObjectLost).toHaveBeenLastCalledWith('b');
     $('#ai-object-lost-go').click();

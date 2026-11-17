@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatBytes,
+  formatClock,
   formatCompactDuration,
   formatDuration,
   formatPercent,
   formatRemaining,
   formatTimestamp,
+  frameToClock,
 } from '../../../src/shared/utils/format.js';
 
 describe('formatBytes', () => {
@@ -104,5 +106,22 @@ describe('formatCompactDuration', () => {
   it('handles very small values', () => {
     expect(formatCompactDuration(0.03)).toBe('0.0s');
     expect(formatCompactDuration(0.05)).toBe('0.1s');
+  });
+});
+
+describe('formatClock / frameToClock', () => {
+  it('shows minutes, seconds and tenths', () => {
+    expect(formatClock(0)).toBe('0:00.0');
+    expect(formatClock(4.13)).toBe('0:04.1');
+    expect(formatClock(65.37)).toBe('1:05.3');
+    expect(formatClock(600)).toBe('10:00.0');
+  });
+
+  it('truncates tenths like a running clock and survives float error', () => {
+    expect(frameToClock(29, 30)).toBe('0:00.9');
+    expect(frameToClock(3, 30)).toBe('0:00.1');
+    expect(frameToClock(124, 30)).toBe('0:04.1');
+    expect(frameToClock(60, 60)).toBe('0:01.0');
+    expect(frameToClock(7, 10)).toBe('0:00.7');
   });
 });

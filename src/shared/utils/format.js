@@ -61,6 +61,30 @@ export function frameToTimecode(frameIndex, fps = 30) {
 }
 
 /**
+ * Format a running clock: minutes, seconds and tenths ("0:04.1"), so a
+ * clip of a few seconds never reads as minutes. Tenths are truncated like
+ * a clock's, never rounded up into the next second.
+ * @param {number} seconds - Time in seconds
+ * @returns {string} Formatted clock (e.g., "0:04.1", "1:05.3")
+ */
+export function formatClock(seconds) {
+  const tenths = Math.max(0, Math.floor(seconds * 10 + 1e-6));
+  const mins = Math.floor(tenths / 600);
+  const secs = Math.floor((tenths % 600) / 10);
+  return `${mins}:${secs.toString().padStart(2, '0')}.${tenths % 10}`;
+}
+
+/**
+ * Format a frame index (or a frame count) as a running clock
+ * @param {number} frameIndex - Frame index (0-based) or count
+ * @param {number} fps - Frames per second
+ * @returns {string} Formatted clock (e.g., "0:04.1")
+ */
+export function frameToClock(frameIndex, fps = 30) {
+  return formatClock(frameIndex / fps);
+}
+
+/**
  * Format duration with sub-second precision
  * Shows seconds with decimal for precise duration display
  * @param {number} seconds - Duration in seconds
