@@ -52,6 +52,18 @@ describe('capture-worker', () => {
     return call ? call[0] : undefined;
   }
 
+  /**
+   * Answer the pending FRAME_REQUEST, then let the capture interval post the
+   * next one (fps 30 in these tests)
+   * @param {any} bitmap
+   * @param {number} timestamp
+   */
+  function respond(bitmap, timestamp) {
+    const requestId = lastPosted('FRAME_REQUEST')?.payload.requestId;
+    send('FRAME_RESPONSE', { bitmap, timestamp, requestId });
+    vi.advanceTimersByTime(34);
+  }
+
   beforeEach(async () => {
     vi.useFakeTimers();
 
@@ -83,7 +95,7 @@ describe('capture-worker', () => {
     const bitmap = createMockBitmap();
 
     send('START', { fps: 30, maxFrames: 10 });
-    send('FRAME_RESPONSE', { bitmap, timestamp: 123 });
+    respond(bitmap, 123);
 
     expect(bitmap.close).not.toHaveBeenCalled();
 
@@ -102,7 +114,7 @@ describe('capture-worker', () => {
     send('START', { fps: 30, maxFrames: 10 });
     // A FRAME_REQUEST is in flight on the main thread when STOP is processed
     send('STOP');
-    send('FRAME_RESPONSE', { bitmap, timestamp: 456 });
+    respond(bitmap, 456);
 
     expect(bitmap.close).toHaveBeenCalledTimes(1);
 
@@ -119,15 +131,46 @@ describe('capture-worker', () => {
     expect(() => send('FRAME_RESPONSE', { bitmap: null, timestamp: 456 })).not.toThrow();
   });
 
+  it('keeps one grab in flight when a request from before a restart is answered late', () => {
+    // A change of source restarts capture while a grab is still pending.
+    send('START', { fps: 10, maxFrames: 10 });
+    const stale = lastPosted('FRAME_REQUEST').payload.requestId;
+    send('STOP');
+    send('CLEAR');
+    send('START', { fps: 10, maxFrames: 10 });
+    const current = lastPosted('FRAME_REQUEST').payload.requestId;
+    const requests = () =>
+      postMessage.mock.calls.filter(([m]) => m.type === 'FRAME_REQUEST').length;
+    const before = requests();
+
+    // The old grab's (null) answer must not release the new grab's slot
+    send('FRAME_RESPONSE', { bitmap: null, timestamp: 1, requestId: stale });
+    vi.advanceTimersByTime(300);
+    expect(requests()).toBe(before);
+
+    // A late frame for the old request is closed, not buffered
+    const late = createMockBitmap();
+    send('FRAME_RESPONSE', { bitmap: late, timestamp: 2, requestId: stale });
+    expect(late.close).toHaveBeenCalledTimes(1);
+
+    // The current request's answer is buffered and frees the slot again
+    const frame = createMockBitmap();
+    send('FRAME_RESPONSE', { bitmap: frame, timestamp: 3, requestId: current });
+    vi.advanceTimersByTime(100);
+    expect(requests()).toBe(before + 1);
+    send('GET_FRAMES');
+    expect(lastPosted('FRAMES_RESPONSE').payload.frames.map((f) => f.bitmap)).toEqual([frame]);
+  });
+
   it('evicts and closes the oldest frame when the buffer is full', () => {
     const first = createMockBitmap();
     const second = createMockBitmap();
     const third = createMockBitmap();
 
     send('START', { fps: 30, maxFrames: 2 });
-    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
-    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
-    send('FRAME_RESPONSE', { bitmap: third, timestamp: 3 });
+    respond(first, 1);
+    respond(second, 2);
+    respond(third, 3);
 
     expect(first.close).toHaveBeenCalledTimes(1);
     expect(second.close).not.toHaveBeenCalled();
@@ -141,10 +184,10 @@ describe('capture-worker', () => {
     const fourth = createMockBitmap();
 
     send('START', { fps: 30, maxFrames: 2 });
-    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
-    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
-    send('FRAME_RESPONSE', { bitmap: third, timestamp: 3 });
-    send('FRAME_RESPONSE', { bitmap: fourth, timestamp: 4 });
+    respond(first, 1);
+    respond(second, 2);
+    respond(third, 3);
+    respond(fourth, 4);
     send('GET_FRAMES');
 
     const response = lastPosted('FRAMES_RESPONSE');
@@ -159,9 +202,9 @@ describe('capture-worker', () => {
     const third = createMockBitmap();
 
     send('START', { fps: 30, maxFrames: 3 });
-    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
-    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
-    send('FRAME_RESPONSE', { bitmap: third, timestamp: 3 });
+    respond(first, 1);
+    respond(second, 2);
+    respond(third, 3);
     send('STOP');
     send('START', { fps: 30, maxFrames: 2 });
     send('GET_FRAMES');
@@ -176,8 +219,8 @@ describe('capture-worker', () => {
     const second = createMockBitmap();
 
     send('START', { fps: 30, maxFrames: 10 });
-    send('FRAME_RESPONSE', { bitmap: first, timestamp: 1 });
-    send('FRAME_RESPONSE', { bitmap: second, timestamp: 2 });
+    respond(first, 1);
+    respond(second, 2);
 
     send('CLEAR');
 

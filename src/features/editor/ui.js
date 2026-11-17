@@ -14,7 +14,7 @@ import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries
 import { registerHotkey } from '../../shared/hotkeys.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { createElement } from '../../shared/utils/dom.js';
-import { frameToTimecode } from '../../shared/utils/format.js';
+import { frameToClock, frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -453,7 +453,7 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
   // selection and the selection total change when the range changes (#44)
   const currentTimeEl = container.querySelector('.time-display .current');
   if (currentTimeEl) {
-    currentTimeEl.textContent = frameToTimecode(
+    currentTimeEl.textContent = frameToClock(
       getPositionInSelection(currentFrame, selectedRange),
       fps,
     );
@@ -461,7 +461,7 @@ export function updateTimelineHeader(container, selectedRange, currentFrame, fps
 
   const totalTimeEl = container.querySelector('.time-display .total');
   if (totalTimeEl) {
-    totalTimeEl.textContent = frameToTimecode(selectionInfo.frameCount, fps);
+    totalTimeEl.textContent = frameToClock(selectionInfo.frameCount, fps);
   }
 }
 
