@@ -14,9 +14,13 @@
  *   be transferred back — or this worker crashes outright — the frames are
  *   lost; the main thread detects the short/empty `frames` and drops the
  *   clip with a user-visible notice (see clip-codec.js failure contract).
- * - DECODE output frames are transferred to the main thread, which owns
- *   them from then on. On failure, partially decoded frames are closed
- *   here (the main thread never saw them).
+ * - DECODE never holds the decoder's own output frames: each one is copied
+ *   into a frame this worker owns and closed at once. A decoder may draw
+ *   its output from a small fixed pool (hardware decoders do) and stops
+ *   until a picture comes back, so holding them until flush() would hang
+ *   every clip longer than the pool. The copies are transferred to the
+ *   main thread, which owns them from then on. On failure, the copies made
+ *   so far are closed here (the main thread never saw them).
  *
  * @module workers/clip-codec-worker
  */
@@ -199,6 +203,8 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
 async function handleDecode({ jobId, chunks, config }) {
   /** @type {VideoFrame[]} */
   const frames = [];
+  /** @type {Promise<void>[]} */
+  const copies = [];
 
   try {
     /** @type {(reason: Error) => void} */
@@ -209,7 +215,15 @@ async function handleDecode({ jobId, chunks, config }) {
     decoderFailed.catch(() => {});
 
     const decoder = new VideoDecoder({
-      output: (frame) => frames.push(frame),
+      output: (frame) => {
+        const copy = ownedCopy(frame).then(
+          (owned) => {
+            frames.push(owned);
+          },
+          (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
+        );
+        copies.push(copy);
+      },
       error: (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
     });
 
@@ -232,6 +246,7 @@ async function handleDecode({ jobId, chunks, config }) {
     }
 
     await Promise.race([decoder.flush(), decoderFailed]);
+    await Promise.race([Promise.all(copies), decoderFailed]);
     decoder.close();
 
     // Presentation order (all-progressive input should already be ordered,
@@ -240,9 +255,56 @@ async function handleDecode({ jobId, chunks, config }) {
 
     self.postMessage({ type: 'DECODE_RESULT', payload: { jobId, frames } }, frames);
   } catch (err) {
-    // The main thread never owned these frames — close them here
+    // The main thread never owned these frames — close them here, also
+    // the copies still in flight when the decode failed
     for (const frame of frames) closeSafe(frame);
+    void Promise.allSettled(copies).then(() => {
+      for (const frame of frames) closeSafe(frame);
+    });
     const message = err instanceof Error ? err.message : 'Decode failed';
     self.postMessage({ type: 'JOB_ERROR', payload: { jobId, message } });
+  }
+}
+
+/**
+ * Copy a decoder output frame into a frame backed by memory this worker
+ * owns, and close the decoder's frame right away (returning its picture
+ * buffer to the decoder). The copy keeps the format, the visible size,
+ * the timing and the colour space.
+ * @param {VideoFrame} frame - Closed by this function
+ * @returns {Promise<VideoFrame>}
+ */
+async function ownedCopy(frame) {
+  try {
+    const format = frame.format;
+    if (format === null) {
+      // Opaque frame (no CPU-readable layout): draw it instead
+      const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
+      /** @type {OffscreenCanvasRenderingContext2D} */ (canvas.getContext('2d')).drawImage(
+        frame,
+        0,
+        0,
+      );
+      return new VideoFrame(canvas, {
+        timestamp: frame.timestamp,
+        ...(frame.duration != null ? { duration: frame.duration } : {}),
+      });
+    }
+    const rect = frame.visibleRect;
+    const data = new ArrayBuffer(frame.allocationSize());
+    const layout = await frame.copyTo(data);
+    return new VideoFrame(data, {
+      format,
+      codedWidth: rect?.width ?? frame.codedWidth,
+      codedHeight: rect?.height ?? frame.codedHeight,
+      displayWidth: frame.displayWidth,
+      displayHeight: frame.displayHeight,
+      timestamp: frame.timestamp,
+      ...(frame.duration != null ? { duration: frame.duration } : {}),
+      layout,
+      colorSpace: frame.colorSpace?.toJSON?.() ?? undefined,
+    });
+  } finally {
+    closeSafe(frame);
   }
 }
