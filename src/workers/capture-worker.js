@@ -36,8 +36,18 @@ let fps = 30;
 /** @type {boolean} */
 let isCapturing = false;
 
-/** @type {boolean} */
-let pendingRequest = false;
+/**
+ * Id of the FRAME_REQUEST whose answer is awaited, or null. Only that
+ * request's answer frees the slot: an answer to a request from before a
+ * restart (a change of source stops and starts while a grab is in flight)
+ * must not let a second grab overlap the current one, or frames could
+ * arrive out of order.
+ * @type {number | null}
+ */
+let pendingRequestId = null;
+
+/** Id of the last FRAME_REQUEST sent; never reused while the worker lives */
+let lastRequestId = 0;
 
 /**
  * Handle messages from main thread
@@ -58,7 +68,7 @@ self.onmessage = (e) => {
       break;
 
     case 'FRAME_RESPONSE':
-      handleFrameResponse(payload.bitmap, payload.timestamp);
+      handleFrameResponse(payload.bitmap, payload.timestamp, payload.requestId);
       break;
 
     case 'GET_FRAMES':
@@ -82,26 +92,35 @@ self.onmessage = (e) => {
 function startCapture() {
   if (isCapturing) return;
   isCapturing = true;
-  pendingRequest = false;
 
   const interval = 1000 / fps;
 
   // Request first frame immediately
-  pendingRequest = true;
-  self.postMessage({ type: 'FRAME_REQUEST', payload: { timestamp: Date.now() } });
+  requestFrame();
 
   // Start interval for subsequent frames
   captureIntervalId = setInterval(() => {
     if (!isCapturing) return;
 
     // Backpressure: skip if previous request is still pending
-    if (pendingRequest) {
+    if (pendingRequestId !== null) {
       return;
     }
 
-    pendingRequest = true;
-    self.postMessage({ type: 'FRAME_REQUEST', payload: { timestamp: Date.now() } });
+    requestFrame();
   }, interval);
+}
+
+/**
+ * Ask the main thread for a frame; its answer must carry the same id
+ */
+function requestFrame() {
+  lastRequestId++;
+  pendingRequestId = lastRequestId;
+  self.postMessage({
+    type: 'FRAME_REQUEST',
+    payload: { timestamp: Date.now(), requestId: lastRequestId },
+  });
 }
 
 /**
@@ -109,7 +128,7 @@ function startCapture() {
  */
 function stopCapture() {
   isCapturing = false;
-  pendingRequest = false;
+  pendingRequestId = null;
 
   if (captureIntervalId !== null) {
     clearInterval(captureIntervalId);
@@ -121,10 +140,17 @@ function stopCapture() {
  * Handle frame response from main thread
  * @param {ImageBitmap | null} bitmap
  * @param {number} timestamp
+ * @param {number} [requestId] - id of the FRAME_REQUEST this answers
  */
-function handleFrameResponse(bitmap, timestamp) {
-  // Clear pending flag to allow next request
-  pendingRequest = false;
+function handleFrameResponse(bitmap, timestamp, requestId) {
+  if (requestId !== pendingRequestId) {
+    // Answers a request from before a stop, clear or restart: the current
+    // request is still pending, so keep its slot and drop this frame
+    bitmap?.close();
+    return;
+  }
+  // Allow the next request
+  pendingRequestId = null;
 
   if (!bitmap) {
     return;
@@ -200,7 +226,6 @@ function clearBuffer() {
   }
   frameBuffer = [];
   frameBufferStart = 0;
-  pendingRequest = false;
   sendStats();
 }
 

@@ -421,3 +421,112 @@ describe('postMessage failure', () => {
     expect(result.frames).toBe(frames);
   });
 });
+
+describe('stall watchdog (a job that stops making progress)', () => {
+  /** Manager with a fresh fake worker per creation and a short bound */
+  async function createWatchedManager(stallMs = 1000) {
+    vi.stubGlobal('VideoEncoder', {
+      isConfigSupported: vi.fn(async () => ({ supported: true })),
+    });
+    /** @type {ReturnType<typeof createFakeWorker>[]} */
+    const workers = [];
+    const manager = createClipCodecManager({
+      createWorker: () => {
+        const w = createFakeWorker();
+        workers.push(w);
+        return w;
+      },
+      stallMs,
+    });
+    await manager.probeSupport();
+    return { manager, workers };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('fails a decode with no reply and no progress, then runs the next job on a fresh worker', async () => {
+    vi.useFakeTimers();
+    const { manager, workers } = await createWatchedManager(1000);
+    const stuck = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    const next = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(stuck).resolves.toEqual({ ok: false, error: 'stalled' });
+    expect(workers[0].terminate).toHaveBeenCalled();
+    // The queue continues on a new worker
+    expect(workers).toHaveLength(2);
+    const { jobId } = workers[1].posted[0].message.payload;
+    workers[1].emit({ type: 'DECODE_RESULT', payload: { jobId, frames: [] } });
+    await expect(next).resolves.toEqual({ ok: true, frames: [] });
+  });
+
+  it('keeps a long job alive while it reports progress', async () => {
+    vi.useFakeTimers();
+    const { manager, workers } = await createWatchedManager(1000);
+    let settled = false;
+    const job = manager.decode({ chunks: [], config: { codec: 'vp8' } }).then((r) => {
+      settled = true;
+      return r;
+    });
+    const { jobId } = workers[0].posted[0].message.payload;
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(900);
+      workers[0].emit({ type: 'JOB_PROGRESS', payload: { jobId } });
+    }
+    expect(settled).toBe(false);
+    workers[0].emit({ type: 'DECODE_RESULT', payload: { jobId, frames: [] } });
+    await expect(job).resolves.toEqual({ ok: true, frames: [] });
+    expect(workers[0].terminate).not.toHaveBeenCalled();
+  });
+
+  it('fails a stalled encode as lost (its frames are in the dead worker)', async () => {
+    vi.useFakeTimers();
+    const { manager, workers } = await createWatchedManager(1000);
+    const job = manager.encode(fakeFrames(2), { fps: 30, width: 10, height: 10 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(job).resolves.toEqual({ ok: false, error: 'stalled', frames: [] });
+    expect(workers[0].terminate).toHaveBeenCalled();
+  });
+
+  it('ignores progress from a job that is not running', async () => {
+    vi.useFakeTimers();
+    const { manager, workers } = await createWatchedManager(1000);
+    const job = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    await vi.advanceTimersByTimeAsync(600);
+    workers[0].emit({ type: 'JOB_PROGRESS', payload: { jobId: 999 } });
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(job).resolves.toEqual({ ok: false, error: 'stalled' });
+  });
+
+  it('does not fire after the job settled', async () => {
+    vi.useFakeTimers();
+    const { manager, workers } = await createWatchedManager(1000);
+    const job = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    const { jobId } = workers[0].posted[0].message.payload;
+    workers[0].emit({ type: 'DECODE_RESULT', payload: { jobId, frames: [] } });
+    await job;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(workers[0].terminate).not.toHaveBeenCalled();
+  });
+});
+
+describe('replies for jobs that already settled', () => {
+  it('closes the frames of a decode result that arrives after the job stalled', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: vi.fn(async () => ({ supported: true })) });
+    const worker = createFakeWorker();
+    const manager = createClipCodecManager({ createWorker: () => worker, stallMs: 1000 });
+    await manager.probeSupport();
+    const job = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    const { jobId } = worker.posted[0].message.payload;
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(job).resolves.toEqual({ ok: false, error: 'stalled' });
+
+    const late = [{ close: vi.fn() }, { close: vi.fn() }];
+    worker.emit({ type: 'DECODE_RESULT', payload: { jobId, frames: late } });
+    for (const frame of late) expect(frame.close).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+});
