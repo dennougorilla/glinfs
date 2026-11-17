@@ -114,13 +114,14 @@ export { getObjectSignature };
 export const SUGGESTIONS_DELAY_MS = 500;
 
 /**
- * Run `task` after the browser has painted the next frame (a frame, then a
- * task), or soon where there are no animation frames
+ * Run `task` once the preview has painted what was just published: the
+ * editor draws on the animation frame after its (throttled) store update,
+ * so wait two frames, then a task; soon where there are no animation frames
  * @param {() => void} task
  */
 function afterNextPaint(task) {
   if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => setTimeout(task, 0));
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(task, 0)));
   } else {
     setTimeout(task, 0);
   }
