@@ -187,6 +187,84 @@ export function opaquePixels(rgba) {
 }
 
 /**
+ * Frame differencing (opaque exports): a pixel showing the same color as in
+ * the previous frame is written as the transparent index and the previous
+ * frame is kept (dispose 1), so the decoded frames are unchanged pixel for
+ * pixel while long runs of one index compress well.
+ *
+ * Whether it pays cannot be told from the frame cheaply: flat colors with
+ * scattered changes, noise that changes every pixel and a palette rebuild
+ * all defeated rules that guessed from counts or reused an earlier choice
+ * (one made a GIF 51 % larger). Every frame is therefore encoded both ways
+ * and the smaller is written. The choice is per frame: either way the
+ * decoded canvas after the frame is the same, so it cannot affect the next
+ * frame, and the GIF is never larger than without differencing.
+ */
+
+/**
+ * The first palette index a mapped frame never uses, or -1
+ * @param {Uint8Array} index
+ * @param {number} paletteLength
+ * @returns {number}
+ */
+export function findUnusedIndex(index, paletteLength) {
+  const used = new Uint8Array(256);
+  let count = 0;
+  for (let i = 0; i < index.length && count < paletteLength; i++) {
+    if (used[index[i]] === 0) {
+      used[index[i]] = 1;
+      count++;
+    }
+  }
+  for (let i = 0; i < paletteLength; i++) {
+    if (used[i] === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Pack a palette's colors into 24-bit integers, for per-pixel comparison
+ * @param {number[][]} palette
+ * @returns {Int32Array}
+ */
+function packPalette(palette) {
+  const packed = new Int32Array(palette.length);
+  for (let i = 0; i < palette.length; i++) {
+    packed[i] = (palette[i][0] << 16) | (palette[i][1] << 8) | palette[i][2];
+  }
+  return packed;
+}
+
+/**
+ * Difference a mapped frame against the colors shown before it.
+ *
+ * Writes the colors this frame shows into `shown` (for the next frame) and,
+ * where a pixel shows the same color as before, the transparent index into
+ * `out`.
+ *
+ * @param {Uint8Array} index - applyPalette output
+ * @param {Int32Array} colors - packPalette of the frame's palette
+ * @param {Int32Array} shown - Colors shown so far (updated in place)
+ * @param {number} transparentIndex
+ * @param {Uint8Array} out - Same length as index
+ * @returns {number} How many pixels keep their color
+ */
+export function differenceFrame(index, colors, shown, transparentIndex, out) {
+  let kept = 0;
+  for (let i = 0; i < index.length; i++) {
+    const color = colors[index[i]];
+    if (color === shown[i]) {
+      out[i] = transparentIndex;
+      kept++;
+    } else {
+      out[i] = index[i];
+    }
+    shown[i] = color;
+  }
+  return kept;
+}
+
+/**
  * Placeholder palette for a frame without any opaque pixel. It is never
  * kept for reuse: the next frame quantizes a real palette (otherwise a
  * clip-wide schedule would map every later frame to black).
@@ -230,6 +308,13 @@ export function createGifencEncoder() {
   /** Transparent export (config.transparent): pixels with alpha < 128 become the transparent index */
   let transparent = false;
 
+  /** Frame differencing (config.frameDifferencing, opaque exports only) */
+  let differencing = false;
+  /** @type {Int32Array | null} Colors the frames written so far show, per pixel */
+  let shown = null;
+  /** @type {Uint8Array | null} Reused output buffer of differenceFrame */
+  let differenced = null;
+
   /**
    * Quantize a palette from RGBA pixels. In transparent mode only opaque
    * pixels vote (cleared pixels would otherwise take palette slots) and one
@@ -249,6 +334,82 @@ export function createGifencEncoder() {
     return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
   };
 
+  /** Scratch encoders (no header) for the frames encoded both ways */
+  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  let trialWhole = null;
+  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  let trialDifferenced = null;
+  /**
+   * Write an opaque frame with frame differencing: encoded whole and with
+   * unchanged pixels as the transparent index, the smaller one written.
+   * Every frame keeps the previous one (dispose 1), so either way the
+   * decoded frame is exactly the mapped frame.
+   * @param {Uint8Array} index
+   * @param {number} width
+   * @param {number} height
+   * @param {number} delay
+   */
+  const writeDifferenced = (index, width, height, delay) => {
+    if (!encoder || !config || !palette) return;
+    const colors = packPalette(palette);
+    const whole = { palette, delay, repeat: config.loopCount, dispose: 1 };
+    /** Only whole is possible: write it and record what it shows */
+    const writeOnlyWhole = () => {
+      if (shown?.length !== index.length) shown = new Int32Array(index.length);
+      for (let i = 0; i < index.length; i++) shown[i] = colors[index[i]];
+      encoder?.writeFrame(index, width, height, whole);
+    };
+
+    // The first frame (or one of another size) has nothing to keep
+    if (shown?.length !== index.length) {
+      writeOnlyWhole();
+      return;
+    }
+    // A slot appended to the palette while the color table (a power of two)
+    // has room for it, else one the frame does not use
+    const tableSize = (/** @type {number} */ n) => 2 ** Math.max(1, Math.ceil(Math.log2(n)));
+    const roomInTable =
+      palette.length < 256 && tableSize(palette.length + 1) === tableSize(palette.length);
+    const unused = roomInTable ? -1 : findUnusedIndex(index, palette.length);
+    const transparentIndex = unused >= 0 ? unused : palette.length;
+    if (transparentIndex > 255) {
+      writeOnlyWhole();
+      return;
+    }
+
+    if (differenced?.length !== index.length) differenced = new Uint8Array(index.length);
+    const keptPixels = differenceFrame(index, colors, shown, transparentIndex, differenced);
+    if (keptPixels === 0) {
+      // Nothing kept: the differenced frame is the same index stream with a
+      // color table at least as large (one more slot, or the same), so its
+      // LZW code size is the same or larger; at every point it emits the
+      // same codes no narrower, and resets its dictionary no later. It
+      // cannot be smaller, so it is not encoded (`shown` is already this
+      // frame's colors)
+      encoder.writeFrame(index, width, height, whole);
+      return;
+    }
+    const kept = {
+      palette: unused >= 0 ? palette : [...palette, [0, 0, 0]],
+      delay,
+      repeat: config.loopCount,
+      transparent: true,
+      transparentIndex,
+      dispose: 1,
+    };
+    // Encode both ways (a frame after the first is written the same with or
+    // without the header, so the scratch bytes go into the GIF as they are)
+    trialWhole ??= GIFEncoder({ auto: false });
+    trialDifferenced ??= GIFEncoder({ auto: false });
+    trialWhole.reset();
+    trialDifferenced.reset();
+    trialWhole.writeFrame(index, width, height, whole);
+    trialDifferenced.writeFrame(differenced, width, height, kept);
+    const a = trialWhole.bytesView();
+    const b = trialDifferenced.bytesView();
+    encoder.stream.writeBytesView(b.length < a.length ? b : a);
+  };
+
   return {
     metadata: METADATA,
 
@@ -262,6 +423,12 @@ export function createGifencEncoder() {
       baseline = { error: 0, tail: 0 };
       earlyRebuilds = 0;
       transparent = encoderConfig.transparent === true;
+      // A cutout clears pixels from one frame to the next, which only
+      // disposal to the background can show: differencing keeps the
+      // previous frame, so it is for opaque exports only
+      differencing = encoderConfig.frameDifferencing === true && !transparent;
+      shown = null;
+      differenced = null;
       // A clip-wide sample yields one global palette up front, so later
       // scenes are not forced onto frame 0's colors (#99). In transparent
       // mode only its opaque pixels count; a sample without any falls back
@@ -328,6 +495,11 @@ export function createGifencEncoder() {
 
       const delay = frameData.delayMs ?? config.frameDelayMs;
 
+      if (differencing) {
+        writeDifferenced(index, width, height, delay);
+        return;
+      }
+
       if (!transparent) {
         encoder.writeFrame(index, width, height, {
           palette,
@@ -381,6 +553,11 @@ export function createGifencEncoder() {
       config = null;
       palette = null;
       transparent = false;
+      differencing = false;
+      shown = null;
+      differenced = null;
+      trialWhole = null;
+      trialDifferenced = null;
     },
   };
 }

@@ -563,6 +563,9 @@ export async function encodeGif(params, signal) {
       paletteInterval: preset.paletteInterval,
       paletteSample,
       transparent,
+      // Opaque gifenc GIFs write unchanged pixels as transparency (smaller,
+      // decoded the same); a cutout clears pixels, which needs disposal instead
+      frameDifferencing: !transparent && (encoderId ?? 'gifenc-js') === 'gifenc-js',
     });
 
     // Setup progress callback (also releases backpressure window slots).
