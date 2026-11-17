@@ -190,6 +190,7 @@ function render(container) {
   uiCleanup = renderCaptureScreen(container, state, {
     onStart: handleStart,
     onStop: handleStop,
+    onChangeSource: handleChangeSource,
     onCreateClip: handleCreateClip,
     onSettingsChange: handleSettingsChange,
     getSettings: () => store?.getState()?.settings ?? null,
@@ -328,44 +329,9 @@ async function handleStart() {
     // Update state
     store.setState((state) => startCapture(state, stream));
 
-    // Initialize worker manager with video element.
-    //
-    // The stats callback closes over THIS session's store, not the module
-    // variable: cleanup() nulls the module `store` on every navigation while
-    // the preserved session (and its store, stashed in screenCaptureState)
-    // lives on. With background capture the worker keeps posting stats while
-    // the user is on another route — writing them through the module variable
-    // silently dropped them all, freezing the live monitor's buffer-fullness
-    // readout.
-    const memorySettings = loadSettings().capture;
+    // Initialize worker manager with video element
     workerManager = new CaptureWorkerManager();
-    workerManager.init(videoElement, {
-      // Downscale at grab time (#96): Retina fullscreen frames are ~24 MB
-      // each as raw RGBA; capping the long edge is the difference between a
-      // ~10 GB and a ~2 GB ring buffer at default settings.
-      maxEdge: memorySettings.captureResolutionLimit,
-      onStatsUpdate: (stats) => {
-        sessionStore.setState((state) => ({
-          ...state,
-          stats: {
-            frameCount: stats.frameCount,
-            duration: stats.frameCount / stats.fps,
-            fps: stats.fps,
-          },
-        }));
-      },
-    });
-
-    // Start worker capture with the budget-clamped buffer size, computed
-    // from the dimensions frames are ACTUALLY captured at (post-limit)
-    const fps = store.getState().settings.fps;
-    const bufferLimit = calculateEffectiveMaxFrames(
-      store.getState().settings,
-      workerManager.getEffectiveFrameDimensions(),
-      memorySettings.memoryBudgetMB,
-    );
-    store.setState((state) => ({ ...state, bufferLimit }));
-    workerManager.start(fps, bufferLimit.maxFrames);
+    startWorkerOn(workerManager, videoElement, sessionStore);
 
     // Emitted only after the worker exists: listeners (the header Clip Now
     // button) probe getLiveCaptureContext(), which is null until then
@@ -410,6 +376,123 @@ async function handleStart() {
     render(container);
     throw err;
   }
+}
+
+/**
+ * Point a worker manager at a video element and start it with the
+ * budget-clamped buffer size, computed from the dimensions frames are
+ * ACTUALLY captured at (post-limit). Shared by a new share and a change of
+ * source, which captures at the new source's size.
+ *
+ * @param {CaptureWorkerManager} manager
+ * @param {HTMLVideoElement} video
+ * @param {NonNullable<typeof store>} sessionStore - the store of the screen
+ *   this share belongs to
+ */
+function startWorkerOn(manager, video, sessionStore) {
+  const memorySettings = loadSettings().capture;
+  manager.init(video, {
+    // Downscale at grab time (#96): Retina fullscreen frames are ~24 MB
+    // each as raw RGBA; capping the long edge is the difference between a
+    // ~10 GB and a ~2 GB ring buffer at default settings.
+    maxEdge: memorySettings.captureResolutionLimit,
+    // The stats callback closes over THIS session's store, not the module
+    // variable: cleanup() nulls the module `store` on every navigation while
+    // the preserved session (and its store, stashed in screenCaptureState)
+    // lives on. With background capture the worker keeps posting stats while
+    // the user is on another route — writing them through the module variable
+    // silently dropped them all, freezing the live monitor's buffer-fullness
+    // readout.
+    onStatsUpdate: (stats) => {
+      sessionStore.setState((state) => ({
+        ...state,
+        stats: {
+          frameCount: stats.frameCount,
+          duration: stats.frameCount / stats.fps,
+          fps: stats.fps,
+        },
+      }));
+    },
+  });
+
+  const bufferLimit = calculateEffectiveMaxFrames(
+    sessionStore.getState().settings,
+    manager.getEffectiveFrameDimensions(),
+    memorySettings.memoryBudgetMB,
+  );
+  sessionStore.setState((state) => ({ ...state, bufferLimit }));
+  manager.start(sessionStore.getState().settings.fps, bufferLimit.maxFrames);
+}
+
+/**
+ * Change source: pick another screen, window or tab while sharing and move
+ * the running capture onto it. A cancelled or failed picker keeps the
+ * current share untouched.
+ *
+ * The buffer is cleared at the switch, so a clip never spans two sources
+ * (#203 drops the older run only when the frame size changes; two sources
+ * of the same size would otherwise end up in one clip) and the buffer is
+ * sized again for the new source's frames.
+ *
+ * @returns {Promise<boolean>} Whether the source changed
+ */
+async function handleChangeSource() {
+  if (!store || !workerManager || !videoElement || !store.getState().isSharing) return false;
+  const sessionStore = store;
+  const manager = workerManager;
+  const stillCurrent = () =>
+    store === sessionStore && workerManager === manager && sessionStore.getState().isSharing;
+
+  /** @type {MediaStream} */
+  let stream;
+  try {
+    stream = await startScreenCapture();
+  } catch {
+    // Picker cancelled or permission denied: the current share goes on
+    return false;
+  }
+  if (!stillCurrent()) {
+    stopScreenCapture(stream);
+    return false;
+  }
+
+  /** @type {HTMLVideoElement} */
+  let video;
+  try {
+    video = await createVideoElement(stream);
+  } catch {
+    stopScreenCapture(stream);
+    return false;
+  }
+  if (!stillCurrent()) {
+    releaseAbandonedStart(stream, null, video);
+    return false;
+  }
+
+  const previousStream = sessionStore.getState().stream;
+  const previousVideo = videoElement;
+
+  // Move the stream-ended listener to the new track before the old one stops
+  if (streamEndedCleanup) streamEndedCleanup();
+  const track = stream.getVideoTracks()[0];
+  track.addEventListener('ended', handleStreamEnded);
+  streamEndedCleanup = () => track.removeEventListener('ended', handleStreamEnded);
+  captureTrack = track;
+  videoElement = video;
+  sessionStore.setState((state) => ({ ...state, stream }));
+
+  manager.stop();
+  manager.clear();
+  startWorkerOn(manager, video, sessionStore);
+
+  previousVideo.pause();
+  previousVideo.srcObject = null;
+  if (previousStream) stopScreenCapture(previousStream);
+
+  emit('capture:started', { stream });
+  announce('Source changed');
+  render(qsRequired('#main-content'));
+  return true;
 }
 
 /**
