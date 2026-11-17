@@ -741,6 +741,26 @@ describe('promote of a compressed entry (prepare + decode)', () => {
     expect(entry.compressed.chunks).toBe(chunksBefore);
   });
 
+  it('marks a failed open on the entry until the next open starts', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const entry = await enqueueCompressed(codec);
+
+    const failed = prepareQueuedClipForPromote(entry.id);
+    codec.decodeCalls[0].resolve({ ok: false, error: 'stalled' });
+    await failed;
+    expect(entry.openFailed).toBe(true);
+
+    const retry = prepareQueuedClipForPromote(entry.id);
+    expect(entry.openFailed).toBe(false);
+    codec.decodeCalls[1].resolve({
+      ok: true,
+      frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
+    });
+    await expect(retry).resolves.toEqual({ ok: true });
+    expect(entry.openFailed).toBe(false);
+  });
+
   it('closes decoded frames when the entry was deleted mid-decode', async () => {
     const codec = createMockCodec();
     registerClipCodec(codec);

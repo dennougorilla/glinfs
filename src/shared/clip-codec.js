@@ -27,6 +27,15 @@
  *   failed instead, handing their untransferred frames back (RECOVERABLE).
  * Decode never loses data: its input chunks are cloned, not transferred.
  *
+ * Nothing waits forever: the worker reports progress (JOB_PROGRESS) while a
+ * job runs, at least as often as the codec accepts input or emits output. A
+ * running job with neither a reply nor progress for `stallMs` is STALLED
+ * (a decoder that stopped handing out frames, a wedged GPU process): the
+ * worker is terminated, the job fails with error 'stalled' (an encode as
+ * LOST, its frames died with the worker) and the queue continues on a
+ * fresh worker. The bound is on silence, not on the job's length, so long
+ * clips are not cut off.
+ *
  * Feature detection runs ONCE via VideoEncoder.isConfigSupported (vp09
  * preferred, vp8 fallback). isCompressionAvailable() is synchronous and
  * reports false until the probe resolves; entries enqueued in that window
@@ -39,6 +48,15 @@
 /** Probed in preference order; 1080p is a representative config, support is
  * not resolution-dependent for these software-decodable codecs */
 const CODEC_CANDIDATES = ['vp09.00.10.08', 'vp8'];
+
+/**
+ * Silence that makes a running job stalled. The worker reports progress
+ * every 250 ms at most while the codec moves; the slowest legitimate gap
+ * measured is the encoder's start-up before its first output (under 2 s at
+ * 4K on the Mac), so 15 s leaves a wide margin on slow PCs while a stalled
+ * open still ends in seconds, not never.
+ */
+export const CODEC_STALL_MS = 15_000;
 
 /**
  * @typedef {import('../workers/clip-codec-worker.js').SerializedChunk} SerializedChunk
@@ -111,11 +129,19 @@ export class ClipCodecManager {
   /** @type {Promise<boolean> | null} */
   #probePromise = null;
 
+  /** Silence (ms) after which the running job is stalled */
+  #stallMs;
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  #watchdog = null;
+
   /**
    * @param {Object} [options]
    * @param {() => Worker} [options.createWorker] - Worker factory (test seam)
+   * @param {number} [options.stallMs] - Stall bound (default CODEC_STALL_MS)
    */
   constructor(options = {}) {
+    this.#stallMs = options.stallMs ?? CODEC_STALL_MS;
     this.#createWorker =
       options.createWorker ??
       (() =>
@@ -285,6 +311,7 @@ export class ClipCodecManager {
     const pending = this.#pending;
     this.#pending = [];
     this.#activeJobId = null;
+    this.#disarm();
     /** @type {[(result: any) => void, EncodeResult|DecodeResult][]} */
     const settled = [];
     for (const p of pending) {
@@ -324,6 +351,7 @@ export class ClipCodecManager {
     }
 
     this.#activeJobId = next.jobId;
+    this.#arm();
     try {
       this.#worker.postMessage(next.message, next.transfer);
     } catch (err) {
@@ -347,9 +375,45 @@ export class ClipCodecManager {
     this.#jobs.delete(jobId);
     if (this.#activeJobId === jobId) {
       this.#activeJobId = null;
+      this.#disarm();
     }
     job?.resolve(result);
     this.#pump();
+  }
+
+  /** (Re)start the stall bound for the running job */
+  #arm() {
+    this.#disarm();
+    this.#watchdog = setTimeout(() => this.#handleStall(), this.#stallMs);
+  }
+
+  #disarm() {
+    if (this.#watchdog !== null) clearTimeout(this.#watchdog);
+    this.#watchdog = null;
+  }
+
+  /**
+   * The running job went silent: end its worker and fail it, like a crash
+   * (the next pending job then starts on a fresh worker)
+   */
+  #handleStall() {
+    this.#watchdog = null;
+    const activeJobId = this.#activeJobId;
+    if (activeJobId === null) return;
+    const job = this.#jobs.get(activeJobId);
+    console.error(
+      `[ClipCodecManager] ${job?.kind ?? 'job'} stalled: no progress for ${this.#stallMs} ms`,
+    );
+    if (this.#worker) {
+      this.#worker.terminate();
+      this.#worker = null;
+    }
+    this.#settle(
+      activeJobId,
+      job?.kind === 'encode'
+        ? { ok: false, error: 'stalled', frames: [] }
+        : { ok: false, error: 'stalled' },
+    );
   }
 
   /**
@@ -358,6 +422,9 @@ export class ClipCodecManager {
   #handleWorkerMessage(e) {
     const { type, payload } = e.data;
     switch (type) {
+      case 'JOB_PROGRESS':
+        if (payload?.jobId === this.#activeJobId) this.#arm();
+        break;
       case 'ENCODE_RESULT':
         this.#settle(payload.jobId, {
           ok: true,

@@ -61,6 +61,26 @@ self.onmessage = (e) => {
   }
 };
 
+/** Progress reports per job: at most one per this many ms */
+const PROGRESS_EVERY_MS = 250;
+
+/**
+ * A function that tells the manager the job is moving (its stall watchdog,
+ * clip-codec.js): called whenever the codec accepts input or emits output,
+ * posting at most every PROGRESS_EVERY_MS
+ * @param {number} jobId
+ * @returns {() => void}
+ */
+function progressReporter(jobId) {
+  let last = -Infinity;
+  return () => {
+    const now = performance.now();
+    if (now - last < PROGRESS_EVERY_MS) return;
+    last = now;
+    self.postMessage({ type: 'JOB_PROGRESS', payload: { jobId } });
+  };
+}
+
 /**
  * Close a VideoFrame, tolerating already-closed frames
  * @param {VideoFrame} frame
@@ -105,6 +125,7 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
   let byteLength = 0;
   /** @type {VideoDecoderConfig|null} */
   let decoderConfig = null;
+  const progress = progressReporter(jobId);
 
   try {
     /** @type {(reason: Error) => void} */
@@ -118,6 +139,7 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
 
     const encoder = new VideoEncoder({
       output: (chunk, metadata) => {
+        progress();
         const data = new ArrayBuffer(chunk.byteLength);
         chunk.copyTo(data);
         chunks.push({
@@ -133,6 +155,7 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
       },
       error: (err) => failEncode(err instanceof Error ? err : new Error(String(err))),
     });
+    encoder.addEventListener('dequeue', progress);
 
     encoder.configure({
       codec,
@@ -205,6 +228,7 @@ async function handleDecode({ jobId, chunks, config }) {
   const frames = [];
   /** @type {Promise<void>[]} */
   const copies = [];
+  const progress = progressReporter(jobId);
 
   try {
     /** @type {(reason: Error) => void} */
@@ -219,6 +243,7 @@ async function handleDecode({ jobId, chunks, config }) {
         const copy = ownedCopy(frame).then(
           (owned) => {
             frames.push(owned);
+            progress();
           },
           (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
         );
@@ -226,6 +251,7 @@ async function handleDecode({ jobId, chunks, config }) {
       },
       error: (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
     });
+    decoder.addEventListener('dequeue', progress);
 
     decoder.configure({
       codec: config.codec,
