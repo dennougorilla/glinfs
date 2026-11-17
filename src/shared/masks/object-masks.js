@@ -72,8 +72,21 @@ export const OBJECT_SEED_GUARD = 'off';
 export const OBJECT_REMOVE_GROW_PX = 2;
 
 /**
+ * "Only this": the kept object grows by this many pixels of a 1024-wide
+ * mask before the base mask is cut to it, so its own edge (where the
+ * tracker's low-res answer is softer than the base model's) is not cut
+ * away. Measured on 6 targets of the owner's clips (task 5, a Keep box,
+ * final J): +0 0.89 mean, +2 0.90, +6 0.91 at clip size (~600 px wide),
+ * i.e. about 10 px of a 1024-wide mask.
+ */
+export const OBJECT_ONLY_GROW_PX = 10;
+
+/**
  * @typedef {Object} ObjectMaskLayer
  * @property {'remove' | 'add'} mode
+ * @property {boolean} [only] - An Add object in "only this": the mask keeps
+ *   only what lies inside it (grown by getOnlyGrowRadius) on the frames it
+ *   has a mask; a frame without one keeps the mask (never an empty frame)
  * @property {{ data: Uint8Array, width: number, height: number } | null} mask - The
  *   object's 0..255 probability on this frame, any size (null: not tracked
  *   here, the frame keeps the base mask)
@@ -106,6 +119,15 @@ export function getObjectMaskSize(width, height) {
  */
 export function getRemoveGrowRadius(maskWidth) {
   return Math.max(1, Math.round((OBJECT_REMOVE_GROW_PX * maskWidth) / 1024));
+}
+
+/**
+ * Grow radius of an "only this" object in pixels of a mask this wide
+ * @param {number} maskWidth
+ * @returns {number}
+ */
+export function getOnlyGrowRadius(maskWidth) {
+  return Math.max(1, Math.round((OBJECT_ONLY_GROW_PX * maskWidth) / 1024));
 }
 
 /**
@@ -193,7 +215,9 @@ export function createObjectScratch(size) {
  * wins where two overlap), each inside where it reaches
  * OBJECT_MASK_THRESHOLD: a 'remove' object, grown by
  * getRemoveGrowRadius, is cleared from the mask; an 'add' object is added
- * to it. Layers without a mask on this frame change nothing.
+ * to it, or with `only`, the mask keeps only what lies inside it (grown by
+ * getOnlyGrowRadius). Layers without a mask on this frame change nothing:
+ * an "only this" object lost on a frame never empties it.
  * @param {Uint8Array} mask - 0/1, width * height (not modified)
  * @param {number} width
  * @param {number} height
@@ -231,6 +255,10 @@ export function applyObjectMasks(mask, width, height, layers, scratch) {
     if (layer.mode === 'remove') {
       bin = morphMask(bin, width, height, getRemoveGrowRadius(width), scratch.grown);
       for (let i = 0; i < size; i++) if (bin[i]) out[i] = 0;
+    } else if (layer.only) {
+      // Only this: what lies outside the (grown) object goes
+      bin = morphMask(bin, width, height, getOnlyGrowRadius(width), scratch.grown);
+      for (let i = 0; i < size; i++) if (!bin[i]) out[i] = 0;
     } else {
       for (let i = 0; i < size; i++) if (bin[i]) out[i] = 1;
     }

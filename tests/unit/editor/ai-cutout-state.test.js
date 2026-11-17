@@ -20,6 +20,7 @@ import {
   removeAiPick,
   setActiveAiObject,
   setAiObjectCandidate,
+  setAiObjectOnly,
   setAiObjectScope,
   setAiObjectTolerance,
   setAiParams,
@@ -385,5 +386,30 @@ describe('picking among the answers (cutout-ux 2)', () => {
     );
     expect(old.background.ai.objects[0].scope).toBe('part');
     expect('candidate' in old.background.ai.objects[0]).toBe(false);
+  });
+});
+
+describe('only this (cutout-ux 3)', () => {
+  const box = { frame: 1, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.5 };
+  it('is a Keep fix-up flag that survives normalization; a Remove fix-up never has it', () => {
+    let state = addAiObject(makeState(), 'add', { box }, 'k1');
+    expect('only' in state.edits.background.ai.objects[0]).toBe(false);
+    state = setAiObjectOnly(state, 'k1', true);
+    expect(state.edits.background.ai.objects[0].only).toBe(true);
+    const saved = JSON.parse(JSON.stringify(state.edits));
+    expect(normalizeEdits(saved, 10).background.ai.objects[0].only).toBe(true);
+    state = addAiObject(state, 'remove', { box }, 'r1');
+    expect(setAiObjectOnly(state, 'r1', true)).toBe(state);
+    const forged = normalizeEdits(
+      {
+        background: {
+          enabled: true,
+          method: 'ai',
+          ai: { objects: [{ id: 'x', mode: 'remove', only: true, boxes: [box] }] },
+        },
+      },
+      10,
+    );
+    expect('only' in forged.background.ai.objects[0]).toBe(false);
   });
 });

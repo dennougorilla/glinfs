@@ -25,7 +25,9 @@ import {
   getModelSizeLabel,
   getObjectSignature,
   getObjectsToTrack,
+  getOnlyThisLoss,
   getSharedFinalMaskCache,
+  getShareInsideBase,
   isAbortError,
   isFrameAnalyzed,
   isWasmAllowed,
@@ -465,5 +467,41 @@ describe('getObjectSignature with boxes', () => {
     const boxed = { ...object, boxes: [{ frame: 0, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 }] };
     expect(getObjectSignature(boxed)).not.toBe(getObjectSignature(object));
     expect(getObjectSignature({ ...object, boxes: undefined })).toBe(getObjectSignature(object));
+  });
+});
+
+describe('only this: what a Keep box holds and what it takes away (cutout-ux 3)', () => {
+  const W = 20;
+  const H = 10;
+  const frames = [{ id: 'f0', width: W, height: H }];
+  const ai = normalizeEdits({ background: { method: 'ai', ai: { model: 'anime' } } }, 1).background
+    .ai;
+  /** @param {number} x0 @param {number} x1 */
+  const cols = (x0, x1) => {
+    const data = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = x0; x < x1; x++) data[y * W + x] = 255;
+    return { data, width: W, height: H };
+  };
+
+  it('measures the share of an answer the base mask keeps', () => {
+    const maskStore = createMaskStore();
+    // The base keeps two characters, x 0..15
+    maskStore.set('anime:f0', cols(0, 16));
+    const opts = { frames, ai, frameIndex: 0, maskStore };
+    expect(getShareInsideBase({ ...opts, mask: cols(0, 8) })).toBe(1);
+    expect(getShareInsideBase({ ...opts, mask: cols(12, 20) })).toBe(0.5);
+    expect(getShareInsideBase({ ...opts, mask: cols(16, 20) })).toBe(0);
+    expect(getShareInsideBase({ ...opts, frameIndex: 3, mask: cols(0, 8) })).toBeNull();
+  });
+
+  it('shows as loss what the base keeps outside the grown object', () => {
+    const maskStore = createMaskStore();
+    maskStore.set('anime:f0', cols(0, 16));
+    const loss = getOnlyThisLoss({ frames, ai, frameIndex: 0, maskStore, mask: cols(0, 8) });
+    // Grown by 1 px at this width: x 9..15 is taken away
+    expect(loss?.data[5 * W + 8]).toBe(0);
+    expect(loss?.data[5 * W + 9]).toBe(255);
+    expect(loss?.data[5 * W + 16]).toBe(0);
+    expect(getOnlyThisLoss({ frames, ai, frameIndex: 0, maskStore, mask: cols(0, 20) })).toBeNull();
   });
 });
