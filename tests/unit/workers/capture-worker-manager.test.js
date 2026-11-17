@@ -232,6 +232,27 @@ describe('CaptureWorkerManager', () => {
     expect(response?.transfer).toEqual([bitmap]);
   });
 
+  it('answers each FRAME_REQUEST with its request id', async () => {
+    const bitmap = { width: 640, height: 480, close: vi.fn() };
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(bitmap));
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo(4));
+    const worker = MockWorker.instances[0];
+
+    worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 42, requestId: 7 } });
+    await vi.waitFor(() => expect(worker._lastMessage('FRAME_RESPONSE')).toBeDefined());
+    expect(worker._lastMessage('FRAME_RESPONSE')?.message.payload.requestId).toBe(7);
+
+    manager.init(createFakeVideo(0));
+    worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 43, requestId: 8 } });
+    await Promise.resolve();
+    expect(worker._lastMessage('FRAME_RESPONSE')?.message.payload).toEqual({
+      bitmap: null,
+      timestamp: 43,
+      requestId: 8,
+    });
+  });
+
   it('closes an in-flight bitmap when terminated during capture', async () => {
     // A FRAME_REQUEST whose createImageBitmap resolves only after the
     // manager was terminated: the bitmap can no longer be transferred and

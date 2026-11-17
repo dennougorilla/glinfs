@@ -249,7 +249,7 @@ export class CaptureWorkerManager {
 
     switch (type) {
       case 'FRAME_REQUEST':
-        await this.#captureAndSendFrame(payload.timestamp);
+        await this.#captureAndSendFrame(payload.timestamp, payload.requestId);
         break;
 
       case 'STATS_UPDATE':
@@ -286,15 +286,16 @@ export class CaptureWorkerManager {
    * Send frame response to worker
    * @param {ImageBitmap | null} bitmap
    * @param {number} timestamp
+   * @param {number} [requestId] - echoed from the FRAME_REQUEST
    */
-  #sendFrameResponse(bitmap, timestamp) {
+  #sendFrameResponse(bitmap, timestamp, requestId) {
     if (!this.#worker) {
       // Terminated while a capture was in flight: nothing can receive the
       // bitmap, so close it here instead of leaking it to GC (#40).
       bitmap?.close();
       return;
     }
-    const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp } };
+    const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp, requestId } };
     if (bitmap) {
       this.#worker.postMessage(message, [bitmap]);
     } else {
@@ -306,11 +307,12 @@ export class CaptureWorkerManager {
    * Capture a frame from video and send to worker
    * Uses createImageBitmap which works even on static screens!
    * @param {number} timestamp
+   * @param {number} [requestId] - echoed back so the worker can match it
    */
-  async #captureAndSendFrame(timestamp) {
+  async #captureAndSendFrame(timestamp, requestId) {
     // Check video is ready (HTMLMediaElement.HAVE_CURRENT_DATA = 2)
     if (!this.#video || this.#video.readyState < 2) {
-      this.#sendFrameResponse(null, timestamp);
+      this.#sendFrameResponse(null, timestamp, requestId);
       return;
     }
 
@@ -330,12 +332,12 @@ export class CaptureWorkerManager {
         // Grabbed before a change of source, stop or clear: answer the
         // worker (it waits for one response per request) without the frame
         bitmap.close();
-        this.#sendFrameResponse(null, timestamp);
+        this.#sendFrameResponse(null, timestamp, requestId);
         return;
       }
-      this.#sendFrameResponse(bitmap, timestamp);
+      this.#sendFrameResponse(bitmap, timestamp, requestId);
     } catch {
-      this.#sendFrameResponse(null, timestamp);
+      this.#sendFrameResponse(null, timestamp, requestId);
     }
   }
 
