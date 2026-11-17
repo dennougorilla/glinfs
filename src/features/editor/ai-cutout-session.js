@@ -405,6 +405,26 @@ export function createAiCutoutSession(options) {
       buildAfterCooldown = true;
       return;
     }
+    // A fix-up is tracked (no analysis): the frames on screen now, from a
+    // draft; the whole clip once the run ends (its finally). A whole-clip
+    // build applies every fix-up to every frame on the main thread that
+    // also drives the tracker: a second fix-up tracked at half the speed
+    // of the first (0.70 s a frame against 0.33 on 300 frames)
+    if (objectController && !analysisController && !interactive) {
+      const state = getState();
+      if (state?.clip && isAiCutoutActive(state.edits.background) && fullSource) {
+        reportCoverage();
+        publish(
+          createClipDraftMaskSource({
+            frames: state.clip.frames,
+            ai: state.edits.background.ai,
+            maskStore,
+            base: fullSource,
+          }),
+        );
+        return;
+      }
+    }
     requestBuild();
   };
 

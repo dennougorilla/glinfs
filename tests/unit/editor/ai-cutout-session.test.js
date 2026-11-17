@@ -1048,7 +1048,7 @@ describe('AI cutout session: tracked objects', () => {
     expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
   });
 
-  it('while a fix-up is tracked, its new masks rebuild the clip at most once per cooldown (cutout-ux 5)', async () => {
+  it('while a fix-up is tracked, its new masks show from a draft; the whole clip is built once it ends (cutout-ux 5)', async () => {
     for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
     const cache = createFinalMaskCache();
     const build = vi.spyOn(cache, 'build');
@@ -1080,8 +1080,14 @@ describe('AI cutout session: tracked objects', () => {
       maskStore.set(`object:o1:${frame.id}`, prob(), 'clip-1', 'object:o1', tag);
       await vi.advanceTimersByTimeAsync(120);
     }
-    // One build when the cooldown allows, not one per mask
-    expect(build.mock.calls.length - before).toBeLessThanOrEqual(2);
+    // No whole-clip build while it is tracked: the frames on screen come
+    // from a draft (cutout-ux 5: builds halved a second fix-up's speed)
+    expect(build.mock.calls.length - before).toBe(0);
+    expect(/** @type {any} */ (session.maskSource)?.draft).toBe(true);
+    // The run ends: one whole-clip build
+    session.cancel();
+    await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS);
+    expect(build.mock.calls.length - before).toBe(1);
   });
 
   it("a fix-up's new masks never redo the clean-up suggestions; a base mask does (cutout-ux 5)", async () => {
@@ -1118,8 +1124,10 @@ describe('AI cutout session: tracked objects', () => {
       await vi.advanceTimersByTimeAsync(500);
     }
     expect(suggested).toBe(1);
-    // A base mask changes: suggested again
+    // A base mask changes: suggested again with the next whole-clip build
+    // (the run's end)
     maskStore.set(`anime:${state.clip.frames[2].id}`, prob(), 'clip-1');
+    session.cancel();
     await vi.advanceTimersByTimeAsync(ANALYSIS_REBUILD_INTERVAL_MS * 3);
     expect(suggested).toBe(2);
   });
