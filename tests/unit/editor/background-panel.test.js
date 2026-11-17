@@ -35,6 +35,7 @@ import {
   getWebgpuWarning,
   renderBackgroundPanel,
   SUBJECT_CARDS,
+  setFixUpThumbnailDrawer,
   updateBackgroundPanel,
 } from '../../../src/features/editor/panels/background-panel.js';
 import { createAiCutoutStatus, createBrushState } from '../../../src/features/editor/state.js';
@@ -870,6 +871,34 @@ describe('tracked objects', () => {
         ...over,
       },
     );
+
+  it('a tracked fix-up chip shows what it holds, redrawn only when it changes (cutout-ux 6)', () => {
+    const drawn = [];
+    setFixUpThumbnailDrawer((canvas, o) => {
+      drawn.push([canvas.className, o.id]);
+      return true;
+    });
+    try {
+      const objects = [object('a', 'remove', 10), object('b', 'add', 0)];
+      updateBackgroundPanel(root, stateWith(objects), 10);
+      expect(root.querySelectorAll('#ai-pick-list .editor-cutout-pick-thumb')).toHaveLength(2);
+      expect(drawn).toEqual([
+        ['editor-cutout-pick-thumb', 'a'],
+        ['editor-cutout-pick-thumb', 'b'],
+      ]);
+      // Nothing changed: no redraw; one more point on a: only a
+      updateBackgroundPanel(root, stateWith(objects), 10);
+      expect(drawn).toHaveLength(2);
+      const more = {
+        ...objects[0],
+        clicks: [...objects[0].clicks, { frame: 12, x: 0.2, y: 0.2, mode: 'remove' }],
+      };
+      updateBackgroundPanel(root, stateWith([more, objects[1]]), 10);
+      expect(drawn.slice(2)).toEqual([['editor-cutout-pick-thumb', 'a']]);
+    } finally {
+      setFixUpThumbnailDrawer(null);
+    }
+  });
 
   it('labels, finds the lost one (active first) and words its note', () => {
     const a = /** @type {any} */ (object('a', 'remove', 10));
