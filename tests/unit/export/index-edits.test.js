@@ -167,6 +167,28 @@ describe('export dialog: plain screen captures', () => {
     expect(/** @type {HTMLInputElement} */ ($('#export-target-mb')).value).toBe('3');
   });
 
+  it('estimates with the encoder the export uses when a target size forces gifenc', async () => {
+    updateSetting('export', 'encoderId', 'gifsicle-wasm');
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(10_000 * params.frameIndices.length, params.frameIndices.length),
+    );
+    const sampleEncoders = () =>
+      vi.mocked(encodeGif).mock.calls.map(([params]) => params.settings.encoderId);
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(sampleEncoders()).toEqual(['gifsicle-wasm']));
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+
+    // A target size exports with gifenc: the estimate follows
+    change('#export-target-enabled', true);
+    await vi.waitFor(() => expect(sampleEncoders()).toEqual(['gifsicle-wasm', 'gifenc-js']));
+
+    change('#export-target-enabled', false);
+    await vi.waitFor(() =>
+      expect(sampleEncoders()).toEqual(['gifsicle-wasm', 'gifenc-js', 'gifsicle-wasm']),
+    );
+  });
+
   it('re-estimates when a setting that changes the size changes', async () => {
     inject({ count: 30 });
     vi.mocked(encodeGif).mockImplementation(async (params) =>

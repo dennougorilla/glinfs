@@ -178,6 +178,25 @@ describe('Export with the AI cutout', () => {
     expect($('#export-progress')).not.toBeNull();
   });
 
+  it('estimates the size after an export has analyzed the cutout', async () => {
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(2_000 * (params.frameIndices?.length ?? 4), params.frameIndices?.length ?? 4),
+    );
+    inject();
+    dialog = openExportDialog();
+    await vi.waitFor(() =>
+      expect($('#export-estimate')?.textContent).toBe('Size known after the cutout is analyzed'),
+    );
+
+    $('#export-start')?.click();
+    await vi.waitFor(() => expect($('#export-again')).not.toBeNull());
+    $('#export-again')?.click();
+
+    await vi.waitFor(() =>
+      expect($('#export-estimate')?.textContent).toMatch(/^Estimated size ≈ /),
+    );
+  });
+
   it('shows analysis progress with Cancel, and cancel returns to the settings', async () => {
     inject();
     dialog = openExportDialog();

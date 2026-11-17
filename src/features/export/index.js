@@ -1094,8 +1094,28 @@ class MasksNotReadyError extends Error {
  * @returns {string}
  */
 function estimateKeyOf(settings) {
-  const { quality, encoderPreset, encoderId, frameSkip, scale, dither } = settings;
-  return JSON.stringify([quality, encoderPreset, encoderId, frameSkip, scale ?? 1, dither]);
+  const { quality, encoderPreset, frameSkip, scale, dither } = settings;
+  return JSON.stringify([
+    quality,
+    encoderPreset,
+    estimateEncoderOf(settings),
+    frameSkip,
+    scale ?? 1,
+    dither,
+  ]);
+}
+
+/**
+ * The encoder the export will use: a target size or a cutout forces gifenc,
+ * whatever encoder the settings name. The sample encode must use the same.
+ * @param {import('./types.js').ExportSettings} settings
+ */
+function estimateEncoderOf(settings) {
+  return getEffectiveEncoderId(
+    settings,
+    clipInfo.transparent === true,
+    normalizeTargetSizeMB(settings.targetSizeMB) !== null,
+  );
 }
 
 /** Stop a running or scheduled dialog estimate */
@@ -1116,7 +1136,9 @@ function disposeDialogEstimate({ keepResult }) {
   dialogEstimate.encoder?.dispose();
   dialogEstimate.encoder = null;
   dialogEstimate.samples.clear();
-  if (!keepResult || dialogEstimate.status === 'pending') {
+  // Only a finished estimate is kept: "unknown" waits for masks that the
+  // export prepares, so it must be retried afterwards
+  if (!keepResult || dialogEstimate.status !== 'ready') {
     dialogEstimate.key = '';
     dialogEstimate.status = 'ready';
     dialogEstimate.bytes = null;
@@ -1133,6 +1155,9 @@ function scheduleDialogEstimate() {
   if (!store || encodingController) return;
   const dialogStore = store;
   const key = estimateKeyOf(dialogStore.getState().settings);
+  // An "unknown" result stays until an export prepares the masks (it resets
+  // it), so a setting that does not change the size does not flash
+  // "Estimating size…"
   if (key === dialogEstimate.key && dialogEstimate.status !== 'pending') {
     // Same size settings: keep the sampled size over the heuristic one
     // updateSettings just wrote
@@ -1163,7 +1188,12 @@ function scheduleDialogEstimate() {
         mergeIdenticalFrames,
         maskSource: null,
       },
-      encodeSettings: { ...settings, targetSizeMB: null, playbackSpeed: clipInfo.speed },
+      encodeSettings: {
+        ...settings,
+        encoderId: estimateEncoderOf(settings),
+        targetSizeMB: null,
+        playbackSpeed: clipInfo.speed,
+      },
       signal: controller.signal,
       masksFor: async (indices) => {
         if (!isAiCutoutActive(edits?.background)) return null;
