@@ -33,8 +33,20 @@ const GENERAL_SPEC = {
   preprocess: { resize: 'stretch', scale: 1 / 255, mean: [0.5, 0.5, 0.5], std: [1, 1, 1] },
 };
 
+/** The click-to-select model (MobileSAM): two graphs, kind 'sam' */
+const CLICK_SPEC = {
+  id: 'click',
+  kind: 'sam',
+  url: '/glinfs/models/mobilesam.onnx',
+  bytes: 40_000_000,
+  sha256: 'd'.repeat(64),
+  inputSize: 1024,
+  preprocess: { resize: 'letterbox', scale: 1 / 255, mean: [0, 0, 0], std: [1, 1, 1] },
+};
+
 /** @param {string} modelId */
-const specFor = (modelId) => (modelId === 'general' ? GENERAL_SPEC : SPEC);
+const specFor = (modelId) =>
+  modelId === 'general' ? GENERAL_SPEC : modelId === 'click' ? CLICK_SPEC : SPEC;
 
 /** Wait for queued promise callbacks and microtasks. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -672,7 +684,29 @@ describe('SegmentationManager.analyzeFrames', () => {
 });
 
 describe('SegmentationManager with more than one model', () => {
-  it('keeps each model’s masks apart and one session per model in the same worker', async () => {
+  it('releases the previous base model’s session when another base model loads, and keeps MobileSAM', async () => {
+    // Every model tried stayed on the GPU for the whole session (2-3 GB each
+    // for BiRefNet), which a 12 GB card next to a screen capture runs out of
+    const { manager, workers } = createHarness();
+    const frames = [makeFrame('a')];
+    await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
+    await manager.preloadModel('click', { allowWasm: true });
+    expect([...manager.loadedModelIds].sort()).toEqual(['anime', 'click']);
+
+    await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'general' });
+    await flush();
+    expect(workers[0].unloads).toEqual(['anime']);
+    expect([...manager.loadedModelIds].sort()).toEqual(['click', 'general']);
+
+    // Back to the first model: it loads again (from the browser cache) and the other goes
+    await manager.analyzeFrames([makeFrame('b')], { clipId: 'c', modelId: 'anime' });
+    await flush();
+    expect(workers[0].unloads).toEqual(['anime', 'general']);
+    expect([...manager.loadedModelIds].sort()).toEqual(['anime', 'click']);
+    expect(workers[0].inits.map((m) => m.model.id)).toEqual(['anime', 'click', 'general', 'anime']);
+  });
+
+  it('keeps each model’s masks apart in the same worker', async () => {
     const { manager, maskStore, workers, createWorker } = createHarness();
     const frames = [makeFrame('a'), makeFrame('b')];
 
@@ -680,7 +714,7 @@ describe('SegmentationManager with more than one model', () => {
     expect(manager.loadedModelIds).toEqual(['anime']);
     expect(workers[0].inits[0].model).toEqual(SPEC);
 
-    // The general model loads next to the anime one: same worker, no teardown
+    // The general model replaces the anime one in the same worker: no teardown
     const general = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'general' });
     expect(general).toMatchObject({ analyzed: 2, skipped: 0 });
     expect(createWorker).toHaveBeenCalledTimes(1);
@@ -693,7 +727,8 @@ describe('SegmentationManager with more than one model', () => {
       'general',
     ]);
     expect(manager.readyInfo).toMatchObject({ modelId: 'general', modelBytes: GENERAL_SPEC.bytes });
-    expect(manager.loadedModelIds).toEqual(['anime', 'general']);
+    expect(manager.loadedModelIds).toEqual(['general']);
+    expect(workers[0].unloads).toEqual(['anime']);
     expect(maskStore.keysForClip('c').sort()).toEqual([
       'anime:a',
       'anime:b',
@@ -701,13 +736,15 @@ describe('SegmentationManager with more than one model', () => {
       'general:b',
     ]);
 
-    // Back to the anime model: its masks are still there, nothing to do
+    // Back to the anime model: its masks are still there, nothing to do and
+    // nothing loads (no session, so no backend to report)
     const back = await manager.analyzeFrames(frames, { clipId: 'c', modelId: 'anime' });
-    expect(back).toEqual({ analyzed: 0, skipped: 2, backend: 'webgpu' });
+    expect(back).toEqual({ analyzed: 0, skipped: 2, backend: null });
 
-    // New anime frames run on the loaded anime session: no second init
+    // New anime frames load the anime model again (from the browser cache)
     await manager.analyzeFrames([makeFrame('c')], { clipId: 'c', modelId: 'anime' });
-    expect(workers[0].inits).toHaveLength(2);
+    expect(workers[0].inits.map((m) => m.model.id)).toEqual(['anime', 'general', 'anime']);
+    expect(workers[0].unloads).toEqual(['anime', 'general']);
     expect(workers[0].segments.at(-1).modelId).toBe('anime');
     expect(manager.getReadyInfo('anime')).toMatchObject({ modelId: 'anime' });
     expect(manager.readyInfo).toMatchObject({ modelId: 'anime' });
@@ -731,8 +768,14 @@ describe('SegmentationManager with more than one model', () => {
     const general = manager.analyzeFrames([makeFrame('a')], { clipId: 'c', modelId: 'general' });
     await flush();
     expect(workers[0].terminated).toBe(false);
+    // The general model loads once the anime frames settled, so the two
+    // sessions are never on the GPU together
+    expect(workers[0].inits).toHaveLength(1);
     workers[0].mask(first);
     workers[0].mask(second);
+    await flush();
+    expect(workers[0].unloads).toEqual(['anime']);
+    expect(workers[0].segments.at(-1).modelId).toBe('general');
     workers[0].mask(workers[0].segments.at(-1));
     await general;
     expect(maskStore.has('anime:a')).toBe(true);
@@ -794,7 +837,7 @@ describe('SegmentationManager with more than one model', () => {
     await expect(general).resolves.toMatchObject({ analyzed: 1, backend: 'wasm' });
   });
 
-  it('a failed load of one model leaves the other model’s session alone', async () => {
+  it('a failed load of another model: the worker stops, the next analysis starts afresh', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
     workers[0].autoReady = false;
@@ -806,16 +849,18 @@ describe('SegmentationManager with more than one model', () => {
       error: { code: SegmentationErrorCode.MODEL_INIT_FAILED, message: 'bad graph' },
     });
     expect((await run.catch((e) => e)).code).toBe(SegmentationErrorCode.MODEL_INIT_FAILED);
-    expect(workers[0].terminated).toBe(false);
-    expect(workers[0].unloads).toEqual(['general']);
-    expect(manager.loadedModelIds).toEqual(['anime']);
+    // The anime session was released when the general one started loading;
+    // with nothing loaded the failed load stops the worker
+    expect(workers[0].unloads).toEqual(['anime']);
+    expect(workers[0].terminated).toBe(true);
+    expect(manager.loadedModelIds).toEqual([]);
     // Messages for a model nobody waits for are ignored
     workers[0].emit({ type: 'ready', modelId: 'general', backend: 'webgpu' });
     workers[0].emit({ type: 'status', modelId: 'general', phase: 'verifying' });
     expect(manager.getReadyInfo('general')).toBeNull();
   });
 
-  it('cancelling one model’s download stops only that load', async () => {
+  it('cancelling another model’s download stops that load; the previous model was released', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')], { modelId: 'anime' });
     workers[0].autoReady = false;
@@ -827,9 +872,9 @@ describe('SegmentationManager with more than one model', () => {
     await flush();
     controller.abort();
     expect((await run.catch((e) => e)).name).toBe('AbortError');
-    expect(workers[0].unloads).toEqual(['general']);
-    expect(workers[0].terminated).toBe(false);
-    expect(manager.getReadyInfo('anime')).not.toBeNull();
+    expect(workers[0].unloads).toEqual(['anime']);
+    expect(manager.getReadyInfo('anime')).toBeNull();
+    expect(manager.getReadyInfo('general')).toBeNull();
   });
 
   it('sends a stretch model a bitmap resized from the source to its input, not the mask size', async () => {
@@ -894,7 +939,8 @@ describe('SegmentationManager with more than one model', () => {
       workers[0].mask(workers[0].segments.at(-1));
       await run;
     };
-    await both('anime');
+    // MobileSAM stays loaded next to a base model
+    await manager.preloadModel('click', { allowWasm: true });
     await both('general');
 
     // A cancelled general job still has a frame in the worker
@@ -911,7 +957,7 @@ describe('SegmentationManager with more than one model', () => {
     await flush();
 
     expect(manager.unloadModel('general')).toBe(true);
-    expect(manager.loadedModelIds).toEqual(['anime']);
+    expect(manager.loadedModelIds).toEqual(['click']);
     expect(workers[0].unloads).toEqual([]);
     workers[0].mask(inflight);
     await flush();

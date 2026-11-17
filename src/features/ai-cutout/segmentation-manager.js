@@ -1111,12 +1111,25 @@ export class SegmentationManager {
     let slot = this.#slots.get(modelId);
     if (slot?.info) return slot.info;
     if (!slot) {
-      // A WASM session shares the worker's memory with any other session:
-      // unload it (once its frames settled) before loading another model
-      const wasm = [...this.#slots]
-        .filter(([id, other]) => id !== modelId && other.info?.backend === 'wasm')
-        .map(([id]) => this.#releaseSlot(id, createAbortError('Switching models')));
-      if (wasm.length > 0) await raceAbort(Promise.all(wasm), signal);
+      // Unload (once its frames settled) before loading another model: a
+      // WASM session, which shares the worker's memory with any other
+      // session, and every other base model, whose session holds 0.5-3 GB
+      // of GPU memory for the rest of the session otherwise. MobileSAM
+      // (kind 'sam') stays: fix-ups use it next to any base model.
+      const base = this.#getModelSpec(modelId).kind !== 'sam';
+      const release = [...this.#slots]
+        .filter(
+          ([id, other]) =>
+            id !== modelId &&
+            (other.info?.backend === 'wasm' || (base && other.spec.kind !== 'sam')),
+        )
+        .map(([id, other]) =>
+          this.#releaseSlot(id, createAbortError('Switching models'), {
+            // WASM memory only shrinks with a new worker
+            keepWorker: other.info?.backend !== 'wasm',
+          }),
+        );
+      if (release.length > 0) await raceAbort(Promise.all(release), signal);
       slot = this.#slots.get(modelId) ?? this.#loadModel(modelId, allowWasm);
     }
     /** @param {AnalysisProgress} progress */
@@ -1286,9 +1299,11 @@ export class SegmentationManager {
    * 'init' with 'ready').
    * @param {string} modelId
    * @param {unknown} error
+   * @param {{ keepWorker?: boolean }} [options] - keepWorker: unload the
+   *   session even when nothing else is loaded (another model loads next)
    * @returns {Promise<void>} Resolves once the worker was told
    */
-  #releaseSlot(modelId, error) {
+  #releaseSlot(modelId, error, { keepWorker = false } = {}) {
     const slot = this.#slots.get(modelId);
     if (!slot) return Promise.resolve();
     this.#slots.delete(modelId);
@@ -1298,7 +1313,7 @@ export class SegmentationManager {
     const worker = this.#worker;
     const release = () => {
       if (!worker || this.#worker !== worker || this.#slots.has(modelId)) return;
-      if (this.#slots.size === 0 && this.#requests.size === 0) {
+      if (!keepWorker && this.#slots.size === 0 && this.#requests.size === 0) {
         this.#teardown(error);
       } else {
         worker.postMessage({ type: 'unload', modelId });
