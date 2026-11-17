@@ -55,6 +55,7 @@
 import { isAiCutoutActive } from '../../shared/edits/model.js';
 import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
+import { OBJECT_GROUP_PREFIX } from '../ai-cutout/mask-store.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
@@ -269,7 +270,7 @@ export function createAiCutoutSession(options) {
     maskSource = source;
     if (!(/** @type {any} */ (source).draft)) {
       fullSource = source;
-      scheduleSuggestions(source);
+      scheduleSuggestions();
       report({ colourLevels: source.colourLevels ?? {} });
     }
     report({ maskVersion: source.version });
@@ -281,25 +282,59 @@ export function createAiCutoutSession(options) {
   /** @type {ReturnType<typeof setTimeout> | null} */
   let suggestTimer = null;
 
+  /**
+   * Changes of the base masks (not the fix-ups'): the suggestions read only
+   * those and the AI settings, so a fix-up's new masks never redo them
+   */
+  let baseMaskVersion = 0;
+  /** The inputs of the last suggestion pass that finished @type {string | null} */
+  let suggestedKey = null;
+  /** The inputs of the pass scheduled or running @type {string | null} */
+  let suggestingKey = null;
+
+  /**
+   * What the suggestions are computed from: the base masks (their version)
+   * and the AI settings without the fix-ups
+   * @returns {string | null}
+   */
+  const suggestionsKey = () => {
+    const state = getState();
+    const frames = state?.clip?.frames;
+    if (!state || !frames) return null;
+    const { objects: _objects, ...ai } = state.edits.background.ai;
+    return `${baseMaskVersion}|${frames.length}|${getClipId()}|${JSON.stringify(ai)}`;
+  };
+
   /** Stop the suggestion pass (a new one starts with the next build) */
   const abortSuggestions = () => {
     if (suggestTimer !== null) clearTimeout(suggestTimer);
     suggestTimer = null;
     suggestController?.abort();
     suggestController = null;
+    suggestingKey = null;
   };
 
   /**
    * Find the clean-up suggestions of a full build, a moment after it lands
-   * @param {MaskSource} source
    */
-  const scheduleSuggestions = (source) => {
+  const scheduleSuggestions = () => {
+    const key = suggestionsKey();
+    // Same inputs: done already, or on the way (a build of a fix-up's masks
+    // landed: with the rebuild cooldown that was a whole-clip suggestion
+    // pass every 1.5 s while a fix-up was tracked, recomputing the same)
+    if (key !== null && key === suggestedKey) return;
+    if (key !== null && key === suggestingKey) return;
     abortSuggestions();
+    suggestingKey = key;
     suggestTimer = setTimeout(() => {
       suggestTimer = null;
       const state = getState();
       const frames = state?.clip?.frames;
-      if (disposed || !state || !frames || maskSource !== source) return;
+      if (disposed || !state || !frames || suggestionsKey() !== key) {
+        suggestingKey = null;
+        if (!disposed && fullSource) scheduleSuggestions();
+        return;
+      }
       const { ai } = state.edits.background;
       const controller = new AbortController();
       suggestController = controller;
@@ -314,6 +349,8 @@ export function createAiCutoutSession(options) {
         (suggestions) => {
           if (suggestController !== controller) return;
           suggestController = null;
+          suggestingKey = null;
+          suggestedKey = key;
           report({ cleanupSuggestions: suggestions });
         },
         (error) => {
@@ -458,6 +495,13 @@ export function createAiCutoutSession(options) {
 
   const unsubscribeStore = maskStore.subscribe((change) => {
     if (disposed) return;
+    // A fix-up's masks (and their retag, a set without a key) leave the
+    // suggestions as they are
+    const objectOnly =
+      (change.type === 'set' && !change.key) ||
+      String(change.key ?? '').startsWith(OBJECT_GROUP_PREFIX) ||
+      String(change.model ?? '').startsWith(OBJECT_GROUP_PREFIX);
+    if (!objectOnly) baseMaskVersion++;
     report({ storeVersion: change.version });
     if (storeTimer !== null) return;
     storeTimer = setTimeout(() => {
