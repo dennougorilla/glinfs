@@ -284,6 +284,10 @@ export async function checkEncoderStatus() {
  *   of `frames`. When given, `frames` are encoded as they are (no frame skip
  *   is applied) and text ranges and masks are looked up by these indices —
  *   the size estimator encodes a sparse sample of the export this way.
+ * @property {number[]} [scheduleIndices] - The frame index the encoder sees
+ *   for each entry of `frames`, which its palette schedule counts (default:
+ *   0, 1, 2 ...): the size estimator puts sample frames on or between
+ *   scheduled palette rebuilds, as they fall in the real GIF
  * @property {Array<RGBAFrame | undefined>} [frameCache] - Keeps each frame
  *   extracted for this encode (by its position in the encode), and reads it
  *   from there when it is already in: pass the same array to encodes of the
@@ -355,6 +359,7 @@ export async function encodeGif(params, signal) {
     scale = 1,
     maxColors: maxColorsOverride,
     frameIndices = null,
+    scheduleIndices = null,
     frameCache = null,
     encoderManager = null,
   } = params;
@@ -526,7 +531,8 @@ export async function encodeGif(params, signal) {
         ? frameDelayMs
         : calculateFrameDelay(fps, settings.playbackSpeed, settings.frameSkip, runLength) * 10;
     // GIF frame index: sequential, so the palette schedule counts GIF frames
-    manager.addFrame(frame.data, frame.width, frame.height, submittedFrames, delayMs);
+    const scheduled = scheduleIndices?.[submittedFrames] ?? submittedFrames;
+    manager.addFrame(frame.data, frame.width, frame.height, scheduled, delayMs);
     submittedFrames++;
     coveredSourceFrames.push(sourceFramesCovered);
   };
@@ -563,6 +569,10 @@ export async function encodeGif(params, signal) {
       paletteInterval: preset.paletteInterval,
       paletteSample,
       transparent,
+      // Opaque gifenc GIFs write unchanged pixels as transparency (smaller,
+      // decoded the same); a cutout clears pixels, which needs disposal instead
+      frameDifferencing: !transparent && (encoderId ?? 'gifenc-js') === 'gifenc-js',
+      dithering: settings.dither === true,
     });
 
     // Setup progress callback (also releases backpressure window slots).

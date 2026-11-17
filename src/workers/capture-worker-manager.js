@@ -57,6 +57,11 @@ export class CaptureWorkerManager {
   /** @type {number} Maximum long edge for grabbed frames; 0 = native (#96) */
   #maxEdge = 0;
 
+  /** @type {number} Bumped by init (a new source), stop and clear: a frame
+   * whose capture started in an earlier generation is dropped, so it can
+   * never enter a buffer that was cleared or restarted meanwhile */
+  #generation = 0;
+
   /**
    * Initialize the worker with a video element
    * @param {HTMLVideoElement} video - Video element to capture from
@@ -68,6 +73,7 @@ export class CaptureWorkerManager {
    *   exist, rather than being shrunk after the memory was already spent.
    */
   init(video, options = {}) {
+    this.#generation++;
     this.#video = video;
     this.#onStatsUpdate = options.onStatsUpdate ?? null;
     this.#maxEdge = options.maxEdge ?? 0;
@@ -118,6 +124,7 @@ export class CaptureWorkerManager {
    * Stop capturing frames (preserves buffer)
    */
   stop() {
+    this.#generation++;
     this.#isRunning = false;
     this.#worker?.postMessage({ type: 'STOP' });
   }
@@ -152,6 +159,7 @@ export class CaptureWorkerManager {
    * Clear the frame buffer
    */
   clear() {
+    this.#generation++;
     this.#worker?.postMessage({ type: 'CLEAR' });
   }
 
@@ -241,7 +249,7 @@ export class CaptureWorkerManager {
 
     switch (type) {
       case 'FRAME_REQUEST':
-        await this.#captureAndSendFrame(payload.timestamp);
+        await this.#captureAndSendFrame(payload.timestamp, payload.requestId);
         break;
 
       case 'STATS_UPDATE':
@@ -278,15 +286,16 @@ export class CaptureWorkerManager {
    * Send frame response to worker
    * @param {ImageBitmap | null} bitmap
    * @param {number} timestamp
+   * @param {number} [requestId] - echoed from the FRAME_REQUEST
    */
-  #sendFrameResponse(bitmap, timestamp) {
+  #sendFrameResponse(bitmap, timestamp, requestId) {
     if (!this.#worker) {
       // Terminated while a capture was in flight: nothing can receive the
       // bitmap, so close it here instead of leaking it to GC (#40).
       bitmap?.close();
       return;
     }
-    const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp } };
+    const message = { type: 'FRAME_RESPONSE', payload: { bitmap, timestamp, requestId } };
     if (bitmap) {
       this.#worker.postMessage(message, [bitmap]);
     } else {
@@ -298,14 +307,16 @@ export class CaptureWorkerManager {
    * Capture a frame from video and send to worker
    * Uses createImageBitmap which works even on static screens!
    * @param {number} timestamp
+   * @param {number} [requestId] - echoed back so the worker can match it
    */
-  async #captureAndSendFrame(timestamp) {
+  async #captureAndSendFrame(timestamp, requestId) {
     // Check video is ready (HTMLMediaElement.HAVE_CURRENT_DATA = 2)
     if (!this.#video || this.#video.readyState < 2) {
-      this.#sendFrameResponse(null, timestamp);
+      this.#sendFrameResponse(null, timestamp, requestId);
       return;
     }
 
+    const generation = this.#generation;
     try {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
@@ -317,9 +328,16 @@ export class CaptureWorkerManager {
             resizeQuality: 'high',
           })
         : await createImageBitmap(this.#video);
-      this.#sendFrameResponse(bitmap, timestamp);
+      if (generation !== this.#generation) {
+        // Grabbed before a change of source, stop or clear: answer the
+        // worker (it waits for one response per request) without the frame
+        bitmap.close();
+        this.#sendFrameResponse(null, timestamp, requestId);
+        return;
+      }
+      this.#sendFrameResponse(bitmap, timestamp, requestId);
     } catch {
-      this.#sendFrameResponse(null, timestamp);
+      this.#sendFrameResponse(null, timestamp, requestId);
     }
   }
 

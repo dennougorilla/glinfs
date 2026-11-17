@@ -219,7 +219,7 @@ export function createDefaultSettings() {
       quality: userSettings.export.quality,
       frameSkip: userSettings.export.frameSkip,
       playbackSpeed: userSettings.export.playbackSpeed,
-      dithering: userSettings.export.dithering,
+      dither: userSettings.export.dither,
       loopCount: userSettings.export.loopCount,
       openInNewTab: userSettings.export.openInNewTab,
       encoderPreset: userSettings.export.encoderPreset,
@@ -233,7 +233,7 @@ export function createDefaultSettings() {
       quality: 0.8,
       frameSkip: 1,
       playbackSpeed: 1,
-      dithering: true,
+      dither: false,
       loopCount: 0,
       openInNewTab: false,
       encoderPreset: 'balanced',
@@ -290,7 +290,7 @@ export function validateSettings(settings) {
  * @property {number} width - Output width
  * @property {number} height - Output height
  * @property {number} quality - Quality setting
- * @property {boolean} dithering - Dithering enabled
+ * @property {boolean} dither - Ordered dithering
  * @property {number} frameSkip - Frame skip factor
  * @property {import('./types.js').EncoderPreset} [encoderPreset='balanced'] - Encoder preset
  */
@@ -306,7 +306,7 @@ export function estimateSize(params) {
     width,
     height,
     quality,
-    dithering,
+    dither,
     frameSkip,
     encoderPreset = 'balanced',
   } = params;
@@ -330,7 +330,7 @@ export function estimateSize(params) {
     (qualityAdjustment.base + quality * qualityAdjustment.scale);
 
   // Dithering adds some overhead (patterns need more entropy)
-  const ditheringMultiplier = dithering ? ditherMult : 1;
+  const ditheringMultiplier = dither ? ditherMult : 1;
 
   // GIF uses LZW compression, estimate compression ratio
   const compressionRatio = compression.base + quality * compression.scale;

@@ -295,6 +295,21 @@
   cursor: progress;
 }
 
+/* A failed open: the status line turns to the error colour, and the
+   thumbnail dims so the row reads as "not opened" at a glance */
+.clip-entries .clip-entry-status--failed {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+.clip-entries .clip-entry-status-alert {
+  flex-shrink: 0;
+}
+
+.clip-entries .clip-entry[data-clip-open-failed="true"] .clip-entry-thumb {
+  opacity: 0.5;
+}
+
 /* Trash button at the row's trailing edge (#100 r5): a flex sibling of the
    promote surface — never over the thumbnail, which hover-skims. Revealed
    on row hover/focus; single click deletes (undo toast covers safety). */
