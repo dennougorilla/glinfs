@@ -157,7 +157,7 @@ test.describe('Portrait AI model (stub model, WASM fallback)', () => {
     ]);
     await model.selectOption('video-person');
     await expect(page.locator('#background-download-title')).toHaveText('Download 54 MB?');
-    await expect(page.locator('#background-download-detail')).toContainText('Person model (RVM)');
+    await expect(page.locator('#background-download-detail')).toContainText('Video person model (RVM)');
     await page.locator('#background-download-cancel').click();
     await expect(page.locator('#background-download')).toBeHidden();
     await expect(model).toHaveValue('portrait');
