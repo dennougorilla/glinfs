@@ -85,6 +85,7 @@ async function handleInit(message) {
       paletteSample: message.paletteSample,
       transparent: message.transparent === true,
       frameDifferencing: message.frameDifferencing === true,
+      dithering: message.dithering === true,
     });
 
     totalFrames = message.totalFrames;
