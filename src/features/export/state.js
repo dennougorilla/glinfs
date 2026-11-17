@@ -43,7 +43,7 @@ export function openDialog(state, clip, crop) {
     width: dims.width,
     height: dims.height,
     quality: state.settings.quality,
-    dithering: state.settings.dithering,
+    dither: state.settings.dither,
     frameSkip: state.settings.frameSkip,
     encoderPreset: state.settings.encoderPreset,
   });
@@ -88,7 +88,7 @@ export function updateSettings(state, settings, dimensions) {
     width: output.width,
     height: output.height,
     quality: newSettings.quality,
-    dithering: newSettings.dithering,
+    dither: newSettings.dither,
     frameSkip: counted === undefined ? newSettings.frameSkip : 1,
     encoderPreset: newSettings.encoderPreset,
   });

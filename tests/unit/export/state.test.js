@@ -88,7 +88,7 @@ describe('updateSettings', () => {
 
     expect(next.settings.quality).toBe(1.0);
     // Unrelated settings survive the merge
-    expect(next.settings.dithering).toBe(state.settings.dithering);
+    expect(next.settings.dither).toBe(state.settings.dither);
     expect(next.estimatedSizeMB).toBeGreaterThan(0);
   });
 

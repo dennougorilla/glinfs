@@ -76,19 +76,21 @@ import {
   generateFilename,
   getCroppedDimensions,
   getEffectiveEncoderId,
+  getEncoderPreset,
   getExportedFrameIndices,
   getScaledDimensions,
   getSpeedLimitInfo,
   normalizeTargetSizeMB,
   readGifInfo,
-  selectPaletteSampleIndices,
 } from './core.js';
 import {
   BYTES_PER_MB,
   buildSizeLadder,
   describeRung,
   exportToTargetSize,
-  extrapolateGifSize,
+  extrapolateFromSample,
+  gifFrameSizes,
+  selectEstimateSample,
 } from './size-planner.js';
 import {
   completeEncoding,
@@ -229,8 +231,23 @@ let throttledUpdateProgressUI = null;
 /** Default FPS */
 const DEFAULT_FPS = 30;
 
-/** Frames encoded to estimate one rung of the target-size ladder */
-const SIZE_SAMPLE_FRAMES = 6;
+/** Quiet time after a settings change before the size is sample-encoded */
+const ESTIMATE_DELAY_MS = 250;
+
+/**
+ * The dialog's size estimate, sample-encoded on its own encoder worker
+ * while the dialog is idle (never during an export, which ends it first)
+ * @type {{ key: string, status: 'ready' | 'pending' | 'unknown', bytes: number | null, controller: AbortController | null, timer: ReturnType<typeof setTimeout> | null, encoder: import('../../workers/worker-manager.js').GifEncoderManager | null, samples: RungEstimator['samples'] }}
+ */
+const dialogEstimate = {
+  key: '',
+  status: 'ready',
+  bytes: null,
+  controller: null,
+  timer: null,
+  encoder: null,
+  samples: new Map(),
+};
 
 /** Focusable controls for the Tab trap */
 const FOCUSABLE_SELECTOR =
@@ -320,6 +337,7 @@ export function openExportDialog(options = {}) {
     }
   });
 
+  scheduleDialogEstimate();
   mountDialog(options);
 
   throttledUpdateProgressUI = throttle(updateProgressUI, PROGRESS_UI_THROTTLE_MS);
@@ -513,6 +531,7 @@ function computeFacts(state) {
     durationSeconds: clipInfo.duration / speedLimit.effectiveSpeed,
     speedLimit,
     sizeLimited: normalizeTargetSizeMB(settings.targetSizeMB) !== null,
+    estimate: dialogEstimate.status,
   };
 }
 
@@ -588,6 +607,7 @@ function closeDialog({ restoreFocus }) {
     encodingController.abort();
     encodingController = null;
   }
+  disposeDialogEstimate({ keepResult: false });
   // The result is scoped to this dialog: a later opening starts fresh
   clearExportResult();
   // The payload described this opening; left behind, the next editor mount
@@ -887,6 +907,7 @@ function handleSettingsChange(patch) {
   if (!store) return;
   const previous = store.getState().settings;
   store.setState((state) => updateSettings(state, patch, getEstimateDims()));
+  scheduleDialogEstimate();
   emit('export:settings', { settings: store.getState().settings });
 
   // Persist the output settings (the speed is the editor's, never sent here)
@@ -939,6 +960,17 @@ function patchSettingsText() {
     const fresh = scratch.querySelector(`#${id}`);
     if (live && fresh) live.replaceWith(fresh);
   }
+  // The suggested target (half the estimate) follows the estimate while the
+  // target is off; the field is disabled then, so nobody is typing in it
+  const amount = body.querySelector('#export-target-mb');
+  const freshAmount = scratch.querySelector('#export-target-mb');
+  if (
+    amount instanceof HTMLInputElement &&
+    freshAmount instanceof HTMLInputElement &&
+    amount.disabled
+  ) {
+    amount.value = freshAmount.value;
+  }
   updateMissingMasksNote();
   body.scrollTop = scrollTop;
   if (activeId && document.activeElement?.id !== activeId) {
@@ -987,11 +1019,13 @@ class AiPreparationError extends Error {
  */
 
 /**
- * Estimated bytes of one ladder rung: encode an evenly spaced sample of the
- * frames it would export (one per run when identical frames merge) and
- * extrapolate per-frame bytes to the whole GIF. Only the sample needs its
- * AI masks here; the rung's other frames are prepared if it is encoded.
- * @param {import('./size-planner.js').SizeRung} rung
+ * Estimated bytes of one ladder rung: encode a few short runs of
+ * consecutive frames it would export (one per run when identical frames
+ * merge; see selectEstimateSample) and extrapolate from the bytes of their
+ * frames. Only the sample needs its AI masks here; the rung's other frames
+ * are prepared if it is encoded. Without maxColors the colors come from the
+ * quality and preset, and the encoder the settings name is used.
+ * @param {{ maxColors?: number, frameSkip: number, scale: number }} rung
  * @param {RungEstimator} estimator
  * @returns {Promise<number>}
  */
@@ -1004,36 +1038,171 @@ async function estimateRungBytes(rung, estimator) {
     representatives = runs.representatives;
     gifFrames = runs.count;
   }
-  const picks = selectPaletteSampleIndices(representatives.length, SIZE_SAMPLE_FRAMES).map(
-    (k) => representatives[k],
+  // gifenc rebuilds the palette on a schedule; the WASM encoder has none
+  const settings = estimator.encodeSettings;
+  const encoderId = getEffectiveEncoderId(
+    settings,
+    estimator.base.transparent,
+    rung.maxColors !== undefined || normalizeTargetSizeMB(settings.targetSizeMB) !== null,
   );
+  const interval =
+    encoderId === 'gifenc-js' ? getEncoderPreset(settings.encoderPreset).paletteInterval : 0;
+  const sample = selectEstimateSample(representatives.length, interval);
+  const picks = sample.positions.map((k) => representatives[k]);
   const maskSource = await estimator.masksFor(picks);
   const key = `${rung.frameSkip}:${rung.scale}`;
-  let sample = estimator.samples.get(key);
-  if (!sample || sample.maskSource !== maskSource) {
-    sample = { maskSource, frames: [] };
-    estimator.samples.set(key, sample);
+  let cached = estimator.samples.get(key);
+  if (!cached || cached.maskSource !== maskSource) {
+    cached = { maskSource, frames: [] };
+    estimator.samples.set(key, cached);
   }
   const blob = await encodeGif(
     {
       ...estimator.base,
       frames: picks.map((index) => clipFrames[index]),
       frameIndices: picks,
+      scheduleIndices: sample.schedule,
       mergeIdenticalFrames: false,
       maskSource,
       settings: {
         ...estimator.encodeSettings,
         frameSkip: /** @type {1|2|3|4|5} */ (rung.frameSkip),
       },
-      maxColors: rung.maxColors,
+      ...(rung.maxColors === undefined ? {} : { maxColors: rung.maxColors }),
       scale: rung.scale,
-      frameCache: sample.frames,
+      frameCache: cached.frames,
       encoderManager: estimator.encoder,
       onProgress: () => {},
     },
     estimator.signal,
   );
-  return extrapolateGifSize(blob.size, picks.length, gifFrames);
+  const sizes = gifFrameSizes(await blobBytes(blob));
+  return extrapolateFromSample(sizes, sample.groups, gifFrames);
+}
+
+/** The AI cutout has not analyzed the frames a size estimate needs */
+class MasksNotReadyError extends Error {
+  constructor() {
+    super('The cutout masks are not ready');
+    this.name = 'MasksNotReadyError';
+  }
+}
+
+/**
+ * The settings a size estimate depends on
+ * @param {import('./types.js').ExportSettings} settings
+ * @returns {string}
+ */
+function estimateKeyOf(settings) {
+  const { quality, encoderPreset, encoderId, frameSkip, scale, dither } = settings;
+  return JSON.stringify([quality, encoderPreset, encoderId, frameSkip, scale ?? 1, dither]);
+}
+
+/** Stop a running or scheduled dialog estimate */
+function cancelDialogEstimate() {
+  if (dialogEstimate.timer !== null) clearTimeout(dialogEstimate.timer);
+  dialogEstimate.timer = null;
+  dialogEstimate.controller?.abort();
+  dialogEstimate.controller = null;
+}
+
+/**
+ * End the dialog estimate and its worker. An export keeps the last result
+ * (the settings come back unchanged after it); closing the dialog drops it.
+ * @param {{ keepResult: boolean }} options
+ */
+function disposeDialogEstimate({ keepResult }) {
+  cancelDialogEstimate();
+  dialogEstimate.encoder?.dispose();
+  dialogEstimate.encoder = null;
+  dialogEstimate.samples.clear();
+  if (!keepResult || dialogEstimate.status === 'pending') {
+    dialogEstimate.key = '';
+    dialogEstimate.status = 'ready';
+    dialogEstimate.bytes = null;
+  }
+}
+
+/**
+ * Sample-encode the size for the current settings, after a quiet moment.
+ * The estimate line says "Estimating size…" meanwhile. When the encode
+ * fails the heuristic estimate stays; with the AI cutout it waits for the
+ * analysis instead of starting one.
+ */
+function scheduleDialogEstimate() {
+  if (!store || encodingController) return;
+  const dialogStore = store;
+  const key = estimateKeyOf(dialogStore.getState().settings);
+  if (key === dialogEstimate.key && dialogEstimate.status !== 'pending') {
+    // Same size settings: keep the sampled size over the heuristic one
+    // updateSettings just wrote
+    const { bytes } = dialogEstimate;
+    if (bytes !== null)
+      dialogStore.setState((s) => ({ ...s, estimatedSizeMB: bytes / BYTES_PER_MB }));
+    return;
+  }
+  cancelDialogEstimate();
+  dialogEstimate.key = key;
+  dialogEstimate.status = 'pending';
+  dialogEstimate.bytes = null;
+  dialogEstimate.timer = setTimeout(() => {
+    dialogEstimate.timer = null;
+    const controller = new AbortController();
+    dialogEstimate.controller = controller;
+    const settings = dialogStore.getState().settings;
+    dialogEstimate.encoder ??= createEncoderManager();
+    /** @type {RungEstimator} */
+    const estimator = {
+      base: {
+        frames,
+        crop: cropArea,
+        fps: clipInfo.fps,
+        edits,
+        rangeStart,
+        transparent: clipInfo.transparent === true,
+        mergeIdenticalFrames,
+        maskSource: null,
+      },
+      encodeSettings: { ...settings, targetSizeMB: null, playbackSpeed: clipInfo.speed },
+      signal: controller.signal,
+      masksFor: async (indices) => {
+        if (!isAiCutoutActive(edits?.background)) return null;
+        const ai = /** @type {import('../../shared/edits/model.js').ClipEdits} */ (edits).background
+          .ai;
+        const pending = collectPendingFrames(
+          framesAt(indices),
+          getSharedMaskStore(),
+          getAiModelId(ai),
+        );
+        const memo =
+          pending.length === 0 ? peekClipMaskSource({ frames: clipFrames, ai, clipId }) : null;
+        if (!memo) throw new MasksNotReadyError();
+        return memo;
+      },
+      encoder: dialogEstimate.encoder,
+      samples: dialogEstimate.samples,
+    };
+    estimateRungBytes({ frameSkip: settings.frameSkip, scale: settings.scale ?? 1 }, estimator)
+      .then(
+        (bytes) => {
+          if (controller.signal.aborted || store !== dialogStore) return;
+          dialogStore.setState((s) => ({ ...s, estimatedSizeMB: bytes / BYTES_PER_MB }));
+          dialogEstimate.status = 'ready';
+          dialogEstimate.bytes = bytes;
+        },
+        (error) => {
+          if (controller.signal.aborted || store !== dialogStore) return;
+          // The heuristic estimate stays when sampling failed
+          dialogEstimate.status = error instanceof MasksNotReadyError ? 'unknown' : 'ready';
+        },
+      )
+      .finally(() => {
+        if (dialogEstimate.controller === controller) dialogEstimate.controller = null;
+        if (!controller.signal.aborted && store === dialogStore && session && !encodingController) {
+          patchSettingsText();
+        }
+      });
+  }, ESTIMATE_DELAY_MS);
 }
 
 /**
@@ -1042,6 +1211,8 @@ async function estimateRungBytes(rung, estimator) {
 async function handleExport() {
   // A running preparation/encode owns the controller: ignore double clicks
   if (!store || frames.length === 0 || encodingController) return;
+  // The export's own encoder takes over: never two encoder workers at once
+  disposeDialogEstimate({ keepResult: true });
   const dialogStore = store;
   const isCurrent = () => store === dialogStore;
 
@@ -1262,22 +1433,31 @@ async function handleExport() {
 }
 
 /**
+ * The bytes of a Blob (FileReader where Blob.arrayBuffer is missing)
+ * @param {Blob} blob
+ * @returns {Promise<Uint8Array>}
+ */
+async function blobBytes(blob) {
+  const buffer =
+    typeof blob.arrayBuffer === 'function'
+      ? await blob.arrayBuffer()
+      : await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(/** @type {ArrayBuffer} */ (reader.result));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsArrayBuffer(blob);
+        });
+  return new Uint8Array(buffer);
+}
+
+/**
  * Size facts of an encoded GIF, or null when it cannot be read
  * @param {Blob} blob
  * @returns {Promise<{ width: number, height: number, frameCount: number } | null>}
  */
 async function readGifFacts(blob) {
   try {
-    const buffer =
-      typeof blob.arrayBuffer === 'function'
-        ? await blob.arrayBuffer()
-        : await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(/** @type {ArrayBuffer} */ (reader.result));
-            reader.onerror = () => reject(reader.error);
-            reader.readAsArrayBuffer(blob);
-          });
-    return readGifInfo(new Uint8Array(buffer));
+    return readGifInfo(await blobBytes(blob));
   } catch {
     return null;
   }
@@ -1340,6 +1520,7 @@ function handleExportAgain() {
   store.setState(resetExport);
   clearExportResult();
   resultInfo = null;
+  scheduleDialogEstimate();
   render();
 }
 
@@ -1347,6 +1528,7 @@ function handleExportAgain() {
 function handleBackToSettings() {
   if (!store) return;
   store.setState(resetExport);
+  scheduleDialogEstimate();
   render();
 }
 

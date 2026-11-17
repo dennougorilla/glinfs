@@ -59,6 +59,7 @@ function createWorkerError(message, code, context) {
  * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
+ * @property {boolean} [dithering] - Ordered dithering before palette mapping (gifenc)
  * @property {boolean} [frameDifferencing] - Write unchanged pixels as transparency (gifenc, opaque only)
  */
 
@@ -236,6 +237,7 @@ export class GifEncoderManager {
           paletteSample: config.paletteSample,
           transparent: config.transparent,
           frameDifferencing: config.frameDifferencing,
+          dithering: config.dithering,
         });
 
         // The sample can be ~1MB; transfer it (detaching the caller's copy)

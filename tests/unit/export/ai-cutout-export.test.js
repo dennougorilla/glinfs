@@ -5,6 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeGifBlob } from './fake-gif.js';
 
 vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (importOriginal) => {
   const actual = /** @type {Record<string, unknown>} */ (await importOriginal());
@@ -349,7 +350,7 @@ describe('Export with the AI cutout', () => {
   function encodeBySkip(sampleBytes) {
     vi.mocked(encodeGif).mockImplementation(async (params) =>
       params.frameIndices
-        ? /** @type {any} */ ({ size: sampleBytes[params.settings.frameSkip] ?? 100 })
+        ? fakeGifBlob(sampleBytes[params.settings.frameSkip] ?? 100, params.frameIndices.length)
         : new Blob([new Uint8Array(10)], { type: 'image/gif' }),
     );
   }
@@ -382,7 +383,7 @@ describe('Export with the AI cutout', () => {
     updateSetting('export', 'targetSizeMB', 5);
     inject({ count: 10, range: { start: 0, end: 9 } });
     // Every skip-2 rung is estimated over the target; skip 3 fits
-    encodeBySkip({ 2: 50_000_000 });
+    encodeBySkip({ 2: 6_000_000 });
     dialog = openExportDialog();
     await flush();
 
@@ -410,7 +411,7 @@ describe('Export with the AI cutout', () => {
     updateSetting('export', 'frameSkip', 2);
     updateSetting('export', 'targetSizeMB', 5);
     inject({ count: 10, range: { start: 0, end: 9 } });
-    encodeBySkip({ 2: 50_000_000 });
+    encodeBySkip({ 2: 6_000_000 });
     const analyze = fake.analyzeFrames.getMockImplementation();
     fake.analyzeFrames.mockImplementationOnce(analyze);
     fake.analyzeFrames.mockRejectedValueOnce(

@@ -53,6 +53,7 @@ export const Events = {
  * @property {number} [paletteInterval] - Palette rebuild schedule (see EncoderPresetConfig)
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
+ * @property {boolean} [dithering] - Ordered dithering before palette mapping (gifenc)
  * @property {boolean} [frameDifferencing] - Write unchanged pixels as transparency (gifenc, opaque only)
  */
 
@@ -141,6 +142,7 @@ export const Events = {
  * @param {number} [config.paletteInterval]
  * @param {Uint8ClampedArray} [config.paletteSample]
  * @param {boolean} [config.transparent]
+ * @param {boolean} [config.dithering]
  * @param {boolean} [config.frameDifferencing]
  * @returns {InitMessage}
  */

@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createGifencEncoder } from '../../../src/features/export/encoders/gifenc-encoder.js';
 import {
   BYTES_PER_MB,
   buildSizeLadder,
   describeRung,
+  ESTIMATE_SAMPLE,
   exportToTargetSize,
-  extrapolateGifSize,
+  extrapolateFromSample,
   formatFileSize,
-  GIF_FILE_OVERHEAD,
+  gifFrameSizes,
   planTargetSize,
   SIZE_LADDER,
+  selectEstimateSample,
 } from '../../../src/features/export/size-planner.js';
 
 /** The user's settings at their most generous */
@@ -211,17 +214,81 @@ describe('exportToTargetSize', () => {
   });
 });
 
-describe('extrapolateGifSize', () => {
-  it('scales the per-frame bytes of a sample to the whole GIF', () => {
-    // 6 sample frames of 1000 bytes each plus the fixed overhead
-    const sample = GIF_FILE_OVERHEAD + 6000;
-    expect(extrapolateGifSize(sample, 6, 30)).toBe(GIF_FILE_OVERHEAD + 30_000);
-    expect(extrapolateGifSize(sample, 6, 6)).toBe(sample);
+describe('selectEstimateSample', () => {
+  it('takes runs of consecutive frames from the start to the end of the clip', () => {
+    const { positions, schedule, groups } = selectEstimateSample(100, 0, { runs: 4, runLength: 3 });
+    expect(positions).toEqual([0, 1, 2, 32, 33, 34, 65, 66, 67, 97, 98, 99]);
+    expect(schedule).toEqual(positions);
+    // The last frame of each run follows its own previous frame
+    expect(groups).toEqual([{ indices: [2, 5, 8, 11], share: 1 }]);
   });
 
-  it('copes with degenerate samples', () => {
-    expect(extrapolateGifSize(500, 0, 10)).toBe(500);
-    expect(extrapolateGifSize(10, 1, 10)).toBe(GIF_FILE_OVERHEAD);
+  it('ends half the runs on a scheduled palette rebuild, standing for 1 in N frames', () => {
+    const { positions, schedule, groups } = selectEstimateSample(100, 10, {
+      runs: 4,
+      runLength: 3,
+    });
+    expect(positions).toEqual([0, 1, 2, 32, 33, 34, 65, 66, 67, 97, 98, 99]);
+    // Runs 1 and 3 end on frame indices 20 and 40, runs 0 and 2 between rebuilds
+    expect(schedule).toEqual([1, 2, 3, 18, 19, 20, 21, 22, 23, 38, 39, 40]);
+    expect(groups).toEqual([
+      { indices: [2, 8], share: 0.9 },
+      { indices: [5, 11], share: 0.1 },
+    ]);
+  });
+
+  it('takes every frame of a clip no longer than the sample', () => {
+    const size = ESTIMATE_SAMPLE.runs * ESTIMATE_SAMPLE.runLength;
+    expect(selectEstimateSample(size, 10).positions).toHaveLength(size);
+    expect(selectEstimateSample(3)).toEqual({
+      positions: [0, 1, 2],
+      schedule: [0, 1, 2],
+      groups: [],
+    });
+    expect(selectEstimateSample(0).positions).toEqual([]);
+  });
+});
+
+describe('gifFrameSizes / extrapolateFromSample', () => {
+  /** A real gifenc GIF of `count` frames, 32x16, each frame different */
+  function gif(count) {
+    const encoder = createGifencEncoder();
+    encoder.init({ width: 32, height: 16, maxColors: 16, frameDelayMs: 100, loopCount: 0 });
+    for (let f = 0; f < count; f++) {
+      const rgba = new Uint8ClampedArray(32 * 16 * 4);
+      for (let i = 0; i < rgba.length; i += 4) rgba.set([(i * (f + 3)) & 255, 60, 90, 255], i);
+      encoder.addFrame({ rgba, width: 32, height: 16 }, f);
+    }
+    return encoder.finish();
+  }
+
+  it('splits a GIF into its frames and the fixed overhead', () => {
+    const bytes = gif(3);
+    const sizes = gifFrameSizes(bytes);
+    expect(sizes.frames).toHaveLength(3);
+    expect(sizes.frames.every((n) => n > 0)).toBe(true);
+    expect(sizes.overhead + sizes.frames.reduce((a, b) => a + b, 0)).toBe(bytes.length);
+    // Header, screen descriptor, global table, loop extension, trailer
+    expect(sizes.overhead).toBeLessThan(13 + 3 * 256 + 19 + 1 + 1);
+  });
+
+  it('counts the first frame once and the measured groups by their share', () => {
+    const sizes = { frames: [1000, 900, 100, 800, 120, 700, 2000], overhead: 50 };
+    const one = [{ indices: [2, 4], share: 1 }];
+    // Measured: frames 2 and 4 (100 and 120 bytes)
+    expect(extrapolateFromSample(sizes, one, 31)).toBe(50 + 1000 + 110 * 30);
+    expect(extrapolateFromSample(sizes, one, 1)).toBe(1050);
+    // 9 in 10 frames like frames 2 and 4, 1 in 10 like frame 6 (a rebuild)
+    const split = [
+      { indices: [2, 4], share: 0.9 },
+      { indices: [6], share: 0.1 },
+    ];
+    expect(extrapolateFromSample(sizes, split, 11)).toBe(50 + 1000 + (0.9 * 110 + 0.1 * 2000) * 10);
+    expect(extrapolateFromSample({ frames: [], overhead: 30 }, one, 10)).toBe(30);
+  });
+
+  it('is the sample itself when the sample is the whole GIF', () => {
+    expect(extrapolateFromSample({ frames: [300, 100, 200], overhead: 40 }, [], 3)).toBe(640);
   });
 });
 
