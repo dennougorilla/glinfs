@@ -182,12 +182,15 @@ export function createFrameGridVirtualizer({
   }
 
   /**
-   * Queue an item's thumbnail; it keeps its placeholder until drawn.
+   * Queue an item's thumbnail; it keeps its placeholder until drawn. Only
+   * the one scheduled animation-frame callback draws, so every caller in a
+   * frame (opening, auto-fit, a scroll) shares that frame's budget.
    * @param {HTMLElement} item
    * @param {number} [displayWidthOverride]
    */
   function queueThumbnail(item, displayWidthOverride) {
     pendingThumbnails.set(item, displayWidthOverride);
+    scheduleThumbnailDraw();
   }
 
   /**
@@ -211,7 +214,8 @@ export function createFrameGridVirtualizer({
     thumbnailFrame = -1;
     const frameId = window.requestAnimationFrame(() => {
       thumbnailFrame = null;
-      if (disposed || !isMounted()) return;
+      // Not isMounted(): items queued while the modal is being built must
+      // still be drawn; dispose() is what stops this
       drawPendingThumbnails();
     });
     if (thumbnailFrame === -1) {
@@ -311,7 +315,6 @@ export function createFrameGridVirtualizer({
     for (let index = firstIndex; index <= lastIndex; index++) {
       materializeGridItem(index, metrics);
     }
-    drawPendingThumbnails();
   }
 
   /** Coalesce rapid scroll events into one virtual-window update per frame. */
@@ -339,7 +342,6 @@ export function createFrameGridVirtualizer({
         queueThumbnail(item);
       }
     });
-    drawPendingThumbnails();
   }
 
   // Lazy loading with IntersectionObserver (with fallback for unsupported environments)
@@ -362,7 +364,6 @@ export function createFrameGridVirtualizer({
               thumbnailObserver.unobserve(item);
             }
           });
-          drawPendingThumbnails();
         },
         {
           root: body, // Scroll container
@@ -390,7 +391,6 @@ export function createFrameGridVirtualizer({
         thumbnailObserver.observe(item);
       }
     });
-    drawPendingThumbnails();
   }
 
   if (isVirtualized) {

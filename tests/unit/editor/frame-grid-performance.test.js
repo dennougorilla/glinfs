@@ -301,7 +301,7 @@ describe('Frame Grid bounded rendering (issue #47)', { retry: 1 }, () => {
 
   it('draws thumbnails within a per-frame time budget and the rest on later frames', () => {
     /** @type {FrameRequestCallback[]} */
-    const queuedAnimationFrames = [];
+    let queuedAnimationFrames = [];
     vi.mocked(window.requestAnimationFrame).mockImplementation((callback) => {
       queuedAnimationFrames.push(callback);
       return queuedAnimationFrames.length;
@@ -312,34 +312,83 @@ describe('Frame Grid bounded rendering (issue #47)', { retry: 1 }, () => {
     vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(function context() {
       return /** @type {CanvasRenderingContext2D} */ ({
         canvas: this,
+        // A thumbnail render (these frames draw their placeholder)
         fillRect: vi.fn(() => {
           clock += 3;
         }),
-        drawImage: vi.fn(() => {
-          clock += 3;
-        }),
+        // Copying a small thumbnail into the cache on eviction is cheap
+        drawImage: vi.fn(),
       });
     });
+    /**
+     * Run every callback queued so far together, as a browser does in one
+     * animation frame; callbacks they request wait for the next frame
+     */
+    const runAnimationFrame = () => {
+      const batch = queuedAnimationFrames;
+      queuedAnimationFrames = [];
+      for (const callback of batch) callback(clock);
+    };
 
-    const opened = clock;
+    // The click that opens the grid and the first animation frame (auto-fit,
+    // the pending thumbnails) share one frame's budget
     renderModal(3600);
     const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
-    const items = [...grid.querySelectorAll('.frame-grid-item')];
-    const drawnAtOpen = grid.querySelectorAll('.frame-grid-item canvas').length;
+    runAnimationFrame();
+    expect(grid.querySelectorAll('.frame-grid-item canvas').length).toBeGreaterThan(0);
+    // Budget 8 ms plus the one 3 ms draw that crosses it
+    expect(clock).toBeLessThanOrEqual(11);
 
-    // The modal opens with a first batch and placeholders for the rest
-    expect(items.length).toBeGreaterThan(20);
-    expect(drawnAtOpen).toBeGreaterThan(0);
-    expect(drawnAtOpen).toBeLessThan(items.length);
-    expect(clock - opened).toBeLessThan(20);
-
-    // Each later frame stays within the budget (plus the one draw that crosses it)
+    // Each later frame (~16.7 ms apart) stays within the budget too
     for (let guard = 0; queuedAnimationFrames.length > 0 && guard < 200; guard++) {
+      clock += 17;
       const before = clock;
-      queuedAnimationFrames.shift()?.(16);
-      expect(clock - before).toBeLessThan(20);
+      runAnimationFrame();
+      expect(clock - before).toBeLessThanOrEqual(11);
     }
+    const items = [...grid.querySelectorAll('.frame-grid-item')];
+    expect(items.length).toBeGreaterThan(20);
     expect(items.every((item) => item.querySelector('canvas'))).toBe(true);
+  });
+
+  it('shares the frame budget with drawing triggered by a scroll in the same frame', () => {
+    /** @type {FrameRequestCallback[]} */
+    let queuedAnimationFrames = [];
+    vi.mocked(window.requestAnimationFrame).mockImplementation((callback) => {
+      queuedAnimationFrames.push(callback);
+      return queuedAnimationFrames.length;
+    });
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(function context() {
+      return /** @type {CanvasRenderingContext2D} */ ({
+        canvas: this,
+        // A thumbnail render (these frames draw their placeholder)
+        fillRect: vi.fn(() => {
+          clock += 3;
+        }),
+        // Copying a small thumbnail into the cache on eviction is cheap
+        drawImage: vi.fn(),
+      });
+    });
+    const runAnimationFrame = () => {
+      const batch = queuedAnimationFrames;
+      queuedAnimationFrames = [];
+      for (const callback of batch) callback(clock);
+    };
+
+    renderModal(3600);
+    runAnimationFrame();
+    clock += 17;
+    // A scroll lands while thumbnails are still pending: its window render
+    // and the pending draw run in the same frame
+    const body = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-body'));
+    const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
+    body.scrollTop = Number.parseFloat(grid.style.height) / 2;
+    body.dispatchEvent(new Event('scroll'));
+    const before = clock;
+    runAnimationFrame();
+    expect(clock - before).toBeLessThanOrEqual(11);
   });
 
   it('releases every canvas and ignores delayed work after cleanup', () => {
@@ -365,6 +414,10 @@ describe('Frame Grid bounded rendering (issue #47)', { retry: 1 }, () => {
       callbacks,
     });
 
+    // Thumbnails are drawn on the next animation frame
+    queuedAnimationFrames.splice(0).forEach((callback) => {
+      callback(16);
+    });
     const body = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-body'));
     const applyButton = /** @type {HTMLButtonElement} */ (
       document.querySelector('.frame-grid-btn-apply')
