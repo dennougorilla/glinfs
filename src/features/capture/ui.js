@@ -76,6 +76,8 @@ function createHeartIcon() {
  * @typedef {Object} CaptureUIHandlers
  * @property {() => Promise<void>} onStart - Start capture handler
  * @property {() => void} onStop - Stop capture handler
+ * @property {() => Promise<boolean>} [onChangeSource] - Pick another source
+ *   while sharing; resolves false when the picker was cancelled
  * @property {() => Promise<boolean>} onCreateClip - Create clip handler (async)
  * @property {(settings: Partial<import('./types.js').CaptureSettings>) => void} onSettingsChange - Settings change handler
  * @property {() => import('./types.js').CaptureSettings | null} getSettings - Get current settings
@@ -392,6 +394,10 @@ function renderCaptureActions(state, handlers, cleanups) {
         }
       }),
     );
+
+    if (handlers.onChangeSource) {
+      actions.appendChild(renderChangeSourceButton(handlers.onChangeSource, cleanups));
+    }
   }
 
   if (handlers.onImportFile) {
@@ -416,6 +422,34 @@ function renderCaptureActions(state, handlers, cleanups) {
   }
 
   return actions;
+}
+
+/**
+ * "Change source" while sharing: opens the browser's picker again. Stopping
+ * is left to the browser's own sharing bar, which every browser shows for
+ * as long as a screen is shared.
+ * @param {() => Promise<boolean>} onChangeSource
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderChangeSourceButton(onChangeSource, cleanups) {
+  const button = createElement(
+    'button',
+    { className: 'btn btn-secondary capture-change-source-btn', type: 'button' },
+    ['Change source'],
+  );
+  cleanups.push(
+    on(button, 'click', async () => {
+      button.setAttribute('disabled', 'true');
+      try {
+        await onChangeSource();
+      } finally {
+        // A changed source re-renders the screen; a cancelled picker lands here
+        button.removeAttribute('disabled');
+      }
+    }),
+  );
+  return button;
 }
 
 /**
