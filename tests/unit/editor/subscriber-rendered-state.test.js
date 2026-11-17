@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initEditor } from '../../../src/features/editor/index.js';
 import * as ui from '../../../src/features/editor/ui.js';
 import { resetAppStore, setClipPayload } from '../../../src/shared/app-store.js';
-import { frameToTimecode } from '../../../src/shared/utils/format.js';
+import { frameToClock } from '../../../src/shared/utils/format.js';
 
 /**
  * Create mock ImageData for testing
@@ -98,11 +98,9 @@ describe('editor subscriber diffs against last-rendered state (issue #50)', () =
     const playBtn = container.querySelector('.btn-play');
     expect(playBtn?.classList.contains('playing')).toBe(true);
 
-    expect(container.querySelector('.time-display .total')?.textContent).toBe(
-      frameToTimecode(10, 30),
-    );
+    expect(container.querySelector('.time-display .total')?.textContent).toBe(frameToClock(10, 30));
     expect(container.querySelector('.time-display .current')?.textContent).toBe(
-      frameToTimecode(4, 30), // frame 9 is 4 frames past the new IN point (5)
+      frameToClock(4, 30), // frame 9 is 4 frames past the new IN point (5)
     );
 
     const timelineContainer = container.querySelector('.editor-timeline-container');
@@ -240,9 +238,7 @@ describe('editor subscriber diffs against last-rendered state (issue #50)', () =
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 9 });
     vi.advanceTimersByTime(20);
 
-    expect(container.querySelector('.time-display .total')?.textContent).toBe(
-      frameToTimecode(10, 30),
-    );
+    expect(container.querySelector('.time-display .total')?.textContent).toBe(frameToClock(10, 30));
     // This is a pure range change (no scenes/status/progress change), so the
     // cheap selection-only path runs instead of a full rebuild (fix 2).
     expect(updateScenesPanelSpy).not.toHaveBeenCalled();

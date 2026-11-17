@@ -228,7 +228,7 @@ describe('FPS-aware playback timing (issue #41)', () => {
       return track;
     }
 
-    it('shows frame 60 of a 60fps clip as 1 second ("01:00")', () => {
+    it('shows frame 60 of a 60fps clip as 1 second ("0:01.0")', () => {
       // 121 frames at 60fps: hovering at 50% = frame 60 = exactly 1.0s
       const clip = createClip(createTestFrames(121), 60);
       const track = renderAndGetTrack(clip);
@@ -236,10 +236,10 @@ describe('FPS-aware playback timing (issue #41)', () => {
       track.dispatchEvent(new MouseEvent('mousemove', { clientX: 60, bubbles: true }));
 
       const hoverTime = container.querySelector('.tl-hover-time');
-      expect(hoverTime?.textContent).toBe('01:00');
+      expect(hoverTime?.textContent).toBe('0:01.0');
     });
 
-    it('shows frame 15 of a 15fps clip as 1 second ("01:00")', () => {
+    it('shows frame 15 of a 15fps clip as 1 second ("0:01.0")', () => {
       // 31 frames at 15fps: hovering at 50% = frame 15 = exactly 1.0s
       const clip = createClip(createTestFrames(31), 15);
       const track = renderAndGetTrack(clip);
@@ -247,7 +247,7 @@ describe('FPS-aware playback timing (issue #41)', () => {
       track.dispatchEvent(new MouseEvent('mousemove', { clientX: 60, bubbles: true }));
 
       const hoverTime = container.querySelector('.tl-hover-time');
-      expect(hoverTime?.textContent).toBe('01:00');
+      expect(hoverTime?.textContent).toBe('0:01.0');
     });
   });
 });

@@ -271,7 +271,7 @@ test.describe('Click to select (stub MobileSAM, WASM fallback)', () => {
     const target = await editorFramePointToViewport(page, discA(2).x, discA(2).y);
     await page.mouse.click(target.x, target.y);
     await expect(page.locator('#ai-pick-list [data-object-id]')).toHaveCount(1);
-    await expect(page.locator('#ai-pick-list [data-object-id]')).toContainText('Remove at 00:02');
+    await expect(page.locator('#ai-pick-list [data-object-id]')).toContainText('Remove at 0:00.2');
     await expect(page.locator('#ai-pick-list .editor-cutout-pick-swatch')).toHaveCount(1);
     expect(
       await page.evaluate(() => window.__TEST_HOOKS__.getEditorState().edits.background.ai.picks),

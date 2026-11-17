@@ -5,7 +5,7 @@
 
 import { navigate } from '../../../shared/router.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
-import { frameToTimecode } from '../../../shared/utils/format.js';
+import { frameToClock } from '../../../shared/utils/format.js';
 import { getPositionInSelection } from '../core.js';
 
 /**
@@ -147,9 +147,9 @@ export function renderEditorToolbar(state, handlers, fps) {
   const selectionFrameCount = state.selectedRange.end - state.selectedRange.start + 1;
   const currentInSelection = getPositionInSelection(state.currentFrame, state.selectedRange);
   const timeDisplay = createElement('div', { className: 'time-display' }, [
-    createElement('span', { className: 'current' }, [frameToTimecode(currentInSelection, fps)]),
+    createElement('span', { className: 'current' }, [frameToClock(currentInSelection, fps)]),
     createElement('span', { className: 'separator' }, [' / ']),
-    createElement('span', { className: 'total' }, [frameToTimecode(selectionFrameCount, fps)]),
+    createElement('span', { className: 'total' }, [frameToClock(selectionFrameCount, fps)]),
   ]);
   playbackControls.appendChild(timeDisplay);
 
