@@ -24,7 +24,9 @@
  *   (Delete, 1-9, G...) cannot reach the page underneath. Global shortcuts
  *   (Shift+C) stay live.
  * - Focus in an input/textarea/select/contenteditable suppresses every
- *   hotkey that did not opt in with `allowInEditable`.
+ *   hotkey that did not opt in with `allowInEditable`, except a Ctrl/Meta
+ *   hotkey on an input that types no text (radio, checkbox, range, button):
+ *   those keys mean nothing to such a control.
  * - Ctrl/Meta/Alt must match exactly (default: not pressed), so browser and
  *   OS shortcuts such as Cmd+F or Alt+ArrowLeft are never swallowed. Shift
  *   is exact too unless the hotkey passes `shift: 'any'`.
@@ -69,6 +71,19 @@ const MODAL_YIELDING_SCOPES = new Set(['overlay', 'route']);
 
 const EDITABLE_SELECTOR =
   'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
+
+/** Input types that take no text, so Ctrl/Meta shortcuts mean nothing to them */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'radio',
+  'checkbox',
+  'range',
+  'button',
+  'submit',
+  'reset',
+  'color',
+  'file',
+  'image',
+]);
 
 /** @type {Map<HotkeyScope, HotkeyOptions[]>} */
 const registry = new Map(SCOPE_ORDER.map((scope) => [scope, []]));
@@ -146,6 +161,7 @@ function dispatch(e) {
   // element. Either way the focused element decides "is the user typing".
   const target = e.target instanceof Element ? e.target : document.activeElement;
   const editable = isEditableTarget(target);
+  const nonTextInput = target instanceof HTMLInputElement && NON_TEXT_INPUT_TYPES.has(target.type);
   // Snapshot like the entries below: a handler may close the modal mid-dispatch
   const modalOpen = countHotkeys('modal') > 0;
 
@@ -154,10 +170,21 @@ function dispatch(e) {
 
     for (const entry of orderEntries(scope, target)) {
       if (!matches(entry, e)) continue;
-      if (editable && !entry.allowInEditable) continue;
+      if (editable && !entry.allowInEditable && !(nonTextInput && hasCtrlOrMeta(entry))) {
+        continue;
+      }
       if (entry.handler(e) !== false) return;
     }
   }
+}
+
+/**
+ * Whether a hotkey needs Ctrl or Meta
+ * @param {HotkeyOptions} entry
+ * @returns {boolean}
+ */
+function hasCtrlOrMeta(entry) {
+  return entry.modifiers?.ctrl === true || entry.modifiers?.meta === true;
 }
 
 /**
