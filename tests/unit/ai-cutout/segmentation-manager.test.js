@@ -4,6 +4,7 @@ import { SegmentationErrorCode } from '../../../src/features/ai-cutout/protocol.
 import {
   collectPendingFrames,
   createSegmentationManager,
+  FRAME_STALL_MS,
   frameKey,
   getSegmentationManager,
   MAX_FRAMES_IN_FLIGHT,
@@ -443,6 +444,48 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(workers[1].posted[0].msg.type).toBe('init');
     workers[1].mask(workers[1].segments[0]);
     await expect(retry).resolves.toMatchObject({ analyzed: 1, backend: 'webgpu' });
+  });
+
+  it('fails a WebGPU frame the worker never answers, and a retry gets a fresh worker', async () => {
+    // A GPU driver reset can leave a run that never returns: without a limit
+    // the analysis waits forever with no message (seen: 23 minutes)
+    vi.useFakeTimers();
+    try {
+      const { manager, workers } = createHarness({ autoMask: false });
+      const run = manager.analyzeFrames([makeFrame('a'), makeFrame('b')]);
+      run.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      const worker = workers[0];
+      worker.mask(worker.segments[0]);
+      await vi.advanceTimersByTimeAsync(FRAME_STALL_MS - 1);
+      expect(worker.terminated).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const error = await run.catch((e) => e);
+      expect(error.code).toBe(SegmentationErrorCode.INFERENCE_FAILED);
+      expect(worker.terminated).toBe(true);
+
+      const retry = manager.analyzeFrames([makeFrame('b')]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(workers).toHaveLength(2);
+      workers[1].mask(workers[1].segments[0]);
+      await expect(retry).resolves.toMatchObject({ analyzed: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives a slow WASM frame all the time it needs', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, workers } = createHarness({ autoMask: false, backend: 'wasm' });
+      const run = manager.analyzeFrames([makeFrame('a')], { allowWasm: true });
+      await vi.advanceTimersByTimeAsync(FRAME_STALL_MS * 3);
+      expect(workers[0].terminated).toBe(false);
+      workers[0].mask(workers[0].segments[0]);
+      await expect(run).resolves.toMatchObject({ analyzed: 1, backend: 'wasm' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the worker when a job fails for a reason other than inference', async () => {

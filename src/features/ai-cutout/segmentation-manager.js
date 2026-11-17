@@ -201,6 +201,14 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
 export const MAX_FRAMES_IN_FLIGHT = 2;
 
 /**
+ * A WebGPU frame with no answer for this long fails the analysis
+ * (INFERENCE_FAILED: the worker is replaced, so "Try again" starts fresh).
+ * A GPU driver reset can leave an ORT run that never returns; a frame takes
+ * 0.1–3 s on WebGPU. WASM frames have no limit: a slow CPU may need minutes.
+ */
+export const FRAME_STALL_MS = 60_000;
+
+/**
  * DEV/E2E override of the model specs: `sha256`/`bytes` apply to every
  * single-file model unless `models[id]` names that model's own (the stubs;
  * a multi-file model names each file's in `models[id].files`), `allowWasm`
@@ -434,6 +442,40 @@ function raceAbort(promise, signal) {
       },
       (error) => {
         signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Resolve with `promise`, or reject with INFERENCE_FAILED when it has not
+ * settled within `ms` (no limit for null).
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number | null} ms
+ * @returns {Promise<T>}
+ */
+function raceStall(promise, ms) {
+  if (ms === null) return promise;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new SegmentationError(
+            SegmentationErrorCode.INFERENCE_FAILED,
+            `The GPU did not answer for ${Math.round(ms / 1000)} s`,
+          ),
+        ),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
         reject(error);
       },
     );
@@ -1082,6 +1124,7 @@ export class SegmentationManager {
     /** @type {Promise<{ totalMs: number }>[]} */
     const inflight = [];
     let next = 0;
+    const stallMs = ready.backend === 'webgpu' ? FRAME_STALL_MS : null;
     try {
       while (framesDone < pending.length) {
         while (inflight.length < MAX_FRAMES_IN_FLIGHT && next < pending.length) {
@@ -1090,7 +1133,7 @@ export class SegmentationManager {
           inflight.push(request);
         }
         // Stays in `inflight` until it settles, so a cancel can wait for it
-        const result = await raceAbort(inflight[0], signal);
+        const result = await raceAbort(raceStall(inflight[0], stallMs), signal);
         inflight.shift();
         framesDone++;
         report(result.totalMs);
