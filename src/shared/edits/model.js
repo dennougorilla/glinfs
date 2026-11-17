@@ -221,12 +221,35 @@ export const OBJECT_SCOPES = /** @type {const} */ (['whole', 'part', 'colour']);
 export const OBJECT_CANDIDATES = 4;
 
 /**
- * The answer a new fix-up starts with: the largest. Measured on 94
- * reference frames of the owner's clips (task 5): from a click the largest
- * answer scored mean J 0.47 (Whole 0.40, Part 0.39), from a box 0.77 like
- * Whole.
+ * The answer a new fix-up starts with (a Keep click or any box): the
+ * largest. See getDefaultObjectCandidate.
  */
 export const DEFAULT_OBJECT_CANDIDATE = OBJECT_CANDIDATES - 1;
+
+/**
+ * The answer a new Remove fix-up made by a click starts with: the second
+ * smallest. A Remove click lands on a leftover attached to the subject,
+ * and the larger answers hold the subject too.
+ */
+export const DEFAULT_REMOVE_CLICK_CANDIDATE = 1;
+
+/**
+ * The answer a new fix-up starts with, by how it was made. Measured on the
+ * 94 reference frames of the owner's clips with the branch's ordering
+ * (cutout-ux 2, mean J of the region):
+ * - Remove click (42 frames): second smallest 0.47, Whole 0.44, Part 0.40,
+ *   largest 0.29, best of the answers 0.59;
+ * - Keep click (52): largest 0.63, Part 0.38, Whole 0.36, best 0.82;
+ * - box: largest 0.67 (Remove) / 0.85 (Keep), as Whole, best 0.68 / 0.88.
+ * @param {ObjectMode} mode
+ * @param {{ box?: unknown }} selection
+ * @returns {number}
+ */
+export function getDefaultObjectCandidate(mode, selection) {
+  return mode === 'remove' && !selection.box
+    ? DEFAULT_REMOVE_CLICK_CANDIDATE
+    : DEFAULT_OBJECT_CANDIDATE;
+}
 
 /**
  * Whether a fix-up can be Colour: a Remove one with a point to sample the

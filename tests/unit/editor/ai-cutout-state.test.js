@@ -189,7 +189,8 @@ describe('tracked objects', () => {
         id: 'o1',
         mode: 'remove',
         scope: 'whole',
-        candidate: DEFAULT_OBJECT_CANDIDATE,
+        // A Remove click: the second smallest answer (the larger ones hold the subject)
+        candidate: 1,
         clicks: [click()],
         boxes: [],
         tolerance: 32,
