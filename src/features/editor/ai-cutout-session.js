@@ -74,6 +74,7 @@ import {
   getAiModelId,
   getBuildParamsKey,
   getClipProbSource,
+  getGoneFrames,
   getObjectCoverage,
   getObjectSignature,
   getSharedFinalMaskCache,
@@ -776,10 +777,78 @@ export function createAiCutoutSession(options) {
    */
   const findObject = (id) => getState()?.edits.background.ai.objects?.find((o) => o.id === id);
 
-  /** @param {Record<string, number[]>} next */
+  /**
+   * Per object: the lost frames its runs reported, before the frames the
+   * user confirmed as gone are taken out
+   * @type {Record<string, number[]>}
+   */
+  let rawLost = {};
+
+  /**
+   * Report the lost frames: those the runs reported, minus the frames the
+   * user confirmed the object is not on (see getGoneFrames)
+   * @param {Record<string, number[]>} next - raw
+   */
   const reportLost = (next) => {
-    objectLost = next;
-    report({ objectLost: next });
+    rawLost = next;
+    const state = getState();
+    const frames = state?.clip?.frames ?? [];
+    const range = state?.selectedRange ?? { start: 0, end: frames.length - 1 };
+    /** @type {Record<string, number[]>} */
+    const shown = {};
+    for (const [id, lost] of Object.entries(next)) {
+      const object = findObject(id);
+      const gone = object && frames.length ? getGoneFrames(frames, range, object, maskStore) : null;
+      shown[id] = gone && gone.size > 0 ? lost.filter((f) => !gone.has(f)) : lost;
+    }
+    objectLost = shown;
+    report({ objectLost: shown });
+  };
+
+  /**
+   * Per object: what its last finished run tracked (its prompts and
+   * selection), so a correction that only adds to them re-tracks only the
+   * span it can change
+   * @type {Map<string, { signature: string, object: import('../../shared/edits/model.js').CutoutObject, range: { start: number, end: number } }>}
+   */
+  const objectTracked = new Map();
+
+  /**
+   * The span a correction can change: when `object` only adds clicks or
+   * boxes to what its last run tracked (same scope, pick and selection),
+   * from the frame after the previous anchor to the frame before the next
+   * one around the new prompts; null: everything (a first run, a changed
+   * scope or pick, a removed point)
+   * @param {import('../../shared/edits/model.js').CutoutObject} object
+   * @param {{ start: number, end: number }} range
+   * @returns {{ start: number, end: number } | null}
+   */
+  const correctionSpan = (object, range) => {
+    const last = objectTracked.get(object.id);
+    if (!last) return null;
+    const old = last.object;
+    if (last.range.start !== range.start || last.range.end !== range.end) return null;
+    if (old.scope !== object.scope || old.candidate !== object.candidate) return null;
+    const key = (/** @type {any} */ p) =>
+      'x0' in p
+        ? `b${p.frame}:${p.x0}:${p.y0}:${p.x1}:${p.y1}`
+        : `c${p.frame}:${p.x}:${p.y}:${p.mode}`;
+    const before = [...old.clicks, ...(old.boxes ?? [])].map(key);
+    const now = [...object.clicks, ...(object.boxes ?? [])];
+    const nowKeys = now.map(key);
+    if (!before.every((k) => nowKeys.includes(k)) || nowKeys.length <= before.length) return null;
+    const added = now.filter((p) => !before.includes(key(p))).map((p) => p.frame);
+    const anchors = [...old.clicks, ...(old.boxes ?? [])].map((p) => p.frame);
+    let start = Number.POSITIVE_INFINITY;
+    let end = Number.NEGATIVE_INFINITY;
+    for (const c of added) {
+      const prev = Math.max(range.start - 1, ...anchors.filter((a) => a < c));
+      const next = Math.min(range.end + 1, ...anchors.filter((a) => a > c));
+      start = Math.min(start, anchors.includes(c) ? c : prev + 1);
+      end = Math.max(end, anchors.includes(c) ? c : next - 1);
+    }
+    if (!(start <= end)) return null;
+    return { start, end };
   };
 
   /**
@@ -875,7 +944,27 @@ export function createAiCutoutSession(options) {
     const controller = new AbortController();
     objectController = controller;
     const signature = getObjectSignature(object);
-    const range = state.selectedRange;
+    const selection = state.selectedRange;
+    // A correction that only adds a point or a box: re-track the span it
+    // can change, never the frames outside it, whose masks (and lost marks)
+    // stay and take the new prompts' tag
+    const span = correctionSpan(object, selection);
+    const range = span ?? selection;
+    if (span) {
+      const last = /** @type {NonNullable<ReturnType<typeof objectTracked.get>>} */ (
+        objectTracked.get(object.id)
+      );
+      const keys = [];
+      for (
+        let f = Math.max(0, selection.start);
+        f <= Math.min(state.clip.frames.length - 1, selection.end);
+        f++
+      ) {
+        if (f < span.start || f > span.end)
+          keys.push(objectMaskKey(state.clip.frames[f], object.id));
+      }
+      maskStore.retag(keys, last.signature, signature);
+    }
     const runKey = runKeyOf(object, range);
     const { id } = object;
     objectRun = { id, signature, runKey };
@@ -934,7 +1023,10 @@ export function createAiCutoutSession(options) {
         },
       });
       objectRuns.set(id, runKey);
-      reportLost({ ...objectLost, [id]: result.lost });
+      objectTracked.set(id, { signature, object, range: selection });
+      // Lost frames outside a correction's span are as the last run left them
+      const kept = span ? (rawLost[id] ?? []).filter((f) => f < span.start || f > span.end) : [];
+      reportLost({ ...rawLost, [id]: [...kept, ...result.lost].sort((a, b) => a - b) });
     } catch (error) {
       if (!isAbortError(error)) {
         const choice = isWasmChoiceError(error) && !isWasmAllowed();
@@ -993,11 +1085,12 @@ export function createAiCutoutSession(options) {
       objectSignatures.delete(id);
       objectRuns.delete(id);
       objectAnswers.delete(id);
+      objectTracked.delete(id);
       objectQueue = objectQueue.filter((queued) => queued !== id);
       if (objectRun?.id === id) objectController?.abort();
       dropObjectMasks(id);
-      if (id in objectLost) {
-        const { [id]: _gone, ...rest } = objectLost;
+      if (id in rawLost) {
+        const { [id]: _gone, ...rest } = rawLost;
         reportLost(rest);
       }
     }
@@ -1035,8 +1128,8 @@ export function createAiCutoutSession(options) {
             maskStore.delete(objectMaskKey(frame, object.id));
           }
         });
-        if (object.id in objectLost) {
-          const { [object.id]: _old, ...rest } = objectLost;
+        if (object.id in rawLost && !correctionSpan(object, state.selectedRange)) {
+          const { [object.id]: _old, ...rest } = rawLost;
           reportLost(rest);
         }
       }
@@ -1046,6 +1139,8 @@ export function createAiCutoutSession(options) {
       }
       if (running) objectController?.abort();
     }
+    // Gone frames confirmed since: the lost frames shown follow
+    reportLost(rawLost);
     void runNextObject();
   };
 

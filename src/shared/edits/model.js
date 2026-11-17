@@ -100,6 +100,10 @@ import { COLOUR_TOLERANCE } from '../masks/colour-fill.js';
  *   the colours to remove and its remove points the colours to protect
  * @property {number} tolerance - Colour only: Euclidean RGB distance,
  *   COLOUR_TOLERANCE.min..max (kept when the scope changes)
+ * @property {number[]} [gone] - Frames where the user confirmed the object is
+ *   not there (it left the frame or is hidden): each one stands for the run
+ *   of frames without its mask around it, which then count as done, not as
+ *   lost (sorted, at most EDIT_LIMITS.aiObjectGone.max)
  * @property {boolean} [everywhere] - Colour only: remove the sampled colours
  *   wherever they are in the mask on every frame, not only where they
  *   touch its points (sparkles, flames scattered over the frame)
@@ -324,6 +328,7 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiObjects: { max: 4 },
   aiObjectClicks: { max: 16 },
   aiObjectBoxes: { max: 8 },
+  aiObjectGone: { max: 64 },
   aiCleanupArea: { min: 0, max: 0.01 },
   touchUpRadius: { min: 0.0025, max: 0.15 },
   touchUps: { max: 200 },
@@ -653,6 +658,7 @@ function normalizeObject(object, frameCount) {
     scope: scope === 'colour' && !canBeColourObject({ mode, clicks: kept }) ? 'whole' : scope,
     ...(mode === 'add' && typeof o.only === 'boolean' ? { only: o.only } : {}),
     ...(mode === 'remove' && o.everywhere === true ? { everywhere: true } : {}),
+    ...normalizeGone(o.gone, frameCount),
     ...(Number.isInteger(o.candidate) &&
     /** @type {number} */ (o.candidate) >= 0 &&
     /** @type {number} */ (o.candidate) < OBJECT_CANDIDATES
@@ -667,6 +673,23 @@ function normalizeObject(object, frameCount) {
       ),
     ),
   };
+}
+
+/**
+ * A fix-up's gone frames: integers inside the clip, sorted, unique, at most
+ * EDIT_LIMITS.aiObjectGone.max (none: no field)
+ * @param {unknown} gone
+ * @param {number} frameCount
+ * @returns {{ gone?: number[] }}
+ */
+function normalizeGone(gone, frameCount) {
+  if (!Array.isArray(gone)) return {};
+  const frames = [
+    ...new Set(gone.filter((f) => Number.isInteger(f) && f >= 0 && f < Math.max(1, frameCount))),
+  ]
+    .sort((a, b) => a - b)
+    .slice(0, EDIT_LIMITS.aiObjectGone.max);
+  return frames.length > 0 ? { gone: frames } : {};
 }
 
 /**

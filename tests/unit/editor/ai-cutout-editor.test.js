@@ -790,6 +790,13 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.aiPickTool).toBe('remove');
     expect($('[data-object-id="o1"]').classList.contains('is-active')).toBe(true);
 
+    // Frame 2 has the fix-up's mask (taking away there is a point)
+    getSharedMaskStore().set(
+      'object:o1:a2',
+      { data: new Uint8Array(100).fill(255), width: 10, height: 10 },
+      'clip',
+      'object:o1',
+    );
     window.__TEST_HOOKS__.setEditorState({ currentFrame: 2 });
     clickPreview(overlay, 10, 10);
     clickPreview(overlay, 20, 20, { altKey: true });
@@ -806,6 +813,14 @@ describe('AI cutout in the mounted editor', () => {
       [2, 'remove'],
     ]);
     expect(object.boxes).toEqual([{ frame: 2, x0: 0.5, y0: 0.5, x1: 0.8, y1: 0.7 }]);
+    // Taking away on a frame without its mask: "not here" (cutout-ux 5), no point
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    // (the Keep tool is on: on a Remove fix-up it takes away)
+    clickPreview(overlay, 20, 20);
+    await settle();
+    const [gone] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(gone.gone).toEqual([1]);
+    expect(gone.clicks).toHaveLength(4);
     // Still selected; Escape finishes
     expect(getEditorState()?.aiActiveObjectId).toBe('o1');
     press('Escape');

@@ -739,6 +739,25 @@ export function getObjectTool(object) {
 }
 
 /**
+ * The object of a tracked fix-up is not on this frame (it left the frame
+ * or is hidden): the run of frames without its mask around it counts as
+ * done, not lost (see getGoneFrames)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {number} frame
+ * @returns {import('./types.js').EditorState}
+ */
+export function addAiObjectGone(state, id, frame) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || (object.gone ?? []).includes(frame)) return state;
+  if ((object.gone ?? []).length >= EDIT_LIMITS.aiObjectGone.max) return state;
+  return updateAiObject(state, id, (o) => ({
+    ...o,
+    gone: [...(o.gone ?? []), frame].sort((a, b) => a - b),
+  }));
+}
+
+/**
  * A Colour fix-up removes its colours wherever they are in the mask
  * (true), or only where they touch its points (false)
  * @param {import('./types.js').EditorState} state
