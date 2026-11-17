@@ -6,9 +6,8 @@
 
 // Import algorithm directly (Worker has module support)
 import {
-  buildSceneRanges,
-  compareHistograms,
-  computeHistogram,
+  computeFrameFeatures,
+  scenesFromFeatures,
 } from '../features/scene-detection/algorithms/histogram-detector.js';
 import { DEFAULT_DETECTOR_OPTIONS } from '../features/scene-detection/types.js';
 
@@ -153,11 +152,8 @@ async function runDetection(frameData, options, runId, requestId) {
     frameByIndex.set(f.index, f);
   }
 
-  /** @type {number[]} */
-  const sceneBreaks = [0]; // First frame is always a scene start
-
-  /** @type {Float32Array | null} */
-  let prevHistogram = null;
+  /** @type {(import('../features/scene-detection/algorithms/histogram-detector.js').FrameFeatures | null)[]} */
+  const features = [];
 
   // Process frames
   for (let i = 0; i < frameData.length; i++) {
@@ -178,32 +174,23 @@ async function runDetection(frameData, options, runId, requestId) {
     );
 
     // Read the transferred ImageBitmap back into pixels HERE (worker
-    // thread), not on main - and compute the histogram from it.
-    let histogram = null;
+    // thread), not on main - and compute the features from it.
+    let frameFeatures = null;
     if (data.imageBitmap) {
       try {
         const ctx = getReadbackContext(data.width, data.height);
         ctx.clearRect(0, 0, data.width, data.height);
         ctx.drawImage(data.imageBitmap, 0, 0);
         const imageData = ctx.getImageData(0, 0, data.width, data.height);
-        histogram = computeHistogram(imageData);
+        frameFeatures = computeFrameFeatures(imageData);
       } finally {
         data.imageBitmap.close();
         data.imageBitmap = null;
       }
     }
 
-    // Compare with previous frame
-    if (histogram && prevHistogram !== null) {
-      const distance = compareHistograms(prevHistogram, histogram);
-
-      // Scene change detected if distance exceeds threshold
-      if (distance > opts.threshold) {
-        sceneBreaks.push(data.index);
-      }
-    }
-
-    prevHistogram = histogram;
+    // A frame without pixels starts nothing (null)
+    features.push(frameFeatures);
 
     // Yield to allow cancellation checks
     if (i % 10 === 0) {
@@ -221,9 +208,12 @@ async function runDetection(frameData, options, runId, requestId) {
 
   // Get the last frame index from frameData
   const lastFrameIndex = frameData[frameData.length - 1].index;
-  sceneBreaks.push(lastFrameIndex + 1); // End marker
-
-  const ranges = buildSceneRanges(sceneBreaks, opts.minSceneDuration);
+  const ranges = scenesFromFeatures(features, {
+    frameIndices: frameData.map((f) => f.index),
+    totalFrames: lastFrameIndex + 1,
+    minSceneDuration: opts.minSceneDuration,
+    method: opts.method,
+  });
   for (const { startFrame, endFrame } of ranges) {
     // Get timestamps from frameData using O(1) Map lookup
     const startData = frameByIndex.get(startFrame);

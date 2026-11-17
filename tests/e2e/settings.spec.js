@@ -253,3 +253,27 @@ test('a ?method.<id>= URL override shows in Settings and is not stored', async (
   const stored = await page.evaluate(() => localStorage.getItem('glinfs_user_settings'));
   expect(stored === null || !JSON.parse(stored).methods?.['e2e.detector']).toBe(true);
 });
+
+test('Scene detection offers its methods, colour and shape first', async ({ page }) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  const select = page.locator('[data-setting-key="scenes"] select');
+  await expect(page.locator('[data-setting-key="scenes"] .settings-item-label')).toHaveText(
+    'Scene detection',
+  );
+  await expect(select.locator('option')).toHaveText([
+    'Colour and shape',
+    'Fixed threshold',
+    'Adaptive threshold',
+    'Shape only',
+  ]);
+  await expect(select).toHaveValue('combined');
+  await select.selectOption('fixed');
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('glinfs_user_settings')).methods),
+    )
+    .toEqual({ scenes: 'fixed' });
+});
