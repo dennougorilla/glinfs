@@ -202,22 +202,18 @@ export function opaquePixels(rgba) {
  *   0.38 -> 1.04, 0.51 -> 1.10
  * - half the frame with sparse noise: 0.22-0.25, ratio 0.82-0.85
  * - video-like noise everywhere: 0.25-0.42, ratio 1.12-1.30
- * Few transitions also come with nearly every pixel changed (noise, a fade),
- * where there is nothing to gain and a palette slot to pay, so the fast path
- * also needs half the pixels kept. Otherwise the count does not tell (0.25
- * is 0.85 on one clip and 1.13 on another): the frame is encoded both ways
- * and the smaller is written; that choice then holds for the next
- * `trialEvery - 1` such frames, since content rarely changes character
- * between frames.
+ * Few transitions do not guarantee a gain either: nearly every pixel can
+ * change (noise, a fade), and flat colors compress so well whole that the
+ * extra palette slot costs more (a black frame alternating with a white
+ * third, 480x240: 23.1 KB differenced against 17.8 KB whole). So below
+ * `neverAbove` the frame is encoded both ways and the smaller is written;
+ * that choice then holds for the next `trialEvery - 1` frames, since content
+ * rarely changes character between frames.
  */
 export const FRAME_DIFFERENCING = /** @type {const} */ ({
-  /** Differenced without a trial below this many transitions per pixel ... */
-  alwaysBelow: 0.1,
-  /** ... when at least this share of the pixels is kept ... */
-  alwaysKept: 0.5,
-  /** ... and written whole without a trial above this many */
+  /** Written whole without a trial above this many transitions per pixel */
   neverAbove: 0.5,
-  /** Frames between trials in the band between the limits */
+  /** Frames between trials below that */
   trialEvery: 8,
   /**
    * After a frame written whole, the next 1, 2, 4 ... up to this many are
@@ -439,7 +435,7 @@ export function createGifencEncoder() {
       shownFrom = null;
     }
     if (differenced?.length !== index.length) differenced = new Uint8Array(index.length);
-    const { transitions, kept: keptShare } = differenceFrame(
+    const { transitions } = differenceFrame(
       index,
       colors,
       /** @type {Int32Array} */ (shown),
@@ -455,13 +451,10 @@ export function createGifencEncoder() {
       dispose: 1,
     };
 
-    const { alwaysBelow, alwaysKept, neverAbove, trialEvery } = FRAME_DIFFERENCING;
+    const { neverAbove, trialEvery } = FRAME_DIFFERENCING;
     /** @type {boolean} */
     let useDifferenced;
-    if (transitions < alwaysBelow && keptShare >= alwaysKept) {
-      useDifferenced = true;
-      encoder.writeFrame(differenced, width, height, kept);
-    } else if (transitions > neverAbove) {
+    if (transitions > neverAbove) {
       useDifferenced = false;
       encoder.writeFrame(index, width, height, whole);
     } else if (trialChoice !== null && sinceTrial < trialEvery - 1) {
