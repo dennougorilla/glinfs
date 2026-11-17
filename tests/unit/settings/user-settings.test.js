@@ -45,11 +45,11 @@ describe('user-settings', () => {
       // itself and reset could never restore the original values.
       const settings = loadSettings();
       settings.capture.fps = 999;
-      settings.export.dithering = false;
+      settings.export.dither = true;
 
       expect(getDefaultSettings().capture.fps).toBe(30);
       expect(loadSettings().capture.fps).toBe(30);
-      expect(loadSettings().export.dithering).toBe(true);
+      expect(loadSettings().export.dither).toBe(false);
     });
 
     it('merges stored partial settings with defaults', () => {
@@ -60,8 +60,16 @@ describe('user-settings', () => {
       expect(settings.capture.fps).toBe(60);
       // Missing keys fall back to defaults
       expect(settings.capture.sceneDetection).toBe(true);
-      expect(settings.export.dithering).toBe(true);
+      expect(settings.export.dither).toBe(false);
       expect(settings.thumbnailQuality).toBe('auto');
+    });
+
+    it('leaves dithering off for a stored old "dithering" setting', () => {
+      // `dithering` never reached an encoder and defaulted to on: honoring
+      // it now would switch on a 1.2-2.3x larger GIF nobody chose
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ export: { dithering: true } }));
+
+      expect(loadSettings().export.dither).toBe(false);
     });
   });
 
@@ -69,14 +77,14 @@ describe('user-settings', () => {
     it('persists and reloads the same values', () => {
       const settings = loadSettings();
       settings.capture.fps = 15;
-      settings.export.dithering = false;
+      settings.export.dither = true;
       settings.thumbnailQuality = 'high';
 
       saveSettings(settings);
 
       const reloaded = loadSettings();
       expect(reloaded.capture.fps).toBe(15);
-      expect(reloaded.export.dithering).toBe(false);
+      expect(reloaded.export.dither).toBe(true);
       expect(reloaded.thumbnailQuality).toBe('high');
     });
   });
@@ -175,13 +183,13 @@ describe('user-settings', () => {
   describe('resetCategory / resetSettings', () => {
     it('resets only the given category', () => {
       updateSetting('capture', 'fps', 60);
-      updateSetting('export', 'dithering', false);
+      updateSetting('export', 'dither', true);
 
       resetCategory('capture');
 
       const settings = loadSettings();
       expect(settings.capture.fps).toBe(30);
-      expect(settings.export.dithering).toBe(false);
+      expect(settings.export.dither).toBe(true);
     });
 
     it('resets the AI cutout category with fresh remembered models', () => {

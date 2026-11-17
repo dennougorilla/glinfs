@@ -88,7 +88,7 @@ describe('updateSettings', () => {
 
     expect(next.settings.quality).toBe(1.0);
     // Unrelated settings survive the merge
-    expect(next.settings.dithering).toBe(state.settings.dithering);
+    expect(next.settings.dither).toBe(state.settings.dither);
     expect(next.estimatedSizeMB).toBeGreaterThan(0);
   });
 
@@ -100,6 +100,33 @@ describe('updateSettings', () => {
     const high = updateSettings(state, { quality: 1.0 }, dims);
 
     expect(high.estimatedSizeMB).toBeGreaterThan(low.estimatedSizeMB);
+  });
+});
+
+describe('updateSettings: dithering only where gifenc encodes', () => {
+  const dims = { frameCount: 20, width: 200, height: 100 };
+  const mb = (/** @type {Record<string, unknown>} */ patch, extra = {}) =>
+    updateSettings(initExportState(), patch, { ...dims, ...extra }).estimatedSizeMB;
+
+  it('counts dithering for gifenc', () => {
+    expect(mb({ encoderId: 'gifenc-js', dither: true })).toBeGreaterThan(
+      mb({ encoderId: 'gifenc-js', dither: false }),
+    );
+  });
+
+  it('ignores it for the WASM encoder, which does not dither', () => {
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true })).toBe(
+      mb({ encoderId: 'gifsicle-wasm', dither: false }),
+    );
+  });
+
+  it('counts it when a target size or a cutout makes gifenc encode', () => {
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true, targetSizeMB: 2 })).toBeGreaterThan(
+      mb({ encoderId: 'gifsicle-wasm', dither: false, targetSizeMB: 2 }),
+    );
+    expect(mb({ encoderId: 'gifsicle-wasm', dither: true }, { transparent: true })).toBeGreaterThan(
+      mb({ encoderId: 'gifsicle-wasm', dither: false }, { transparent: true }),
+    );
   });
 });
 

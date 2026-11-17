@@ -8,9 +8,25 @@ import {
   createDefaultSettings,
   estimateSize,
   getCroppedDimensions,
+  getEffectiveEncoderId,
   getScaledDimensions,
+  normalizeTargetSizeMB,
 } from './core.js';
 import { BYTES_PER_MB } from './size-planner.js';
+
+/**
+ * Whether the export dithers: only gifenc does, and it runs for a target
+ * size or a cutout whatever encoder is chosen
+ * @param {import('./types.js').ExportSettings} settings
+ * @param {boolean} transparent
+ */
+function dithers(settings, transparent) {
+  const sizeLimited = normalizeTargetSizeMB(settings.targetSizeMB) !== null;
+  return (
+    settings.dither === true &&
+    getEffectiveEncoderId(settings, transparent, sizeLimited) === 'gifenc-js'
+  );
+}
 
 /**
  * Initialize export state
@@ -43,7 +59,7 @@ export function openDialog(state, clip, crop) {
     width: dims.width,
     height: dims.height,
     quality: state.settings.quality,
-    dithering: state.settings.dithering,
+    dither: dithers(state.settings, false),
     frameSkip: state.settings.frameSkip,
     encoderPreset: state.settings.encoderPreset,
   });
@@ -72,10 +88,11 @@ export function closeDialog(state) {
  * Update export settings
  * @param {import('./types.js').ExportState} state
  * @param {Partial<import('./types.js').ExportSettings>} settings
- * @param {{ frameCount: number, width: number, height: number, countFrames?: (frameSkip: number) => number }} dimensions
+ * @param {{ frameCount: number, width: number, height: number, transparent?: boolean, countFrames?: (frameSkip: number) => number }} dimensions
  *   width/height before the output scale (it is applied here). countFrames:
  *   GIF frames for a frame skip when the export merges identical frames
- *   (defaults to one GIF frame per exported frame)
+ *   (defaults to one GIF frame per exported frame). transparent: a cutout,
+ *   which gifenc encodes
  * @returns {import('./types.js').ExportState}
  */
 export function updateSettings(state, settings, dimensions) {
@@ -88,7 +105,7 @@ export function updateSettings(state, settings, dimensions) {
     width: output.width,
     height: output.height,
     quality: newSettings.quality,
-    dithering: newSettings.dithering,
+    dither: dithers(newSettings, dimensions.transparent === true),
     frameSkip: counted === undefined ? newSettings.frameSkip : 1,
     encoderPreset: newSettings.encoderPreset,
   });
