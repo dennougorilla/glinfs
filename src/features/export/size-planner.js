@@ -213,26 +213,146 @@ export async function exportToTargetSize({
 }
 
 /**
- * Header (6) + logical screen descriptor (7) + NETSCAPE loop extension (19)
- * + trailer (1). The global color table belongs to the first frame.
+ * The frames a size estimate encodes: a few short runs of consecutive GIF
+ * frames, spread across the clip. Consecutive frames matter because opaque
+ * GIFs are frame-differenced: a frame costs what changed since the frame
+ * before, which frames picked far apart do not show.
  */
-export const GIF_FILE_OVERHEAD = 33;
+export const ESTIMATE_SAMPLE = /** @type {const} */ ({
+  /** Runs, spread evenly from the first frame to the last */
+  runs: 4,
+  /** Consecutive frames per run; only the last one of each run is measured */
+  runLength: 3,
+});
 
 /**
- * Extrapolate a GIF's size from a sample encode. GIF frames are encoded
- * independently here (each with its own image data and, except the first,
- * its own color table), so the sample's bytes per frame carry over; only
- * the fixed file overhead (header, logical screen descriptor, loop
- * extension, trailer) is paid once.
- * @param {number} sampleBytes - Size of the sample GIF
- * @param {number} sampleFrames - Frames in the sample
- * @param {number} gifFrames - Frames the real GIF will have (after merging)
+ * @typedef {Object} EstimateSample
+ * @property {number[]} positions - Positions (0-based, ascending) in the GIF's frame list to encode
+ * @property {number[]} schedule - The frame index the encoder sees for each
+ *   position (its palette schedule counts these)
+ * @property {Array<{ indices: number[], share: number }>} groups - Measured
+ *   frames (indices into `positions`) and the share of the GIF's frames each
+ *   group stands for. A measured frame is the last of its run, which follows
+ *   its own previous frame (the first of a run follows a frame from elsewhere
+ *   in the clip, and right after that jump the encoder can still be writing
+ *   whole frames). Empty when `positions` is the whole GIF.
+ */
+
+/**
+ * @param {number} total - GIF frames
+ * @param {number} [paletteInterval=0] - The encoder's palette schedule: N > 3
+ *   rebuilds the palette every Nth frame, and such a frame changes colors
+ *   everywhere, so it costs about a whole frame even where the frames around
+ *   it cost little. Then half the runs end on a rebuild and stand for 1 in N
+ *   frames, the other half end between rebuilds. 0 (one palette) or 1 (one
+ *   per frame) treat every frame alike.
+ * @param {{ runs: number, runLength: number }} [sample=ESTIMATE_SAMPLE]
+ * @returns {EstimateSample}
+ */
+export function selectEstimateSample(total, paletteInterval = 0, sample = ESTIMATE_SAMPLE) {
+  const { runs, runLength } = sample;
+  if (total <= runs * runLength) {
+    const positions = Array.from({ length: Math.max(0, total) }, (_, i) => i);
+    return { positions, schedule: positions, groups: [] };
+  }
+  const split = paletteInterval > runLength;
+  /** @type {number[]} */
+  const positions = [];
+  /** @type {number[]} */
+  const schedule = [];
+  /** @type {number[]} */
+  const steady = [];
+  /** @type {number[]} */
+  const rebuild = [];
+  const lastStart = total - runLength;
+  for (let r = 0; r < runs; r++) {
+    const start = runs === 1 ? 0 : Math.round((r * lastStart) / (runs - 1));
+    const onRebuild = split && r % 2 === 1;
+    // Between rebuilds: r*N+1 ... r*N+runLength; ending on one: ... r*N+N
+    const first = split
+      ? r * paletteInterval + (onRebuild ? paletteInterval - runLength + 1 : 1)
+      : start;
+    for (let k = 0; k < runLength; k++) {
+      positions.push(start + k);
+      schedule.push(first + k);
+    }
+    (onRebuild ? rebuild : steady).push(positions.length - 1);
+  }
+  const groups = split
+    ? [
+        { indices: steady, share: 1 - 1 / paletteInterval },
+        { indices: rebuild, share: 1 / paletteInterval },
+      ]
+    : [{ indices: steady, share: 1 }];
+  return { positions, schedule, groups };
+}
+
+/**
+ * Bytes of each image in a GIF, from its Graphic Control Extension (or image
+ * descriptor) to the end of its pixel data; the rest of the file is fixed
+ * overhead (header, screen descriptor, global color table, loop extension,
+ * trailer).
+ * @param {Uint8Array} bytes
+ * @returns {{ frames: number[], overhead: number }}
+ */
+export function gifFrameSizes(bytes) {
+  const lsd = bytes[10];
+  let pos = 13 + (lsd & 0x80 ? 3 * (1 << ((lsd & 7) + 1)) : 0);
+  const skipSubBlocks = () => {
+    while (pos < bytes.length && bytes[pos] !== 0) pos += bytes[pos] + 1;
+    pos++;
+  };
+  /** @type {number[]} */
+  const frames = [];
+  let frameStart = -1;
+  while (pos < bytes.length) {
+    const block = bytes[pos];
+    if (block === 0x3b) break;
+    if (block === 0x21) {
+      if (bytes[pos + 1] === 0xf9) frameStart = pos;
+      pos += 2;
+      skipSubBlocks();
+    } else if (block === 0x2c) {
+      const start = frameStart >= 0 ? frameStart : pos;
+      const fields = bytes[pos + 9];
+      pos += 10 + (fields & 0x80 ? 3 * (1 << ((fields & 7) + 1)) : 0);
+      pos++; // LZW minimum code size
+      skipSubBlocks();
+      frames.push(pos - start);
+      frameStart = -1;
+    } else {
+      break;
+    }
+  }
+  const imageBytes = frames.reduce((a, b) => a + b, 0);
+  return { frames, overhead: bytes.length - imageBytes };
+}
+
+/**
+ * Extrapolate a GIF's size from a sample encode (selectEstimateSample): the
+ * file overhead and the first frame once, every later frame at the
+ * share-weighted mean of the measured groups. A sample of the whole GIF is
+ * its size.
+ * @param {{ frames: number[], overhead: number }} sizes - gifFrameSizes of the sample GIF
+ * @param {EstimateSample['groups']} groups
+ * @param {number} gifFrames - Frames the real GIF will have
  * @returns {number}
  */
-export function extrapolateGifSize(sampleBytes, sampleFrames, gifFrames) {
-  if (sampleFrames <= 0) return sampleBytes;
-  const perFrame = Math.max(0, sampleBytes - GIF_FILE_OVERHEAD) / sampleFrames;
-  return Math.round(GIF_FILE_OVERHEAD + perFrame * gifFrames);
+export function extrapolateFromSample(sizes, groups, gifFrames) {
+  const { frames, overhead } = sizes;
+  const sum = frames.reduce((a, b) => a + b, 0);
+  if (frames.length === 0 || gifFrames <= 0) return overhead;
+  if (groups.length === 0) return Math.round(overhead + (sum / frames.length) * gifFrames);
+  let typical = 0;
+  let shares = 0;
+  for (const { indices, share } of groups) {
+    const counted = indices.filter((i) => i < frames.length);
+    if (counted.length === 0) continue;
+    typical += (share * counted.reduce((total, i) => total + frames[i], 0)) / counted.length;
+    shares += share;
+  }
+  if (shares === 0) return Math.round(overhead + (sum / frames.length) * gifFrames);
+  return Math.round(overhead + frames[0] + (typical / shares) * (gifFrames - 1));
 }
 
 /**

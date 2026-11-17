@@ -213,3 +213,77 @@ export function decodeGifFrames(bytes) {
   }
   return frames;
 }
+
+/**
+ * Render every frame of a GIF as the viewer shows it (RGBA): color tables,
+ * transparency and disposal 0-2 are honored, so tests can compare what two
+ * encodings display pixel for pixel. Assumes full-canvas images (as the app
+ * writes them).
+ * @param {Uint8Array} bytes
+ * @returns {Uint8ClampedArray[]}
+ */
+export function renderGifFrames(bytes) {
+  const u16 = (/** @type {number} */ o) => bytes[o] | (bytes[o + 1] << 8);
+  const width = u16(6);
+  const height = u16(8);
+  const lsdFields = bytes[10];
+  const globalSize = lsdFields & 0x80 ? 1 << ((lsdFields & 7) + 1) : 0;
+  const globalTable = bytes.subarray(13, 13 + globalSize * 3);
+  let pos = 13 + globalSize * 3;
+
+  const readSubBlocks = () => {
+    /** @type {number[]} */
+    const payload = [];
+    while (bytes[pos] !== 0) {
+      const size = bytes[pos];
+      for (let i = 1; i <= size; i++) payload.push(bytes[pos + i]);
+      pos += size + 1;
+    }
+    pos++;
+    return Uint8Array.from(payload);
+  };
+
+  const canvas = new Uint8ClampedArray(width * height * 4);
+  /** @type {Uint8ClampedArray[]} */
+  const frames = [];
+  let disposal = 0;
+  /** @type {number | null} */
+  let transparentIndex = null;
+  let previousDisposal = 0;
+  while (pos < bytes.length) {
+    const block = bytes[pos++];
+    if (block === 0x3b) break;
+    if (block === 0x21) {
+      const label = bytes[pos++];
+      if (label === 0xf9) {
+        const packed = bytes[pos + 1];
+        disposal = (packed >> 2) & 7;
+        transparentIndex = packed & 1 ? bytes[pos + 4] : null;
+      }
+      readSubBlocks();
+    } else if (block === 0x2c) {
+      if (previousDisposal === 2) canvas.fill(0);
+      const fields = bytes[pos + 8];
+      const localSize = fields & 0x80 ? 1 << ((fields & 7) + 1) : 0;
+      const table = localSize ? bytes.subarray(pos + 9, pos + 9 + localSize * 3) : globalTable;
+      pos += 9 + localSize * 3;
+      const minCodeSize = bytes[pos++];
+      const indices = lzwDecode(minCodeSize, readSubBlocks(), width * height);
+      for (let i = 0; i < indices.length; i++) {
+        const c = indices[i];
+        if (c === transparentIndex) continue;
+        canvas[i * 4] = table[c * 3];
+        canvas[i * 4 + 1] = table[c * 3 + 1];
+        canvas[i * 4 + 2] = table[c * 3 + 2];
+        canvas[i * 4 + 3] = 255;
+      }
+      frames.push(canvas.slice());
+      previousDisposal = disposal;
+      disposal = 0;
+      transparentIndex = null;
+    } else {
+      throw new Error(`Unexpected GIF block 0x${block.toString(16)} at ${pos - 1}`);
+    }
+  }
+  return frames;
+}

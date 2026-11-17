@@ -83,7 +83,8 @@ const REMOVE_SCOPES = ['whole', 'part', 'colour'];
  * @property {number} playbackSpeed - Playback speed a new clip starts with
  *   (0.25-4.0); each clip then keeps its own editor speed, which is the GIF's
  *   speed
- * @property {boolean} dithering - Dithering enabled
+ * @property {boolean} dither - Ordered dithering (the old `dithering` key never
+ *   reached an encoder and defaulted to on, so it is not read)
  * @property {number} loopCount - Loop count (0 = infinite)
  * @property {boolean} openInNewTab - Open result in new tab
  * @property {'quality'|'balanced'|'fast'} encoderPreset - Encoder quality preset
@@ -112,7 +113,7 @@ const DEFAULT_SETTINGS = {
     quality: 0.8,
     frameSkip: 1,
     playbackSpeed: 1.0,
-    dithering: true,
+    dither: false,
     loopCount: 0,
     openInNewTab: false,
     encoderPreset: 'balanced',
@@ -229,7 +230,7 @@ export const SETTINGS_METADATA = {
         step: 0.25,
         format: (v) => `${v}x`,
       },
-      dithering: {
+      dither: {
         label: 'Dithering',
         type: 'boolean',
       },
