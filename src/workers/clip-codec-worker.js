@@ -155,7 +155,10 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
       },
       error: (err) => failEncode(err instanceof Error ? err : new Error(String(err))),
     });
-    encoder.addEventListener('dequeue', progress);
+    // 'dequeue' events exist where the codec is an EventTarget (Chrome 106+);
+    // outputs report progress either way
+    if (typeof encoder.addEventListener === 'function')
+      encoder.addEventListener('dequeue', progress);
 
     encoder.configure({
       codec,
@@ -251,14 +254,12 @@ async function handleDecode({ jobId, chunks, config }) {
       },
       error: (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
     });
-    decoder.addEventListener('dequeue', progress);
+    // 'dequeue' events exist where the codec is an EventTarget (Chrome 106+);
+    // outputs report progress either way
+    if (typeof decoder.addEventListener === 'function')
+      decoder.addEventListener('dequeue', progress);
 
-    decoder.configure({
-      codec: config.codec,
-      codedWidth: config.codedWidth,
-      codedHeight: config.codedHeight,
-      ...(config.description ? { description: config.description } : {}),
-    });
+    decoder.configure(await decoderConfigFor(config));
 
     for (const chunk of chunks) {
       decoder.decode(
@@ -290,6 +291,37 @@ async function handleDecode({ jobId, chunks, config }) {
     const message = err instanceof Error ? err.message : 'Decode failed';
     self.postMessage({ type: 'JOB_ERROR', payload: { jobId, message } });
   }
+}
+
+/**
+ * The decoder configuration: software decoding when the browser has it.
+ * Every output is copied into CPU memory anyway (ownedCopy), and measured
+ * on 300 x 1080p VP9 (Mac M3, Chrome 157) a software decode plus that copy
+ * took 565-572 ms against 792-795 ms for a hardware decode plus reading
+ * its frames back from the GPU, at the same memory (I420 or NV12, 3.1 MB
+ * per 1080p frame). It also keeps hardware decoders, whose picture pools
+ * caused the hang, out of the path. Without a software decoder the default
+ * (any decoder) is used; the copies keep that safe too.
+ * @param {{codec: string, codedWidth: number, codedHeight: number, description?: ArrayBuffer}} config
+ * @returns {Promise<VideoDecoderConfig>}
+ */
+async function decoderConfigFor(config) {
+  /** @type {VideoDecoderConfig} */
+  const base = {
+    codec: config.codec,
+    codedWidth: config.codedWidth,
+    codedHeight: config.codedHeight,
+    ...(config.description ? { description: config.description } : {}),
+  };
+  /** @type {VideoDecoderConfig} */
+  const software = { ...base, hardwareAcceleration: 'prefer-software' };
+  try {
+    const support = await VideoDecoder.isConfigSupported(software);
+    if (support?.supported) return software;
+  } catch {
+    // Fall back to the default
+  }
+  return base;
 }
 
 /**

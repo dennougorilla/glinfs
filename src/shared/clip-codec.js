@@ -50,11 +50,12 @@
 const CODEC_CANDIDATES = ['vp09.00.10.08', 'vp8'];
 
 /**
- * Silence that makes a running job stalled. The worker reports progress
- * every 250 ms at most while the codec moves; the slowest legitimate gap
- * measured is the encoder's start-up before its first output (under 2 s at
- * 4K on the Mac), so 15 s leaves a wide margin on slow PCs while a stalled
- * open still ends in seconds, not never.
+ * Silence that makes a running job stalled. The worker reports progress at
+ * most every 250 ms while the codec moves. Measured on a Mac M3 (Chrome
+ * 157, 300 x 1080p and 60 x 4K VP9, hardware and software): the first
+ * report came 20-50 ms after the job started and the longest gap between
+ * reports was 265 ms. 15 s is about 60 times that, a wide margin for slow
+ * PCs, while a stalled open still ends in seconds instead of never.
  */
 export const CODEC_STALL_MS = 15_000;
 

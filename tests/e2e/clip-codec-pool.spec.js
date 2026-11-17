@@ -22,8 +22,9 @@ const SHIM = `
   const Real = self.VideoDecoder;
   const POOL = ${POOL};
   let maxHeld = 0;
-  self.VideoDecoder = class {
+  self.VideoDecoder = class extends EventTarget {
     constructor(init) {
+      super();
       this.held = 0;
       this.buffered = [];
       this.flushWaiters = [];
@@ -32,6 +33,7 @@ const SHIM = `
         output: (frame) => { this.buffered.push(frame); this.pump(); },
         error: init.error,
       });
+      this.real.addEventListener('dequeue', () => this.dispatchEvent(new Event('dequeue')));
     }
     pump() {
       while (this.buffered.length && this.held < POOL) {
