@@ -411,12 +411,13 @@ describe('getObjectsToTrack (export with tracked objects)', () => {
   });
 
   it('tracks again after eviction drops a finished run’s masks and marks', () => {
-    // Room for the object's masks, then a base-model group evicts them
-    const store = createMaskStore({ capBytes: 40 });
+    // Room for the object's masks, then another fix-up's group evicts them
+    // (fix-ups have their own budget, cutout-ux 5)
+    const store = createMaskStore({ capBytes: 40, objectCapBytes: 40 });
     finishRun(store, whole, [0, 1, 2]);
     expect(getObjectsToTrack(frames, range, [whole], store)).toEqual([]);
     for (const frame of frames) {
-      store.set(`general:${frame.id}`, mask(), 'clip', 'general');
+      store.set(`object:o9:${frame.id}`, mask(), 'clip', 'object:o9');
     }
     expect(store.has('object:o1:f0')).toBe(false);
     expect(store.getMark('object:o1:f3')).toBeUndefined();

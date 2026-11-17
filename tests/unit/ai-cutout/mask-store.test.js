@@ -224,11 +224,11 @@ describe('mask provenance (tags and unreachable marks)', () => {
   });
 
   it('drops marks with their group on eviction, deleteClip and clear', () => {
-    const store = createMaskStore({ capBytes: 10 });
+    const store = createMaskStore({ capBytes: 10, objectCapBytes: 10 });
     store.set('object:o1:a', mask(4), 'clip', 'object:o1', 't');
     store.mark('object:o1:b', 't', 'clip', 'object:o1');
-    // Another group over the cap evicts the object's group, marks too
-    store.set('general:a', mask(8), 'clip', 'general');
+    // Another fix-up's group over the cap evicts the object's group, marks too
+    store.set('object:o9:a', mask(8), 'clip', 'object:o9');
     expect(store.has('object:o1:a')).toBe(false);
     expect(store.getMark('object:o1:b')).toBeUndefined();
 
@@ -238,5 +238,38 @@ describe('mask provenance (tags and unreachable marks)', () => {
     store.mark('object:o3:a', 't', 'clip', 'object:o3');
     store.clear();
     expect(store.getMark('object:o3:a')).toBeUndefined();
+  });
+});
+
+describe('fix-up masks have their own budget; retag (cutout-ux 5)', () => {
+  /** @param {number} n */
+  const m = (n) => ({ data: new Uint8Array(n), width: n, height: 1 });
+
+  it('a fix-up never evicts a base mask, a base mask never evicts a fix-up', () => {
+    const store = createMaskStore({ capBytes: 10, objectCapBytes: 10 });
+    store.set('anime:a', m(8), 'clip', 'anime');
+    store.set('object:o1:a', m(8), 'clip', 'object:o1');
+    expect(store.has('anime:a')).toBe(true);
+    store.set('object:o2:a', m(8), 'clip', 'object:o2');
+    expect(store.has('object:o1:a')).toBe(false);
+    expect(store.has('anime:a')).toBe(true);
+    store.set('general:a', m(8), 'clip', 'general');
+    expect(store.has('anime:a')).toBe(false);
+    expect(store.has('object:o2:a')).toBe(true);
+  });
+
+  it('retags masks and marks of one tag, once', () => {
+    const store = createMaskStore();
+    store.set('object:o1:a', m(2), 'clip', 'object:o1', 'old');
+    store.set('object:o1:b', m(2), 'clip', 'object:o1', 'other');
+    store.mark('object:o1:c', 'old', 'clip', 'object:o1');
+    const v = store.version;
+    expect(
+      store.retag(['object:o1:a', 'object:o1:b', 'object:o1:c', 'object:o1:x'], 'old', 'new'),
+    ).toBe(2);
+    expect(store.getTag('object:o1:a')).toBe('new');
+    expect(store.getTag('object:o1:b')).toBe('other');
+    expect(store.getMark('object:o1:c')).toBe('new');
+    expect(store.version).toBe(v + 1);
   });
 });

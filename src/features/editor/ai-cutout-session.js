@@ -359,7 +359,11 @@ export function createAiCutoutSession(options) {
    */
   const requestStoreBuild = () => {
     if (disposed) return;
-    if (analysisController && cooldownTimer !== null) {
+    // A tracked fix-up adds a mask every few frames too: without the
+    // cooldown every store change rebuilt the whole clip on the main thread
+    // (129 builds while one fix-up was tracked through 286 frames, tracking
+    // at 1.4 frames/s with three fix-ups while the GPU idled at 5 %)
+    if ((analysisController || objectController) && cooldownTimer !== null) {
       buildAfterCooldown = true;
       return;
     }
@@ -422,7 +426,7 @@ export function createAiCutoutSession(options) {
     buildKey = key;
     rebuildAfterBuild = false;
     startBuildingStatus();
-    if (analysisController) startCooldown();
+    if (analysisController || objectController) startCooldown();
     buildClipMaskSource({ frames, ai, maskStore, clipId, cache, signal: controller.signal }).then(
       (source) => {
         if (buildController !== controller) return;

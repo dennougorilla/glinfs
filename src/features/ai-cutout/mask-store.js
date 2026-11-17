@@ -17,8 +17,20 @@
 
 /** @typedef {import('./preprocess.js').ProbabilityMask} ProbabilityMask */
 
-/** Default memory cap for all stored masks */
+/** Default memory cap for the base models' masks */
 export const MASK_STORE_CAP_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Memory cap of the tracked fix-ups' masks (groups whose model starts with
+ * OBJECT_GROUP_PREFIX), apart from the base masks: a fix-up never evicts a
+ * base mask (which would make the clip analyze again), only another
+ * fix-up's. 300 frames of a fix-up at 256 px long side take 11-16 MB, so
+ * this holds 8 fix-ups of a 300-frame clip.
+ */
+export const OBJECT_MASK_CAP_BYTES = 128 * 1024 * 1024;
+
+/** Groups of tracked fix-ups' masks (see objectMaskGroup) */
+export const OBJECT_GROUP_PREFIX = 'object:';
 
 /** Clip id used when a caller does not name one */
 export const DEFAULT_CLIP_ID = '';
@@ -43,6 +55,9 @@ export const DEFAULT_CLIP_ID = '';
  *   maskless entry in the group: `tag` tried this frame and could not make a
  *   mask (dropped with the group, like its masks; a mask set at `key` replaces it)
  * @property {(key: string) => string | undefined} getMark
+ * @property {(keys: Iterable<string>, from: string, to: string) => number} retag - Give the
+ *   masks and marks at `keys` that carry tag `from` the tag `to` (unchanged
+ *   pixels; one change event); returns how many
  * @property {(key: string) => boolean} delete - The mask and the mark at `key`
  * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip (all models); returns how many
  * @property {(clipId: string, model?: string) => void} touchClip - Mark a clip's masks of one
@@ -67,7 +82,10 @@ export const DEFAULT_CLIP_ID = '';
  * @param {{ capBytes?: number }} [options]
  * @returns {MaskStore}
  */
-export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
+export function createMaskStore({
+  capBytes = MASK_STORE_CAP_BYTES,
+  objectCapBytes = OBJECT_MASK_CAP_BYTES,
+} = {}) {
   /** @type {Map<string, { mask: ProbabilityMask, group: string, tag: string }>} */
   const entries = new Map();
   /** @type {Map<string, { group: string, tag: string }>} key -> mark (no mask) */
@@ -81,7 +99,12 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
   let version = 0;
   let byteLength = 0;
+  /** Bytes of the fix-ups' groups (inside byteLength too) */
+  let objectBytes = 0;
   let tick = 0;
+
+  /** @param {string} id - A group id: one of a tracked fix-up's masks */
+  const isObjectGroup = (id) => (groups.get(id)?.model ?? '').startsWith(OBJECT_GROUP_PREFIX);
 
   /**
    * @param {string} clipId
@@ -124,6 +147,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     if (!entry) return false;
     entries.delete(key);
     byteLength -= entry.mask.data.byteLength;
+    if (isObjectGroup(entry.group)) objectBytes -= entry.mask.data.byteLength;
     groups.get(entry.group)?.keys.delete(key);
     dropIfEmpty(entry.group);
     return true;
@@ -190,11 +214,16 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
    * @param {string} keepGroup
    */
   function evictOverCap(keepGroup) {
-    while (byteLength > capBytes) {
+    // Fix-ups and base masks each stay under their own cap, evicting only
+    // their own kind
+    const objects = isObjectGroup(keepGroup);
+    const over = () =>
+      objects ? objectBytes > objectCapBytes : byteLength - objectBytes > capBytes;
+    while (over()) {
       let victim = null;
       let oldest = Number.POSITIVE_INFINITY;
       for (const [id, used] of lastUsed) {
-        if (id !== keepGroup && used < oldest) {
+        if (id !== keepGroup && isObjectGroup(id) === objects && used < oldest) {
           oldest = used;
           victim = id;
         }
@@ -234,6 +263,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       const { id, group } = ensureGroup(clipId, model);
       entries.set(key, { mask, group: id, tag });
       byteLength += mask.data.byteLength;
+      if (isObjectGroup(id)) objectBytes += mask.data.byteLength;
       group.keys.add(key);
       touch(id);
       changed({ type: 'set', key, clipId });
@@ -256,6 +286,24 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
     getMark(key) {
       return marks.get(key)?.tag;
+    },
+
+    retag(keys, from, to) {
+      let n = 0;
+      for (const key of keys) {
+        const entry = entries.get(key);
+        if (entry && entry.tag === from) {
+          entry.tag = to;
+          n++;
+        }
+        const mark = marks.get(key);
+        if (mark && mark.tag === from) {
+          mark.tag = to;
+          n++;
+        }
+      }
+      if (n > 0) changed({ type: 'set' });
+      return n;
     },
 
     delete(key) {
@@ -300,6 +348,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       groups.clear();
       lastUsed.clear();
       byteLength = 0;
+      objectBytes = 0;
       changed({ type: 'clear' });
     },
 
