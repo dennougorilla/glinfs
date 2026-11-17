@@ -127,6 +127,9 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
   let decoderConfig = null;
   const progress = progressReporter(jobId);
 
+  /** @type {VideoEncoder | null} */
+  let encoder = null;
+
   try {
     /** @type {(reason: Error) => void} */
     let failEncode = () => {};
@@ -137,7 +140,7 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
     // an unconsumed encoderFailed would surface as an unhandled rejection.
     encoderFailed.catch(() => {});
 
-    const encoder = new VideoEncoder({
+    encoder = new VideoEncoder({
       output: (chunk, metadata) => {
         progress();
         const data = new ArrayBuffer(chunk.byteLength);
@@ -204,6 +207,12 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
       transfer,
     );
   } catch (err) {
+    // Stop the encoder first: its frames go back to the main thread below
+    try {
+      encoder?.close();
+    } catch {
+      // Already closed (an encoder error closes it)
+    }
     // Failure: hand every surviving frame BACK to the main thread so the
     // queue entry can stay raw instead of losing the clip.
     const message = err instanceof Error ? err.message : 'Encode failed';
@@ -232,27 +241,54 @@ async function handleDecode({ jobId, chunks, config }) {
   /** @type {Promise<void>[]} */
   const copies = [];
   const progress = progressReporter(jobId);
+  /** @type {VideoDecoder | null} */
+  let decoder = null;
+  /**
+   * Set at the first failure (a decoder error, a frame copy that fails, a
+   * throwing call): from then on the decoder is closed and every frame,
+   * the decoder's or a finished copy, is closed as soon as it shows up
+   */
+  let failed = false;
+
+  /** @type {(reason: Error) => void} */
+  let rejectFailed = () => {};
+  const decoderFailed = new Promise((_resolve, reject) => {
+    rejectFailed = reject;
+  });
+  decoderFailed.catch(() => {});
+
+  /** @param {unknown} err */
+  const fail = (err) => {
+    if (failed) return;
+    failed = true;
+    // Stop the decoder first, so it emits nothing after the cleanup
+    try {
+      decoder?.close();
+    } catch {
+      // Already closed (a decoder error closes it)
+    }
+    for (const frame of frames.splice(0)) closeSafe(frame);
+    rejectFailed(err instanceof Error ? err : new Error(String(err)));
+  };
 
   try {
-    /** @type {(reason: Error) => void} */
-    let failDecode = () => {};
-    const decoderFailed = new Promise((_resolve, reject) => {
-      failDecode = reject;
-    });
-    decoderFailed.catch(() => {});
-
-    const decoder = new VideoDecoder({
+    decoder = new VideoDecoder({
       output: (frame) => {
-        const copy = ownedCopy(frame).then(
-          (owned) => {
-            frames.push(owned);
-            progress();
-          },
-          (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
-        );
+        if (failed) {
+          closeSafe(frame);
+          return;
+        }
+        const copy = ownedCopy(frame).then((owned) => {
+          if (failed) {
+            closeSafe(owned);
+            return;
+          }
+          frames.push(owned);
+          progress();
+        }, fail);
         copies.push(copy);
       },
-      error: (err) => failDecode(err instanceof Error ? err : new Error(String(err))),
+      error: fail,
     });
     // 'dequeue' events exist where the codec is an EventTarget (Chrome 106+);
     // outputs report progress either way
@@ -273,7 +309,10 @@ async function handleDecode({ jobId, chunks, config }) {
     }
 
     await Promise.race([decoder.flush(), decoderFailed]);
+    // Every output has a copy registered by now (flush resolves after the
+    // last output callback); wait for them
     await Promise.race([Promise.all(copies), decoderFailed]);
+    if (failed) await decoderFailed;
     decoder.close();
 
     // Presentation order (all-progressive input should already be ordered,
@@ -282,12 +321,9 @@ async function handleDecode({ jobId, chunks, config }) {
 
     self.postMessage({ type: 'DECODE_RESULT', payload: { jobId, frames } }, frames);
   } catch (err) {
-    // The main thread never owned these frames — close them here, also
-    // the copies still in flight when the decode failed
-    for (const frame of frames) closeSafe(frame);
-    void Promise.allSettled(copies).then(() => {
-      for (const frame of frames) closeSafe(frame);
-    });
+    // The main thread never owned these frames: fail() closes the decoder,
+    // the frames copied so far, and every frame that arrives later
+    fail(err);
     const message = err instanceof Error ? err.message : 'Decode failed';
     self.postMessage({ type: 'JOB_ERROR', payload: { jobId, message } });
   }

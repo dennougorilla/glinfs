@@ -511,3 +511,22 @@ describe('stall watchdog (a job that stops making progress)', () => {
     expect(workers[0].terminate).not.toHaveBeenCalled();
   });
 });
+
+describe('replies for jobs that already settled', () => {
+  it('closes the frames of a decode result that arrives after the job stalled', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: vi.fn(async () => ({ supported: true })) });
+    const worker = createFakeWorker();
+    const manager = createClipCodecManager({ createWorker: () => worker, stallMs: 1000 });
+    await manager.probeSupport();
+    const job = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    const { jobId } = worker.posted[0].message.payload;
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(job).resolves.toEqual({ ok: false, error: 'stalled' });
+
+    const late = [{ close: vi.fn() }, { close: vi.fn() }];
+    worker.emit({ type: 'DECODE_RESULT', payload: { jobId, frames: late } });
+    for (const frame of late) expect(frame.close).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+});

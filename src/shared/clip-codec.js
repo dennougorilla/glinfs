@@ -422,6 +422,22 @@ export class ClipCodecManager {
    */
   #handleWorkerMessage(e) {
     const { type, payload } = e.data;
+    if (
+      (type === 'DECODE_RESULT' || type === 'JOB_ERROR') &&
+      Array.isArray(payload?.frames) &&
+      !this.#jobs.has(payload.jobId)
+    ) {
+      // A reply for a job already settled (stalled, terminated): nobody
+      // will take its frames, so they end here
+      for (const frame of payload.frames) {
+        try {
+          frame.close();
+        } catch {
+          // Already closed
+        }
+      }
+      return;
+    }
     switch (type) {
       case 'JOB_PROGRESS':
         if (payload?.jobId === this.#activeJobId) this.#arm();
