@@ -26,7 +26,6 @@ import {
   setAiObjectTolerance,
   setAiParams,
   setAiPickTool,
-  setAiRemoveScope,
   setBackgroundMethod,
   setBrush,
   setPickingKeyColor,
