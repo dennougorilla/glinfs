@@ -63,7 +63,6 @@
 
   /* Recording — the magenta plate, pushed toward red */
   --color-recording: #ff3d71;
-  --color-recording-glow: rgba(255, 61, 113, 0.4);
 
   /* Success / Export complete */
   --color-success: #3ee0a1;
