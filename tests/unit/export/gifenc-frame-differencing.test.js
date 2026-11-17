@@ -233,6 +233,71 @@ describe('gifenc frame differencing', () => {
     expect(differing).toBe(0);
   });
 
+  it('differences a static stretch again soon after video-like frames (review case)', () => {
+    // 12 noisy frames, then 150 frames of a static background with a moving block
+    const width = 160;
+    const height = 90;
+    const r = rng(5);
+    /** @param {number} f */
+    const video = (f) => {
+      const px = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const n = (r() - 0.5) * 20;
+          px[i] = ((x + f * 3) % 256) + n;
+          px[i + 1] = ((y * 2 + f) % 256) + n;
+          px[i + 2] = ((x + y + f * 5) % 256) + n;
+          px[i + 3] = 255;
+        }
+      }
+      return px;
+    };
+    /** @param {number} f */
+    const still = (f) => {
+      const px = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const block = Math.abs(x - 20 - (f % 60) * 4) < 10 && Math.abs(y - 50) < 10;
+          px.set(block ? [255, 0, 0, 255] : [(x >> 5) * 30, (y >> 5) * 40, 200, 255], i);
+        }
+      }
+      return px;
+    };
+    const frames = [
+      ...Array.from({ length: 12 }, (_, f) => video(f)),
+      ...Array.from({ length: 150 }, (_, f) => still(f)),
+    ];
+    /** @param {boolean} frameDifferencing */
+    const run = (frameDifferencing) => {
+      const encoder = createGifencEncoder();
+      encoder.init({
+        width,
+        height,
+        maxColors: 64,
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb565',
+        paletteInterval: 1,
+        frameDifferencing,
+      });
+      for (const [f, rgba] of frames.entries()) encoder.addFrame({ rgba, width, height }, f);
+      return encoder.finish();
+    };
+    const plain = run(false);
+    const differenced = run(true);
+    const whole = readGifStructure(differenced)
+      .frames.slice(12)
+      .filter((f) => !f.transparent).length;
+    process.stderr.write(
+      `[noise12+static150] plain ${plain.length} B, differenced ${differenced.length} B, ${whole} of 150 static frames whole\n`,
+    );
+
+    // Within about two trial periods of the cut, not ~136 frames later
+    expect(whole).toBeLessThanOrEqual(2 * FRAME_DIFFERENCING.trialEvery);
+  });
+
   it('is off for transparent exports, which clear pixels with dispose 2', () => {
     /** @param {number} f */
     const cutout = (f) => {
