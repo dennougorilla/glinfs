@@ -9,9 +9,9 @@ import {
   createDefaultEdits,
   createLayerId,
   createTextLayer,
-  DEFAULT_OBJECT_CANDIDATE,
   DEFAULT_TOUCH_UP_RADIUS,
   EDIT_LIMITS,
+  getDefaultObjectCandidate,
   normalizeEdits,
   OBJECT_CANDIDATES,
   OBJECT_SCOPES,
@@ -555,7 +555,7 @@ export function clearAiPicks(state) {
  * Add a tracked object selected by a click or a box (ignored once
  * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
  * a tool adds another fix-up. It keeps the largest of the tracker's answers
- * on its frame (DEFAULT_OBJECT_CANDIDATE); the user steps through the
+ * on its frame that getDefaultObjectCandidate picks; the user steps through the
  * others (setAiObjectCandidate). A click with Remove is Colour when Colour
  * was chosen last for a Remove fix-up (state.aiRemoveScope); a box never
  * is (Colour needs points).
@@ -577,7 +577,7 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
       mode === 'remove' && selection.click && !selection.box && state.aiRemoveScope === 'colour'
         ? 'colour'
         : 'whole',
-    candidate: DEFAULT_OBJECT_CANDIDATE,
+    candidate: getDefaultObjectCandidate(mode, selection),
     tolerance: COLOUR_TOLERANCE.default,
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
