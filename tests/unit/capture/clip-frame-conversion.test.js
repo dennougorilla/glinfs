@@ -133,3 +133,39 @@ describe('convertBitmapFramesToVideoFrames', () => {
     expect(validAfter.bitmap.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('convertBitmapFramesToVideoFrames: a source switch mid-share (feedback 2026-11-17)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('VideoFrame', MockVideoFrame);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the frames of the newest source only: one clip, one frame size', () => {
+    // Sharing switched from an 800x600 source to a 600x900 one: the editor
+    // and the export size every frame by the first, so a mixed clip came out
+    // cropped with a stale strip
+    const before = [1, 2, 3].map(() => createFrameItem({ width: 800, height: 600 }));
+    const after = [1, 2].map(() => createFrameItem({ width: 600, height: 900 }));
+
+    const result = convertBitmapFramesToVideoFrames([...before, ...after]);
+
+    expect(result.map((f) => `${f.width}x${f.height}`)).toEqual(['600x900', '600x900']);
+    expect(result.map((f) => f.id)).toEqual(after.map((item) => item.id));
+    // Every bitmap is released, the dropped ones included
+    for (const item of [...before, ...after]) expect(item.bitmap.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('a single frame-size blip in the middle ends the older run as well', () => {
+    const items = [
+      createFrameItem({ width: 800, height: 600 }),
+      createFrameItem({ width: 640, height: 480 }),
+      createFrameItem({ width: 800, height: 600 }),
+      createFrameItem({ width: 800, height: 600 }),
+    ];
+    const result = convertBitmapFramesToVideoFrames(items);
+    expect(result.map((f) => f.id)).toEqual([items[2].id, items[3].id]);
+  });
+});
