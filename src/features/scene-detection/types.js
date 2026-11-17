@@ -35,7 +35,6 @@
 /**
  * Detector configuration options
  * @typedef {Object} DetectorOptions
- * @property {number} threshold - Change detection threshold (0-1), higher = less sensitive
  * @property {number} minSceneDuration - Minimum scene duration in frames
  * @property {number} sampleInterval - Frame sampling interval (1 = every frame, 3 = every 3rd frame)
  * @property {(progress: DetectionProgress) => void} [onProgress] - Progress callback
@@ -46,7 +45,6 @@
  * @type {DetectorOptions}
  */
 export const DEFAULT_DETECTOR_OPTIONS = {
-  threshold: 0.3,
   minSceneDuration: 5,
   sampleInterval: 1,
   onProgress: undefined,

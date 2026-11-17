@@ -99,7 +99,6 @@ describe('loading feature production lifecycle', () => {
     expect(manager.detect).toHaveBeenCalledWith(
       payload.frames,
       expect.objectContaining({
-        threshold: 0.3,
         minSceneDuration: 5,
         sampleInterval: 1,
         onProgress: expect.any(Function),

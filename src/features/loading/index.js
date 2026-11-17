@@ -82,7 +82,6 @@ async function runSceneDetection(container, clipPayload, session) {
     await session.manager.init();
 
     const result = await session.manager.detect(clipPayload.frames, {
-      threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {
