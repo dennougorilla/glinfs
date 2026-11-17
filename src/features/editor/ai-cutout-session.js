@@ -73,6 +73,7 @@ import {
   getAiModelId,
   getBuildParamsKey,
   getClipProbSource,
+  getObjectCoverage,
   getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
@@ -215,6 +216,31 @@ export function createAiCutoutSession(options) {
     if (!disposed) setStatus(patch);
   };
 
+  /** Coverage of the tracked fix-ups last reported (skip identical reports) */
+  let coverageKey = '';
+
+  /**
+   * Report how far each tracked fix-up reaches through the selection (the
+   * chips' rings and the status line read it)
+   */
+  const reportCoverage = () => {
+    if (disposed) return;
+    const state = getState();
+    const frames = state?.clip?.frames;
+    if (!state || !frames) return;
+    const objects = state.edits?.background?.ai?.objects ?? [];
+    const range = state.selectedRange ?? { start: 0, end: frames.length - 1 };
+    const { perObject, short } = getObjectCoverage(frames, range, objects, {
+      maskStore,
+    });
+    const key = `${short}|${Object.entries(perObject)
+      .map(([id, c]) => `${id}:${c.covered}/${c.selection}`)
+      .join(',')}`;
+    if (key === coverageKey) return;
+    coverageKey = key;
+    report({ objectCoverage: perObject, objectShort: short });
+  };
+
   /** @param {MaskSource} source */
   const publish = (source) => {
     if (disposed || source === maskSource) return;
@@ -336,6 +362,7 @@ export function createAiCutoutSession(options) {
    */
   const requestBuild = () => {
     if (disposed) return;
+    reportCoverage();
     const state = getState();
     if (!state?.clip || !isAiCutoutActive(state.edits.background)) {
       abortBuild();
@@ -407,6 +434,7 @@ export function createAiCutoutSession(options) {
       storeTimer = null;
       if (disposed) return;
       onMasksChanged?.();
+      reportCoverage();
       requestStoreBuild();
     }, STORE_REBUILD_DELAY_MS);
   });
@@ -727,6 +755,47 @@ export function createAiCutoutSession(options) {
     manager.dropObjectSeeds?.(id);
   };
 
+  /**
+   * Publish a draft of the current parameters and masks at once (the frame
+   * on screen is computed when drawn), then the whole-clip build. A build in
+   * flight started before the new masks: it is dropped, so it cannot
+   * replace the draft with older masks.
+   */
+  const showDraftNow = () => {
+    if (disposed) return;
+    const state = getState();
+    if (!state?.clip || !isAiCutoutActive(state.edits.background)) return;
+    abortBuild();
+    clearCooldown();
+    publish(
+      createClipDraftMaskSource({
+        frames: state.clip.frames,
+        ai: state.edits.background.ai,
+        maskStore,
+        base: fullSource,
+      }),
+    );
+    requestBuild();
+  };
+
+  /**
+   * Prepare the tracker (MobileSAM) ahead of the first tracked fix-up, e.g.
+   * when Keep or Remove is turned on: only when it is downloaded already
+   * (never a download), and not while another model is busy
+   * @returns {Promise<boolean>} Its session is ready
+   */
+  const preloadTracker = async () => {
+    if (disposed) return false;
+    if (manager.getReadyInfo?.('click')) return true;
+    if (!(await isModelCached('click').catch(() => false))) return false;
+    if (disposed) return false;
+    const ready =
+      (await manager.preloadModel?.('click', { allowWasm: isWasmAllowed() }).catch(() => false)) ??
+      false;
+    void refreshModels();
+    return ready;
+  };
+
   /** Track the next queued object that still exists (one at a time) */
   const runNextObject = async () => {
     if (disposed || objectController) return;
@@ -766,10 +835,11 @@ export function createAiCutoutSession(options) {
         onProgress: (progress) => {
           if (disposed || objectController !== controller) return;
           if (!firstMaskShown && progress.framesDone > 0) {
-            // The clicked frame's object: show it now
+            // The clicked frame's object: show it now, from a draft that
+            // computes only the frames drawn (a few ms), not after a
+            // whole-clip build; the full build follows
             firstMaskShown = true;
-            clearCooldown();
-            requestBuild();
+            showDraftNow();
           }
           report({
             objectTracking: {
@@ -811,6 +881,7 @@ export function createAiCutoutSession(options) {
       }
       clearCooldown();
       requestBuild();
+      reportCoverage();
       void refreshModels();
       if (!disposed) {
         if (objectQueue.length > 0) {
@@ -904,6 +975,7 @@ export function createAiCutoutSession(options) {
     clearClickMasks,
     syncObjects,
     preload,
+    preloadTracker,
     refreshModels,
     requestBuild,
 

@@ -749,6 +749,7 @@ export function initEditor() {
     }
     if (frameChanged || editsChanged || aiChanged || pickToolChanged) {
       updateAiPreviewNote(container, state);
+      updateAiPulse(container, state);
     }
 
     if (frameChanged) {
@@ -1178,6 +1179,88 @@ function updateAiPreviewNote(container, state) {
   }
   if (note.textContent !== text) note.textContent = text;
   note.hidden = text === '';
+}
+
+/**
+ * A Keep / Remove click or box that is waiting for its answer on the
+ * clicked frame: it pulses on the preview until that frame's answer lands
+ * (see updateAiPulse)
+ * @type {{ objectId: string, frame: number, click?: { x: number, y: number }, box?: { x0: number, y0: number, x1: number, y1: number }, since: number } | null}
+ */
+let pendingPulse = null;
+
+/** A pulse ends after this long even if no answer came (a failed run) */
+const PULSE_MAX_MS = 60_000;
+
+/**
+ * @param {string} objectId
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
+ */
+function startPulse(objectId, selection) {
+  const frame = selection.box?.frame ?? selection.click?.frame;
+  if (frame === undefined) return;
+  pendingPulse = {
+    objectId,
+    frame,
+    ...(selection.box ? { box: selection.box } : {}),
+    ...(selection.click ? { click: { x: selection.click.x, y: selection.click.y } } : {}),
+    since: performance.now(),
+  };
+  const container = document.querySelector('.editor-screen');
+  if (container && store) updateAiPulse(container, store.getState());
+}
+
+/**
+ * Show the pulse of the click or box waiting for its answer, over the
+ * preview at the clicked spot; hide it once the clicked frame's answer
+ * landed (its tracking reported a frame), the run ended, or on another frame
+ * @param {ParentNode} container
+ * @param {import('./types.js').EditorState} state
+ */
+function updateAiPulse(container, state) {
+  const canvasContainer = container.querySelector('.editor-canvas-container');
+  if (!(canvasContainer instanceof HTMLElement)) return;
+  let pulse = canvasContainer.querySelector('.editor-cutout-pulse');
+  const pending = pendingPulse;
+  if (pending) {
+    const tracking = state.aiCutout.objectTracking;
+    const answered = tracking?.id === pending.objectId && tracking.framesDone > 0;
+    const object = state.edits.background.ai.objects?.find((o) => o.id === pending.objectId);
+    const ended =
+      !object ||
+      (tracking?.id !== pending.objectId && performance.now() - pending.since > 1500) ||
+      performance.now() - pending.since > PULSE_MAX_MS;
+    if (answered || ended) pendingPulse = null;
+  }
+  const show = pendingPulse && pendingPulse.frame === state.currentFrame && overlayCanvas;
+  if (!show) {
+    if (pulse instanceof HTMLElement) pulse.hidden = true;
+    return;
+  }
+  const p = /** @type {NonNullable<typeof pendingPulse>} */ (pendingPulse);
+  if (!(pulse instanceof HTMLElement)) {
+    pulse = document.createElement('div');
+    pulse.setAttribute('aria-hidden', 'true');
+    canvasContainer.appendChild(pulse);
+  }
+  const el = /** @type {HTMLElement} */ (pulse);
+  const c = canvasContainer.getBoundingClientRect();
+  const r = /** @type {HTMLCanvasElement} */ (overlayCanvas).getBoundingClientRect();
+  const left = r.left - c.left;
+  const top = r.top - c.top;
+  el.className = `editor-cutout-pulse${p.box ? ' editor-cutout-pulse--box' : ''}`;
+  if (p.box) {
+    el.style.left = `${left + p.box.x0 * r.width}px`;
+    el.style.top = `${top + p.box.y0 * r.height}px`;
+    el.style.width = `${(p.box.x1 - p.box.x0) * r.width}px`;
+    el.style.height = `${(p.box.y1 - p.box.y0) * r.height}px`;
+  } else if (p.click) {
+    el.style.left = `${left + p.click.x * r.width}px`;
+    el.style.top = `${top + p.click.y * r.height}px`;
+    el.style.width = '';
+    el.style.height = '';
+  }
+  el.hidden = false;
 }
 
 /**
@@ -1976,6 +2059,11 @@ function handleResetBackground() {
 function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
   store.setState((state) => setAiPickTool(state, tool));
+  // A click may become a tracked fix-up: have the tracker ready by then
+  // (only when it is downloaded already; it never downloads here)
+  if (tool && getAiModelId(store.getState().edits.background.ai) !== 'click') {
+    void aiSession?.preloadTracker();
+  }
   if (tool && options.fromKeyboard && overlayCanvas) {
     setOverlayPickMode(overlayCanvas, true);
     overlayCanvas.focus();
@@ -2215,6 +2303,7 @@ function addObjectFixUp(mode, selection) {
   }
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
   const added = store.getState().edits.background.ai.objects?.at(-1);
+  if (added && !isColourObject(added)) startPulse(added.id, selection);
   announce(
     added && isColourObject(added)
       ? 'Removed by colour on every frame. Select its chip to add points or Alt-click what to keep.'
@@ -2245,6 +2334,7 @@ function handleObjectCorrection(object, correction) {
       return;
     }
     store.setState((s) => addAiObjectBox(s, object.id, box));
+    startPulse(object.id, { box });
     announce('Box added. Tracking again.');
     return;
   }
@@ -2258,6 +2348,9 @@ function handleObjectCorrection(object, correction) {
   store.setState((s) =>
     addAiObjectClick(s, object.id, { frame: s.currentFrame, x: point.x, y: point.y, mode }),
   );
+  if (!isColourObject(object)) {
+    startPulse(object.id, { click: { frame: state.currentFrame, x: point.x, y: point.y } });
+  }
   announce(mode === 'keep' ? 'Point added. Tracking again.' : 'Point taken away. Tracking again.');
 }
 

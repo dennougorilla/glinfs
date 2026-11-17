@@ -629,10 +629,12 @@ export function getLostFramesText(lostFrames, fps) {
 
 /**
  * The AI status line (the fixed slot above the adjustments)
- * @param {{ running: boolean, pending: number, analyzed: number, total: number, status: import('../types.js').AiCutoutStatus }} info
+ * @param {{ running: boolean, pending: number, analyzed: number, total: number, short?: number, status: import('../types.js').AiCutoutStatus }} info
+ *   short: analyzed frames that a tracked fix-up does not reach (they are
+ *   not done: the line never says every frame is when one stopped short)
  * @returns {{ kind: 'running' | 'pending' | 'done' | 'empty', text: string }}
  */
-export function describeAiStatus({ running, pending, analyzed, total, status }) {
+export function describeAiStatus({ running, pending, analyzed, total, short = 0, status }) {
   if (running) {
     if (status.phase === 'analyzing') {
       return {
@@ -646,6 +648,12 @@ export function describeAiStatus({ running, pending, analyzed, total, status }) 
     return {
       kind: 'pending',
       text: `${pending} frame${pending === 1 ? '' : 's'} not analyzed`,
+    };
+  }
+  if (total > 0 && analyzed > 0 && short > 0) {
+    return {
+      kind: 'pending',
+      text: `${Math.max(0, analyzed - short)} of ${total} frames analyzed`,
     };
   }
   if (total > 0 && analyzed > 0) {
@@ -1513,6 +1521,84 @@ function setHidden(el, hidden) {
 }
 
 /**
+ * @typedef {Object} FixUpProgress
+ * @property {'colour' | 'waiting' | 'starting' | 'tracking' | 'done' | 'short'} state -
+ *   colour: not tracked; waiting: queued or not tracked yet; starting: the
+ *   tracker loads; tracking: frames being tracked; done: every selection
+ *   frame has its mask; short: its last run left frames without one
+ * @property {number} fraction - 0..1, how much of the selection it covers
+ * @property {number} missing - Selection frames without its mask (short)
+ */
+
+/**
+ * What a tracked fix-up's chip shows: a ring that fills while its frames
+ * are tracked, full when every frame has its mask, amber with the count of
+ * frames it does not reach when tracking stopped short of some
+ * @param {CutoutObject} object
+ * @param {import('../types.js').AiCutoutStatus | null | undefined} status
+ * @returns {FixUpProgress}
+ */
+export function getFixUpProgress(object, status) {
+  if (object.scope === 'colour' && object.mode === 'remove') {
+    return { state: 'colour', fraction: 1, missing: 0 };
+  }
+  const tracking = status?.objectTracking;
+  if (tracking?.id === object.id) {
+    if (tracking.phase === 'analyzing' && tracking.framesTotal > 0) {
+      return {
+        state: 'tracking',
+        fraction: Math.min(1, tracking.framesDone / tracking.framesTotal),
+        missing: 0,
+      };
+    }
+    return { state: 'starting', fraction: 0, missing: 0 };
+  }
+  const coverage = status?.objectCoverage?.[object.id];
+  if (!coverage || coverage.selection === 0) return { state: 'waiting', fraction: 0, missing: 0 };
+  const fraction = coverage.covered / coverage.selection;
+  if (coverage.covered >= coverage.selection) return { state: 'done', fraction: 1, missing: 0 };
+  // Short only once a run of these prompts finished (it reported its lost
+  // frames); before that the fix-up is waiting for its run
+  if (!status?.objectLost || !(object.id in status.objectLost)) {
+    return { state: 'waiting', fraction, missing: 0 };
+  }
+  return { state: 'short', fraction, missing: coverage.selection - coverage.covered };
+}
+
+/**
+ * Patch the tracked fix-ups' chips in place with their progress (the list
+ * itself is rebuilt only when the fix-ups change)
+ * @param {HTMLElement} list
+ * @param {CutoutObject[]} objects
+ * @param {import('../types.js').AiCutoutStatus | null | undefined} status
+ */
+function updateFixUpProgress(list, objects, status) {
+  /** @type {Map<string, Element>} */
+  const items = new Map();
+  for (const li of list.children) {
+    const id = /** @type {HTMLElement} */ (li).dataset.objectId;
+    if (id) items.set(id, li);
+  }
+  for (const object of objects) {
+    const item = items.get(object.id);
+    const swatch = item?.querySelector('.editor-cutout-pick-swatch');
+    if (!(swatch instanceof HTMLElement) || !(item instanceof HTMLElement)) continue;
+    const progress = getFixUpProgress(object, status);
+    if (item.dataset.progress !== progress.state) item.dataset.progress = progress.state;
+    const value = progress.fraction.toFixed(3);
+    if (swatch.style.getPropertyValue('--progress') !== value) {
+      swatch.style.setProperty('--progress', value);
+    }
+    const count = item.querySelector('.editor-cutout-pick-missing');
+    const text = progress.state === 'short' ? String(progress.missing) : '';
+    if (count instanceof HTMLElement && count.textContent !== text) {
+      count.textContent = text;
+      count.hidden = text === '';
+    }
+  }
+}
+
+/**
  * Rebuild the fix-up list: the picks, then the tracked fix-ups with their
  * colour (small: at most 16 + 4 items). Keeps focus inside the list when
  * the focused item goes away.
@@ -1565,6 +1651,12 @@ function updatePickList(list, picks, objects, selectedId, fps, fallbackFocus) {
                   'aria-hidden': 'true',
                 }),
                 label,
+                // Frames it does not reach (only when tracking stopped short)
+                createElement('span', {
+                  className: 'editor-cutout-pick-missing',
+                  hidden: 'true',
+                  'aria-hidden': 'true',
+                }),
               ]
             : [label],
         ),
@@ -1841,9 +1933,11 @@ export function updateBackgroundPanel(container, state, fps) {
     !canResetBackground(state);
 
   const click = isAi && getAiModelId(ai) === 'click';
-  const samReady = getModelReadiness('click', status?.models?.click).ready;
+  // Only when a tracked fix-up would really download the tracker (not when
+  // it is downloaded and just not started yet)
+  const samMissing = status?.models?.click === 'missing';
   let toolsHint = '';
-  if (isAi && !click && state.aiPickTool && !samReady) {
+  if (isAi && !click && state.aiPickTool && samMissing) {
     toolsHint = `Fix-ups on the subject and boxes are tracked with MobileSAM: the first one downloads ${getModelSizeLabel('click')}.`;
   } else if (isAi && objectsFull && !correcting) {
     toolsHint = `The limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups is reached. Delete one to add another.`;
@@ -1882,6 +1976,7 @@ export function updateBackgroundPanel(container, state, fps) {
     q(root, '#ai-pick-keep'),
   );
   setHidden(list, !isAi || (ai.picks.length === 0 && objects.length === 0));
+  if (isAi) updateFixUpProgress(list, objects, status);
 
   // Clean up chips
   const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? []) : [];
@@ -1992,6 +2087,8 @@ function updateAiSettings(root, state, _fps) {
         pending: cover.pendingInSelection,
         analyzed: cover.analyzedInClip,
         total: cover.clipFrames,
+        // While a fix-up is tracked the slot shows its progress instead
+        short: status.objectTracking ? 0 : (status.objectShort ?? 0),
         status,
       });
   // A tracked object being tracked shows in the slot once the model's own

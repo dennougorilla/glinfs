@@ -12,6 +12,10 @@
  * aria-description: descendants of a slider are presentational, so a
  * description on the track would never reach a screen reader.
  *
+ * Each tracked fix-up adds a thin row above it in its chip's colour: the
+ * frames that have its mask, with gaps where tracking lost it or has not
+ * got yet (so the row grows while it is tracked).
+ *
  * Long clips (thousands of frames) never become per-frame DOM: the frame
  * states are run-length encoded into segments (bucketed per device pixel
  * column when frames are denser than pixels) and painted into one canvas.
@@ -20,7 +24,8 @@
 import { isAiCutoutActive } from '../../shared/edits/model.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { maskKey } from '../ai-cutout/segmentation-manager.js';
-import { getAiModelId } from './ai-cutout.js';
+import { getAiModelId, getObjectCoverage, getObjectSignature } from './ai-cutout.js';
+import { getObjectColor } from './object-colors.js';
 
 /** @typedef {import('../capture/types.js').Frame} Frame */
 /** @typedef {import('../ai-cutout/mask-store.js').MaskStore} MaskStore */
@@ -148,6 +153,21 @@ export function computeAiMarkSegments(states, columns) {
   return segments;
 }
 
+/** Height of a fix-up's row and the gap above it, in CSS pixels */
+export const OBJECT_ROW_PX = 3;
+const OBJECT_ROW_GAP_PX = 1;
+/** Height of the model's own row (the track's height without fix-ups) */
+const BASE_ROW_PX = 4;
+
+/**
+ * Height of the marks track for this many tracked fix-ups
+ * @param {number} rows
+ * @returns {number} CSS pixels
+ */
+export function getAiMarksHeight(rows) {
+  return BASE_ROW_PX + rows * (OBJECT_ROW_PX + OBJECT_ROW_GAP_PX);
+}
+
 /**
  * Accessible description of the coverage ("34 of 60 frames analyzed")
  * @param {number} analyzed
@@ -234,6 +254,12 @@ export function attachTimelineAiMarks(
       state.selectedRange,
       (frame) => maskStore.has(maskKey(frame, modelId)),
     );
+    const objects = (state.edits.background.ai.objects ?? []).filter(
+      (o) => !(o.scope === 'colour' && o.mode === 'remove'),
+    );
+    const rows = objects.length;
+    const cssRows = `${getAiMarksHeight(rows)}px`;
+    if (holder.style.height !== cssRows) holder.style.height = cssRows;
 
     const dpr = window.devicePixelRatio || 1;
     const cssWidth = holder.clientWidth;
@@ -241,7 +267,8 @@ export function attachTimelineAiMarks(
     const width = Math.max(1, Math.round(cssWidth * dpr));
     const height = Math.max(1, Math.round(cssHeight * dpr));
     const { start, end } = state.selectedRange;
-    const key = `${width}x${height}|${modelId}|${start}-${end}|${frames.length}|${analyzed}|${maskStore.version}`;
+    const objectKey = objects.map((o) => `${o.id}:${getObjectSignature(o)}`).join(',');
+    const key = `${width}x${height}|${modelId}|${start}-${end}|${frames.length}|${analyzed}|${maskStore.version}|${objectKey}`;
     if (key === lastKey) return;
     lastKey = key;
 
@@ -268,13 +295,51 @@ export function attachTimelineAiMarks(
     const span = Math.max(1, frames.length - 1);
     const clipLeft = frames.length > 1 ? (Math.max(0, start) / span) * width : 0;
     const clipRight = frames.length > 1 ? (Math.min(frames.length - 1, end) / span) * width : width;
-    for (const segment of computeAiMarkSegments(states, width)) {
-      const x0 = Math.max(clipLeft, segment.x0 * width);
-      const x1 = Math.min(clipRight, segment.x1 * width);
-      const left = Math.floor(x0);
-      const w = Math.max(1, Math.ceil(x1) - left);
-      ctx.fillStyle = colors[segment.state];
-      ctx.fillRect(left, 0, w, height);
+    const baseTop = Math.round(
+      (height * (getAiMarksHeight(rows) - BASE_ROW_PX)) / getAiMarksHeight(rows),
+    );
+    /**
+     * @param {ArrayLike<number>} rowStates
+     * @param {(state: number) => string | null} colorOf
+     * @param {number} top
+     * @param {number} rowHeight
+     */
+    const paintRow = (rowStates, colorOf, top, rowHeight) => {
+      for (const segment of computeAiMarkSegments(rowStates, width)) {
+        const color = colorOf(segment.state);
+        if (!color) continue;
+        const x0 = Math.max(clipLeft, segment.x0 * width);
+        const x1 = Math.min(clipRight, segment.x1 * width);
+        const left = Math.floor(x0);
+        const w = Math.max(1, Math.ceil(x1) - left);
+        ctx.fillStyle = color;
+        ctx.fillRect(left, top, w, rowHeight);
+      }
+    };
+    paintRow(states, (st) => colors[st] ?? null, baseTop, height - baseTop);
+    if (rows > 0) {
+      const coverage = getObjectCoverage(frames, state.selectedRange, objects, {
+        maskStore,
+        states: true,
+      });
+      const allObjects = state.edits.background.ai.objects ?? [];
+      const unit = height / getAiMarksHeight(rows);
+      objects.forEach((object, k) => {
+        // Covered frames ANALYZED, the rest of the selection PENDING (a gap)
+        const rowStates = new Uint8Array(frames.length);
+        const covered = coverage.states[object.id];
+        for (let f = Math.max(0, start); f <= Math.min(frames.length - 1, end); f++) {
+          rowStates[f] = covered?.[f] ? AI_MARK.ANALYZED : AI_MARK.PENDING;
+        }
+        const top = Math.round(k * (OBJECT_ROW_PX + OBJECT_ROW_GAP_PX) * unit);
+        const color = getObjectColor(allObjects, object.id);
+        paintRow(
+          rowStates,
+          (st) => (st === AI_MARK.ANALYZED ? color : null),
+          top,
+          Math.max(1, Math.round(OBJECT_ROW_PX * unit)),
+        );
+      });
     }
   }
 

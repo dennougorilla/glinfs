@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
-import { maskKey } from '../../../src/features/ai-cutout/segmentation-manager.js';
+import { maskKey, objectMaskKey } from '../../../src/features/ai-cutout/segmentation-manager.js';
+import { getObjectSignature } from '../../../src/features/editor/ai-cutout.js';
+import { OBJECT_COLORS } from '../../../src/features/editor/object-colors.js';
 import {
   AI_MARK,
   attachTimelineAiMarks,
@@ -8,6 +10,7 @@ import {
   computeAiMarkSegments,
   computeFrameMarkStates,
   describeAiMarks,
+  getAiMarksHeight,
   runLengthEncode,
 } from '../../../src/features/editor/timeline-ai-marks.js';
 
@@ -213,6 +216,53 @@ describe('attachTimelineAiMarks', () => {
     flush();
     expect(holder.dataset.analyzed).toBe('2');
     expect(holder.dataset.selected).toBe('6');
+  });
+
+  it('adds a row per tracked fix-up in its colour, drawn where it has its mask (cutout-ux 1)', () => {
+    /** @type {{ style: unknown, rect: number[] }[]} */
+    const fills = [];
+    const ctx = {
+      fillStyle: '',
+      clearRect: () => {},
+      fillRect(...rect) {
+        fills.push({ style: this.fillStyle, rect });
+      },
+    };
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(/** @type {any} */ (ctx));
+    const object = {
+      id: 'o1',
+      mode: 'remove',
+      scope: 'part',
+      clicks: [{ frame: 2, x: 0.5, y: 0.5, mode: 'keep' }],
+      boxes: [],
+    };
+    const colour = {
+      id: 'o2',
+      mode: 'remove',
+      scope: 'colour',
+      clicks: [{ frame: 2, x: 0.1, y: 0.1, mode: 'keep' }],
+      boxes: [],
+    };
+    const { holder, frames, maskStore } = setup({
+      ...aiOn,
+      ai: { model: 'anime', objects: [object, colour] },
+    });
+    // A track wide enough for one column per frame
+    Object.defineProperty(holder, 'clientWidth', { value: 100 });
+    Object.defineProperty(holder, 'clientHeight', { value: getAiMarksHeight(1) });
+    flush();
+    // One tracked fix-up (the Colour one is not tracked): one row above the model's
+    expect(holder.style.height).toBe(`${getAiMarksHeight(1)}px`);
+    expect(fills.some((f) => f.style === OBJECT_COLORS[0])).toBe(false);
+    maskStore.set(
+      objectMaskKey(frames[3], 'o1'),
+      mask,
+      undefined,
+      'object:o1',
+      getObjectSignature(object),
+    );
+    flush();
+    expect(fills.some((f) => f.style === OBJECT_COLORS[0])).toBe(true);
   });
 
   it('hides for Solid color and Off, and repaints on selection changes', () => {
