@@ -24,6 +24,10 @@ const LEGACY_CLIP_QUEUE_LIMIT_DEFAULT = 10;
  * @property {ExportSettingsPrefs} export - Export settings
  * @property {string} thumbnailQuality - Thumbnail quality preset
  * @property {AiCutoutPrefs} aiCutout - AI cutout preferences
+ * @property {Record<string, string>} methods - Switchable method choices,
+ *   method id -> option id. Checked for shape only (string values); whether
+ *   a value names an option is decided by shared/methods.js, which falls
+ *   back to the entry's default
  */
 
 /**
@@ -123,6 +127,7 @@ const DEFAULT_SETTINGS = {
     lastModelBySubject: {},
     lastRemoveScope: 'part',
   },
+  methods: {},
 };
 
 /**
@@ -284,7 +289,24 @@ function cloneDefaults() {
     export: { ...DEFAULT_SETTINGS.export },
     thumbnailQuality: DEFAULT_SETTINGS.thumbnailQuality,
     aiCutout: decodeStoredAiCutout(undefined),
+    methods: {},
   };
+}
+
+/**
+ * Stored method choices, keeping string values only
+ * @param {any} methods - JSON-parsed stored method choices
+ * @returns {Record<string, string>}
+ */
+function decodeStoredMethods(methods) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  if (methods && typeof methods === 'object' && !Array.isArray(methods)) {
+    for (const [id, option] of Object.entries(methods)) {
+      if (typeof option === 'string') out[id] = option;
+    }
+  }
+  return out;
 }
 
 /**
@@ -395,6 +417,7 @@ export function loadSettings() {
       export: { ...DEFAULT_SETTINGS.export, ...parsed.export },
       thumbnailQuality: parsed.thumbnailQuality || DEFAULT_SETTINGS.thumbnailQuality,
       aiCutout: decodeStoredAiCutout(parsed.aiCutout),
+      methods: decodeStoredMethods(parsed.methods),
     };
   } catch (error) {
     console.error('Failed to load user settings:', error);
@@ -419,7 +442,7 @@ export function saveSettings(settings) {
 
 /**
  * Update a specific setting
- * @param {string} category - 'capture' | 'export' | 'thumbnailQuality' | 'aiCutout'
+ * @param {string} category - 'capture' | 'export' | 'thumbnailQuality' | 'aiCutout' | 'methods'
  * @param {string} key - Setting key
  * @param {any} value - New value
  */
@@ -478,7 +501,7 @@ export function resetSettings() {
 
 /**
  * Reset a specific category to defaults
- * @param {string} category - 'capture' | 'export'
+ * @param {string} category - 'capture' | 'export' | 'methods'
  */
 export function resetCategory(category) {
   const settings = loadSettings();

@@ -5,6 +5,7 @@
 
 import { getDefaultClipQueueLimit, isClipCompressionAvailable } from '../../shared/app-store.js';
 import { on as onBus } from '../../shared/bus.js';
+import { getMethodOverride, getStoredMethods, listMethods } from '../../shared/methods.js';
 import {
   loadSettings,
   resetCategory,
@@ -122,6 +123,30 @@ export function renderSettings(container, handlers = {}) {
     );
     content.appendChild(exportSection);
 
+    // Switchable methods: shown once anything registers one
+    const methods = listMethods();
+    if (methods.length > 0) {
+      const stored = getStoredMethods(settings);
+      /** @type {Record<string, string>} */
+      const values = {};
+      /** @type {Record<string, Object>} */
+      const metadata = {};
+      for (const entry of methods) {
+        const override = getMethodOverride(entry.id);
+        values[entry.id] = override ?? stored[entry.id];
+        metadata[entry.id] = {
+          label: entry.name,
+          type: 'select',
+          options: entry.options.map((o) => ({ value: o.id, label: o.name })),
+          // A URL override holds the choice for this page session
+          locked: override !== null,
+        };
+      }
+      content.appendChild(
+        renderSettingsCategory('methods', 'Methods', values, metadata, cleanups, rerender),
+      );
+    }
+
     // Render thumbnail quality setting
     const thumbnailSection = renderThumbnailQualitySetting(settings.thumbnailQuality, cleanups);
     content.appendChild(thumbnailSection);
@@ -187,6 +212,7 @@ function renderSettingsCategory(category, label, values, metadata, cleanups, rer
   Object.entries(metadata).forEach(([key, meta]) => {
     const value = values[key];
     const item = renderSettingItem(category, key, value, meta, cleanups);
+    item.dataset.settingKey = key;
     list.appendChild(item);
   });
 
@@ -301,7 +327,13 @@ function renderSettingControl(category, key, value, metadata, cleanups) {
       return renderBooleanControl(value, readCurrentValue, handleChange, cleanups);
 
     case 'select':
-      return renderSelectControl(value, metadata.options, handleChange, cleanups);
+      return renderSelectControl(
+        value,
+        metadata.options,
+        handleChange,
+        cleanups,
+        metadata.locked === true,
+      );
 
     case 'range':
       return renderRangeControl(value, metadata, handleChange, cleanups);
@@ -358,12 +390,17 @@ function renderBooleanControl(value, readCurrentValue, onChange, cleanups) {
  * @param {Array} options
  * @param {Function} onChange
  * @param {Array} cleanups
+ * @param {boolean} [locked] - Set by the page URL: shown, not changeable
  * @returns {HTMLElement}
  */
-function renderSelectControl(value, options, onChange, cleanups) {
+function renderSelectControl(value, options, onChange, cleanups, locked = false) {
   const control = createElement('div', { className: 'settings-control' });
 
   const select = createElement('select', { className: 'settings-select' });
+  if (locked) {
+    select.disabled = true;
+    select.title = 'Set by the page URL';
+  }
 
   options.forEach((option) => {
     const attrs = { value: String(option.value) };

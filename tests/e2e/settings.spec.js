@@ -184,3 +184,72 @@ test.describe('clip queue limit auto default (#92)', () => {
     await expect(clipQueueRow(page).locator('.settings-range-value')).toHaveText('10 clips');
   });
 });
+
+/** A method entry registered through the test hooks (main has none yet) */
+const E2E_METHOD = {
+  id: 'e2e.detector',
+  area: 'scenes',
+  name: 'Scene detection',
+  options: [
+    { id: 'fixed', name: 'Fixed threshold' },
+    { id: 'adaptive', name: 'Adaptive' },
+  ],
+  default: 'fixed',
+};
+
+/**
+ * Register E2E_METHOD and open Settings
+ * @param {import('@playwright/test').Page} page
+ */
+async function openSettingsWithMethod(page) {
+  await page.waitForFunction(() => Boolean(window.__TEST_HOOKS__?.registerMethod));
+  await page.evaluate((entry) => window.__TEST_HOOKS__.registerMethod(entry), E2E_METHOD);
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  await expect(page.locator('.settings-screen')).toBeVisible();
+}
+
+test('the Methods section lists a method and its choice persists', async ({ page }) => {
+  await gotoCapture(page);
+  await openSettingsWithMethod(page);
+
+  const section = page.locator('.settings-section', {
+    has: page.locator('.settings-section-title', { hasText: 'Methods' }),
+  });
+  const row = section.locator('[data-setting-key="e2e.detector"]');
+  await expect(row.locator('.settings-item-label')).toHaveText('Scene detection');
+  const select = row.locator('select');
+  // The default is the first option
+  await expect(select.locator('option')).toHaveText(['Fixed threshold', 'Adaptive']);
+  await expect(select).toHaveValue('fixed');
+
+  await select.selectOption('adaptive');
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('glinfs_user_settings')).methods),
+    )
+    .toEqual({ 'e2e.detector': 'adaptive' });
+
+  // A new page load (the registry is empty again until registered)
+  await page.reload();
+  await page.waitForSelector('.settings-screen', { state: 'visible' });
+  await page.evaluate(() => {
+    location.hash = '#/capture';
+  });
+  await page.waitForSelector('.capture-screen', { state: 'visible' });
+  await openSettingsWithMethod(page);
+  await expect(page.locator('[data-setting-key="e2e.detector"] select')).toHaveValue('adaptive');
+});
+
+test('a ?method.<id>= URL override shows in Settings and is not stored', async ({ page }) => {
+  await page.goto('/?method.e2e.detector=adaptive#/capture');
+  await page.waitForSelector('.capture-screen', { state: 'visible' });
+  await openSettingsWithMethod(page);
+
+  const select = page.locator('[data-setting-key="e2e.detector"] select');
+  await expect(select).toHaveValue('adaptive');
+  await expect(select).toBeDisabled();
+  const stored = await page.evaluate(() => localStorage.getItem('glinfs_user_settings'));
+  expect(stored === null || !JSON.parse(stored).methods?.['e2e.detector']).toBe(true);
+});
