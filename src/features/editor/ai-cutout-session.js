@@ -811,6 +811,16 @@ export function createAiCutoutSession(options) {
   const objectTracked = new Map();
 
   /**
+   * Per object: the tags of the runs started since its last finished one. A
+   * run cut short by the next change leaves frames with its tag (those it
+   * tracked, and for a correction those outside its span); the next span
+   * takes them over too, else they match neither run and are never tracked
+   * again
+   * @type {Map<string, Set<string>>}
+   */
+  const objectStarted = new Map();
+
+  /**
    * The span a correction can change: when `object` only adds clicks or
    * boxes to what its last run tracked (same scope, pick and selection),
    * from the frame after the previous anchor to the frame before the next
@@ -960,8 +970,11 @@ export function createAiCutoutSession(options) {
         if (f < span.start || f > span.end)
           keys.push(objectMaskKey(state.clip.frames[f], object.id));
       }
-      maskStore.retag(keys, last.signature, signature);
+      for (const from of new Set([last.signature, ...(objectStarted.get(object.id) ?? [])])) {
+        if (from !== signature) maskStore.retag(keys, from, signature);
+      }
     }
+    objectStarted.set(object.id, new Set([...(objectStarted.get(object.id) ?? []), signature]));
     const runKey = runKeyOf(object, range);
     const { id } = object;
     objectRun = { id, signature, runKey };
@@ -1021,6 +1034,7 @@ export function createAiCutoutSession(options) {
       });
       objectRuns.set(id, runKey);
       objectTracked.set(id, { signature, object, range: selection });
+      objectStarted.delete(id);
       // Lost frames outside a correction's span are as the last run left them
       const kept = span ? (rawLost[id] ?? []).filter((f) => f < span.start || f > span.end) : [];
       reportLost({ ...rawLost, [id]: [...kept, ...result.lost].sort((a, b) => a - b) });
@@ -1083,6 +1097,7 @@ export function createAiCutoutSession(options) {
       objectRuns.delete(id);
       objectAnswers.delete(id);
       objectTracked.delete(id);
+      objectStarted.delete(id);
       objectQueue = objectQueue.filter((queued) => queued !== id);
       if (objectRun?.id === id) objectController?.abort();
       dropObjectMasks(id);
