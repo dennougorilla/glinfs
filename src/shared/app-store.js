@@ -766,7 +766,7 @@ function restoreSharedFrames(decodedFrames, meta) {
  * - 'raw': resolves immediately (also the no-codec fallback path)
  * - 'compressing': awaits the pending encode, then falls through
  * - 'compressed': flips to 'decoding' (visible via queue:changed), decodes
- *   in the worker (decode jobs jump the codec queue), rebuilds the Frame
+ *   in the decode worker (it never waits for a compression), rebuilds the Frame
  *   wrappers from frameMeta and returns the entry to 'raw'
  * - 'decoding': REFUSED — the double-promote guard
  * - deleted at any await point: refused with 'not-found', decoded frames
