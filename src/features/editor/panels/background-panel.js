@@ -52,7 +52,7 @@ import { MAX_SUGGESTIONS } from '../../../shared/masks/cleanup-suggestions.js';
 import { COLOUR_TOLERANCE } from '../../../shared/masks/colour-fill.js';
 import { loadSettings } from '../../../shared/user-settings.js';
 import { createElement, on } from '../../../shared/utils/dom.js';
-import { frameToTimecode } from '../../../shared/utils/format.js';
+import { frameToClock } from '../../../shared/utils/format.js';
 import { isModelOffered } from '../../ai-cutout/model-config.js';
 import { pickPreferredModel } from '../../ai-cutout/model-preference.js';
 import { getCustomModelEntries, getModelEntry } from '../../ai-cutout/model-registry.js';
@@ -447,7 +447,7 @@ export function getWebgpuWarning(status, modelLabel, webgpuOnly = false) {
  * @returns {string}
  */
 export function getPickLabel(pick, fps) {
-  return `${pick.mode === 'keep' ? 'Keep' : 'Remove'} at ${frameToTimecode(pick.frame, fps)}`;
+  return `${pick.mode === 'keep' ? 'Keep' : 'Remove'} at ${frameToClock(pick.frame, fps)}`;
 }
 
 /**
@@ -473,7 +473,7 @@ export function getObjectFrame(object) {
  */
 export function getObjectLabel(object, fps) {
   const verb = object.mode === 'remove' ? 'Remove' : 'Keep';
-  return `${verb} at ${frameToTimecode(getObjectFrame(object), fps)}`;
+  return `${verb} at ${frameToClock(getObjectFrame(object), fps)}`;
 }
 
 /**
@@ -535,7 +535,7 @@ export function getColourGuard(objects, levels, range) {
  * @returns {string}
  */
 export function getColourGuardText(guard, fps) {
-  return `Colour removes more at ${frameToTimecode(guard.frame, fps)}.`;
+  return `Colour removes more at ${frameToClock(guard.frame, fps)}.`;
 }
 
 /**
@@ -570,7 +570,7 @@ export function getLostObject(objects, lost, range, activeId = null) {
  */
 export function getObjectLostText(object, frames, fps) {
   const what = object.mode === 'remove' ? 'What you removed' : 'What you kept';
-  const first = frameToTimecode(frames[0], fps);
+  const first = frameToClock(frames[0], fps);
   if (frames.length === 1) return `${what} was lost at ${first}. Click it there to keep going.`;
   return `${what} was lost at ${frames.length} places, first at ${first}. Click it there to keep going.`;
 }
@@ -622,7 +622,7 @@ export function getLostFramesInSelection(status, range) {
  */
 export function getLostFramesText(lostFrames, fps) {
   if (lostFrames.length === 0) return '';
-  const first = frameToTimecode(lostFrames[0], fps);
+  const first = frameToClock(lostFrames[0], fps);
   if (lostFrames.length === 1) return `Lost track at ${first}. Click it there to keep going.`;
   return `Lost track at ${lostFrames.length} places, first at ${first}. Click it there to keep going.`;
 }

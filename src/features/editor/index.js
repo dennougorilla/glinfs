@@ -48,7 +48,7 @@ import {
   rememberRemoveScope,
 } from '../../shared/user-settings.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
-import { frameToTimecode } from '../../shared/utils/format.js';
+import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
@@ -689,7 +689,7 @@ export function initEditor() {
       if (currentTimeEl) {
         // Calculate position within selection range (clamped)
         const currentInSelection = getPositionInSelection(state.currentFrame, state.selectedRange);
-        currentTimeEl.textContent = frameToTimecode(currentInSelection, fps);
+        currentTimeEl.textContent = frameToClock(currentInSelection, fps);
       }
 
       // Update playhead position on timeline
