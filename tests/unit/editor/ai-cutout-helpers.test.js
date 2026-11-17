@@ -330,6 +330,12 @@ describe('AI cutout helpers', () => {
       expect(described.message).not.toContain('internal');
       expect(described.message.length).toBeGreaterThan(10);
     }
+    // A GPU reset is said as such, never as a browser without WebGPU
+    const reset = describeAnalysisError(
+      new SegmentationError(SegmentationErrorCode.GPU_LOST, 'The GPU was reset: device lost'),
+    );
+    expect(reset.message).toBe('The GPU was reset.');
+    expect(reset.message).not.toMatch(/browser|WebGPU/);
     // WebGPU-only models and running out of WASM memory say so
     const needs = 'Busy backgrounds needs WebGPU, which this browser does not provide.';
     expect(

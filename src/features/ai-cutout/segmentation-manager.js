@@ -191,7 +191,13 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {Navigator} [navigatorImpl] - For getCapabilities()
  * @property {() => Promise<unknown>} [persistStorage] - Called after the
  *   worker downloaded and cached a model (asks for persistent storage)
+ * @property {number} [gpuRetryDelayMs] - Wait before retrying an analysis
+ *   on a fresh worker after the GPU was lost (Chrome restarts its GPU
+ *   process meanwhile)
  */
+
+/** Wait before an analysis retries on a fresh worker after a GPU loss */
+export const GPU_RETRY_DELAY_MS = 1500;
 
 /** Frames handed to the worker ahead of the one being analyzed */
 export const MAX_FRAMES_IN_FLIGHT = 2;
@@ -436,6 +442,14 @@ function raceAbort(promise, signal) {
   });
 }
 
+/**
+ * @param {unknown} error
+ * @returns {boolean} The WebGPU device was lost under the job
+ */
+function isGpuLost(error) {
+  return error instanceof SegmentationError && error.code === SegmentationErrorCode.GPU_LOST;
+}
+
 /** @returns {Worker} */
 function createSegmentationWorker() {
   return new Worker(new URL('../../workers/segmentation-worker.js', import.meta.url), {
@@ -489,10 +503,15 @@ export class SegmentationManager {
     this.#getModelSpec = options.getModelSpec ?? ((modelId) => getModelSpec(modelId));
     this.#navigator = options.navigatorImpl ?? globalThis.navigator;
     this.#persistStorage = options.persistStorage ?? (() => requestPersistentStorage());
+    this.#gpuRetryDelayMs = options.gpuRetryDelayMs ?? GPU_RETRY_DELAY_MS;
   }
 
   /** @type {() => Promise<unknown>} */
   #persistStorage;
+  /** @type {number} */
+  #gpuRetryDelayMs;
+  /** The GPU was lost in this session: a missing adapter afterwards is that, not the browser */
+  #gpuLost = false;
   /** @type {Set<() => void>} */
   #modelListeners = new Set();
 
@@ -721,7 +740,7 @@ export class SegmentationManager {
     this.#markBusy(modelId, 1);
     const previous = this.#tail;
     const run = raceAbort(previous, options.signal).then(() =>
-      this.#analyze(frames, { ...options, modelId }),
+      this.#analyzeWithRetry(frames, { ...options, modelId }),
     );
     // The queue moves on only once both this call and the one it waited
     // for have settled: an abort while waiting must not let the next call
@@ -940,7 +959,8 @@ export class SegmentationManager {
       this.#cancelJob(jobId, submitted);
       if (
         error instanceof SegmentationError &&
-        error.code === SegmentationErrorCode.INFERENCE_FAILED
+        (error.code === SegmentationErrorCode.INFERENCE_FAILED ||
+          error.code === SegmentationErrorCode.GPU_LOST)
       ) {
         this.#teardown(error);
       }
@@ -1027,6 +1047,59 @@ export class SegmentationManager {
   }
 
   /**
+   * #analyze, retried once on a fresh worker when the GPU was lost under it
+   * (a driver reset): frames finished before the loss are kept and skipped.
+   * A missing adapter or a second loss after that is reported as GPU_LOST,
+   * not as a browser without WebGPU.
+   * @param {Frame[]} frames
+   * @param {AnalyzeOptions} options
+   * @returns {Promise<AnalyzeResult>}
+   */
+  async #analyzeWithRetry(frames, options) {
+    try {
+      return await this.#analyze(frames, options);
+    } catch (error) {
+      // A WebGPU run that failed may be the GPU going away before its loss
+      // was reported: a missing adapter afterwards is said as a reset too
+      if (/** @type {any} */ (error)?.code === SegmentationErrorCode.INFERENCE_FAILED) {
+        this.#gpuLost = true;
+      }
+      if (!isGpuLost(error) || options.signal?.aborted) throw this.#asGpuLoss(error);
+      this.#gpuLost = true;
+      await raceAbort(
+        new Promise((resolve) => setTimeout(resolve, this.#gpuRetryDelayMs)),
+        options.signal,
+      );
+      try {
+        return await this.#analyze(frames, options);
+      } catch (second) {
+        throw this.#asGpuLoss(second);
+      }
+    }
+  }
+
+  /**
+   * After a GPU loss in this session, "no WebGPU adapter" means the GPU is
+   * still restarting (or gone for this page), not that the browser has none
+   * @param {unknown} error
+   * @returns {unknown}
+   */
+  #asGpuLoss(error) {
+    const code = /** @type {any} */ (error)?.code;
+    if (
+      this.#gpuLost &&
+      (code === SegmentationErrorCode.WEBGPU_REQUIRED ||
+        code === SegmentationErrorCode.WEBGPU_UNAVAILABLE)
+    ) {
+      return new SegmentationError(
+        SegmentationErrorCode.GPU_LOST,
+        'The GPU was reset and did not come back for this page',
+      );
+    }
+    return error;
+  }
+
+  /**
    * @param {Frame[]} frames
    * @param {AnalyzeOptions} options
    * @returns {Promise<AnalyzeResult>}
@@ -1084,7 +1157,8 @@ export class SegmentationManager {
       this.#cancelJob(jobId, inflight);
       if (
         error instanceof SegmentationError &&
-        error.code === SegmentationErrorCode.INFERENCE_FAILED
+        (error.code === SegmentationErrorCode.INFERENCE_FAILED ||
+          error.code === SegmentationErrorCode.GPU_LOST)
       ) {
         // The session may be unusable (e.g. a lost WebGPU device, which ORT
         // never re-creates, and which every session shares): start a fresh
@@ -1262,6 +1336,17 @@ export class SegmentationManager {
               totalMs: data.totalMs,
               cached: Boolean(data.cached),
             }),
+          );
+          break;
+        case 'device-lost':
+          // The WebGPU device every session of this worker runs on is gone:
+          // nothing in flight will answer. A fresh worker gets a new device.
+          this.#gpuLost = true;
+          this.#teardown(
+            new SegmentationError(
+              SegmentationErrorCode.GPU_LOST,
+              `The GPU was reset: ${data.message || 'the WebGPU device was lost'}`,
+            ),
           );
           break;
         case 'segment-error':

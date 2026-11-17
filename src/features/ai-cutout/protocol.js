@@ -87,6 +87,12 @@ export const SegmentationErrorCode = Object.freeze({
   INVALID_OUTPUT: 'invalid-output',
   /** The worker crashed or could not start */
   WORKER_CRASHED: 'worker-crashed',
+  /**
+   * The GPU was reset under the analysis (the WebGPU device was lost, e.g.
+   * a driver reset when video memory ran out), and the retry on a fresh
+   * worker failed too
+   */
+  GPU_LOST: 'gpu-lost',
   /** A frame's pixels are gone (closed VideoFrame) */
   FRAME_UNAVAILABLE: 'frame-unavailable',
 });

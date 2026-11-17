@@ -147,6 +147,39 @@ const models = new Map();
 /** @type {Promise<GPUAdapter | null> | null} */
 let adapterPromise = null;
 
+/** Requests for a WebGPU adapter before concluding there is none, and the wait between them */
+const ADAPTER_ATTEMPTS = 3;
+const ADAPTER_RETRY_MS = 1000;
+
+/** How long a failed run waits for the device's loss to be reported */
+const LOST_GRACE_MS = 300;
+
+/** The WebGPU device ORT runs on, once watched @type {any} */
+let watchedDevice = null;
+/** Set when that device was lost (every session on it is dead) */
+let deviceLost = false;
+/** @type {Promise<void> | null} */
+let deviceLostPromise = null;
+
+/**
+ * Watch the WebGPU device ORT created for the sessions: when it is lost
+ * (a driver reset), tell the manager, which replaces this worker.
+ */
+async function watchDevice() {
+  try {
+    const device = await Promise.resolve(/** @type {any} */ (ort).env?.webgpu?.device);
+    if (!device?.lost || device === watchedDevice) return;
+    watchedDevice = device;
+    deviceLostPromise = device.lost.then((/** @type {any} */ info) => {
+      if (info?.reason === 'destroyed') return;
+      deviceLost = true;
+      post({ type: 'device-lost', message: String(info?.message ?? '') });
+    });
+  } catch {
+    // No device to watch (WASM): nothing to report
+  }
+}
+
 /** Tail of the ORT call queue @type {Promise<unknown>} */
 let ortTail = Promise.resolve();
 
@@ -215,11 +248,18 @@ function getAdapter() {
   adapterPromise ??= (async () => {
     const gpu = /** @type {any} */ (self.navigator).gpu;
     if (!gpu) return null;
-    try {
-      return (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? null;
-    } catch {
-      return null;
+    // Right after a GPU reset Chrome restarts its GPU process and answers
+    // null for a moment: ask again before concluding there is no WebGPU
+    for (let attempt = 0; attempt < ADAPTER_ATTEMPTS; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, ADAPTER_RETRY_MS));
+      try {
+        const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+        if (adapter) return adapter;
+      } catch {
+        // asked again below
+      }
     }
+    return null;
   })();
   return adapterPromise;
 }
@@ -422,6 +462,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
   }
 
   const backend = combineBackends(results.map((r) => r.created.backend));
+  if (backend !== 'wasm') void watchDevice();
   return {
     type: 'ready',
     modelId,
@@ -725,10 +766,24 @@ async function drainQueue() {
           await segment(/** @type {SegmentRequest} */ (request));
         }
       } catch (error) {
+        // A run fails before the device's loss is reported: wait a moment
+        // to tell a lost GPU (the manager retries on a fresh worker) from a
+        // failing model
+        if (!deviceLost && deviceLostPromise) {
+          await Promise.race([
+            deviceLostPromise,
+            new Promise((resolve) => setTimeout(resolve, LOST_GRACE_MS)),
+          ]);
+        }
         post({
           type: 'segment-error',
           requestId: request.requestId,
-          error: toErrorPayload(error, SegmentationErrorCode.INFERENCE_FAILED),
+          error: deviceLost
+            ? {
+                code: SegmentationErrorCode.GPU_LOST,
+                message: `The GPU was reset: ${error instanceof Error ? error.message : String(error)}`,
+              }
+            : toErrorPayload(error, SegmentationErrorCode.INFERENCE_FAILED),
         });
       } finally {
         request.bitmap?.close();

@@ -457,6 +457,65 @@ describe('SegmentationManager.analyzeFrames', () => {
     await expect(retry).resolves.toMatchObject({ analyzed: 1, backend: 'webgpu' });
   });
 
+  it('a lost GPU device: the analysis retries once on a fresh worker and finishes', async () => {
+    // A driver reset loses the WebGPU device; the session was dead until a reload
+    const { manager, maskStore, workers } = createHarness(
+      { autoMask: false },
+      { gpuRetryDelayMs: 0 },
+    );
+    const run = manager.analyzeFrames([makeFrame('a'), makeFrame('b'), makeFrame('c')], {
+      clipId: 'c',
+    });
+    await flush();
+    workers[0].mask(workers[0].segments[0]);
+    await flush();
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    await flush();
+    await flush();
+    expect(workers[0].terminated).toBe(true);
+    expect(workers).toHaveLength(2);
+    expect(workers[1].inits[0].model.id).toBe('anime');
+    for (const segment of workers[1].segments) workers[1].mask(segment);
+    await expect(run).resolves.toMatchObject({ backend: 'webgpu' });
+    expect(['anime:a', 'anime:b', 'anime:c'].every((k) => maskStore.has(k))).toBe(true);
+  });
+
+  it('a GPU failure that repeats on the retry is reported as a GPU reset', async () => {
+    const { manager, workers } = createHarness({ autoMask: false }, { gpuRetryDelayMs: 0 });
+    const run = manager.analyzeFrames([makeFrame('a')]);
+    await flush();
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    await flush();
+    await flush();
+    workers[1].emit({ type: 'device-lost', message: 'D3D device removed' });
+    const error = await run.catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.GPU_LOST);
+    expect(workers).toHaveLength(2);
+  });
+
+  it('after a GPU loss, a worker that finds no adapter is a GPU reset, not a browser without WebGPU', async () => {
+    const { manager, workers } = createHarness(
+      { autoMask: false, autoReady: false },
+      { gpuRetryDelayMs: 0 },
+    );
+    const run = manager.analyzeFrames([makeFrame('a')]);
+    await flush();
+    workers[0].ready();
+    await flush();
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    await flush();
+    await flush();
+    // The fresh worker asked for an adapter while the GPU was still restarting
+    expect(workers[1].inits).toHaveLength(1);
+    workers[1].emit({
+      type: 'init-error',
+      modelId: 'anime',
+      error: { code: SegmentationErrorCode.WEBGPU_REQUIRED, message: 'needs WebGPU' },
+    });
+    const error = await run.catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.GPU_LOST);
+  });
+
   it('keeps the worker when a job fails for a reason other than inference', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')]);
