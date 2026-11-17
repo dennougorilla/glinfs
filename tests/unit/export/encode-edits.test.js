@@ -206,9 +206,11 @@ describe('mergeIdenticalFrames = false (default)', () => {
     });
 
     // The previous pipeline: one addFrame per frame, no per-frame delay,
-    // encoder config without the transparency flag.
+    // encoder config without the transparency flag (opaque exports are
+    // frame-differenced either way).
     const legacy = createGifencEncoder();
     legacy.init({
+      frameDifferencing: true,
       width: W,
       height: H,
       maxColors: manager.initConfig.maxColors,

@@ -373,6 +373,55 @@ describe('GifEncoderManager', () => {
     });
   });
 
+  describe('dispose during init', () => {
+    const CONFIG = {
+      width: 10,
+      height: 10,
+      totalFrames: 1,
+      maxColors: 256,
+      frameDelayMs: 100,
+      loopCount: 0,
+    };
+
+    it('fails the pending init at once and leaves a later worker alone', async () => {
+      vi.useFakeTimers();
+      try {
+        const manager = new workerManagerModule.GifEncoderManager();
+        // Estimate A: the worker never answers, then the estimate is abandoned
+        const first = manager.init(CONFIG, 10_000);
+        /** @type {string} */
+        let firstOutcome = 'pending';
+        first.then(
+          () => {
+            firstOutcome = 'resolved';
+          },
+          (error) => {
+            firstOutcome = error.name;
+          },
+        );
+        await Promise.resolve();
+        manager.dispose();
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+        expect(firstOutcome).toBe('AbortError');
+
+        // Estimate B starts its own worker on the same manager
+        const second = manager.init(CONFIG, 10_000);
+        await Promise.resolve();
+        const workerB = /** @type {MockWorker} */ (mockWorkerInstance);
+        workerB._simulateMessage({ event: Events.READY });
+        await second;
+
+        // A's 10 s timeout must not shut B's worker down
+        vi.advanceTimersByTime(10_000);
+        expect(workerB.terminated).toBe(false);
+        expect(manager.worker).toBe(workerB);
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('addFrame', () => {
     it('should throw if not initialized', () => {
       // Arrange

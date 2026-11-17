@@ -383,26 +383,6 @@
   transition-duration: 60ms;
 }
 
-.btn-capture-stop {
-  background: var(--color-recording);
-  color: white;
-  animation: pulse-recording 2s infinite;
-}
-
-@keyframes pulse-recording {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 var(--color-recording-glow);
-  }
-  50% {
-    box-shadow: 0 0 0 6px transparent;
-  }
-}
-
-.btn-capture-stop:hover:not(:disabled) {
-  background: #e8336f;
-}
-
 .btn-create-clip {
   width: calc(100% - var(--reg-offset));
   height: var(--control-height-lg);
@@ -669,7 +649,8 @@
   gap: var(--space-2);
 }
 
-.capture-screen .capture-import-btn {
+.capture-screen .capture-import-btn,
+.capture-screen .capture-change-source-btn {
   width: 100%;
 }
 

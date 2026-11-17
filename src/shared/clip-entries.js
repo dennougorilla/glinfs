@@ -111,6 +111,25 @@ function buildTrashIcon() {
 }
 
 /**
+ * Alert icon of a failed open (a circle with an exclamation mark)
+ * @returns {SVGSVGElement}
+ */
+function buildAlertIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'clip-entry-status-alert');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '12');
+  svg.setAttribute('height', '12');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<circle cx="12" cy="12" r="10"/><path d="M12 7v6"/><path d="M12 17h.01"/>';
+  return svg;
+}
+
+/**
  * Build the thumbnail element for an entry (dataURL image or placeholder)
  * @param {string|null|undefined} thumbnailDataUrl
  * @returns {HTMLElement}
@@ -147,7 +166,7 @@ const BUSY_STATUS_LABELS = {
  * controls — the promote surface and the delete button — and buttons must
  * not nest.
  *
- * @param {{ id?: string, frames?: {length: number}[]|null, frameCount?: number, status?: import('./app-store.js').ClipQueueEntryStatus, byteLengthMB?: number, fps: number, capturedAt: number, thumbnailDataUrl?: string|null }} clip
+ * @param {{ id?: string, frames?: {length: number}[]|null, frameCount?: number, status?: import('./app-store.js').ClipQueueEntryStatus, openFailed?: boolean, byteLengthMB?: number, fps: number, capturedAt: number, thumbnailDataUrl?: string|null }} clip
  * @param {{ active: boolean, onPromote?: (id: string) => void, onDelete?: (id: string) => void }} options
  * @param {(() => void)[]} cleanups
  * @returns {HTMLElement}
@@ -176,6 +195,9 @@ function buildEntry(clip, options, cleanups) {
   const metaLabel = `${durationLabel} · ${detailLabel}`;
   const fullDetail = `${durationSec.toFixed(1)}s · ${frameCount} frames${sizeLabel} · captured ${timeLabel}`;
   const busyLabel = status ? BUSY_STATUS_LABELS[status] : undefined;
+  // A failed open (the entry is 'compressed' again): said on the row, in
+  // the place "Opening…" was; clicking the row tries again
+  const openFailed = !options.active && status === 'compressed' && clip.openFailed === true;
 
   const entry = createElement('div', {
     className: `clip-entry ${options.active ? 'clip-entry--active' : ''}`,
@@ -183,6 +205,7 @@ function buildEntry(clip, options, cleanups) {
     'data-clip-id': clip.id ?? '',
     'data-clip-active': options.active ? 'true' : undefined,
     'data-clip-status': status,
+    'data-clip-open-failed': openFailed ? 'true' : undefined,
   });
 
   // Position badge (browser-tab model, #100 r7): the number IS the list
@@ -213,6 +236,14 @@ function buildEntry(clip, options, cleanups) {
               'aria-hidden': 'true',
             }),
             busyLabel,
+          ]),
+        ]
+      : []),
+    ...(openFailed
+      ? [
+          createElement('div', { className: 'clip-entry-status clip-entry-status--failed' }, [
+            buildAlertIcon(),
+            "Couldn't open",
           ]),
         ]
       : []),
@@ -251,7 +282,7 @@ function buildEntry(clip, options, cleanups) {
     {
       className: 'clip-entry-main',
       type: 'button',
-      'aria-label': `Edit clip captured at ${timeLabel} (${metaLabel})`,
+      'aria-label': `${openFailed ? "Couldn't open, try again: " : ''}Edit clip captured at ${timeLabel} (${metaLabel})`,
     },
     [thumbEl, info],
   );

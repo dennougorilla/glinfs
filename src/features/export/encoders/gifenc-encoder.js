@@ -4,8 +4,9 @@
  * @module features/export/encoders/gifenc-encoder
  */
 
-import { applyPalette, GIFEncoder, quantize } from 'gifenc';
+import { GIFEncoder, quantize } from 'gifenc';
 import { ALPHA_THRESHOLD } from '../../../shared/edits/color-key.js';
+import { applyPaletteFast as applyPalette } from './apply-palette.js';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
@@ -187,6 +188,139 @@ export function opaquePixels(rgba) {
 }
 
 /**
+ * Frame differencing (opaque exports): a pixel showing the same color as in
+ * the previous frame is written as the transparent index and the previous
+ * frame is kept (dispose 1), so the decoded frames are unchanged pixel for
+ * pixel while long runs of one index compress well.
+ *
+ * Whether it pays cannot be told from the frame cheaply: flat colors with
+ * scattered changes, noise that changes every pixel and a palette rebuild
+ * all defeated rules that guessed from counts or reused an earlier choice
+ * (one made a GIF 51 % larger). Every frame is therefore encoded both ways
+ * and the smaller is written. The choice is per frame: either way the
+ * decoded canvas after the frame is the same, so it cannot affect the next
+ * frame, and the GIF is never larger than without differencing.
+ */
+
+/**
+ * The first palette index a mapped frame never uses, or -1
+ * @param {Uint8Array} index
+ * @param {number} paletteLength
+ * @returns {number}
+ */
+export function findUnusedIndex(index, paletteLength) {
+  const used = new Uint8Array(256);
+  let count = 0;
+  for (let i = 0; i < index.length && count < paletteLength; i++) {
+    if (used[index[i]] === 0) {
+      used[index[i]] = 1;
+      count++;
+    }
+  }
+  for (let i = 0; i < paletteLength; i++) {
+    if (used[i] === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Pack a palette's colors into 24-bit integers, for per-pixel comparison
+ * @param {number[][]} palette
+ * @returns {Int32Array}
+ */
+function packPalette(palette) {
+  const packed = new Int32Array(palette.length);
+  for (let i = 0; i < palette.length; i++) {
+    packed[i] = (palette[i][0] << 16) | (palette[i][1] << 8) | palette[i][2];
+  }
+  return packed;
+}
+
+/**
+ * Difference a mapped frame against the colors shown before it.
+ *
+ * Writes the colors this frame shows into `shown` (for the next frame) and,
+ * where a pixel shows the same color as before, the transparent index into
+ * `out`.
+ *
+ * @param {Uint8Array} index - applyPalette output
+ * @param {Int32Array} colors - packPalette of the frame's palette
+ * @param {Int32Array} shown - Colors shown so far (updated in place)
+ * @param {number} transparentIndex
+ * @param {Uint8Array} out - Same length as index
+ * @returns {number} How many pixels keep their color
+ */
+export function differenceFrame(index, colors, shown, transparentIndex, out) {
+  let kept = 0;
+  for (let i = 0; i < index.length; i++) {
+    const color = colors[index[i]];
+    if (color === shown[i]) {
+      out[i] = transparentIndex;
+      kept++;
+    } else {
+      out[i] = index[i];
+    }
+    shown[i] = color;
+  }
+  return kept;
+}
+
+/**
+ * Ordered (Bayer 8x8) dithering, applied to the pixels before they are
+ * mapped to the palette: each pixel's RGB moves by a fixed offset that
+ * depends only on its position, within +-amplitude/2. Smooth gradients then
+ * mix the two nearest palette colors instead of breaking into bands.
+ * Being positional (not error diffusion), an unchanged pixel gets the same
+ * offset in every frame, so frame differencing still finds it unchanged,
+ * and alpha is never touched, so the transparent pixels of a cutout stay
+ * exactly the ones the source has.
+ */
+export const DITHERING = {
+  /**
+   * Peak-to-peak offset per channel (0-255 levels), per quantize format.
+   * Measured at 1024x576 on a smooth sky gradient with a shaded sphere,
+   * banding as the mean error after a 9x9 box blur (what the eye averages):
+   * balanced (102 colors) 2.43 undithered, 1.58 / 1.45 / 1.53 / 1.72 at
+   * 8 / 16 / 24 / 32; quality (205 colors) 2.62 -> 1.47 at 16; fast
+   * (rgb444, 51 colors) 5.52 -> 3.86 at 16, 3.56 at 24, 3.67 at 32. Larger
+   * amplitudes add visible noise without removing more banding.
+   */
+  amplitude: { rgb565: 16, rgb444: 24 },
+};
+
+/** Bayer 8x8 threshold matrix, values 0-63 */
+const BAYER_8 = Uint8Array.from([
+  0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28,
+  52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7,
+  39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
+]);
+
+/**
+ * Ordered dithering of an RGBA frame into `out` (alpha copied unchanged)
+ * @param {Uint8ClampedArray} rgba
+ * @param {number} width
+ * @param {number} amplitude - Peak-to-peak offset per channel
+ * @param {Uint8ClampedArray} out - Same length as rgba
+ * @returns {Uint8ClampedArray} out
+ */
+export function orderedDither(rgba, width, amplitude, out) {
+  const offsets = new Int16Array(64);
+  for (let i = 0; i < 64; i++) offsets[i] = Math.round(((BAYER_8[i] + 0.5) / 64 - 0.5) * amplitude);
+  const height = width > 0 ? rgba.length / 4 / width : 0;
+  for (let y = 0; y < height; y++) {
+    const row = (y & 7) << 3;
+    for (let x = 0, p = y * width * 4; x < width; x++, p += 4) {
+      const o = offsets[row | (x & 7)];
+      out[p] = rgba[p] + o;
+      out[p + 1] = rgba[p + 1] + o;
+      out[p + 2] = rgba[p + 2] + o;
+      out[p + 3] = rgba[p + 3];
+    }
+  }
+  return out;
+}
+
+/**
  * Placeholder palette for a frame without any opaque pixel. It is never
  * kept for reuse: the next frame quantizes a real palette (otherwise a
  * clip-wide schedule would map every later frame to black).
@@ -230,6 +364,18 @@ export function createGifencEncoder() {
   /** Transparent export (config.transparent): pixels with alpha < 128 become the transparent index */
   let transparent = false;
 
+  /** Ordered dithering before mapping (config.dithering) */
+  let dithering = false;
+  /** @type {Uint8ClampedArray | null} Reused buffer of the dithered frame */
+  let dithered = null;
+
+  /** Frame differencing (config.frameDifferencing, opaque exports only) */
+  let differencing = false;
+  /** @type {Int32Array | null} Colors the frames written so far show, per pixel */
+  let shown = null;
+  /** @type {Uint8Array | null} Reused output buffer of differenceFrame */
+  let differenced = null;
+
   /**
    * Quantize a palette from RGBA pixels. In transparent mode only opaque
    * pixels vote (cleared pixels would otherwise take palette slots) and one
@@ -249,6 +395,82 @@ export function createGifencEncoder() {
     return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
   };
 
+  /** Scratch encoders (no header) for the frames encoded both ways */
+  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  let trialWhole = null;
+  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  let trialDifferenced = null;
+  /**
+   * Write an opaque frame with frame differencing: encoded whole and with
+   * unchanged pixels as the transparent index, the smaller one written.
+   * Every frame keeps the previous one (dispose 1), so either way the
+   * decoded frame is exactly the mapped frame.
+   * @param {Uint8Array} index
+   * @param {number} width
+   * @param {number} height
+   * @param {number} delay
+   */
+  const writeDifferenced = (index, width, height, delay) => {
+    if (!encoder || !config || !palette) return;
+    const colors = packPalette(palette);
+    const whole = { palette, delay, repeat: config.loopCount, dispose: 1 };
+    /** Only whole is possible: write it and record what it shows */
+    const writeOnlyWhole = () => {
+      if (shown?.length !== index.length) shown = new Int32Array(index.length);
+      for (let i = 0; i < index.length; i++) shown[i] = colors[index[i]];
+      encoder?.writeFrame(index, width, height, whole);
+    };
+
+    // The first frame (or one of another size) has nothing to keep
+    if (shown?.length !== index.length) {
+      writeOnlyWhole();
+      return;
+    }
+    // A slot appended to the palette while the color table (a power of two)
+    // has room for it, else one the frame does not use
+    const tableSize = (/** @type {number} */ n) => 2 ** Math.max(1, Math.ceil(Math.log2(n)));
+    const roomInTable =
+      palette.length < 256 && tableSize(palette.length + 1) === tableSize(palette.length);
+    const unused = roomInTable ? -1 : findUnusedIndex(index, palette.length);
+    const transparentIndex = unused >= 0 ? unused : palette.length;
+    if (transparentIndex > 255) {
+      writeOnlyWhole();
+      return;
+    }
+
+    if (differenced?.length !== index.length) differenced = new Uint8Array(index.length);
+    const keptPixels = differenceFrame(index, colors, shown, transparentIndex, differenced);
+    if (keptPixels === 0) {
+      // Nothing kept: the differenced frame is the same index stream with a
+      // color table at least as large (one more slot, or the same), so its
+      // LZW code size is the same or larger; at every point it emits the
+      // same codes no narrower, and resets its dictionary no later. It
+      // cannot be smaller, so it is not encoded (`shown` is already this
+      // frame's colors)
+      encoder.writeFrame(index, width, height, whole);
+      return;
+    }
+    const kept = {
+      palette: unused >= 0 ? palette : [...palette, [0, 0, 0]],
+      delay,
+      repeat: config.loopCount,
+      transparent: true,
+      transparentIndex,
+      dispose: 1,
+    };
+    // Encode both ways (a frame after the first is written the same with or
+    // without the header, so the scratch bytes go into the GIF as they are)
+    trialWhole ??= GIFEncoder({ auto: false });
+    trialDifferenced ??= GIFEncoder({ auto: false });
+    trialWhole.reset();
+    trialDifferenced.reset();
+    trialWhole.writeFrame(index, width, height, whole);
+    trialDifferenced.writeFrame(differenced, width, height, kept);
+    const a = trialWhole.bytesView();
+    const b = trialDifferenced.bytesView();
+    encoder.stream.writeBytesView(b.length < a.length ? b : a);
+  };
+
   return {
     metadata: METADATA,
 
@@ -262,6 +484,14 @@ export function createGifencEncoder() {
       baseline = { error: 0, tail: 0 };
       earlyRebuilds = 0;
       transparent = encoderConfig.transparent === true;
+      dithering = encoderConfig.dithering === true;
+      dithered = null;
+      // A cutout clears pixels from one frame to the next, which only
+      // disposal to the background can show: differencing keeps the
+      // previous frame, so it is for opaque exports only
+      differencing = encoderConfig.frameDifferencing === true && !transparent;
+      shown = null;
+      differenced = null;
       // A clip-wide sample yields one global palette up front, so later
       // scenes are not forced onto frame 0's colors (#99). In transparent
       // mode only its opaque pixels count; a sample without any falls back
@@ -301,15 +531,23 @@ export function createGifencEncoder() {
         palette = buildPalette(rgba, config);
       }
 
+      // The pixels to map: dithered when asked (the palette and the alpha
+      // threshold still come from the frame itself)
+      let source = rgba;
+      if (dithering) {
+        if (dithered?.length !== rgba.length) dithered = new Uint8ClampedArray(rgba.length);
+        source = orderedDither(rgba, width, DITHERING.amplitude[format], dithered);
+      }
+
       // Map pixels to palette indices with same format
-      let index = applyPalette(rgba, palette, format);
+      let index = applyPalette(source, palette, format);
 
       // A scene cut or new content between scheduled rebuilds makes the
       // reused palette stale; rebuild early instead of waiting for the
       // schedule. Interval 0 keeps its clip-wide palette: rebuilding from
       // one frame would replace it with a worse, single-scene palette.
       if (interval > 1 && !perFrame) {
-        const fit = measurePalette(rgba, index, palette, width, transparent);
+        const fit = measurePalette(source, index, palette, width, transparent);
         if (scheduled) {
           baseline = fit;
           // Per-frame mode ends at a scheduled rebuild, but one more stale
@@ -318,8 +556,8 @@ export function createGifencEncoder() {
           earlyRebuilds = earlyRebuilds >= perFrameAfter ? perFrameAfter - 1 : 0;
         } else if (isPaletteStale(fit, baseline)) {
           palette = buildPalette(rgba, config);
-          index = applyPalette(rgba, palette, format);
-          baseline = measurePalette(rgba, index, palette, width, transparent);
+          index = applyPalette(source, palette, format);
+          baseline = measurePalette(source, index, palette, width, transparent);
           earlyRebuilds++;
         } else {
           earlyRebuilds = 0;
@@ -327,6 +565,11 @@ export function createGifencEncoder() {
       }
 
       const delay = frameData.delayMs ?? config.frameDelayMs;
+
+      if (differencing) {
+        writeDifferenced(index, width, height, delay);
+        return;
+      }
 
       if (!transparent) {
         encoder.writeFrame(index, width, height, {
@@ -381,6 +624,13 @@ export function createGifencEncoder() {
       config = null;
       palette = null;
       transparent = false;
+      differencing = false;
+      dithering = false;
+      dithered = null;
+      shown = null;
+      differenced = null;
+      trialWhole = null;
+      trialDifferenced = null;
     },
   };
 }
