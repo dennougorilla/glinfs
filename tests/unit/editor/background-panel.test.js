@@ -1091,7 +1091,9 @@ describe('tracked objects', () => {
     updateBackgroundPanel(root, stateWith(many.slice(0, 1)), 10);
     expect($('#background-tools-hint').textContent).not.toContain('limit');
     updateBackgroundPanel(root, stateWith(many), 10);
-    expect($('#background-tools-hint').textContent).toContain('limit of 4 tracked fix-ups');
+    expect($('#background-tools-hint').textContent).toContain(
+      `limit of ${EDIT_LIMITS.aiObjects.max} tracked fix-ups`,
+    );
     expect($('#ai-pick-remove').disabled).toBe(false);
   });
 });

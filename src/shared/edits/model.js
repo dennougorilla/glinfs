@@ -325,7 +325,9 @@ export const EDIT_LIMITS = /** @type {const} */ ({
   aiThreshold: { min: 0.05, max: 0.95 },
   aiEdge: { min: -8, max: 8 },
   aiPicks: { max: 16 },
-  aiObjects: { max: 4 },
+  // 8 fix-ups of a 300-frame clip fit the fix-ups' own mask budget
+  // (OBJECT_MASK_CAP_BYTES, 128 MB: 11-16 MB each at 256 px long side)
+  aiObjects: { max: 8 },
   aiObjectClicks: { max: 16 },
   aiObjectBoxes: { max: 8 },
   aiObjectGone: { max: 64 },

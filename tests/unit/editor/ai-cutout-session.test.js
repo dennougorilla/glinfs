@@ -968,6 +968,47 @@ describe('AI cutout session: tracked objects', () => {
     expect(preloadModel).toHaveBeenCalledWith('click', { allowWasm: false });
   });
 
+  it('a correction that adds a point re-tracks only its span; frames outside keep their masks (cutout-ux 5)', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls[0].range).toEqual({ start: 0, end: 3 });
+    const frame0 = `object:o1:${state.clip.frames[0].id}`;
+    const before = maskStore.get(frame0);
+    // One more point on frame 2: from after the anchor at 0 to the end
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0), click(2)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls[1].range).toEqual({ start: 1, end: 3 });
+    // Frame 0 was not redone: the same mask, now with the new prompts' tag
+    expect(maskStore.get(frame0)).toBe(before);
+    expect(maskStore.getTag(frame0)).toBe(getObjectSignature(state.edits.background.ai.objects[0]));
+    expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
+    // A changed pick re-tracks everything
+    setObjects([{ id: 'o1', mode: 'remove', candidate: 2, clicks: [click(0), click(2)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls[2].range).toEqual({ start: 0, end: 3 });
+  });
+
+  it('frames confirmed gone are not lost, and count as done (cutout-ux 5)', async () => {
+    manager.lostAt = new Set([2, 3]);
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(status.objectLost).toEqual({ o1: [2, 3] });
+    expect(status.objectShort).toBe(2);
+    // "Not here" on frame 2: the run of frames without its mask around it
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)], gone: [2] }]);
+    session.requestBuild();
+    session.syncObjects();
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(status.objectLost).toEqual({ o1: [] });
+    expect(status.objectShort).toBe(0);
+    expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
+  });
+
   it('tracks a new object through the selection and reports its lost frames', async () => {
     manager.lostAt = new Set([3]);
     setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
