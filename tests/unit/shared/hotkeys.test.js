@@ -334,6 +334,43 @@ describe('editable-target guard', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it.each(['radio', 'checkbox', 'range', 'button'])(
+    'fires a Ctrl/Meta hotkey while a %s input has focus (it types no text)',
+    (type) => {
+      const handler = vi.fn();
+      register({ key: 'e', modifiers: { ctrl: true }, scope: 'route', handler });
+      register({ key: 'e', modifiers: { meta: true }, scope: 'route', handler });
+      const input = document.createElement('input');
+      input.type = type;
+      document.body.appendChild(input);
+      input.focus();
+
+      press({ key: 'e', ctrlKey: true }, input);
+      press({ key: 'e', metaKey: true });
+
+      expect(handler).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('still suppresses unmodified keys on those inputs, and Ctrl/Meta in a text field', () => {
+    const plain = vi.fn();
+    const ctrl = vi.fn();
+    register({ key: ' ', scope: 'route', handler: plain });
+    register({ key: 'e', modifiers: { ctrl: true }, scope: 'route', handler: ctrl });
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    const text = document.createElement('input');
+    document.body.append(radio, text);
+
+    radio.focus();
+    press({ key: ' ' }, radio);
+    text.focus();
+    press({ key: 'e', ctrlKey: true }, text);
+
+    expect(plain).not.toHaveBeenCalled();
+    expect(ctrl).not.toHaveBeenCalled();
+  });
+
   it('lets an opted-in lower scope act while a guarded higher one is skipped', () => {
     const overlay = vi.fn();
     const global = vi.fn();
