@@ -197,6 +197,24 @@ describe('Export with the AI cutout', () => {
     );
   });
 
+  it('says the size waits for the analysis after Back from a failed analysis', async () => {
+    inject();
+    dialog = openExportDialog();
+    fake.analyzeFrames.mockRejectedValueOnce(
+      new SegmentationError(SegmentationErrorCode.HASH_MISMATCH, 'bad'),
+    );
+    $('#export-start')?.click();
+    await vi.waitFor(() =>
+      expect($('#export-ai-prep')?.textContent).toContain('could not be prepared'),
+    );
+    $('#export-ai-back')?.click();
+
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    await vi.waitFor(() =>
+      expect($('#export-estimate')?.textContent).toBe('Size known after the cutout is analyzed'),
+    );
+  });
+
   it('shows analysis progress with Cancel, and cancel returns to the settings', async () => {
     inject();
     dialog = openExportDialog();

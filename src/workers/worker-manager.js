@@ -102,6 +102,14 @@ export class GifEncoderManager {
 
     /** @type {((error: Error) => void) | null} */
     this._globalErrorHandler = null;
+
+    /**
+     * Fails the init in progress, if any. dispose() calls it: the worker it
+     * waits for is gone, and its timeout must not outlive it (it would
+     * dispose a worker a later init started on this manager)
+     * @type {((error: Error) => void) | null}
+     */
+    this._failInit = null;
   }
 
   /**
@@ -144,12 +152,17 @@ export class GifEncoderManager {
         if (isSettled) return;
         isSettled = true;
         cleanup();
+        if (this._failInit === failInit) this._failInit = null;
         if (type === 'resolve') {
           resolve();
         } else {
           reject(error);
         }
       };
+
+      /** @param {Error} error */
+      const failInit = (error) => settle('reject', error);
+      this._failInit = failInit;
 
       try {
         // A worker whose listeners are set up can take the next INIT as is
@@ -177,7 +190,9 @@ export class GifEncoderManager {
               { timeoutMs, encoderId: config.encoderId },
             ),
           );
-          this.dispose();
+          // Only the worker this init started (dispose() fails the init
+          // and clears this timeout, so it is always that one)
+          if (this.worker === worker) this.dispose();
         }, timeoutMs);
 
         /**
@@ -341,6 +356,7 @@ export class GifEncoderManager {
    */
   dispose() {
     this._terminateWorker();
+    this._failInit?.(new DOMException('Encoding cancelled', 'AbortError'));
 
     // Reject a pending finish() before clearing callbacks — terminating the
     // worker means COMPLETE/ERROR/CANCELLED will never arrive.

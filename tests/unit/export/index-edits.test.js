@@ -189,6 +189,31 @@ describe('export dialog: plain screen captures', () => {
     );
   });
 
+  it('estimates again when an export started during sampling is cancelled', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) =>
+      fakeGifBlob(10_000 * params.frameIndices.length, params.frameIndices.length),
+    );
+    // The export's encode runs until it is cancelled
+    vi.mocked(encodeGif).mockImplementationOnce(
+      (_params, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('Encoding cancelled', 'AbortError')),
+          );
+        }),
+    );
+    dialog = openExportDialog();
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    clickExport();
+    await vi.waitFor(() => expect($('#export-cancel')).not.toBeNull());
+    $('#export-cancel')?.dispatchEvent(new MouseEvent('click'));
+
+    await vi.waitFor(() => expect($('#export-settings')).not.toBeNull());
+    expect($('#export-estimate')?.textContent).toBe('Estimating size…');
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+  });
+
   it('re-estimates when a setting that changes the size changes', async () => {
     inject({ count: 30 });
     vi.mocked(encodeGif).mockImplementation(async (params) =>

@@ -1122,8 +1122,13 @@ function estimateEncoderOf(settings) {
 function cancelDialogEstimate() {
   if (dialogEstimate.timer !== null) clearTimeout(dialogEstimate.timer);
   dialogEstimate.timer = null;
-  dialogEstimate.controller?.abort();
-  dialogEstimate.controller = null;
+  if (dialogEstimate.controller) {
+    // The abandoned encode disposes its worker; the next estimate starts
+    // on a new manager, so nothing left of this one can reach it
+    dialogEstimate.controller.abort();
+    dialogEstimate.controller = null;
+    dialogEstimate.encoder = null;
+  }
 }
 
 /**
@@ -1426,9 +1431,12 @@ async function handleExport() {
     if (!isCurrent()) return;
     sizeStep = null;
     if (isAbortError(error)) {
-      // Cancel returns to the settings
+      // Cancel returns to the settings, with a fresh estimate (the one
+      // running when Export was clicked was dropped)
       aiPrep = null;
       dialogStore.setState(resetExport);
+      if (encodingController === controller) encodingController = null;
+      if (store === dialogStore) scheduleDialogEstimate();
       emit('export:cancelled', {});
       announce('Export cancelled');
     } else if (error instanceof AiPreparationError) {
@@ -1573,6 +1581,7 @@ function handleAiAllowWasm() {
 function handleAiBack() {
   if (!store) return;
   aiPrep = null;
+  scheduleDialogEstimate();
   render();
 }
 
