@@ -22,6 +22,14 @@ import {
 import { clampFrameIndex } from './selection.js';
 
 /**
+ * Main-thread time spent drawing thumbnails per animation frame. A 1080p
+ * thumbnail costs 1-2.6 ms without GPU raster, so drawing a whole window
+ * (about 100 items) at once blocked for 150-220 ms; within this budget the
+ * grid paints at once and fills in over the next frames.
+ */
+export const THUMBNAIL_FRAME_BUDGET_MS = 8;
+
+/**
  * Copy a rendered thumbnail's pixel content into a brand-new canvas.
  *
  * An evicted row zeroes its canvas's width/height to force immediate
@@ -121,6 +129,12 @@ export function createFrameGridVirtualizer({
   const thumbnailCache = createGridThumbnailCache();
   /** @type {number | null} */
   let virtualRenderFrame = null;
+  // Items waiting for their thumbnail (with the known CSS width, if any),
+  // drawn in insertion order within THUMBNAIL_FRAME_BUDGET_MS per frame
+  /** @type {Map<HTMLElement, number | undefined>} */
+  const pendingThumbnails = new Map();
+  /** @type {number | null} */
+  let thumbnailFrame = null;
 
   /**
    * Get current grid geometry for both CSS-grid and virtualized layouts.
@@ -168,6 +182,44 @@ export function createFrameGridVirtualizer({
   }
 
   /**
+   * Queue an item's thumbnail; it keeps its placeholder until drawn.
+   * @param {HTMLElement} item
+   * @param {number} [displayWidthOverride]
+   */
+  function queueThumbnail(item, displayWidthOverride) {
+    pendingThumbnails.set(item, displayWidthOverride);
+  }
+
+  /**
+   * Draw queued thumbnails until the frame budget is spent (at least one),
+   * then continue on the next animation frame.
+   */
+  function drawPendingThumbnails() {
+    if (disposed) return;
+    const start = performance.now();
+    for (const [item, displayWidth] of pendingThumbnails) {
+      pendingThumbnails.delete(item);
+      renderThumbnail(item, displayWidth);
+      if (performance.now() - start >= THUMBNAIL_FRAME_BUDGET_MS) break;
+    }
+    if (pendingThumbnails.size > 0) scheduleThumbnailDraw();
+  }
+
+  function scheduleThumbnailDraw() {
+    if (thumbnailFrame !== null) return;
+    // -1 keeps this correct where requestAnimationFrame runs synchronously (tests)
+    thumbnailFrame = -1;
+    const frameId = window.requestAnimationFrame(() => {
+      thumbnailFrame = null;
+      if (disposed || !isMounted()) return;
+      drawPendingThumbnails();
+    });
+    if (thumbnailFrame === -1) {
+      thumbnailFrame = frameId;
+    }
+  }
+
+  /**
    * Position an item in the virtual grid.
    * @param {HTMLElement} item
    * @param {number} index
@@ -199,7 +251,7 @@ export function createFrameGridVirtualizer({
     positionVirtualItem(item, index, metrics);
     // The virtual layout already calculated this width. Passing it through
     // avoids a layout read after writing position/size for every visible cell.
-    renderThumbnail(item, metrics.cellWidth);
+    queueThumbnail(item, metrics.cellWidth);
   }
 
   /**
@@ -211,6 +263,7 @@ export function createFrameGridVirtualizer({
     if (!item) return;
 
     onItemEvicted(item);
+    pendingThumbnails.delete(item);
     // Removing a focused item drops focus to <body>, silently escaping the
     // modal's Tab trap. Relocate focus to the (non-tab-stop) grid container
     // first so it stays inside the modal.
@@ -258,6 +311,7 @@ export function createFrameGridVirtualizer({
     for (let index = firstIndex; index <= lastIndex; index++) {
       materializeGridItem(index, metrics);
     }
+    drawPendingThumbnails();
   }
 
   /** Coalesce rapid scroll events into one virtual-window update per frame. */
@@ -282,9 +336,10 @@ export function createFrameGridVirtualizer({
       const item = gridItems[index];
       if (!item) return;
       if (isVirtualized || item.querySelector('canvas, .frame-grid-thumbnail-error')) {
-        renderThumbnail(item);
+        queueThumbnail(item);
       }
     });
+    drawPendingThumbnails();
   }
 
   // Lazy loading with IntersectionObserver (with fallback for unsupported environments)
@@ -301,12 +356,13 @@ export function createFrameGridVirtualizer({
 
               // Render thumbnail if not already rendered
               if (!item.querySelector('canvas')) {
-                renderThumbnail(item);
+                queueThumbnail(item);
               }
 
               thumbnailObserver.unobserve(item);
             }
           });
+          drawPendingThumbnails();
         },
         {
           root: body, // Scroll container
@@ -329,11 +385,12 @@ export function createFrameGridVirtualizer({
 
       const isInitiallySelected = index === initialRange.start || index === initialRange.end;
       if (isInitiallySelected || !thumbnailObserver) {
-        renderThumbnail(item);
+        queueThumbnail(item);
       } else {
         thumbnailObserver.observe(item);
       }
     });
+    drawPendingThumbnails();
   }
 
   if (isVirtualized) {
@@ -418,6 +475,11 @@ export function createFrameGridVirtualizer({
       window.cancelAnimationFrame(virtualRenderFrame);
       virtualRenderFrame = null;
     }
+    if (thumbnailFrame !== null && thumbnailFrame >= 0) {
+      window.cancelAnimationFrame(thumbnailFrame);
+      thumbnailFrame = null;
+    }
+    pendingThumbnails.clear();
     materializedIndices.forEach((index) => {
       const item = gridItems[index];
       if (item) releaseThumbnail(item);

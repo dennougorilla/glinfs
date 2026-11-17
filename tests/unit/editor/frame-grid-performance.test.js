@@ -299,6 +299,49 @@ describe('Frame Grid bounded rendering (issue #47)', { retry: 1 }, () => {
     expect(callbacks.onApply).toHaveBeenCalledWith({ start: 3000, end: 3020 });
   });
 
+  it('draws thumbnails within a per-frame time budget and the rest on later frames', () => {
+    /** @type {FrameRequestCallback[]} */
+    const queuedAnimationFrames = [];
+    vi.mocked(window.requestAnimationFrame).mockImplementation((callback) => {
+      queuedAnimationFrames.push(callback);
+      return queuedAnimationFrames.length;
+    });
+    // Every thumbnail costs 3 ms of main-thread time (a CPU-raster 1080p draw)
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(function context() {
+      return /** @type {CanvasRenderingContext2D} */ ({
+        canvas: this,
+        fillRect: vi.fn(() => {
+          clock += 3;
+        }),
+        drawImage: vi.fn(() => {
+          clock += 3;
+        }),
+      });
+    });
+
+    const opened = clock;
+    renderModal(3600);
+    const grid = /** @type {HTMLElement} */ (document.querySelector('.frame-grid-container'));
+    const items = [...grid.querySelectorAll('.frame-grid-item')];
+    const drawnAtOpen = grid.querySelectorAll('.frame-grid-item canvas').length;
+
+    // The modal opens with a first batch and placeholders for the rest
+    expect(items.length).toBeGreaterThan(20);
+    expect(drawnAtOpen).toBeGreaterThan(0);
+    expect(drawnAtOpen).toBeLessThan(items.length);
+    expect(clock - opened).toBeLessThan(20);
+
+    // Each later frame stays within the budget (plus the one draw that crosses it)
+    for (let guard = 0; queuedAnimationFrames.length > 0 && guard < 200; guard++) {
+      const before = clock;
+      queuedAnimationFrames.shift()?.(16);
+      expect(clock - before).toBeLessThan(20);
+    }
+    expect(items.every((item) => item.querySelector('canvas'))).toBe(true);
+  });
+
   it('releases every canvas and ignores delayed work after cleanup', () => {
     /** @type {FrameRequestCallback[]} */
     const queuedAnimationFrames = [];

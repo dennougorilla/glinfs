@@ -518,13 +518,21 @@ function handleStop(preserveBuffer = true) {
  * the pixel data at construction time, so keeping the bitmap alive after a
  * successful conversion only defers release to nondeterministic GC (#40).
  *
+ * A clip has one frame size: the editor and the export size every frame by
+ * the first. Switching the shared source (Chrome's "Share this tab instead",
+ * a resized window) changes the size mid-buffer, so only the frames of the
+ * newest source (the run since the last size change) make the clip; the
+ * older bitmaps are closed with the rest.
+ *
  * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
  * @returns {import('./types.js').Frame[]}
  */
 export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
   const videoFrames = [];
+  const start = getNewestSourceStart(imageBitmapFrames);
+  for (const item of imageBitmapFrames.slice(0, start)) item.bitmap?.close();
 
-  for (const item of imageBitmapFrames) {
+  for (const item of imageBitmapFrames.slice(start)) {
     // Validate ImageBitmap
     if (!item.bitmap || item.bitmap.width === 0 || item.bitmap.height === 0) {
       item.bitmap?.close();
@@ -561,6 +569,28 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
   }
 
   return videoFrames;
+}
+
+/**
+ * Index of the first frame of the newest source: the trailing run of
+ * frames with the size of the last usable one
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} frames
+ * @returns {number}
+ */
+function getNewestSourceStart(frames) {
+  const sized = (/** @type {number} */ i) =>
+    frames[i]?.bitmap && frames[i].bitmap.width > 0 && frames[i].bitmap.height > 0;
+  let last = frames.length - 1;
+  while (last >= 0 && !sized(last)) last--;
+  if (last < 0) return 0;
+  const { width, height } = frames[last].bitmap;
+  let start = last;
+  while (start > 0) {
+    const previous = frames[start - 1].bitmap;
+    if (sized(start - 1) && (previous.width !== width || previous.height !== height)) break;
+    start--;
+  }
+  return start;
 }
 
 /**
