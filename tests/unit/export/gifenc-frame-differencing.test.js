@@ -7,10 +7,10 @@ import { describe, expect, it } from 'vitest';
  * and a frame is only differenced where that is smaller.
  */
 
+import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 import {
   createGifencEncoder,
   differenceFrame,
-  FRAME_DIFFERENCING,
   findUnusedIndex,
 } from '../../../src/features/export/encoders/gifenc-encoder.js';
 import { readGifStructure, renderGifFrames } from './gif-structure.js';
@@ -107,17 +107,16 @@ function encode(generate, frames, config = {}) {
 }
 
 describe('differenceFrame', () => {
-  it('writes unchanged colors as the transparent index and counts transitions', () => {
+  it('writes unchanged colors as the transparent index and counts the kept pixels', () => {
     const colors = Int32Array.from([0x000000, 0xffffff, 0xff0000]);
     // Shown before: black, white, white, black; now: black, red, white, white
     const shown = Int32Array.from([0x000000, 0xffffff, 0xffffff, 0x000000]);
     const out = new Uint8Array(4);
-    const stats = differenceFrame(Uint8Array.from([0, 2, 1, 1]), colors, shown, 3, out);
+    const kept = differenceFrame(Uint8Array.from([0, 2, 1, 1]), colors, shown, 3, out);
 
     expect(Array.from(out)).toEqual([3, 2, 3, 1]);
     expect(Array.from(shown)).toEqual([0x000000, 0xff0000, 0xffffff, 0xffffff]);
-    // kept | changed | kept | changed: 4 runs, starting from "changed"
-    expect(stats).toEqual({ transitions: 4 / 4, kept: 2 / 4 });
+    expect(kept).toBe(2);
   });
 
   it('compares colors, not indices, so a new palette keeps matching pixels', () => {
@@ -173,8 +172,8 @@ describe('gifenc frame differencing', () => {
   });
 
   it('keeps the smaller encoding of each tried frame', () => {
-    const plain = encode(halfSparse, 2 * FRAME_DIFFERENCING.trialEvery);
-    const differenced = encode(halfSparse, 2 * FRAME_DIFFERENCING.trialEvery, {
+    const plain = encode(halfSparse, 16);
+    const differenced = encode(halfSparse, 16, {
       frameDifferencing: true,
     });
 
@@ -294,8 +293,8 @@ describe('gifenc frame differencing', () => {
       `[noise12+static150] plain ${plain.length} B, differenced ${differenced.length} B, ${whole} of 150 static frames whole\n`,
     );
 
-    // Within about two trial periods of the cut, not ~136 frames later
-    expect(whole).toBeLessThanOrEqual(2 * FRAME_DIFFERENCING.trialEvery);
+    // Only the cut itself, not ~136 frames after it
+    expect(whole).toBeLessThanOrEqual(1);
   });
 
   it('is off for transparent exports, which clear pixels with dispose 2', () => {
@@ -310,5 +309,242 @@ describe('gifenc frame differencing', () => {
 
     expect(withFlag).toEqual(without);
     expect(readGifStructure(withFlag).frames.every((f) => f.disposal === 2)).toBe(true);
+  });
+});
+
+/**
+ * Bytes of each frame of a GIF (graphic control extension to the end of
+ * the image data), as gifenc writes them
+ * @param {Uint8Array} bytes
+ * @returns {number[]}
+ */
+function frameBytes(bytes) {
+  const lsd = bytes[10];
+  let pos = 13 + (lsd & 0x80 ? 3 * (1 << ((lsd & 7) + 1)) : 0);
+  let start = 0;
+  /** @type {number[]} */
+  const sizes = [];
+  const skipBlocks = () => {
+    while (bytes[pos] !== 0) pos += bytes[pos] + 1;
+    pos++;
+  };
+  while (pos < bytes.length) {
+    const b = bytes[pos++];
+    if (b === 0x3b) break;
+    if (b === 0x21) {
+      const label = bytes[pos++];
+      if (label === 0xf9) start = pos - 2;
+      skipBlocks();
+    } else if (b === 0x2c) {
+      const fields = bytes[pos + 8];
+      pos += 9 + (fields & 0x80 ? 3 * (1 << ((fields & 7) + 1)) : 0) + 1;
+      skipBlocks();
+      sizes.push(pos - start);
+    }
+  }
+  return sizes;
+}
+
+/**
+ * The bytes each frame takes encoded whole and differenced, computed here
+ * from gifenc directly (palette per frame, as paletteInterval 1 does): the
+ * oracle the encoder's choice is checked against. `null` where no
+ * differenced encoding exists (the first frame, no free palette index).
+ * @param {Uint8ClampedArray[]} frames
+ * @param {number} width
+ * @param {number} height
+ * @param {number} maxColors
+ */
+function oracle(frames, width, height, maxColors) {
+  const scratch = GIFEncoder({ auto: false });
+  const size = (/** @type {Uint8Array} */ index, /** @type {any} */ opts) => {
+    scratch.reset();
+    scratch.writeFrame(index, width, height, opts);
+    return scratch.bytesView().length;
+  };
+  const tableSize = (/** @type {number} */ n) => 2 ** Math.max(1, Math.ceil(Math.log2(n)));
+  /** @type {Int32Array | null} */
+  let previous = null;
+  return frames.map((rgba) => {
+    const palette = quantize(rgba, maxColors, { format: 'rgb565' });
+    const index = applyPalette(rgba, palette, 'rgb565');
+    const colors = palette.map(([r, g, b]) => (r << 16) | (g << 8) | b);
+    const shows = Int32Array.from(index, (i) => colors[i]);
+    const opts = { palette, delay: 100, repeat: 0, dispose: 1 };
+    const whole = size(index, opts);
+    const before = previous;
+    previous = shows;
+    if (!before) return { whole, differenced: null };
+    const room =
+      palette.length < 256 && tableSize(palette.length + 1) === tableSize(palette.length);
+    const unused = room ? -1 : findUnusedIndex(index, palette.length);
+    const t = unused >= 0 ? unused : palette.length;
+    if (t > 255) return { whole, differenced: null };
+    const out = Uint8Array.from(index, (v, i) => (shows[i] === before[i] ? t : v));
+    const differenced = size(out, {
+      palette: unused >= 0 ? palette : [...palette, [0, 0, 0]],
+      delay: 100,
+      repeat: 0,
+      transparent: true,
+      transparentIndex: t,
+      dispose: 1,
+    });
+    return { whole, differenced };
+  });
+}
+
+describe('gifenc frame differencing: the smaller encoding of every frame', () => {
+  const W2 = 96;
+  const H2 = 64;
+  /** @param {number} seed */
+  const random = (seed) => rng(seed);
+  /** @param {number[]} rgb */
+  const fill = (rgb) => {
+    const px = new Uint8ClampedArray(W2 * H2 * 4);
+    for (let i = 0; i < W2 * H2; i++) px.set([...rgb, 255], i * 4);
+    return px;
+  };
+  /** 1 px scanlines with particles flickering every other frame (review round 3) */
+  const scanlineFlicker = () => {
+    const r = random(3);
+    const bg = new Uint8ClampedArray(W2 * H2 * 4);
+    for (let y = 0; y < H2; y++)
+      for (let x = 0; x < W2; x++)
+        bg.set(y & 1 ? [240, 240, 240, 255] : [20, 20, 20, 255], (y * W2 + x) * 4);
+    return Array.from({ length: 24 }, (_, f) => {
+      const px = bg.slice();
+      if (f % 2)
+        for (let i = 0; i < W2 * H2; i++) if (r() < 0.1) px.set([255, 255, 255, 255], i * 4);
+      return px;
+    });
+  };
+  /** Ordered-dithered sky with stars blinking in a pattern, then held (review round 3) */
+  const starBlink = (/** @type {string} */ pattern, /** @type {number} */ hold) => {
+    const r = random(3);
+    const bayer = [
+      [0, 8, 2, 10],
+      [12, 4, 14, 6],
+      [3, 11, 1, 9],
+      [15, 7, 13, 5],
+    ];
+    const sky = new Uint8ClampedArray(W2 * H2 * 4);
+    for (let y = 0; y < H2; y++)
+      for (let x = 0; x < W2; x++)
+        sky.set(
+          (y / H2) * 16 > bayer[y & 3][x & 3] ? [20, 20, 70, 255] : [70, 40, 120, 255],
+          (y * W2 + x) * 4,
+        );
+    const on = sky.slice();
+    for (let i = 0; i < W2 * H2 * 0.04; i++)
+      on.set([255, 255, 200, 255], ((r() * W2 * H2) | 0) * 4);
+    const seq = [...pattern].map((c) => (c === '1' ? on : sky));
+    return [...seq, ...Array(hold).fill(seq.at(-1))];
+  };
+  /** Two frames alternating, or a short flicker over a still frame */
+  const alternate = (
+    /** @type {Uint8ClampedArray} */ a,
+    /** @type {Uint8ClampedArray} */ b,
+    period = 1,
+  ) => Array.from({ length: 20 }, (_, f) => (Math.floor(f / period) % 2 ? b : a));
+  /** Random clips: random palettes, random share and shape of changes */
+  const randomClip = (/** @type {number} */ seed) => {
+    const r = random(seed);
+    const colorCount = [1, 2, 4, 16, 300][Math.floor(r() * 5)];
+    const palette = Array.from({ length: colorCount }, () => [
+      (r() * 256) | 0,
+      (r() * 256) | 0,
+      (r() * 256) | 0,
+    ]);
+    let prev = new Uint8ClampedArray(W2 * H2 * 4);
+    for (let i = 0; i < W2 * H2; i++) prev.set([...palette[(r() * colorCount) | 0], 255], i * 4);
+    return Array.from({ length: 12 }, () => {
+      const cur = prev.slice();
+      const share = [0, 0.01, 0.2, 0.7, 1][Math.floor(r() * 5)];
+      const x0 = (r() * W2) | 0;
+      const bw = Math.max(1, (r() * W2) | 0);
+      for (let i = 0; i < W2 * H2; i++) {
+        const x = i % W2;
+        if ((x >= x0 && x < x0 + bw && r() < share) || r() < share * 0.05) {
+          cur.set([...palette[(r() * colorCount) | 0], 255], i * 4);
+        }
+      }
+      prev = cur;
+      return cur;
+    });
+  };
+
+  const cases = [
+    ['scanlines with flickering particles', scanlineFlicker(), 64],
+    ['stars blinking 1001100110, then held', starBlink('1001100110', 20), 64],
+    ['stars on, off, then held off', starBlink('10', 30), 64],
+    [
+      'black / white third, alternating',
+      alternate(
+        fill([0, 0, 0]),
+        (() => {
+          const px = fill([0, 0, 0]);
+          for (let i = 0; i < W2 * H2; i++)
+            if (i % W2 < W2 / 3) px.set([255, 255, 255, 255], i * 4);
+          return px;
+        })(),
+      ),
+      64,
+    ],
+    [
+      'two noise frames alternating',
+      alternate(noise(1).slice(0, W2 * H2 * 4), noise(2).slice(0, W2 * H2 * 4)),
+      64,
+    ],
+    ['flicker every 3 frames', alternate(fill([10, 120, 200]), fill([200, 120, 10]), 3), 16],
+    [
+      'noise then still',
+      [
+        ...Array.from({ length: 6 }, (_, f) => noise(f + 9).slice(0, W2 * H2 * 4)),
+        ...Array(8).fill(fill([30, 60, 90])),
+      ],
+      64,
+    ],
+    ...Array.from({ length: 12 }, (_, k) => [
+      `random clip ${k + 1}`,
+      randomClip(k * 7919 + 11),
+      [2, 16, 64, 256][k % 4],
+    ]),
+  ];
+
+  it.each(cases)('%s', (_label, frames, maxColors) => {
+    /** @param {boolean} frameDifferencing */
+    const run = (frameDifferencing) => {
+      const encoder = createGifencEncoder();
+      encoder.init({
+        width: W2,
+        height: H2,
+        maxColors: /** @type {number} */ (maxColors),
+        frameDelayMs: 100,
+        loopCount: 0,
+        quantizeFormat: 'rgb565',
+        paletteInterval: 1,
+        frameDifferencing,
+      });
+      for (const [f, rgba] of /** @type {Uint8ClampedArray[]} */ (frames).entries()) {
+        encoder.addFrame({ rgba, width: W2, height: H2 }, f);
+      }
+      return encoder.finish();
+    };
+    const plain = run(false);
+    const differenced = run(true);
+    const written = frameBytes(differenced);
+    const expected = oracle(
+      /** @type {Uint8ClampedArray[]} */ (frames),
+      W2,
+      H2,
+      /** @type {number} */ (maxColors),
+    ).map(({ whole, differenced: d }) => (d === null ? whole : Math.min(whole, d)));
+
+    // The first frame's palette is the GIF's global table: compare it with
+    // the first frame of the GIF without differencing instead
+    expected[0] = frameBytes(plain)[0];
+    expect(written).toEqual(expected);
+    expect(differenced.length).toBeLessThanOrEqual(plain.length);
+    expect(renderGifFrames(differenced)).toEqual(renderGifFrames(plain));
   });
 });
