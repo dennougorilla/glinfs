@@ -182,6 +182,71 @@ describe('CaptureWorkerManager', () => {
     await expect(second).resolves.toEqual([]);
   });
 
+  it('terminates the worker on its error; a new init starts a fresh one (B10)', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+    const worker = MockWorker.instances[0];
+
+    worker.onerror?.({ message: 'boom' });
+
+    expect(worker.terminated).toBe(true);
+    expect(manager.isInitialized).toBe(false);
+    manager.init(createFakeVideo());
+    expect(MockWorker.instances).toHaveLength(2);
+    expect(manager.isInitialized).toBe(true);
+  });
+
+  it('closes the bitmaps of a FRAMES_RESPONSE nobody waits for (B10)', () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+    const worker = MockWorker.instances[0];
+    const late = [
+      { id: 'a', bitmap: { close: vi.fn() }, timestamp: 0 },
+      { id: 'b', bitmap: { close: vi.fn() }, timestamp: 1 },
+    ];
+
+    worker._simulateMessage({ type: 'FRAMES_RESPONSE', payload: { frames: late } });
+
+    for (const frame of late) expect(frame.bitmap.close).toHaveBeenCalledOnce();
+  });
+
+  it('reports a change of captured frame size since start (B5)', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ close: vi.fn() }));
+    const onFrameSizeChange = vi.fn();
+    const video = /** @type {any} */ ({ readyState: 4, videoWidth: 1280, videoHeight: 720 });
+    const manager = new CaptureWorkerManager();
+    manager.init(video, { onFrameSizeChange, maxEdge: 1920 });
+    manager.start(30, 100);
+    const worker = MockWorker.instances[0];
+    const grab = async () => {
+      const before = worker.messages.length;
+      worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 0 } });
+      await vi.waitFor(() => expect(worker.messages.length).toBeGreaterThan(before));
+    };
+
+    await grab();
+    expect(onFrameSizeChange).not.toHaveBeenCalled();
+    // The shared window grows: frames are now 1920x1080 (scaled from 2560x1440)
+    video.videoWidth = 2560;
+    video.videoHeight = 1440;
+    await grab();
+    await grab();
+    expect(onFrameSizeChange).toHaveBeenCalledOnce();
+    expect(onFrameSizeChange).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 1920, height: 1080 }),
+    );
+  });
+
+  it('posts RESIZE with the new capacity (B5)', () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(createFakeVideo());
+    manager.resize(120);
+    expect(MockWorker.instances[0]._lastMessage('RESIZE')?.message.payload).toEqual({
+      maxFrames: 120,
+    });
+  });
+
   it('resolves requestFrames with an empty array when not initialized', async () => {
     const manager = new CaptureWorkerManager();
 

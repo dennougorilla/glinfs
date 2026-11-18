@@ -75,6 +75,12 @@ self.onmessage = (e) => {
       sendFrames();
       break;
 
+    case 'RESIZE':
+      // A new capacity while capturing: the frame size changed (B5)
+      resizeBuffer(payload.maxFrames);
+      sendStats();
+      break;
+
     case 'CLEAR':
       clearBuffer();
       break;
