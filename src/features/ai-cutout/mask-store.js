@@ -198,29 +198,30 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
   /**
    * The cap now: the default, or what the active clip's groups need when
-   * that is more (frames x the size of one of its masks x groups)
+   * that is more. Each group needs frames x the size of one of its masks; a
+   * group with no mask yet is counted at the largest mask of the clip (a
+   * fix-up's masks are far smaller than the base model's)
    * @returns {number}
    */
   function currentCap() {
     if (!active || active.frames <= 0) return capBytes;
-    let maskBytes = 0;
-    for (const model of active.models) {
-      const group = groups.get(groupId(active.clipId, model));
-      const key = group?.keys.values().next().value;
-      if (key !== undefined) {
-        maskBytes = /** @type {{ mask: ProbabilityMask }} */ (entries.get(key)).mask.data
-          .byteLength;
-        break;
-      }
-    }
-    return Math.max(capBytes, active.frames * maskBytes * active.models.size);
+    const { clipId, frames } = active;
+    /** @type {(number | null)[]} */
+    const sizes = [...active.models].map((model) => {
+      const key = groups.get(groupId(clipId, model))?.keys.values().next().value;
+      if (key === undefined) return null;
+      return /** @type {{ mask: ProbabilityMask }} */ (entries.get(key)).mask.data.byteLength;
+    });
+    const largest = Math.max(0, ...sizes.map((size) => size ?? 0));
+    const need = sizes.reduce((sum, size) => sum + frames * (size ?? largest), 0);
+    return Math.max(capBytes, need);
   }
 
   /**
    * Least-recently-used group that may go: another clip's first, then one of
    * the active clip's groups it no longer reads; never `keepGroup` and never
    * a group the active clip reads
-   * @param {string} keepGroup
+   * @param {string | null} keepGroup
    * @returns {string | null}
    */
   function pickVictim(keepGroup) {
@@ -246,7 +247,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
   /**
    * Evict groups (see pickVictim) until under the cap.
-   * @param {string} keepGroup
+   * @param {string | null} keepGroup - The group being written, if any
    */
   function evictOverCap(keepGroup) {
     const cap = currentCap();
@@ -341,6 +342,9 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
         clipId === null
           ? null
           : { clipId, frames: need?.frames ?? 0, models: new Set(need?.models ?? []) };
+      // The groups protected until now may be over the new cap: reclaim at
+      // once, not at the next write (a switch to an unanalyzed clip has none)
+      evictOverCap(null);
     },
 
     keysForClip(clipId) {
