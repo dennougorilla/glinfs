@@ -63,4 +63,25 @@ describe('applyPaletteFast', () => {
     const px = Uint8ClampedArray.from([100, 100, 100, 255, 110, 100, 100, 255, 5, 5, 5, 255]);
     expect(applyPaletteFast(px, palette)).toEqual(applyPalette(px, palette, 'rgb565'));
   });
+
+  it.each(['rgb565', 'rgb444'])(
+    'stable (%s): a color maps to the same index whichever pixel of its key comes first',
+    (format) => {
+      // 96 and 103 share a 5-bit (and a 4-bit) key with 100
+      const palette = [
+        [96, 96, 96],
+        [103, 103, 103],
+        [0, 0, 0],
+      ];
+      const px = (first) => Uint8ClampedArray.from([...first, 255, 100, 100, 100, 255]);
+      const opts = { stable: true };
+      const a = applyPaletteFast(px([96, 96, 96]), palette, /** @type {any} */ (format), opts);
+      const b = applyPaletteFast(px([103, 103, 103]), palette, /** @type {any} */ (format), opts);
+      expect(a[1]).toBe(b[1]);
+      // Without it, the first pixel decides (gifenc)
+      const c = applyPaletteFast(px([96, 96, 96]), palette, /** @type {any} */ (format));
+      const d = applyPaletteFast(px([103, 103, 103]), palette, /** @type {any} */ (format));
+      expect(c[1]).not.toBe(d[1]);
+    },
+  );
 });

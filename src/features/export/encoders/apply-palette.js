@@ -11,6 +11,11 @@
  * last of equally near colors wins) are gifenc's, so the indices are
  * identical.
  *
+ * With `stable`, the search uses the centre of the key's color range
+ * instead of the first pixel's color: the first pixel of a key changes from
+ * frame to frame, so a still pixel could change index (and shown color)
+ * between frames. The encoder uses it; the default stays gifenc's.
+ *
  * @module features/export/encoders/apply-palette
  */
 
@@ -21,9 +26,12 @@ let cache = null;
  * @param {Uint8Array | Uint8ClampedArray} rgba
  * @param {number[][]} palette - At most 256 colors
  * @param {'rgb565' | 'rgb444'} [format='rgb565']
+ * @param {{ stable?: boolean }} [options] - stable: a key is looked up with
+ *   the centre of its color range, not the first pixel's color, so a color
+ *   maps to the same index wherever and whenever it appears
  * @returns {Uint8Array} Palette index per pixel
  */
-export function applyPaletteFast(rgba, palette, format = 'rgb565') {
+export function applyPaletteFast(rgba, palette, format = 'rgb565', { stable = false } = {}) {
   const n = palette.length;
   if (n === 0 || n > 256) throw new Error('applyPaletteFast() needs 1-256 colors');
   const pr = new Int32Array(n);
@@ -56,18 +64,22 @@ export function applyPaletteFast(rgba, palette, format = 'rgb565') {
       : ((r << 8) & 0xf800) | ((g << 2) & 0x03e0) | (b >> 3);
     let k = c[key];
     if (k < 0) {
+      // The color searched for: the pixel's, or its key's range centre
+      const sr = stable ? (rgb444 ? (r & 0xf0) | 8 : (r & 0xf8) | 4) : r;
+      const sg = stable ? (rgb444 ? (g & 0xf0) | 8 : (g & 0xf8) | 4) : g;
+      const sb = stable ? (rgb444 ? (b & 0xf0) | 8 : (b & 0xf8) | 4) : b;
       // gifenc's nearestColorIndexRGB: squared distance, channel by channel
       // with early exits; a later color at an equal distance wins
       k = 0;
       let min = Number.POSITIVE_INFINITY;
       for (let j = 0; j < n; j++) {
-        const dr = pr[j] - r;
+        const dr = pr[j] - sr;
         let d = dr * dr;
         if (d > min) continue;
-        const dg = pg[j] - g;
+        const dg = pg[j] - sg;
         d += dg * dg;
         if (d > min) continue;
-        const db = pb[j] - b;
+        const db = pb[j] - sb;
         d += db * db;
         if (d > min) continue;
         min = d;
