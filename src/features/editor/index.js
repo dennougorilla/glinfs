@@ -3201,7 +3201,6 @@ async function startSceneDetectionAsync(frames) {
 
     // Run detection with progress updates
     const result = await manager.detect(frames, {
-      threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {

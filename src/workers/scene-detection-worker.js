@@ -6,9 +6,8 @@
 
 // Import algorithm directly (Worker has module support)
 import {
-  buildSceneRanges,
-  compareHistograms,
   computeHistogram,
+  detectScenesFromHistograms,
 } from '../features/scene-detection/algorithms/histogram-detector.js';
 import { DEFAULT_DETECTOR_OPTIONS } from '../features/scene-detection/types.js';
 
@@ -100,14 +99,6 @@ function throwIfStale(runId) {
 }
 
 /**
- * Generate unique scene ID
- * @returns {string}
- */
-function generateSceneId() {
-  return `scene-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
-
-/**
  * Detect scenes using histogram comparison
  * The worker owns every ImageBitmap in `frameData` once it has been
  * transferred here: each is closed right after its readback, and any left
@@ -146,106 +137,47 @@ async function runDetection(frameData, options, runId, requestId) {
     };
   }
 
-  // Build index→FrameData map for O(1) lookups when building scenes
-  /** @type {Map<number, FrameData>} */
-  const frameByIndex = new Map();
+  // index -> timestamp, for O(1) lookups when building scenes
+  /** @type {Map<number, number>} */
+  const timestampByIndex = new Map();
   for (const f of frameData) {
-    frameByIndex.set(f.index, f);
+    timestampByIndex.set(f.index, f.timestamp);
   }
+  const totalFrames = frameData[frameData.length - 1].index + 1;
 
-  /** @type {number[]} */
-  const sceneBreaks = [0]; // First frame is always a scene start
+  const scenes = await detectScenesFromHistograms(frameData, {
+    indexOf: (data) => data.index,
+    histogramOf: readHistogram,
+    timestampAt: (frameIndex) => timestampByIndex.get(frameIndex),
+    totalFrames,
+    minSceneDuration: opts.minSceneDuration,
+    onStep: (i, data) => {
+      throwIfStale(runId);
+      // Progress 30-90% (extraction was 0-30%)
+      postResult(
+        'PROGRESS',
+        {
+          percent: 30 + Math.round((i / frameData.length) * 60),
+          currentFrame: data.index,
+          totalFrames,
+          stage: 'analyzing',
+        },
+        requestId,
+      );
+    },
+  });
 
-  /** @type {Float32Array | null} */
-  let prevHistogram = null;
-
-  // Process frames
-  for (let i = 0; i < frameData.length; i++) {
-    throwIfStale(runId);
-
-    const data = frameData[i];
-
-    // Report progress (30-90% range, extraction was 0-30%)
-    postResult(
-      'PROGRESS',
-      {
-        percent: 30 + Math.round((i / frameData.length) * 60),
-        currentFrame: data.index,
-        totalFrames: frameData[frameData.length - 1].index + 1,
-        stage: 'analyzing',
-      },
-      requestId,
-    );
-
-    // Read the transferred ImageBitmap back into pixels HERE (worker
-    // thread), not on main - and compute the histogram from it.
-    let histogram = null;
-    if (data.imageBitmap) {
-      try {
-        const ctx = getReadbackContext(data.width, data.height);
-        ctx.clearRect(0, 0, data.width, data.height);
-        ctx.drawImage(data.imageBitmap, 0, 0);
-        const imageData = ctx.getImageData(0, 0, data.width, data.height);
-        histogram = computeHistogram(imageData);
-      } finally {
-        data.imageBitmap.close();
-        data.imageBitmap = null;
-      }
-    }
-
-    // Compare with previous frame
-    if (histogram && prevHistogram !== null) {
-      const distance = compareHistograms(prevHistogram, histogram);
-
-      // Scene change detected if distance exceeds threshold
-      if (distance > opts.threshold) {
-        sceneBreaks.push(data.index);
-      }
-    }
-
-    prevHistogram = histogram;
-
-    // Yield to allow cancellation checks
-    if (i % 10 === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-  }
-
-  // The last iteration may have yielded (1, 11, 21, ... frames): a CANCEL
-  // or new DETECT that landed there must stop this run before it reports
+  // The last frame may have yielded: a CANCEL or new DETECT that landed
+  // there must stop this run before it reports
   throwIfStale(runId);
-
-  // Build scenes from breaks
-  /** @type {Scene[]} */
-  const scenes = [];
-
-  // Get the last frame index from frameData
-  const lastFrameIndex = frameData[frameData.length - 1].index;
-  sceneBreaks.push(lastFrameIndex + 1); // End marker
-
-  const ranges = buildSceneRanges(sceneBreaks, opts.minSceneDuration);
-  for (const { startFrame, endFrame } of ranges) {
-    // Get timestamps from frameData using O(1) Map lookup
-    const startData = frameByIndex.get(startFrame);
-    const endData = frameByIndex.get(endFrame) || frameData[frameData.length - 1];
-
-    scenes.push({
-      id: generateSceneId(),
-      startFrame,
-      endFrame,
-      confidence: 1.0,
-      timestamp: startData?.timestamp ?? 0,
-      duration: startData && endData ? (endData.timestamp - startData.timestamp) / 1000 : 0,
-    });
-  }
 
   // Final progress
   postResult(
     'PROGRESS',
     {
       percent: 100,
-      currentFrame: lastFrameIndex + 1,
-      totalFrames: lastFrameIndex + 1,
+      currentFrame: totalFrames,
+      totalFrames,
       stage: 'complete',
     },
     requestId,
@@ -253,10 +185,29 @@ async function runDetection(frameData, options, runId, requestId) {
 
   return {
     scenes,
-    totalFrames: lastFrameIndex + 1,
+    totalFrames,
     processingTimeMs: performance.now() - startTime,
     algorithmId,
   };
+}
+
+/**
+ * Read a transferred ImageBitmap back into pixels HERE (worker thread), not
+ * on main, and compute its histogram. The bitmap is closed right after.
+ * @param {FrameData} data
+ * @returns {Float32Array | null} Null when the frame has no bitmap
+ */
+function readHistogram(data) {
+  if (!data.imageBitmap) return null;
+  try {
+    const ctx = getReadbackContext(data.width, data.height);
+    ctx.clearRect(0, 0, data.width, data.height);
+    ctx.drawImage(data.imageBitmap, 0, 0);
+    return computeHistogram(ctx.getImageData(0, 0, data.width, data.height));
+  } finally {
+    data.imageBitmap.close();
+    data.imageBitmap = null;
+  }
 }
 
 /**
