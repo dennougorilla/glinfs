@@ -51,7 +51,7 @@
 
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import * as ort from 'onnxruntime-web/webgpu';
-import { createByteLru } from '../features/ai-cutout/byte-lru.js';
+import { createEmbeddingCache } from '../features/ai-cutout/embedding-cache.js';
 import { getSpecFiles } from '../features/ai-cutout/model-config.js';
 import {
   evictCachedModel,
@@ -96,6 +96,7 @@ import {
  * @property {number} jobId
  * @property {string} modelId
  * @property {string} frameKey - Embedding cache key (pixel identity of the frame)
+ * @property {string} [clipId] - The clip the frame belongs to ('forget-clip' drops its embeddings)
  * @property {ImageBitmap | null} bitmap - The frame at encoderWidth × encoderHeight
  *   (closed here; unused when the embedding is cached)
  * @property {number} encoderWidth
@@ -147,6 +148,39 @@ const models = new Map();
 /** @type {Promise<GPUAdapter | null> | null} */
 let adapterPromise = null;
 
+/** Requests for a WebGPU adapter before concluding there is none, and the wait between them */
+const ADAPTER_ATTEMPTS = 3;
+const ADAPTER_RETRY_MS = 1000;
+
+/** How long a failed run waits for the device's loss to be reported */
+const LOST_GRACE_MS = 300;
+
+/** The WebGPU device ORT runs on, once watched @type {any} */
+let watchedDevice = null;
+/** Set when that device was lost (every session on it is dead) */
+let deviceLost = false;
+/** @type {Promise<void> | null} */
+let deviceLostPromise = null;
+
+/**
+ * Watch the WebGPU device ORT created for the sessions: when it is lost
+ * (a driver reset), tell the manager, which replaces this worker.
+ */
+async function watchDevice() {
+  try {
+    const device = await Promise.resolve(/** @type {any} */ (ort).env?.webgpu?.device);
+    if (!device?.lost || device === watchedDevice) return;
+    watchedDevice = device;
+    deviceLostPromise = device.lost.then((/** @type {any} */ info) => {
+      if (info?.reason === 'destroyed') return;
+      deviceLost = true;
+      post({ type: 'device-lost', message: String(info?.message ?? '') });
+    });
+  } catch {
+    // No device to watch (WASM): nothing to report
+  }
+}
+
 /** Tail of the ORT call queue @type {Promise<unknown>} */
 let ortTail = Promise.resolve();
 
@@ -167,10 +201,12 @@ const Half = /** @type {Float32ArrayConstructor | undefined} */ (
   /** @type {any} */ (globalThis).Float16Array
 );
 
-/** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
-const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
-  onEvict: (key) => embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key),
-});
+/**
+ * The cached embeddings, indexed by model and by clip: an unloaded model or a
+ * released clip ('forget-clip') drops its own at once, index entries too
+ * (audit B8, Codex round 1 on #229)
+ */
+const embeddings = createEmbeddingCache(EMBEDDING_CACHE_BYTES);
 
 /** @type {OffscreenCanvas | null} */
 let samCanvas = null;
@@ -215,11 +251,18 @@ function getAdapter() {
   adapterPromise ??= (async () => {
     const gpu = /** @type {any} */ (self.navigator).gpu;
     if (!gpu) return null;
-    try {
-      return (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? null;
-    } catch {
-      return null;
+    // Right after a GPU reset Chrome restarts its GPU process and answers
+    // null for a moment: ask again before concluding there is no WebGPU
+    for (let attempt = 0; attempt < ADAPTER_ATTEMPTS; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, ADAPTER_RETRY_MS));
+      try {
+        const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+        if (adapter) return adapter;
+      } catch {
+        // asked again below
+      }
     }
+    return null;
   })();
   return adapterPromise;
 }
@@ -368,6 +411,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
     throw new SegmentationError(
       SegmentationErrorCode.WEBGPU_REQUIRED,
       `${spec.label ?? 'This model'} needs WebGPU, which this browser does not provide, and is too large to run on the CPU. Choose another model.`,
+      { noAdapter: true },
     );
   }
   if (!adapter && !allowWasm) {
@@ -375,6 +419,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
     throw new SegmentationError(
       SegmentationErrorCode.WEBGPU_UNAVAILABLE,
       'WebGPU is not available in this browser',
+      { noAdapter: true },
     );
   }
 
@@ -422,6 +467,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
   }
 
   const backend = combineBackends(results.map((r) => r.created.backend));
+  if (backend !== 'wasm') void watchDevice();
   return {
     type: 'ready',
     modelId,
@@ -492,9 +538,7 @@ function unloadModel(modelId) {
   entry.controller.abort();
   const session = /** @type {any} */ (entry.session);
   entry.session = null;
-  if (entry.spec.kind === 'sam') {
-    for (const key of [...embeddingKeys(modelId)]) embeddings.delete(key);
-  }
+  if (entry.spec.kind === 'sam') embeddings.forgetModel(modelId);
   // A session still being created is released by initialize(). A video
   // model's state goes in the queue too: a frame running now may still
   // read it.
@@ -597,22 +641,6 @@ async function segment(request) {
   );
 }
 
-/** Keys of the embeddings of a model @type {Map<string, Set<string>>} */
-const embeddingKeysByModel = new Map();
-
-/**
- * @param {string} modelId
- * @returns {Set<string>}
- */
-function embeddingKeys(modelId) {
-  let keys = embeddingKeysByModel.get(modelId);
-  if (!keys) {
-    keys = new Set();
-    embeddingKeysByModel.set(modelId, keys);
-  }
-  return keys;
-}
-
 /**
  * The reused encoder input canvas and HWC buffer for a size
  * @param {number} width
@@ -668,8 +696,10 @@ async function prompt(request) {
       return result;
     });
     const keep = Half ? new Half(embedding) : embedding;
-    if (embeddings.set(key, keep, keep.byteLength, request.jobId))
-      embeddingKeys(request.modelId).add(key);
+    embeddings.set(key, keep, keep.byteLength, request.jobId, {
+      modelId: request.modelId,
+      clipId: request.clipId,
+    });
   }
   request.bitmap?.close();
   request.bitmap = null;
@@ -725,10 +755,24 @@ async function drainQueue() {
           await segment(/** @type {SegmentRequest} */ (request));
         }
       } catch (error) {
+        // A run fails before the device's loss is reported: wait a moment
+        // to tell a lost GPU (the manager retries on a fresh worker) from a
+        // failing model
+        if (!deviceLost && deviceLostPromise) {
+          await Promise.race([
+            deviceLostPromise,
+            new Promise((resolve) => setTimeout(resolve, LOST_GRACE_MS)),
+          ]);
+        }
         post({
           type: 'segment-error',
           requestId: request.requestId,
-          error: toErrorPayload(error, SegmentationErrorCode.INFERENCE_FAILED),
+          error: deviceLost
+            ? {
+                code: SegmentationErrorCode.GPU_LOST,
+                message: `The GPU was reset: ${error instanceof Error ? error.message : String(error)}`,
+              }
+            : toErrorPayload(error, SegmentationErrorCode.INFERENCE_FAILED),
         });
       } finally {
         request.bitmap?.close();
@@ -786,6 +830,7 @@ self.onmessage = (event) => {
         jobId: message.jobId,
         modelId: message.modelId,
         frameKey: message.frameKey,
+        clipId: message.clipId,
         bitmap: message.bitmap ?? null,
         encoderWidth: message.encoderWidth,
         encoderHeight: message.encoderHeight,
@@ -800,6 +845,9 @@ self.onmessage = (event) => {
       break;
     case 'cancel':
       cancelJob(message.jobId);
+      break;
+    case 'forget-clip':
+      embeddings.forgetClip(message.clipId);
       break;
   }
 };
