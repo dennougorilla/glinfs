@@ -437,6 +437,14 @@ export async function trackClicks({
         lost.add(f);
         return;
       }
+      // The step read the previous frame's logits; nothing reads them again
+      // unless that frame starts another pass (an anchor). A frame that
+      // shares its pixels took them over by reference (audit B7: every
+      // frame's logits stayed for the whole run, 75 MiB per 300 frames)
+      if (!anchorFrames.has(from)) {
+        const previous = done.get(from);
+        if (previous) previous.lowRes = null;
+      }
       from = f;
     }
   };

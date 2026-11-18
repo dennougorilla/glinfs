@@ -96,6 +96,7 @@ import {
  * @property {number} jobId
  * @property {string} modelId
  * @property {string} frameKey - Embedding cache key (pixel identity of the frame)
+ * @property {string} [clipId] - The clip the frame belongs to ('forget-clip' drops its embeddings)
  * @property {ImageBitmap | null} bitmap - The frame at encoderWidth × encoderHeight
  *   (closed here; unused when the embedding is cached)
  * @property {number} encoderWidth
@@ -169,8 +170,33 @@ const Half = /** @type {Float32ArrayConstructor | undefined} */ (
 
 /** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
 const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
-  onEvict: (key) => embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key),
+  onEvict: (key) => {
+    embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key);
+    forgetEmbeddingClip(key);
+  },
 });
+
+/** Clip of each cached embedding @type {Map<string, string>} */
+const embeddingClip = new Map();
+/** Embeddings of each clip @type {Map<string, Set<string>>} */
+const embeddingKeysByClip = new Map();
+
+/** @param {string} key - An embedding that left the cache */
+function forgetEmbeddingClip(key) {
+  const clipId = embeddingClip.get(key);
+  embeddingClip.delete(key);
+  if (clipId !== undefined) embeddingKeysByClip.get(clipId)?.delete(key);
+}
+
+/**
+ * Handle 'forget-clip': drop the embeddings of a clip released for good
+ * (audit B8: they stayed until the cache's cap evicted them)
+ * @param {string} clipId
+ */
+function forgetClip(clipId) {
+  for (const key of [...(embeddingKeysByClip.get(clipId) ?? [])]) embeddings.delete(key);
+  embeddingKeysByClip.delete(clipId);
+}
 
 /** @type {OffscreenCanvas | null} */
 let samCanvas = null;
@@ -668,8 +694,18 @@ async function prompt(request) {
       return result;
     });
     const keep = Half ? new Half(embedding) : embedding;
-    if (embeddings.set(key, keep, keep.byteLength, request.jobId))
+    if (embeddings.set(key, keep, keep.byteLength, request.jobId)) {
       embeddingKeys(request.modelId).add(key);
+      if (request.clipId !== undefined && request.clipId !== null) {
+        embeddingClip.set(key, request.clipId);
+        let keys = embeddingKeysByClip.get(request.clipId);
+        if (!keys) {
+          keys = new Set();
+          embeddingKeysByClip.set(request.clipId, keys);
+        }
+        keys.add(key);
+      }
+    }
   }
   request.bitmap?.close();
   request.bitmap = null;
@@ -786,6 +822,7 @@ self.onmessage = (event) => {
         jobId: message.jobId,
         modelId: message.modelId,
         frameKey: message.frameKey,
+        clipId: message.clipId,
         bitmap: message.bitmap ?? null,
         encoderWidth: message.encoderWidth,
         encoderHeight: message.encoderHeight,
@@ -800,6 +837,9 @@ self.onmessage = (event) => {
       break;
     case 'cancel':
       cancelJob(message.jobId);
+      break;
+    case 'forget-clip':
+      forgetClip(message.clipId);
       break;
   }
 };

@@ -616,3 +616,43 @@ describe('refineAnchorPrompt', () => {
     ).toBeNull();
   });
 });
+
+describe('trackClicks memory (audit B7)', () => {
+  it('keeps the low-res logits it still needs (the anchor and the previous frame), not every frame', async () => {
+    // Every frame's logits stayed alive for the whole run (75 MiB per 300
+    // frames at 256x256 floats); a step reads only the previous frame's
+    const v8 = await import('node:v8');
+    const vm = await import('node:vm');
+    v8.setFlagsFromString('--expose_gc');
+    const gc = vm.runInNewContext('gc');
+    /** @type {WeakRef<Float32Array>[]} */
+    const logits = [];
+    let aliveAtEnd = -1;
+    // Plain functions: a vi.fn keeps every answer it returned
+    const { prompt: fake } = fakeSegmenter();
+    fake.mockClear();
+    const prompt = async (/** @type {number} */ frame, /** @type {any} */ p) => {
+      fake.mockClear();
+      // A task boundary: new WeakRefs keep their targets until the job ends
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (frame === 29) {
+        gc();
+        aliveAtEnd = logits.filter((ref) => ref.deref() !== undefined).length;
+      }
+      // The fake records its prompts: not the logits passed in them
+      const candidates = await fake(frame, { ...p, maskInput: null });
+      return candidates.map((c) => {
+        const lowRes = new Float32Array(64 * 64);
+        logits.push(new WeakRef(lowRes));
+        return { ...c, lowRes };
+      });
+    };
+    const { promise } = run({ range: { start: 0, end: 29 }, currentFrame: 3, prompt });
+    await promise;
+    // Frames 3..28 were tracked before frame 29 (26 chosen answers, all alive
+    // before the fix): what is left is the anchor's, frame 28's and the last
+    // step's other candidates, a constant that does not grow with the run
+    expect(aliveAtEnd).toBeGreaterThanOrEqual(2);
+    expect(aliveAtEnd).toBeLessThanOrEqual(6);
+  });
+});

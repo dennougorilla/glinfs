@@ -197,6 +197,13 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
 export const MAX_FRAMES_IN_FLIGHT = 2;
 
 /**
+ * A cancelled WebGPU job whose frames have not settled after this long is
+ * stuck on a GPU that stopped answering: its worker is torn down, or its
+ * sessions would stay until the next failure (audit B11)
+ */
+export const CANCEL_SETTLE_MS = 60_000;
+
+/**
  * DEV/E2E override of the model specs: `sha256`/`bytes` apply to every
  * single-file model unless `models[id]` names that model's own (the stubs;
  * a multi-file model names each file's in `models[id].files`), `allowWasm`
@@ -878,7 +885,14 @@ export class SegmentationManager {
         wholeMinScoreRatio: options.wholeMinScoreRatio,
         keyOf: (f) => frameKey(frames[f]),
         prompt: async (f, prompt) => {
-          const request = this.#submitPrompt(jobId, frames[f], prompt, spec, maskSizeOf(frames[f]));
+          const request = this.#submitPrompt(
+            jobId,
+            frames[f],
+            prompt,
+            spec,
+            maskSizeOf(frames[f]),
+            clipId,
+          );
           submitted.push(request);
           const answer = await raceAbort(request, signal);
           lastMs = answer.totalMs;
@@ -937,7 +951,7 @@ export class SegmentationManager {
       });
       return { ...result, backend: ready.backend };
     } catch (error) {
-      this.#cancelJob(jobId, submitted);
+      this.#cancelJob(jobId, submitted, ready.backend);
       if (
         error instanceof SegmentationError &&
         error.code === SegmentationErrorCode.INFERENCE_FAILED
@@ -959,7 +973,7 @@ export class SegmentationManager {
    * @param {{ width: number, height: number }} mask - Size the decoder answers at
    * @returns {Promise<PromptResult>}
    */
-  async #submitPrompt(jobId, frame, prompt, spec, mask) {
+  async #submitPrompt(jobId, frame, prompt, spec, mask, clipId) {
     const source = getDrawableSource(frame);
     if (!source || /** @type {{ codedWidth?: number }} */ (source).codedWidth === 0) {
       throw new SegmentationError(
@@ -1004,6 +1018,8 @@ export class SegmentationManager {
             jobId,
             modelId,
             frameKey: frameKey(frame),
+            // The worker drops a released clip's embeddings (forgetClip)
+            clipId,
             bitmap,
             encoderWidth: encoderSize.width,
             encoderHeight: encoderSize.height,
@@ -1081,7 +1097,7 @@ export class SegmentationManager {
         report(result.totalMs);
       }
     } catch (error) {
-      this.#cancelJob(jobId, inflight);
+      this.#cancelJob(jobId, inflight, ready.backend);
       if (
         error instanceof SegmentationError &&
         error.code === SegmentationErrorCode.INFERENCE_FAILED
@@ -1325,6 +1341,8 @@ export class SegmentationManager {
   forgetClip(clipId) {
     this.#releasedClips.add(clipId);
     this.#objectSeeds.dropClip(clipId);
+    // Its cached image embeddings too (up to 96 MiB), not only when evicted
+    this.#worker?.postMessage({ type: 'forget-clip', clipId });
   }
 
   /**
@@ -1444,11 +1462,27 @@ export class SegmentationManager {
    * cancelled until every request it submitted has settled.
    * @param {number} jobId
    * @param {Promise<unknown>[]} submitted - The job's requests that may still be pending
+   * @param {string | null} [backend] - The job's backend ('webgpu' bounds the wait)
    */
-  #cancelJob(jobId, submitted) {
+  #cancelJob(jobId, submitted, backend = null) {
     this.#cancelledJobs.add(jobId);
-    this.#worker?.postMessage({ type: 'cancel', jobId });
-    Promise.allSettled(submitted).then(() => this.#cancelledJobs.delete(jobId));
+    const worker = this.#worker;
+    worker?.postMessage({ type: 'cancel', jobId });
+    const settled = Promise.allSettled(submitted);
+    settled.then(() => this.#cancelledJobs.delete(jobId));
+    // A frame the GPU never answers keeps the job (and the worker's
+    // sessions) forever: after the bound, the worker goes (audit B11)
+    if (backend !== 'webgpu' || !worker || submitted.length === 0) return;
+    const timer = setTimeout(() => {
+      if (this.#worker !== worker) return;
+      this.#teardown(
+        new SegmentationError(
+          SegmentationErrorCode.INFERENCE_FAILED,
+          `The GPU did not answer for ${CANCEL_SETTLE_MS / 1000} s after a cancel`,
+        ),
+      );
+    }, CANCEL_SETTLE_MS);
+    settled.then(() => clearTimeout(timer));
   }
 
   /**
