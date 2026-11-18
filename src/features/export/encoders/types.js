@@ -94,8 +94,9 @@
  * @typedef {Object} EncoderInterface
  * @property {EncoderMetadata} metadata - Encoder metadata
  * @property {(config: EncoderConfig) => void | Promise<void>} init - Initialize (sync or async)
- * @property {(frameData: FrameData, frameIndex: number) => void} addFrame - Add frame
- * @property {() => Uint8Array} finish - Complete encoding and get byte array
+ * @property {(frameData: FrameData, frameIndex: number) => void | Promise<void>} addFrame - Add
+ *   frame; a promise when the frame is written later (pending until it is in the GIF)
+ * @property {() => Uint8Array | Promise<Uint8Array>} finish - Complete encoding and get byte array
  * @property {() => void} dispose - Release resources
  */
 

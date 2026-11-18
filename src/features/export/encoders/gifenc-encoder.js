@@ -7,6 +7,7 @@
 import { GIFEncoder, quantize } from 'gifenc';
 import { ALPHA_THRESHOLD } from '../../../shared/edits/color-key.js';
 import { applyPaletteFast as applyPalette } from './apply-palette.js';
+import { createFrameEncoding, encodeFrame, encodeSmaller } from './gif-frame.js';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
@@ -342,10 +343,20 @@ export function paletteColorCount(maxColors, transparent) {
 }
 
 /**
+ * How many frames' trials may wait on the second worker at once. While it
+ * has one, the next trial runs here, so both work on a frame each.
+ */
+export const TRIALS_AWAY = 1;
+
+/**
  * Create gifenc encoder
+ * @param {{ trials?: import('../../../workers/gif-trial-runner.js').TrialRunner | null }} [options] -
+ *   `trials`: a second worker for frame differencing's trials. With it, a
+ *   frame's addFrame may return a promise that settles once the frame is in
+ *   the GIF, and finish may return a promise; the bytes are the same.
  * @returns {EncoderInterface}
  */
-export function createGifencEncoder() {
+export function createGifencEncoder({ trials = null } = {}) {
   /** @type {ReturnType<typeof GIFEncoder> | null} */
   let encoder = null;
 
@@ -395,11 +406,76 @@ export function createGifencEncoder() {
     return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
   };
 
-  /** Scratch encoders (no header) for the frames encoded both ways */
-  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  /** Stepped encodings for the frames encoded both ways */
+  /** @type {ReturnType<typeof createFrameEncoding> | null} */
   let trialWhole = null;
-  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  /** @type {ReturnType<typeof createFrameEncoding> | null} */
   let trialDifferenced = null;
+
+  /**
+   * Frames not yet in the GIF, in order: while a trial runs on the second
+   * worker, the frames after it wait here
+   * @type {Array<{ bytes: Uint8Array | null, written: Promise<void>, resolve: () => void, reject: (error: Error) => void }>}
+   */
+  let queue = [];
+  /** Bumped by init and dispose: a trial from an earlier session is ignored */
+  let session = 0;
+  /**
+   * Index buffers back from the second worker, reused for the next trials
+   * (at most TRIALS_AWAY pairs exist)
+   * @type {Array<{ index: ArrayBuffer, differenced: ArrayBuffer }>}
+   */
+  let spare = [];
+
+  /**
+   * A copy of `data` in a spare buffer of its size, else a new one
+   * @param {Uint8Array} data
+   * @param {'index' | 'differenced'} kind
+   * @param {{ index: ArrayBuffer, differenced: ArrayBuffer } | undefined} pair
+   */
+  const copyOut = (data, kind, pair) => {
+    const buffer =
+      pair?.[kind].byteLength === data.length ? pair[kind] : new ArrayBuffer(data.length);
+    new Uint8Array(buffer).set(data);
+    return buffer;
+  };
+
+  const flush = () => {
+    while (queue.length > 0 && queue[0].bytes) {
+      const entry = /** @type {NonNullable<(typeof queue)[number]>} */ (queue.shift());
+      encoder?.stream.writeBytesView(/** @type {Uint8Array} */ (entry.bytes));
+      entry.resolve();
+    }
+  };
+
+  /** @param {Uint8Array | null} bytes - Null while its trial runs elsewhere */
+  const enqueue = (bytes) => {
+    /** @type {() => void} */
+    let resolve = () => {};
+    /** @type {(error: Error) => void} */
+    let reject = () => {};
+    const written = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const entry = { bytes, written, resolve, reject };
+    queue.push(entry);
+    return entry;
+  };
+
+  /**
+   * Put a frame's bytes in the GIF, after any frame still waiting
+   * @param {Uint8Array} bytes - May be a reused buffer's view
+   * @returns {Promise<void> | undefined}
+   */
+  const put = (bytes) => {
+    if (queue.length === 0) {
+      encoder?.stream.writeBytesView(bytes);
+      return undefined;
+    }
+    return enqueue(bytes.slice()).written;
+  };
+
   /**
    * Write an opaque frame with frame differencing: encoded whole and with
    * unchanged pixels as the transparent index, the smaller one written.
@@ -409,22 +485,31 @@ export function createGifencEncoder() {
    * @param {number} width
    * @param {number} height
    * @param {number} delay
+   * @returns {Promise<void> | undefined} Pending while the frame waits for a trial
    */
   const writeDifferenced = (index, width, height, delay) => {
-    if (!encoder || !config || !palette) return;
+    if (!encoder || !config || !palette) return undefined;
     const colors = packPalette(palette);
     const whole = { palette, delay, repeat: config.loopCount, dispose: 1 };
+    /** Write the whole frame (after any frame still waiting) */
+    const putWhole = () => {
+      if (queue.length === 0) {
+        encoder?.writeFrame(index, width, height, whole);
+        return undefined;
+      }
+      trialWhole ??= createFrameEncoding();
+      return put(encodeFrame(trialWhole, index, width, height, whole));
+    };
     /** Only whole is possible: write it and record what it shows */
     const writeOnlyWhole = () => {
       if (shown?.length !== index.length) shown = new Int32Array(index.length);
       for (let i = 0; i < index.length; i++) shown[i] = colors[index[i]];
-      encoder?.writeFrame(index, width, height, whole);
+      return putWhole();
     };
 
     // The first frame (or one of another size) has nothing to keep
     if (shown?.length !== index.length) {
-      writeOnlyWhole();
-      return;
+      return writeOnlyWhole();
     }
     // A slot appended to the palette while the color table (a power of two)
     // has room for it, else one the frame does not use
@@ -434,8 +519,7 @@ export function createGifencEncoder() {
     const unused = roomInTable ? -1 : findUnusedIndex(index, palette.length);
     const transparentIndex = unused >= 0 ? unused : palette.length;
     if (transparentIndex > 255) {
-      writeOnlyWhole();
-      return;
+      return writeOnlyWhole();
     }
 
     if (differenced?.length !== index.length) differenced = new Uint8Array(index.length);
@@ -447,8 +531,7 @@ export function createGifencEncoder() {
       // same codes no narrower, and resets its dictionary no later. It
       // cannot be smaller, so it is not encoded (`shown` is already this
       // frame's colors)
-      encoder.writeFrame(index, width, height, whole);
-      return;
+      return putWhole();
     }
     const kept = {
       palette: unused >= 0 ? palette : [...palette, [0, 0, 0]],
@@ -458,17 +541,51 @@ export function createGifencEncoder() {
       transparentIndex,
       dispose: 1,
     };
-    // Encode both ways (a frame after the first is written the same with or
-    // without the header, so the scratch bytes go into the GIF as they are)
-    trialWhole ??= GIFEncoder({ auto: false });
-    trialDifferenced ??= GIFEncoder({ auto: false });
-    trialWhole.reset();
-    trialDifferenced.reset();
-    trialWhole.writeFrame(index, width, height, whole);
-    trialDifferenced.writeFrame(differenced, width, height, kept);
-    const a = trialWhole.bytesView();
-    const b = trialDifferenced.bytesView();
-    encoder.stream.writeBytesView(b.length < a.length ? b : a);
+
+    // Encode both ways and write the smaller (the whole frame on a tie).
+    // On the second worker while it is free, else here; either way the
+    // larger is dropped as soon as it cannot be the smaller.
+    if (trials && trials.pending < TRIALS_AWAY) {
+      const entry = enqueue(null);
+      const own = session;
+      const pair = spare.pop();
+      trials
+        .run({
+          width,
+          height,
+          index: copyOut(index, 'index', pair),
+          differenced: copyOut(differenced, 'differenced', pair),
+          wholeOptions: whole,
+          keptOptions: kept,
+        })
+        .then(
+          (result) => {
+            if (own !== session) return;
+            spare.push({ index: result.index, differenced: result.differenced });
+            entry.bytes = result.bytes;
+            flush();
+          },
+          (error) => {
+            if (own !== session) return;
+            entry.reject(error);
+          },
+        );
+      return entry.written;
+    }
+    trialWhole ??= createFrameEncoding();
+    trialDifferenced ??= createFrameEncoding();
+    trialWhole.start(index, width, height, whole);
+    trialDifferenced.start(differenced, width, height, kept);
+    return put(encodeSmaller(trialWhole, trialDifferenced).bytes);
+  };
+
+  /** @returns {Uint8Array} */
+  const finishNow = () => {
+    if (!encoder) {
+      throw new Error('Encoder not initialized. Call init() first.');
+    }
+    encoder.finish();
+    return encoder.bytes();
   };
 
   return {
@@ -481,6 +598,9 @@ export function createGifencEncoder() {
     init(encoderConfig) {
       config = encoderConfig;
       encoder = GIFEncoder();
+      queue = [];
+      spare = [];
+      session++;
       baseline = { error: 0, tail: 0 };
       earlyRebuilds = 0;
       transparent = encoderConfig.transparent === true;
@@ -508,6 +628,8 @@ export function createGifencEncoder() {
      * Add frame
      * @param {FrameData} frameData
      * @param {number} frameIndex
+     * @returns {Promise<void> | undefined} With a second worker: pending
+     *   until the frame is in the GIF
      */
     addFrame(frameData, frameIndex) {
       if (!encoder || !config) {
@@ -567,8 +689,7 @@ export function createGifencEncoder() {
       const delay = frameData.delayMs ?? config.frameDelayMs;
 
       if (differencing) {
-        writeDifferenced(index, width, height, delay);
-        return;
+        return writeDifferenced(index, width, height, delay);
       }
 
       if (!transparent) {
@@ -602,18 +723,20 @@ export function createGifencEncoder() {
     },
 
     /**
-     * Complete encoding and get byte array
-     * @returns {Uint8Array}
+     * Complete encoding and get byte array (a promise while frames wait for
+     * a trial on the second worker)
+     * @returns {Uint8Array | Promise<Uint8Array>}
      */
     finish() {
       if (!encoder) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
-
-      encoder.finish();
-      const bytes = encoder.bytes();
-
-      return bytes;
+      if (queue.length === 0) return finishNow();
+      const own = session;
+      return Promise.all(queue.map((entry) => entry.written)).then(() => {
+        if (own !== session) throw new Error('Encoder disposed before finishing');
+        return finishNow();
+      });
     },
 
     /**
@@ -631,6 +754,9 @@ export function createGifencEncoder() {
       differenced = null;
       trialWhole = null;
       trialDifferenced = null;
+      queue = [];
+      spare = [];
+      session++;
     },
   };
 }
