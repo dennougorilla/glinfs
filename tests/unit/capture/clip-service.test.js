@@ -17,7 +17,7 @@ const captureContext = vi.hoisted(() => ({ current: /** @type {any} */ (null) })
 vi.mock('../../../src/features/capture/index.js', () => ({
   getLiveCaptureContext: vi.fn(() => captureContext.current),
   // Pass-through conversion: each "bitmap" item becomes a mock Frame
-  convertBitmapFramesToVideoFrames: vi.fn((items) =>
+  convertBitmapFramesToClipFrames: vi.fn((items) =>
     items.map((_item, i) => ({
       id: String(i),
       frame: { close: vi.fn(), closed: false },
@@ -26,6 +26,13 @@ vi.mock('../../../src/features/capture/index.js', () => ({
       height: 100,
     })),
   ),
+}));
+
+// Clip frames are CPU I420 when the converter worker can run (D3); most
+// tests here keep the RGBA numbers they were written with
+const cpuFrames = vi.hoisted(() => ({ available: false }));
+vi.mock('../../../src/workers/i420-converter.js', () => ({
+  isCpuFrameConversionAvailable: vi.fn(() => cpuFrames.available),
 }));
 
 import {
@@ -37,7 +44,7 @@ import {
   registerClipNowHotkey,
 } from '../../../src/features/capture/clip-service.js';
 import {
-  convertBitmapFramesToVideoFrames,
+  convertBitmapFramesToClipFrames,
   getLiveCaptureContext,
 } from '../../../src/features/capture/index.js';
 import {
@@ -78,9 +85,10 @@ beforeEach(() => {
   resetAppStore();
   localStorage.clear();
   captureContext.current = null;
+  cpuFrames.available = false;
   // Drop one-shot implementations a refused test never consumed, so they
   // cannot leak into the next test (restores the pass-through conversion)
-  vi.mocked(convertBitmapFramesToVideoFrames).mockReset();
+  vi.mocked(convertBitmapFramesToClipFrames).mockReset();
 });
 
 afterEach(() => {
@@ -159,7 +167,7 @@ describe('clipNow', () => {
 
     expect(result).toEqual({ ok: false, reason: 'queue-full' });
     // The refused frames (returned by the conversion mock) were closed
-    const converted = vi.mocked(convertBitmapFramesToVideoFrames).mock.results[0].value;
+    const converted = vi.mocked(convertBitmapFramesToClipFrames).mock.results[0].value;
     for (const frame of converted) {
       expect(frame.frame.close).toHaveBeenCalledOnce();
     }
@@ -288,7 +296,7 @@ describe('automatic removal of the oldest clips (#186)', () => {
       sceneDetection: false,
       stats: { frameCount, fps: 30 },
     };
-    vi.mocked(convertBitmapFramesToVideoFrames).mockImplementationOnce(() =>
+    vi.mocked(convertBitmapFramesToClipFrames).mockImplementationOnce(() =>
       createSizedFrames(realCount, 1),
     );
     return workerManager;
@@ -465,7 +473,7 @@ describe('automatic removal of the oldest clips (#186)', () => {
     expect(budgetEvents.events).toHaveLength(1);
     expect(budgetEvents.events[0].incomingMB).toBeCloseTo(104, 0);
     // The refused snapshot never entered the store: its frames were closed
-    const refused = vi.mocked(convertBitmapFramesToVideoFrames).mock.results[0].value;
+    const refused = vi.mocked(convertBitmapFramesToClipFrames).mock.results[0].value;
     expect(refused).toHaveLength(104);
     for (const frame of refused) expect(frame.frame.close).toHaveBeenCalledOnce();
     removedEvents.off();
@@ -523,7 +531,7 @@ describe('the budget counts what is held (memory accounting PR A)', () => {
       sceneDetection: false,
       stats: { frameCount: BUFFER_FRAMES, fps: 30 },
     };
-    vi.mocked(convertBitmapFramesToVideoFrames).mockImplementationOnce(() =>
+    vi.mocked(convertBitmapFramesToClipFrames).mockImplementationOnce(() =>
       frames1080(BUFFER_FRAMES, 'snap'),
     );
     return workerManager;
@@ -584,6 +592,21 @@ describe('the budget counts what is held (memory accounting PR A)', () => {
     installFullBuffer();
     const projection = projectClipMemory(getLiveCaptureContext());
     expect(projection.incomingMB).toBeCloseTo((BUFFER_FRAMES * W * H * 4) / BYTES_PER_MB, 3);
+  });
+
+  it('counts a new active clip at 1.5 B/px when its frames become CPU I420 (D3)', () => {
+    cpuFrames.available = true;
+    installFullBuffer();
+    const projection = projectClipMemory(getLiveCaptureContext(), { asActive: true });
+    expect(projection.incomingMB).toBeCloseTo((BUFFER_FRAMES * W * H * 1.5) / BYTES_PER_MB, 3);
+  });
+
+  it('counts a snapshot that will not compress at 1.5 B/px when it becomes CPU I420 (D3)', () => {
+    cpuFrames.available = true;
+    registerClipCodec(null);
+    installFullBuffer();
+    const projection = projectClipMemory(getLiveCaptureContext());
+    expect(projection.incomingMB).toBeCloseTo((BUFFER_FRAMES * W * H * 1.5) / BYTES_PER_MB, 3);
   });
 
   it('names the numbers in the unit Settings shows', () => {

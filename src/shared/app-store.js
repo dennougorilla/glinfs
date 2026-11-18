@@ -1382,7 +1382,9 @@ export function registerMemoryHolder(name, getMB) {
  * queue will compress it (codec available, no alpha), else raw. Give the
  * frames, or their count and size before they exist (a buffer snapshot).
  * @param {{ frames?: Array<{width?: number, height?: number, sharedKey?: string, byteLength?: number}>|null,
- *   frameCount?: number, width?: number, height?: number, fps?: number, hasAlpha?: boolean }} clip
+ *   frameCount?: number, width?: number, height?: number, fps?: number, hasAlpha?: boolean,
+ *   bytesPerPixel?: number }} clip - `bytesPerPixel`: the raw size of a snapshot's
+ *   frames (4 for GPU RGBA, 1.5 for CPU I420)
  * @returns {number} MB
  */
 export function estimateQueuedClipMB(clip) {
@@ -1392,7 +1394,7 @@ export function estimateQueuedClipMB(clip) {
   const height = frames ? (frames[0]?.height ?? 0) : (clip?.height ?? 0);
   const rawMB = frames
     ? estimateFramesMemoryMB(frames)
-    : (frameCount * width * height * 4) / BYTES_PER_MB;
+    : (frameCount * width * height * (clip?.bytesPerPixel ?? 4)) / BYTES_PER_MB;
   const fps = clip?.fps ?? 0;
   if (frameCount === 0 || clip?.hasAlpha === true || !(fps > 0)) return rawMB;
   if (!clipCodec?.isCompressionAvailable()) return rawMB;

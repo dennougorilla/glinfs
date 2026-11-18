@@ -7,7 +7,9 @@
  * A single captured frame from the screen
  * @typedef {Object} Frame
  * @property {string} id - Unique identifier (UUID)
- * @property {VideoFrame} frame - GPU-resident video frame (WebCodecs API)
+ * @property {VideoFrame} frame - The pixels (WebCodecs): CPU I420 / NV12 for a clip
+ *   from the capture buffer or the queue; RGBA for an imported image, or where
+ *   the I420 converter could not run
  * @property {number} timestamp - Capture time (VideoFrame.timestamp in microseconds)
  * @property {number} width - Frame width in pixels (from VideoFrame.codedWidth)
  * @property {number} height - Frame height in pixels (from VideoFrame.codedHeight)
@@ -15,7 +17,7 @@
  *   (clone() slots of one decoded image, see features/import); memory
  *   estimates count each key once
  * @property {number} [byteLength] - Bytes the frame really holds, when known
- *   (a decoded clip's I420 / NV12 frames: allocationSize()); memory
+ *   (CPU I420 / NV12 frames: allocationSize()); memory
  *   estimates count RGBA w*h*4 without it
  */
 

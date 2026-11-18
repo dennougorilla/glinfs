@@ -22,6 +22,7 @@ import {
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
 import { registerHotkey } from '../../shared/hotkeys.js';
+import { I420_BYTES_PER_PIXEL } from '../../shared/i420.js';
 import { announce } from '../../shared/live-region.js';
 import { showToast } from '../../shared/toast.js';
 import { loadSettings } from '../../shared/user-settings.js';
@@ -30,7 +31,8 @@ import {
   estimateFramesMemoryMB,
   formatMemory,
 } from '../../shared/utils/memory-monitor.js';
-import { convertBitmapFramesToVideoFrames, getLiveCaptureContext } from './index.js';
+import { isCpuFrameConversionAvailable } from '../../workers/i420-converter.js';
+import { convertBitmapFramesToClipFrames, getLiveCaptureContext } from './index.js';
 
 /**
  * @typedef {Object} ClipNowResult
@@ -68,11 +70,13 @@ export function projectClipMemory(context, { asActive = false } = {}) {
   const snapshot = dims
     ? { frameCount, width: dims.width, height: dims.height, fps: context?.fps ?? 0 }
     : null;
+  // The clip's frames are CPU I420 where the converter worker runs (D3)
+  const bytesPerPixel = isCpuFrameConversionAvailable() ? I420_BYTES_PER_PIXEL : 4;
   let incomingMB = 0;
   if (snapshot) {
     incomingMB = asActive
-      ? (frameCount * snapshot.width * snapshot.height * 4) / BYTES_PER_MB
-      : estimateQueuedClipMB(snapshot);
+      ? (frameCount * snapshot.width * snapshot.height * bytesPerPixel) / BYTES_PER_MB
+      : estimateQueuedClipMB({ ...snapshot, bytesPerPixel });
   }
   const heldMB = heldAfterSnapshotMB(asActive);
   const projectedMB = heldMB + incomingMB;
@@ -383,7 +387,7 @@ export async function clipNow() {
     return { ok: false, reason: 'no-frames' };
   }
 
-  const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
+  const videoFrames = await convertBitmapFramesToClipFrames(imageBitmapFrames);
   if (videoFrames.length === 0) {
     return { ok: false, reason: 'no-frames' };
   }

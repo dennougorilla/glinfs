@@ -13,12 +13,14 @@ import {
   setScreenCaptureState,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
+import { I420_COLOR_SPACE, i420Layout } from '../../shared/i420.js';
 import { announce } from '../../shared/live-region.js';
 import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
+import { convertBitmapsToI420, warmI420Converter } from '../../workers/i420-converter.js';
 import { formatImportBusyLabel } from '../import/core.js';
 import { importFile, isImporting, reportImportBusy } from '../import/index.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
@@ -423,6 +425,8 @@ function startWorkerOn(manager, video, sessionStore) {
   );
   sessionStore.setState((state) => ({ ...state, bufferLimit }));
   manager.start(sessionStore.getState().settings.fps, bufferLimit.maxFrames);
+  // A clip may follow: start the I420 converter now, not on the first clip
+  warmI420Converter();
 }
 
 /**
@@ -596,7 +600,9 @@ function handleStop(preserveBuffer = true) {
 }
 
 /**
- * Convert transferred ImageBitmap frames into VideoFrames for the Editor.
+ * Convert transferred ImageBitmap frames into GPU RGBA VideoFrames. Clips
+ * use convertBitmapFramesToClipFrames, which comes here only for the frames
+ * the I420 converter could not convert.
  *
  * Closes every source ImageBitmap regardless of outcome: a VideoFrame copies
  * the pixel data at construction time, so keeping the bitmap alive after a
@@ -653,6 +659,71 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
   }
 
   return videoFrames;
+}
+
+/**
+ * Turn the transferred capture bitmaps into the clip's frames: CPU I420
+ * VideoFrames (1.5 B/px, off the GPU, like a clip opened from the queue)
+ * through the converter worker (D3's cheap half). Frames the worker could
+ * not convert are made the old way (GPU RGBA, convertBitmapFramesToVideoFrames).
+ *
+ * Like the old route, only the newest source's frames make the clip, and
+ * every bitmap is closed: by the worker once converted, here otherwise.
+ *
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
+ * @returns {Promise<import('./types.js').Frame[]>}
+ */
+export async function convertBitmapFramesToClipFrames(imageBitmapFrames) {
+  const start = getNewestSourceStart(imageBitmapFrames);
+  for (const item of imageBitmapFrames.slice(0, start)) item.bitmap?.close();
+  const usable = [];
+  for (const item of imageBitmapFrames.slice(start)) {
+    if (item.bitmap && item.bitmap.width > 0 && item.bitmap.height > 0) {
+      usable.push(item);
+    } else {
+      item.bitmap?.close();
+    }
+  }
+
+  const { converted, rest, lost } = await convertBitmapsToI420(usable);
+  if (lost > 0) console.warn(`[Capture] ${lost} frames were lost converting the clip`);
+
+  /** @type {Array<{ index: number, frame: import('./types.js').Frame }>} */
+  const ordered = [];
+  for (const entry of converted) {
+    let videoFrame;
+    try {
+      videoFrame = new VideoFrame(entry.data, {
+        format: 'I420',
+        codedWidth: entry.width,
+        codedHeight: entry.height,
+        timestamp: entry.timestamp * 1000,
+        colorSpace: I420_COLOR_SPACE,
+        transfer: [entry.data],
+      });
+    } catch (err) {
+      console.warn('[Capture] Could not make a frame from the converted bytes:', err);
+      continue;
+    }
+    ordered.push({
+      index: entry.index,
+      frame: {
+        id: entry.id,
+        frame: videoFrame,
+        timestamp: entry.timestamp * 1000,
+        width: entry.width,
+        height: entry.height,
+        byteLength: i420Layout(entry.width, entry.height).size,
+      },
+    });
+  }
+  const fallback = convertBitmapFramesToVideoFrames(rest.map(({ item }) => item));
+  const fallbackIds = new Map(rest.map(({ index, item }) => [item.id, index]));
+  for (const frame of fallback) {
+    ordered.push({ index: fallbackIds.get(frame.id) ?? Number.MAX_SAFE_INTEGER, frame });
+  }
+  ordered.sort((a, b) => a.index - b.index);
+  return ordered.map(({ frame }) => frame);
 }
 
 /**
@@ -737,8 +808,8 @@ async function handleCreateClip() {
     return false;
   }
 
-  // Convert ImageBitmaps to VideoFrames for Editor
-  const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
+  // The clip's frames: CPU I420 where the converter worker runs (D3)
+  const videoFrames = await convertBitmapFramesToClipFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
     return false;
