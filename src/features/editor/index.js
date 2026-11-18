@@ -52,7 +52,7 @@ import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
-import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { getSegmentationManager, objectMaskGroup } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
@@ -2453,6 +2453,18 @@ function startAiCutoutSession() {
   if (clipId !== undefined) {
     maskStore.touchClip(clipId, getAiModelId(sessionStore.getState().edits.background.ai));
   }
+  // The masks this clip reads now are never evicted, and the store makes
+  // room for all of them (a 15 s clip's base masks alone fill the default cap)
+  const syncActiveMasks = () => {
+    const id = getActiveClipId();
+    const state = sessionStore.getState();
+    const ai = state.edits.background.ai;
+    maskStore.setActiveClip(id ?? null, {
+      frames: state.clip?.frames.length ?? 0,
+      models: [getAiModelId(ai), ...(ai.objects ?? []).map((object) => objectMaskGroup(object.id))],
+    });
+  };
+  syncActiveMasks();
 
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight
@@ -2461,6 +2473,7 @@ function startAiCutoutSession() {
   let selectionSyncTimer = null;
   const unsubscribeEdits = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
+      syncActiveMasks();
       session.requestBuild();
       followClickSelection(session, state, prevState);
       session.syncObjects();
