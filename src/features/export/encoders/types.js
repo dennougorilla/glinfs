@@ -41,6 +41,10 @@
  *   transparency (one palette slot reserved, every frame disposed to background).
  *   Only encoders with capabilities.supportsTransparency honor it.
  * @property {boolean} [dithering=false] - Ordered dithering before palette mapping (gifenc)
+ * @property {'bayer' | 'blue-noise'} [ditherPattern='bayer'] - Threshold map of the dithering
+ * @property {'threshold' | 'matte' | 'dither'} [edge='threshold'] - How soft alpha becomes 1-bit
+ *   (transparent exports)
+ * @property {number[]} [matteColor] - [r, g, b] the edge is blended into with edge 'matte'
  * @property {boolean} [frameDifferencing=false] - Write pixels unchanged since
  *   the previous frame as transparency (opaque exports; gifenc only)
  */

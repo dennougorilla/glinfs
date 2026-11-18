@@ -86,6 +86,9 @@ async function handleInit(message) {
       transparent: message.transparent === true,
       frameDifferencing: message.frameDifferencing === true,
       dithering: message.dithering === true,
+      ditherPattern: message.ditherPattern,
+      edge: message.edge,
+      matteColor: message.matteColor,
     });
 
     totalFrames = message.totalFrames;

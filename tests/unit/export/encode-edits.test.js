@@ -478,6 +478,55 @@ describe('frame differencing switch (Settings → Methods)', () => {
   });
 });
 
+describe('dither pattern and cutout edge switches (Settings → Methods)', () => {
+  const run = (extra = {}) =>
+    encodeGif({
+      frames: framesOf([1, 2]),
+      crop: null,
+      settings: { ...SETTINGS, dither: true },
+      fps: 30,
+      onProgress: vi.fn(),
+      ...extra,
+    });
+
+  it('dithers with the Bayer pattern by default', async () => {
+    localStorage.clear();
+    await run();
+    expect(manager.initConfig).toMatchObject({ dithering: true, ditherPattern: 'bayer' });
+  });
+
+  it('dithers with blue noise when chosen', async () => {
+    setMethod('gif.dither', 'blue-noise');
+    await run();
+    expect(manager.initConfig.ditherPattern).toBe('blue-noise');
+    localStorage.clear();
+  });
+
+  it('keeps hard cutout edges by default', async () => {
+    localStorage.clear();
+    await run({ transparent: true });
+    expect(manager.initConfig.edge).toBe('threshold');
+  });
+
+  it.each([
+    ['matte-white', [255, 255, 255]],
+    ['matte-black', [0, 0, 0]],
+  ])('blends cutout edges into the %s', async (id, matteColor) => {
+    setMethod('gif.edge', id);
+    await run({ transparent: true });
+    expect(manager.initConfig).toMatchObject({ edge: 'matte', matteColor });
+    localStorage.clear();
+  });
+
+  it('stipples cutout edges when dithered', async () => {
+    setMethod('gif.edge', 'dither');
+    await run({ transparent: true });
+    expect(manager.initConfig.edge).toBe('dither');
+    expect(manager.initConfig.matteColor).toBeUndefined();
+    localStorage.clear();
+  });
+});
+
 describe('transparent exports', () => {
   it('forces gifenc and tells the encoder to write transparency', async () => {
     await encodeGif({

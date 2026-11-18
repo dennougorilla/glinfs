@@ -7,6 +7,7 @@
 import { GIFEncoder, quantize } from 'gifenc';
 import { ALPHA_THRESHOLD } from '../../../shared/edits/color-key.js';
 import { applyPaletteFast as applyPalette } from './apply-palette.js';
+import { blueNoise64 } from './blue-noise.js';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
@@ -266,14 +267,17 @@ export function differenceFrame(index, colors, shown, transparentIndex, out) {
 }
 
 /**
- * Ordered (Bayer 8x8) dithering, applied to the pixels before they are
- * mapped to the palette: each pixel's RGB moves by a fixed offset that
- * depends only on its position, within +-amplitude/2. Smooth gradients then
- * mix the two nearest palette colors instead of breaking into bands.
- * Being positional (not error diffusion), an unchanged pixel gets the same
- * offset in every frame, so frame differencing still finds it unchanged,
- * and alpha is never touched, so the transparent pixels of a cutout stay
- * exactly the ones the source has.
+ * Ordered dithering, applied to the pixels before they are mapped to the
+ * palette: each pixel's RGB moves by a fixed offset that depends only on
+ * its position, within +-amplitude/2. Smooth gradients then mix the two
+ * nearest palette colors instead of breaking into bands. Being positional
+ * (not error diffusion), an unchanged pixel gets the same offset in every
+ * frame, so frame differencing still finds it unchanged, and alpha is never
+ * touched, so the transparent pixels of a cutout stay exactly the ones the
+ * source has.
+ *
+ * Two threshold maps: Bayer 8x8 (a regular cross-hatch) and a 64x64 blue
+ * noise map (an irregular grain with no visible period; blue-noise.js).
  */
 export const DITHERING = {
   /**
@@ -296,25 +300,117 @@ const BAYER_8 = Uint8Array.from([
 ]);
 
 /**
+ * @typedef {'bayer' | 'blue-noise'} DitherPattern
+ */
+
+/** @type {Map<DitherPattern, { size: number, levels: Float64Array }>} */
+const thresholdMaps = new Map();
+
+/**
+ * A threshold map as levels in [0, 1): `size` x `size` (a power of two),
+ * row-major
+ * @param {DitherPattern} pattern
+ * @returns {{ size: number, levels: Float64Array }}
+ */
+export function thresholdMap(pattern) {
+  let map = thresholdMaps.get(pattern);
+  if (!map) {
+    const values = pattern === 'blue-noise' ? blueNoise64() : BAYER_8;
+    const steps = pattern === 'blue-noise' ? 256 : 64;
+    const levels = Float64Array.from(values, (v) => (v + 0.5) / steps);
+    map = { size: pattern === 'blue-noise' ? 64 : 8, levels };
+    thresholdMaps.set(pattern, map);
+  }
+  return map;
+}
+
+/**
  * Ordered dithering of an RGBA frame into `out` (alpha copied unchanged)
  * @param {Uint8ClampedArray} rgba
  * @param {number} width
  * @param {number} amplitude - Peak-to-peak offset per channel
  * @param {Uint8ClampedArray} out - Same length as rgba
+ * @param {DitherPattern} [pattern='bayer']
  * @returns {Uint8ClampedArray} out
  */
-export function orderedDither(rgba, width, amplitude, out) {
-  const offsets = new Int16Array(64);
-  for (let i = 0; i < 64; i++) offsets[i] = Math.round(((BAYER_8[i] + 0.5) / 64 - 0.5) * amplitude);
+export function orderedDither(rgba, width, amplitude, out, pattern = 'bayer') {
+  const { size, levels } = thresholdMap(pattern);
+  const mask = size - 1;
+  const shift = Math.log2(size);
+  const offsets = Int16Array.from(levels, (l) => Math.round((l - 0.5) * amplitude));
   const height = width > 0 ? rgba.length / 4 / width : 0;
   for (let y = 0; y < height; y++) {
-    const row = (y & 7) << 3;
+    const row = (y & mask) << shift;
     for (let x = 0, p = y * width * 4; x < width; x++, p += 4) {
-      const o = offsets[row | (x & 7)];
+      const o = offsets[row | (x & mask)];
       out[p] = rgba[p] + o;
       out[p + 1] = rgba[p + 1] + o;
       out[p + 2] = rgba[p + 2] + o;
       out[p + 3] = rgba[p + 3];
+    }
+  }
+  return out;
+}
+
+/**
+ * How a transparent export turns soft alpha (1-254: an anti-aliased or
+ * feathered edge) into the GIF's 1-bit transparency:
+ * - 'threshold': kept where alpha >= 128, colors as they are
+ * - 'matte': the edge is blended into a matte color first, then kept where
+ *   alpha >= 128, so the kept edge fades into the color of the page it will
+ *   be shown on instead of the background it was cut from
+ * - 'dither': kept where alpha passes a blue-noise threshold map, so a soft
+ *   edge becomes a stipple whose density follows alpha (positional, so a
+ *   still edge does not flicker)
+ * Alpha 0 and 255 are the same in every mode.
+ * @typedef {'threshold' | 'matte' | 'dither'} EdgeMode
+ */
+
+/**
+ * The frame with every alpha 0 or 255, per the edge mode, into `out`;
+ * returns `rgba` itself when no pixel has soft alpha
+ * @param {Uint8ClampedArray} rgba
+ * @param {number} width
+ * @param {EdgeMode} mode
+ * @param {number[]} matte - [r, g, b], for 'matte'
+ * @param {Uint8ClampedArray} out - Same length as rgba
+ * @returns {Uint8ClampedArray}
+ */
+export function hardenEdges(rgba, width, mode, matte, out) {
+  let soft = false;
+  for (let p = 3; p < rgba.length; p += 4) {
+    if (rgba[p] !== 0 && rgba[p] !== 255) {
+      soft = true;
+      break;
+    }
+  }
+  if (!soft) return rgba;
+  const { size, levels } = thresholdMap('blue-noise');
+  const mask = size - 1;
+  const shift = Math.log2(size);
+  const height = width > 0 ? rgba.length / 4 / width : 0;
+  for (let y = 0; y < height; y++) {
+    const row = (y & mask) << shift;
+    for (let x = 0, p = y * width * 4; x < width; x++, p += 4) {
+      const a = rgba[p + 3];
+      let r = rgba[p];
+      let g = rgba[p + 1];
+      let b = rgba[p + 2];
+      let keep = a >= ALPHA_THRESHOLD;
+      if (a !== 0 && a !== 255) {
+        if (mode === 'matte') {
+          const k = a / 255;
+          r = r * k + matte[0] * (1 - k);
+          g = g * k + matte[1] * (1 - k);
+          b = b * k + matte[2] * (1 - k);
+        } else if (mode === 'dither') {
+          keep = a / 255 > levels[row | (x & mask)];
+        }
+      }
+      out[p] = r;
+      out[p + 1] = g;
+      out[p + 2] = b;
+      out[p + 3] = keep ? 255 : 0;
     }
   }
   return out;
@@ -366,6 +462,14 @@ export function createGifencEncoder() {
 
   /** Ordered dithering before mapping (config.dithering) */
   let dithering = false;
+  /** @type {DitherPattern} */
+  let ditherPattern = 'bayer';
+  /** @type {EdgeMode} How soft alpha becomes 1-bit (transparent exports) */
+  let edge = 'threshold';
+  /** @type {number[]} */
+  let matte = [255, 255, 255];
+  /** @type {Uint8ClampedArray | null} Reused buffer of the frame with hard edges */
+  let hardened = null;
   /** @type {Uint8ClampedArray | null} Reused buffer of the dithered frame */
   let dithered = null;
 
@@ -485,6 +589,13 @@ export function createGifencEncoder() {
       earlyRebuilds = 0;
       transparent = encoderConfig.transparent === true;
       dithering = encoderConfig.dithering === true;
+      ditherPattern = encoderConfig.ditherPattern === 'blue-noise' ? 'blue-noise' : 'bayer';
+      edge =
+        encoderConfig.edge === 'matte' || encoderConfig.edge === 'dither'
+          ? encoderConfig.edge
+          : 'threshold';
+      matte = encoderConfig.matteColor ?? [255, 255, 255];
+      hardened = null;
       dithered = null;
       // A cutout clears pixels from one frame to the next, which only
       // disposal to the background can show: differencing keeps the
@@ -514,7 +625,15 @@ export function createGifencEncoder() {
         throw new Error('Encoder not initialized. Call init() first.');
       }
 
-      const { rgba, width, height } = frameData;
+      const { width, height } = frameData;
+      // A transparent export decides its 1-bit alpha (and, with a matte,
+      // the edge colors) before anything reads the frame; the hard
+      // threshold is what the mapping below does anyway
+      let { rgba } = frameData;
+      if (transparent && edge !== 'threshold') {
+        if (hardened?.length !== rgba.length) hardened = new Uint8ClampedArray(rgba.length);
+        rgba = hardenEdges(rgba, width, edge, matte, hardened);
+      }
       const format = config.quantizeFormat || 'rgb565';
 
       // Palette rebuilding (quantize) dominates encode time (#99); the
@@ -536,7 +655,7 @@ export function createGifencEncoder() {
       let source = rgba;
       if (dithering) {
         if (dithered?.length !== rgba.length) dithered = new Uint8ClampedArray(rgba.length);
-        source = orderedDither(rgba, width, DITHERING.amplitude[format], dithered);
+        source = orderedDither(rgba, width, DITHERING.amplitude[format], dithered, ditherPattern);
       }
 
       // Map pixels to palette indices with same format
@@ -627,6 +746,7 @@ export function createGifencEncoder() {
       differencing = false;
       dithering = false;
       dithered = null;
+      hardened = null;
       shown = null;
       differenced = null;
       trialWhole = null;
