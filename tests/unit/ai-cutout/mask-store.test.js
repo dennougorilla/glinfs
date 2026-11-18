@@ -200,6 +200,93 @@ describe('createMaskStore', () => {
   });
 });
 
+describe('the active clip (task 13: export failed after fix-ups on a 15 s clip)', () => {
+  it('never evicts the base masks of the active clip when its fix-ups write theirs', () => {
+    // A clip whose base masks fill the cap, then a tracked fix-up: before,
+    // the fix-up's masks evicted the base set, and export found no masks
+    const store = createMaskStore({ capBytes: 12 });
+    store.setActiveClip('A', { frames: 3, models: ['anime', 'object:1'] });
+    for (const f of ['0', '1', '2']) store.set(`anime:${f}`, mask(4), 'A', 'anime');
+    for (const f of ['0', '1', '2']) store.set(`object:1:${f}`, mask(4), 'A', 'object:1');
+
+    expect(store.keysForClip('A')).toHaveLength(6);
+    expect(store.byteLength).toBe(24);
+  });
+
+  it('evicts other clips first, then the models the active clip no longer uses', () => {
+    const store = createMaskStore({ capBytes: 12 });
+    store.set('old:b', mask(4), 'B', 'anime');
+    store.set('general:a', mask(4), 'A', 'general'); // the active clip's earlier model
+    store.setActiveClip('A', { frames: 1, models: ['anime'] });
+    store.set('anime:a', mask(4), 'A', 'anime');
+    store.set('x:c', mask(4), 'C', 'anime'); // 16 > 12: the oldest evictable group goes
+
+    expect(store.has('old:b')).toBe(false);
+    expect(store.has('general:a')).toBe(true);
+    store.set('anime:a2', mask(4), 'A', 'anime'); // 16 > 12: other clips go before A's general set
+    expect(store.has('x:c')).toBe(false);
+    expect(store.has('general:a')).toBe(true);
+    store.set('anime:a3', mask(4), 'A', 'anime'); // 16 > 12, no other clip left
+    expect(store.has('general:a')).toBe(false);
+    expect(store.keysForClip('A').sort()).toEqual(['anime:a', 'anime:a2', 'anime:a3']);
+  });
+
+  it('sizes the cap from the active clip: frames x mask bytes x (1 + objects)', () => {
+    const store = createMaskStore({ capBytes: 8 });
+    store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
+    store.set('anime:0', mask(4), 'A', 'anime');
+    // 4 frames x 4 bytes x 2 groups = 32 bytes of room
+    expect(store.capBytes).toBe(32);
+    store.set('b', mask(8), 'B', 'anime');
+    store.set('c', mask(8), 'C', 'anime');
+    expect(store.has('b')).toBe(true); // 4 + 8 + 8 = 20 <= 32
+    store.set('d', mask(16), 'D', 'anime'); // 36 > 32: B goes
+    expect(store.has('b')).toBe(false);
+    expect(store.has('c')).toBe(true);
+    // Never below the default cap
+    store.setActiveClip('A', { frames: 1, models: ['anime'] });
+    expect(store.capBytes).toBe(8);
+  });
+
+  it('sizes each group of the active clip by its own masks (fix-up masks are small)', () => {
+    const store = createMaskStore({ capBytes: 8 });
+    store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
+    store.set('anime:0', mask(4), 'A', 'anime');
+    // No fix-up mask yet: it may be as large as a base mask
+    expect(store.capBytes).toBe(32);
+    store.set('object:1:0', mask(1), 'A', 'object:1');
+    // 4 frames x 4 bytes + 4 frames x 1 byte
+    expect(store.capBytes).toBe(20);
+  });
+
+  it('stops protecting a clip once the active clip is set to null', () => {
+    const store = createMaskStore({ capBytes: 8 });
+    store.setActiveClip('A', { frames: 1, models: ['anime'] });
+    store.set('anime:a', mask(4), 'A', 'anime');
+    store.setActiveClip(null);
+    store.set('b', mask(8), 'B', 'anime'); // 12 > 8: A is no longer protected
+    expect(store.has('anime:a')).toBe(false);
+  });
+
+  it('reclaims at once when the active clip changes to one that needs less (Codex P2 on #228)', () => {
+    // A clip with a fix-up held 4 x 4 x 2 = 32 bytes over a default cap of 8
+    const store = createMaskStore({ capBytes: 8 });
+    store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
+    for (const f of ['0', '1', '2', '3']) store.set(`anime:${f}`, mask(4), 'A', 'anime');
+    for (const f of ['0', '1', '2', '3']) store.set(`object:1:${f}`, mask(4), 'A', 'object:1');
+    expect(store.byteLength).toBe(32);
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    // Another clip, nothing analyzed yet: A's masks are no longer protected
+    // and must not stay over the cap until the next analysis writes a mask
+    store.setActiveClip('B', { frames: 4, models: ['anime'] });
+
+    expect(store.byteLength).toBeLessThanOrEqual(8);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: 'evict', clipId: 'A' }));
+  });
+});
+
 describe('getSharedMaskStore', () => {
   it('returns one app-wide store', () => {
     expect(getSharedMaskStore()).toBe(getSharedMaskStore());
