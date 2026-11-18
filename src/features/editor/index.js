@@ -51,7 +51,7 @@ import { createElement, createErrorScreen, qsRequired } from '../../shared/utils
 import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
@@ -59,6 +59,7 @@ import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
   classifyFixUp,
   clearPixelCache,
+  getActiveMaskGroups,
   getAiModelId,
   getClipColourRegion,
   getClipObjectSources,
@@ -349,7 +350,9 @@ function getDefaultClipSpeed() {
 
 // Probability masks belong to clips. When a clip's frames are released for
 // good (its deletion's Undo window ended, or a fresh session drained
-// everything) its masks go too; a full reset also stops the model worker.
+// everything) its masks go too. A full reset, or the last clip going, also
+// stops the model worker: it holds the models on the GPU and ONNX Runtime's
+// WASM heap, which never shrinks. The next analysis starts a fresh worker.
 // Subscribed at module scope: the Undo timer can fire on any screen.
 onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ detail) => {
   const maskStore = getSharedMaskStore();
@@ -366,6 +369,16 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     // Its memoized final masks (~22 MB for 300 frames) and a build for it
     getSharedFinalMaskCache().forgetClip(id);
   }
+  // After the release settles: a deletion that replaces an earlier one
+  // releases the earlier clip before the new one is held for Undo
+  queueMicrotask(() => {
+    if (!getClipPayload() && getClipQueue().length === 0 && !hasPendingDeletion()) {
+      getSegmentationManager().dispose();
+      // Masks stored without a clip id belong to no clip; nothing else
+      // removes their group (audit B12)
+      maskStore.deleteClip(DEFAULT_CLIP_ID);
+    }
+  });
 });
 
 /**
@@ -2728,6 +2741,18 @@ function startAiCutoutSession() {
   if (clipId !== undefined) {
     maskStore.touchClip(clipId, getAiModelId(sessionStore.getState().edits.background.ai));
   }
+  // The masks this clip reads now are never evicted, and the store makes
+  // room for all of them (a 15 s clip's base masks alone fill the default cap)
+  const syncActiveMasks = () => {
+    const id = getActiveClipId();
+    const state = sessionStore.getState();
+    const ai = state.edits.background.ai;
+    maskStore.setActiveClip(id ?? null, {
+      frames: state.clip?.frames.length ?? 0,
+      models: getActiveMaskGroups(ai),
+    });
+  };
+  syncActiveMasks();
 
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight
@@ -2736,6 +2761,7 @@ function startAiCutoutSession() {
   let selectionSyncTimer = null;
   const unsubscribeEdits = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
+      syncActiveMasks();
       session.requestBuild();
       followClickSelection(session, state, prevState);
       session.syncObjects();
