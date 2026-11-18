@@ -17,6 +17,7 @@ import {
   describeAnalysisProgress,
   estimateRemainingMs,
   formatTimeLeft,
+  getActiveMaskGroups,
   getAiModelId,
   getAnalysisCoverage,
   getAnalysisFraction,
@@ -332,6 +333,12 @@ describe('AI cutout helpers', () => {
       expect(described.message).not.toContain('internal');
       expect(described.message.length).toBeGreaterThan(10);
     }
+    // A GPU reset is said as such, never as a browser without WebGPU
+    const reset = describeAnalysisError(
+      new SegmentationError(SegmentationErrorCode.GPU_LOST, 'The GPU was reset: device lost'),
+    );
+    expect(reset.message).toBe('The GPU was reset.');
+    expect(reset.message).not.toMatch(/browser|WebGPU/);
     // WebGPU-only models and running out of WASM memory say so
     const needs = 'Busy backgrounds needs WebGPU, which this browser does not provide.';
     expect(
@@ -504,5 +511,21 @@ describe('only this: what a Keep box holds and what it takes away (cutout-ux 3)'
     expect(loss?.data[5 * W + 9]).toBe(255);
     expect(loss?.data[5 * W + 16]).toBe(0);
     expect(getOnlyThisLoss({ frames, ai, frameIndex: 0, maskStore, mask: cols(0, 20) })).toBeNull();
+  });
+});
+
+describe('getActiveMaskGroups (#228: the groups the mask store protects for the active clip)', () => {
+  it('names the base model and each tracked fix-up, never a Colour fix-up (Codex round 2)', () => {
+    // A Colour fix-up stores no masks: a protected group for it was budgeted
+    // at the base mask size and kept unrelated masks alive
+    const ai = /** @type {any} */ ({
+      model: 'anime',
+      objects: [
+        { id: 'o1', mode: 'remove', scope: 'whole', clicks: [], boxes: [] },
+        { id: 'o2', mode: 'remove', scope: 'colour', clicks: [], boxes: [] },
+        { id: 'o3', mode: 'keep', scope: 'part', clicks: [], boxes: [] },
+      ],
+    });
+    expect(getActiveMaskGroups(ai)).toEqual([getAiModelId(ai), 'object:o1', 'object:o3']);
   });
 });
