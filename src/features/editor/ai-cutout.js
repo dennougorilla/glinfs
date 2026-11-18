@@ -625,6 +625,7 @@ const ERROR_COPY = {
     'The analysis stopped unexpectedly (the browser may be low on memory).',
   [SegmentationErrorCode.FRAME_UNAVAILABLE]:
     'A frame of this clip is no longer available, so it cannot be analyzed.',
+  [SegmentationErrorCode.GPU_LOST]: 'The GPU was reset.',
 };
 
 /**
