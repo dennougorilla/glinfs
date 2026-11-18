@@ -87,6 +87,12 @@ export const SegmentationErrorCode = Object.freeze({
   INVALID_OUTPUT: 'invalid-output',
   /** The worker crashed or could not start */
   WORKER_CRASHED: 'worker-crashed',
+  /**
+   * The GPU was reset under the analysis (the WebGPU device was lost, e.g.
+   * a driver reset when video memory ran out), and the retry on a fresh
+   * worker failed too
+   */
+  GPU_LOST: 'gpu-lost',
   /** A frame's pixels are gone (closed VideoFrame) */
   FRAME_UNAVAILABLE: 'frame-unavailable',
 });
@@ -103,12 +109,16 @@ export class SegmentationError extends Error {
   /**
    * @param {string} code - A SegmentationErrorCode
    * @param {string} message
+   * @param {{ noAdapter?: boolean }} [details] - noAdapter: raised because no
+   *   WebGPU adapter was found (not because a model failed on one)
    */
-  constructor(code, message) {
+  constructor(code, message, { noAdapter = false } = {}) {
     super(message);
     this.name = 'SegmentationError';
     /** @type {string} */
     this.code = code;
+    /** @type {boolean} */
+    this.noAdapter = noAdapter;
   }
 }
 
@@ -120,7 +130,11 @@ export class SegmentationError extends Error {
  */
 export function toErrorPayload(error, fallbackCode) {
   if (error instanceof SegmentationError) {
-    return { code: error.code, message: error.message };
+    return {
+      code: error.code,
+      message: error.message,
+      ...(error.noAdapter ? { noAdapter: true } : {}),
+    };
   }
   const message = error instanceof Error ? error.message : String(error);
   return { code: fallbackCode, message };
@@ -136,6 +150,7 @@ export function fromErrorPayload(payload, fallbackCode) {
   return new SegmentationError(
     payload?.code ?? fallbackCode,
     payload?.message ?? 'Segmentation failed',
+    { noAdapter: payload?.noAdapter === true },
   );
 }
 
