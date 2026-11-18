@@ -164,8 +164,9 @@ export function initCapture(settings) {
   throttledUpdate = throttle(() => {
     if (!store) return; // Guard against cleanup race condition
     const state = store.getState();
-    // Update buffer status without full re-render
-    updateBufferStatus(container, state.stats);
+    // Update buffer status without full re-render (the limit changes while
+    // sharing when the frame size does, B5)
+    updateBufferStatus(container, state.stats, state.bufferLimit ?? null);
   }, 100);
 
   storeUnsubscribe = store.subscribe(throttledUpdate);

@@ -232,6 +232,24 @@ describe('capture-worker', () => {
     expect(lastPosted('FRAMES_RESPONSE').payload.frames.map((f) => f.timestamp)).toEqual([4]);
   });
 
+  it('drops the frames of the old size before taking a larger capacity (#231 review)', () => {
+    // Filled at 1920x1080; the window shrank, and the capacity grows for the
+    // smaller frames. The large frames must not stay counted as small ones.
+    const large = [createMockBitmap(1920, 1080), createMockBitmap(1920, 1080)];
+    const small = createMockBitmap(1280, 720);
+
+    send('START', { fps: 30, maxFrames: 3 });
+    for (const [i, bitmap] of large.entries()) respond(bitmap, i + 1);
+    respond(small, 3);
+    send('RESIZE', { maxFrames: 6, width: 1280, height: 720 });
+
+    for (const bitmap of large) expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(small.close).not.toHaveBeenCalled();
+    expect(lastPosted('STATS_UPDATE').payload).toMatchObject({ frameCount: 1, maxFrames: 6 });
+    send('GET_FRAMES');
+    expect(lastPosted('FRAMES_RESPONSE').payload.frames.map((f) => f.timestamp)).toEqual([3]);
+  });
+
   it('closes all buffered frames on CLEAR', () => {
     const first = createMockBitmap();
     const second = createMockBitmap();

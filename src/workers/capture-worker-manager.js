@@ -144,12 +144,17 @@ export class CaptureWorkerManager {
 
   /**
    * Change the buffer capacity while capturing; the oldest frames beyond it
-   * are closed in the worker. For a frame size that changed (B5).
+   * are closed in the worker, and so are the frames of another size. For a
+   * frame size that changed (B5).
    * @param {number} maxFrames
    */
   resize(maxFrames) {
-    this.#capacitySize = sizeKey(this.getEffectiveFrameDimensions());
-    this.#worker?.postMessage({ type: 'RESIZE', payload: { maxFrames } });
+    const dims = this.getEffectiveFrameDimensions();
+    this.#capacitySize = sizeKey(dims);
+    this.#worker?.postMessage({
+      type: 'RESIZE',
+      payload: { maxFrames, ...(dims ? { width: dims.width, height: dims.height } : {}) },
+    });
   }
 
   /**

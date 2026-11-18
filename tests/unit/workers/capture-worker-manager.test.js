@@ -238,12 +238,16 @@ describe('CaptureWorkerManager', () => {
     );
   });
 
-  it('posts RESIZE with the new capacity (B5)', () => {
+  it('posts RESIZE with the new capacity and the frame size it is for (B5)', () => {
     const manager = new CaptureWorkerManager();
-    manager.init(createFakeVideo());
+    manager.init(/** @type {any} */ ({ readyState: 4, videoWidth: 2560, videoHeight: 1440 }), {
+      maxEdge: 1920,
+    });
     manager.resize(120);
     expect(MockWorker.instances[0]._lastMessage('RESIZE')?.message.payload).toEqual({
       maxFrames: 120,
+      width: 1920,
+      height: 1080,
     });
   });
 

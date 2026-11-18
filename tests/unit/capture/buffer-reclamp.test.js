@@ -127,4 +127,28 @@ describe('ring buffer re-clamp on a frame-size change (B5)', () => {
     onFrameSizeChange({ width: 1280, height: 720, scaled: false });
     expect(manager.resize).toHaveBeenLastCalledWith(450);
   });
+
+  it('hands the new limit to the live stats, so the note follows it (#231 review)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager } = await startSharing();
+      const { onFrameSizeChange } = manager.init.mock.calls.at(-1)[1];
+      const { updateBufferStatus } = await import('../../../src/features/capture/ui.js');
+
+      onFrameSizeChange({ width: 1920, height: 1080, scaled: false });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(vi.mocked(updateBufferStatus).mock.calls.at(-1)?.[2]).toMatchObject({
+        clamped: true,
+      });
+
+      onFrameSizeChange({ width: 1280, height: 720, scaled: false });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(vi.mocked(updateBufferStatus).mock.calls.at(-1)?.[2]).toMatchObject({
+        clamped: false,
+        maxFrames: 450,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
