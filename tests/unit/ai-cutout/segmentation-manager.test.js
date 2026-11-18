@@ -549,6 +549,41 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(error.message).toMatch(/Choose another model/);
   });
 
+  it('a WASM inference failure is not a GPU loss: a later WebGPU-only model keeps its own error (Codex round 3)', async () => {
+    const { manager, workers } = createHarness(
+      { backend: 'wasm', autoMask: false, autoReady: false },
+      { gpuRetryDelayMs: 0 },
+    );
+    const run = manager
+      .analyzeFrames([makeFrame('a')], { clipId: 'c', allowWasm: true })
+      .catch((e) => e);
+    await flush();
+    workers[0].ready();
+    for (let i = 0; i < 10 && workers[0].segments.length === 0; i++) await flush();
+    workers[0].emit({
+      type: 'segment-error',
+      requestId: workers[0].segments[0].requestId,
+      error: { code: SegmentationErrorCode.INFERENCE_FAILED, message: 'WASM out of memory' },
+    });
+    expect((await run).code).toBe(SegmentationErrorCode.INFERENCE_FAILED);
+
+    // A WebGPU-only model on the fresh worker, in a browser without an adapter
+    const next = manager
+      .analyzeFrames([makeFrame('b')], { clipId: 'c', modelId: 'general' })
+      .catch((e) => e);
+    for (let i = 0; i < 10 && !(workers[1]?.inits.length > 0); i++) await flush();
+    workers[1].emit({
+      type: 'init-error',
+      modelId: 'general',
+      error: {
+        code: SegmentationErrorCode.WEBGPU_REQUIRED,
+        message: 'needs WebGPU',
+        noAdapter: true,
+      },
+    });
+    expect((await next).code).toBe(SegmentationErrorCode.WEBGPU_REQUIRED);
+  });
+
   it('dispose() while a model switch waits for the old model’s frames starts no worker (Codex round 2)', async () => {
     const { manager, workers } = createHarness({ autoMask: false });
     const controller = new AbortController();

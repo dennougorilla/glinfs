@@ -1075,11 +1075,6 @@ export class SegmentationManager {
     try {
       return await this.#analyze(frames, options);
     } catch (error) {
-      // A WebGPU run that failed may be the GPU going away before its loss
-      // was reported: a missing adapter afterwards is said as a reset too
-      if (/** @type {any} */ (error)?.code === SegmentationErrorCode.INFERENCE_FAILED) {
-        this.#gpuLost = true;
-      }
       if (!isGpuLost(error) || options.signal?.aborted) throw this.#asGpuLoss(error);
       this.#gpuLost = true;
       await raceAbort(
@@ -1176,6 +1171,16 @@ export class SegmentationManager {
       }
     } catch (error) {
       this.#cancelJob(jobId, inflight);
+      // A WebGPU run that failed may be the GPU going away before its loss
+      // was reported: a missing adapter afterwards is said as a reset too.
+      // Only a WebGPU session's failure says that (a WASM one is the CPU's)
+      if (
+        error instanceof SegmentationError &&
+        error.code === SegmentationErrorCode.INFERENCE_FAILED &&
+        ready.backend === 'webgpu'
+      ) {
+        this.#gpuLost = true;
+      }
       if (
         error instanceof SegmentationError &&
         (error.code === SegmentationErrorCode.INFERENCE_FAILED ||
