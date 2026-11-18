@@ -15,6 +15,7 @@ vi.mock('../../../src/features/ai-cutout/segmentation-manager.js', async (import
   return { ...actual, getSegmentationManager: () => fake, __fake: fake };
 });
 
+import { getSharedMaskStore } from '../../../src/features/ai-cutout/mask-store.js';
 import * as segmentation from '../../../src/features/ai-cutout/segmentation-manager.js';
 import '../../../src/features/editor/index.js';
 import {
@@ -76,5 +77,36 @@ describe('the model worker goes with the last clip', () => {
 
     expect(fake.forgetClip).toHaveBeenCalledWith('a');
     expect(fake.dispose).not.toHaveBeenCalled();
+  });
+});
+
+describe('masks that belong to no clip (audit B12)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetAppStore();
+    getSharedMaskStore().clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('go when the last clip goes: nothing else ever removes their group', async () => {
+    const store = getSharedMaskStore();
+    store.set('anime:x', { data: new Uint8Array(4), width: 4, height: 1 }, undefined, 'anime');
+    setClipPayload(clip('a'));
+    deleteActiveClip();
+    await vi.runAllTimersAsync();
+    await flush();
+    expect(store.has('anime:x')).toBe(false);
+  });
+
+  it('stay while a clip is open (they may be its masks)', async () => {
+    const store = getSharedMaskStore();
+    store.set('anime:x', { data: new Uint8Array(4), width: 4, height: 1 }, undefined, 'anime');
+    setClipPayload(clip('b'));
+    emit('clips:released', { ids: ['a'], reset: false });
+    await flush();
+    expect(store.has('anime:x')).toBe(true);
   });
 });

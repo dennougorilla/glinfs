@@ -50,7 +50,7 @@ import { createElement, createErrorScreen, qsRequired } from '../../shared/utils
 import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
@@ -371,6 +371,9 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
   queueMicrotask(() => {
     if (!getClipPayload() && getClipQueue().length === 0 && !hasPendingDeletion()) {
       getSegmentationManager().dispose();
+      // Masks stored without a clip id belong to no clip; nothing else
+      // removes their group (audit B12)
+      maskStore.deleteClip(DEFAULT_CLIP_ID);
     }
   });
 });
