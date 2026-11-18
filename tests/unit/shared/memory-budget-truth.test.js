@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteQueuedClip,
   enqueueClip,
   estimateQueuedClipMB,
   getClipMemoryEstimateMB,
   getClipPayload,
   getClipQueue,
   getHeldMemoryMB,
+  planQueueEviction,
   prepareQueuedClipForPromote,
   promoteQueuedClip,
   registerClipCodec,
@@ -197,6 +199,28 @@ describe('the total counts the other holders', () => {
   });
 });
 
+describe('removing a clip frees its masks too (#230 review P2)', () => {
+  it('counts the masks a queued clip takes with it when planning removals', () => {
+    // Raw queue (no codec): two clips of ~99.5 MB, the older one with
+    // 300 MB of masks
+    enqueueClip({ frames: rgbaFrames(12, 'o'), fps: 30, capturedAt: 1 });
+    enqueueClip({ frames: rgbaFrames(12, 'n'), fps: 30, capturedAt: 2 });
+    const [newer, older] = getClipQueue();
+    unregister.push(
+      registerMemoryHolder('masks', () => 300, {
+        forClip: (clipId) => (clipId === older.id ? 300 : 0),
+      }),
+    );
+
+    // Held ~499; a 700 MB clip needs ~199 freed: the older clip and its
+    // masks free ~399, so the newer one stays
+    const plan = planQueueEviction({ needSlot: false, incomingMB: 700, budgetMB: 1000 });
+
+    expect(plan).toMatchObject({ ok: true, ids: [older.id] });
+    expect(plan.ids).not.toContain(newer.id);
+  });
+});
+
 describe('opening a queued clip is checked against the budget', () => {
   /** A compressed queued clip of `count` 1080p frames, captured at `at` */
   async function compressedEntry(codec, count, at) {
@@ -216,6 +240,32 @@ describe('opening a queued clip is checked against the budget', () => {
     expect(codec.decode).toHaveBeenCalledOnce();
     codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(300) });
     expect(await prepared).toEqual({ ok: true, removed: [] });
+  });
+
+  it.each([
+    ['the decode fails', 'decode-failed', { ok: false, error: 'boom' }],
+    ['the clip is deleted while it decodes', 'not-found', 'delete'],
+  ])('reports the clips it removed when %s (#230 review P2)', async (_label, reason, outcome) => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    updateSetting('capture', 'memoryBudgetMB', 4000);
+    const entry = await compressedEntry(codec, 300, 5);
+    enqueueClip({ frames: rgbaFrames(100, 'alpha'), fps: 30, capturedAt: 1, hasAlpha: true });
+    const raw = getClipQueue().find((e) => e.capturedAt === 1);
+    unregister.push(registerMemoryHolder('capture-buffer', () => 2400));
+
+    const prepared = prepareQueuedClipForPromote(entry.id);
+    expect(raw.frames).toBeNull();
+    if (outcome === 'delete') {
+      deleteQueuedClip(entry.id);
+      codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(300) });
+    } else {
+      codec.decodeCalls[0].resolve(outcome);
+    }
+    const result = await prepared;
+
+    expect(result).toMatchObject({ ok: false, reason });
+    expect(/** @type {any} */ (result).removed.map((e) => e.id)).toEqual([raw.id]);
   });
 
   it('removes older queued clips first when that makes room', async () => {

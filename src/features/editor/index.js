@@ -2984,6 +2984,12 @@ function handlePromoteClip(id) {
  */
 async function promoteWhenDecoded(id) {
   const prep = await prepareQueuedClipForPromote(id);
+  if (!prep.ok && prep.reason !== 'decoding' && store && deletedClipOnScreen) {
+    // Succession after deleting the open clip failed: the editor must not
+    // stay on the deleted clip, whose frames close when its Undo hold ends
+    leaveDeletedClip(prep);
+    return false;
+  }
   reportOpenMemory(prep);
   if (!prep.ok) {
     // 'decoding' = double-promote, silently ignored (first click wins);
@@ -3004,6 +3010,27 @@ async function promoteWhenDecoded(id) {
   // holds raw frames).
   compressQueuedClip(id);
   return false;
+}
+
+/**
+ * Leave the deleted clip still on screen when its successor could not be
+ * opened (#230 review P1). Refused for memory while the deleted clip waits
+ * in its Undo hold: that hold is what is in the way, so the opening state
+ * stays up and the editor mounts again when the hold ends (the successor
+ * then fits, or Undo brought the deleted clip back). Any other failure is
+ * reported and the editor mounts again on what is left.
+ * @param {{ ok: false, reason: string }} prep
+ */
+function leaveDeletedClip(prep) {
+  const container = qsRequired('#main-content');
+  cleanup();
+  if (prep.reason === 'memory-budget' && hasPendingDeletion()) {
+    renderClipOpeningScreen(container, null);
+    return;
+  }
+  reportOpenMemory(/** @type {any} */ (prep));
+  if (prep.reason === 'decode-failed') announce('Could not open clip — decoding failed');
+  initEditor();
 }
 
 /**
@@ -3127,7 +3154,9 @@ export async function promoteClipFromQueue(id) {
  * so the only state worth showing is "working on it".
  *
  * @param {HTMLElement} container
- * @param {string} entryId - Queue entry being opened
+ * @param {string | null} entryId - Queue entry being opened; null: open
+ *   nothing yet, mount the editor again once the pending Undo hold ends
+ *   (its memory was in the way, see leaveDeletedClip)
  * @param {boolean} [openExportDialogOnMount=false] - A `#/export` request
  *   taken by this mount: handed on to the editor that replaces this screen,
  *   and dropped when the clip cannot be opened or the screen is left
@@ -3163,6 +3192,27 @@ function renderClipOpeningScreen(container, entryId, openExportDialogOnMount = f
       initEditor();
     }
   });
+
+  if (entryId === null) {
+    const remount = () => {
+      if (disposed || hasPendingDeletion()) return;
+      disposed = true;
+      unsubscribe();
+      unsubscribeReleased();
+      pendingExportDialog = openExportDialogOnMount;
+      initEditor();
+    };
+    // Undo (queue:changed above, or here) or the hold ending (clips:released)
+    const unsubscribeReleased = onBus('clips:released', remount);
+    const unsubscribeUndo = onBus('queue:changed', remount);
+    return () => {
+      disposed = true;
+      unsubscribe();
+      unsubscribeReleased();
+      unsubscribeUndo();
+      cleanup();
+    };
+  }
 
   void promoteClipFromQueue(entryId).then((ok) => {
     if (disposed) return;

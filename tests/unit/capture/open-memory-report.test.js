@@ -52,6 +52,20 @@ describe('reportOpenMemory', () => {
     off();
   });
 
+  it('names the clips removed to make room even when the open then failed (#230 review P2)', () => {
+    const events = [];
+    const off = onBus('clip:auto-removed', (payload) => events.push(payload));
+    reportOpenMemory({
+      ok: false,
+      reason: 'decode-failed',
+      removed: [{ id: 'q1', capturedAt: 0, sourceName: 'wave.gif' }],
+    });
+    expect(events[0]?.message).toBe(
+      'Memory budget reached — removed the oldest clip (wave.gif) to make room',
+    );
+    off();
+  });
+
   it('says nothing for an open that needed no room, or failed for another reason', () => {
     const events = [];
     const offA = onBus('clip:memory-budget', (payload) => events.push(payload));

@@ -140,11 +140,9 @@ export function announceMemoryBudget(projection) {
  *   projection?: import('../../shared/app-store.js').MemoryProjection }} result
  */
 export function reportOpenMemory(result) {
-  if (result.ok) {
-    if (result.removed?.length) announceClipsRemoved(result.removed, 'memory-budget');
-    return;
-  }
-  if (result.reason !== 'memory-budget' || !result.projection) return;
+  // Removed before the decode: gone even when the open then failed
+  if (result.removed?.length) announceClipsRemoved(result.removed, 'memory-budget');
+  if (result.ok || result.reason !== 'memory-budget' || !result.projection) return;
   const message = buildMemoryBudgetMessage(result.projection, 'opened clip');
   let shownOnScreen = false;
   emit('clip:memory-budget', {
