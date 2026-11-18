@@ -347,7 +347,9 @@ function getDefaultClipSpeed() {
 
 // Probability masks belong to clips. When a clip's frames are released for
 // good (its deletion's Undo window ended, or a fresh session drained
-// everything) its masks go too; a full reset also stops the model worker.
+// everything) its masks go too. A full reset, or the last clip going, also
+// stops the model worker: it holds the models on the GPU and ONNX Runtime's
+// WASM heap, which never shrinks. The next analysis starts a fresh worker.
 // Subscribed at module scope: the Undo timer can fire on any screen.
 onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ detail) => {
   const maskStore = getSharedMaskStore();
@@ -364,6 +366,13 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
     // Its memoized final masks (~22 MB for 300 frames) and a build for it
     getSharedFinalMaskCache().forgetClip(id);
   }
+  // After the release settles: a deletion that replaces an earlier one
+  // releases the earlier clip before the new one is held for Undo
+  queueMicrotask(() => {
+    if (!getClipPayload() && getClipQueue().length === 0 && !hasPendingDeletion()) {
+      getSegmentationManager().dispose();
+    }
+  });
 });
 
 /**
