@@ -512,6 +512,10 @@ export class SegmentationManager {
   #gpuRetryDelayMs;
   /** The GPU was lost in this session: a missing adapter afterwards is that, not the browser */
   #gpuLost = false;
+  /** Bumped by dispose(): a GPU retry waiting since an earlier lifecycle does not run */
+  #lifecycle = 0;
+  /** Why the last worker was torn down (cleared when a new one starts) */
+  #teardownError = /** @type {unknown} */ (null);
   /** @type {Set<() => void>} */
   #modelListeners = new Set();
 
@@ -680,6 +684,10 @@ export class SegmentationManager {
     const resolved = applyDevOverride(spec, allowWasm);
     if (!resolved.allowWasm && !(await this.getCapabilities()).webgpu) return false;
     // Re-checked: an analysis may have started or loaded it meanwhile
+    if (this.#slots.has(modelId) || this.#busy.size > 0) return false;
+    // A base model preloaded for the clip on screen replaces the one before
+    // it, as an analysis does (#ensureReady); otherwise both stay on the GPU
+    await this.#releaseOtherModels(modelId);
     if (this.#slots.has(modelId) || this.#busy.size > 0) return false;
     const slot = this.#loadModel(modelId, allowWasm, { cacheOnly: true });
     try {
@@ -1006,6 +1014,11 @@ export class SegmentationManager {
     const worker = this.#worker;
     if (!worker || this.#cancelledJobs.has(jobId)) {
       bitmap.close();
+      // The worker went away while the bitmap was made: a lost GPU is that
+      // (and is retried), not the user cancelling
+      if (!worker && !this.#cancelledJobs.has(jobId) && isGpuLost(this.#teardownError)) {
+        throw this.#teardownError;
+      }
       throw createAbortError();
     }
     const requestId = ++this.#requestSeq;
@@ -1056,6 +1069,7 @@ export class SegmentationManager {
    * @returns {Promise<AnalyzeResult>}
    */
   async #analyzeWithRetry(frames, options) {
+    const lifecycle = this.#lifecycle;
     try {
       return await this.#analyze(frames, options);
     } catch (error) {
@@ -1070,6 +1084,8 @@ export class SegmentationManager {
         new Promise((resolve) => setTimeout(resolve, this.#gpuRetryDelayMs)),
         options.signal,
       );
+      // Disposed meanwhile: dispose() cancels every analysis, this one too
+      if (this.#lifecycle !== lifecycle) throw createAbortError('Segmentation manager disposed');
       try {
         return await this.#analyze(frames, options);
       } catch (second) {
@@ -1185,25 +1201,7 @@ export class SegmentationManager {
     let slot = this.#slots.get(modelId);
     if (slot?.info) return slot.info;
     if (!slot) {
-      // Unload (once its frames settled) before loading another model: a
-      // WASM session, which shares the worker's memory with any other
-      // session, and every other base model, whose session holds 0.5-3 GB
-      // of GPU memory for the rest of the session otherwise. MobileSAM
-      // (kind 'sam') stays: fix-ups use it next to any base model.
-      const base = this.#getModelSpec(modelId).kind !== 'sam';
-      const release = [...this.#slots]
-        .filter(
-          ([id, other]) =>
-            id !== modelId &&
-            (other.info?.backend === 'wasm' || (base && other.spec.kind !== 'sam')),
-        )
-        .map(([id, other]) =>
-          this.#releaseSlot(id, createAbortError('Switching models'), {
-            // WASM memory only shrinks with a new worker
-            keepWorker: other.info?.backend !== 'wasm',
-          }),
-        );
-      if (release.length > 0) await raceAbort(Promise.all(release), signal);
+      await raceAbort(this.#releaseOtherModels(modelId), signal);
       slot = this.#slots.get(modelId) ?? this.#loadModel(modelId, allowWasm);
     }
     /** @param {AnalysisProgress} progress */
@@ -1221,6 +1219,32 @@ export class SegmentationManager {
     } finally {
       if (slot.onProgress === progress) slot.onProgress = null;
     }
+  }
+
+  /**
+   * Unload (once their frames settled) what must go before `modelId` loads: a
+   * WASM session, which shares the worker's memory with any other session,
+   * and, when `modelId` is a base model, every other base model, whose
+   * session holds 0.5-3 GB of GPU memory for the rest of the session
+   * otherwise. MobileSAM (kind 'sam') stays: fix-ups use it next to any base
+   * model.
+   * @param {string} modelId
+   * @returns {Promise<unknown>}
+   */
+  #releaseOtherModels(modelId) {
+    const base = this.#getModelSpec(modelId).kind !== 'sam';
+    const release = [...this.#slots]
+      .filter(
+        ([id, other]) =>
+          id !== modelId && (other.info?.backend === 'wasm' || (base && other.spec.kind !== 'sam')),
+      )
+      .map(([id, other]) =>
+        this.#releaseSlot(id, createAbortError('Switching models'), {
+          // WASM memory only shrinks with a new worker
+          keepWorker: other.info?.backend !== 'wasm',
+        }),
+      );
+    return Promise.all(release);
   }
 
   /**
@@ -1275,6 +1299,7 @@ export class SegmentationManager {
       );
     }
     this.#worker = worker;
+    this.#teardownError = null;
 
     worker.addEventListener('message', (event) => {
       if (this.#worker !== worker) return;
@@ -1503,6 +1528,11 @@ export class SegmentationManager {
     const worker = this.#worker;
     if (!worker || this.#cancelledJobs.has(jobId)) {
       bitmap.close();
+      // The worker went away while the bitmap was made: a lost GPU is that
+      // (and is retried), not the user cancelling
+      if (!worker && !this.#cancelledJobs.has(jobId) && isGpuLost(this.#teardownError)) {
+        throw this.#teardownError;
+      }
       throw createAbortError();
     }
     const requestId = ++this.#requestSeq;
@@ -1558,6 +1588,7 @@ export class SegmentationManager {
   #teardown(error) {
     this.#worker?.terminate();
     this.#worker = null;
+    this.#teardownError = error;
     this.#lastReady = null;
     const slots = [...this.#slots.values()];
     this.#slots.clear();
@@ -1572,6 +1603,7 @@ export class SegmentationManager {
 
   /** Terminate the worker; pending analyses reject with an AbortError. */
   dispose() {
+    this.#lifecycle++;
     this.#teardown(createAbortError('Segmentation manager disposed'));
     this.#cancelledJobs.clear();
     this.#objectSeeds.clear();

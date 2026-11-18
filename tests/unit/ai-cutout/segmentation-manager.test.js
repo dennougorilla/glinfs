@@ -516,6 +516,48 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(error.code).toBe(SegmentationErrorCode.GPU_LOST);
   });
 
+  it('dispose() during the GPU retry delay starts no worker; the analysis ends as cancelled', async () => {
+    // Codex P2 on #222: the retry timer outlived dispose() and started a
+    // worker that loaded a model and wrote masks after the cleanup
+    const { manager, maskStore, workers } = createHarness(
+      { autoMask: false },
+      { gpuRetryDelayMs: 40 },
+    );
+    const run = manager.analyzeFrames([makeFrame('a')], { clipId: 'c' }).catch((e) => e);
+    await flush();
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    await flush();
+    manager.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const error = await run;
+    expect(error.name).toBe('AbortError');
+    expect(workers).toHaveLength(1);
+    expect(maskStore.size).toBe(0);
+  });
+
+  it('a GPU loss while a frame’s bitmap is being made is retried, not reported as a cancel', async () => {
+    // Codex P2 on #222: no request was registered yet, so the loss reached
+    // the frame as "no worker" and the editor said the user cancelled
+    /** @type {() => void} */
+    let release = () => undefined;
+    const gate = new Promise((resolve) => {
+      release = () => resolve(undefined);
+    });
+    let calls = 0;
+    const createBitmap = vi.fn(async (_source, width, height) => {
+      if (calls++ === 0) await gate;
+      return /** @type {any} */ ({ width, height, close: vi.fn() });
+    });
+    const { manager, workers } = createHarness({}, { gpuRetryDelayMs: 0, createBitmap });
+    const run = manager.analyzeFrames([makeFrame('a')], { clipId: 'c' });
+    await flush();
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    release();
+    await expect(run).resolves.toMatchObject({ analyzed: 1, backend: 'webgpu' });
+    expect(workers).toHaveLength(2);
+  });
+
   it('keeps the worker when a job fails for a reason other than inference', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')]);
@@ -763,6 +805,20 @@ describe('SegmentationManager with more than one model', () => {
     expect(workers[0].unloads).toEqual(['anime', 'general']);
     expect([...manager.loadedModelIds].sort()).toEqual(['anime', 'click']);
     expect(workers[0].inits.map((m) => m.model.id)).toEqual(['anime', 'click', 'general', 'anime']);
+  });
+
+  it('a preloaded base model releases the base model loaded before it (audit B1)', async () => {
+    // Mounting the editor on a clip whose model differs preloads that model:
+    // the earlier base model stayed on the GPU next to it
+    const { manager, workers } = createHarness();
+    await manager.analyzeFrames([makeFrame('a')], { clipId: 'c', modelId: 'anime' });
+    await manager.preloadModel('click', { allowWasm: true });
+
+    await expect(manager.preloadModel('general', { allowWasm: true })).resolves.toBe(true);
+    await flush();
+
+    expect(workers[0].unloads).toEqual(['anime']);
+    expect([...manager.loadedModelIds].sort()).toEqual(['click', 'general']);
   });
 
   it('keeps each model’s masks apart in the same worker', async () => {
