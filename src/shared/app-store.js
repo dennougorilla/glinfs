@@ -779,7 +779,8 @@ function restoreSharedFrames(decodedFrames, meta) {
  *   'memory-budget' before anything is decoded
  *
  * @param {string} id - Queue entry id
- * @returns {Promise<{ok: true, removed: ClipQueueEntry[]} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed'} | {ok: false, reason: 'memory-budget', projection: MemoryProjection}>}
+ * @returns {Promise<{ok: true, removed: ClipQueueEntry[]} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed', removed?: ClipQueueEntry[]} | {ok: false, reason: 'memory-budget', projection: MemoryProjection}>}
+ *   `removed`: the clips removed to make room, also when the open then failed
  */
 export async function prepareQueuedClipForPromote(id) {
   let entry = state.clipQueue.find((e) => e.id === id);
@@ -819,15 +820,17 @@ export async function prepareQueuedClipForPromote(id) {
   // Shown on the entry itself until the next open starts
   if (!result.ok) entry.openFailed = true;
 
+  // Clips removed to make room are gone whatever happens next: every exit
+  // from here carries them, so the user is told (#230 review)
   if (!result.ok) {
     if (live) emitQueueChanged('decode-error');
-    return { ok: false, reason: 'decode-failed' };
+    return { ok: false, reason: 'decode-failed', removed: room.removed };
   }
 
   if (!live) {
     // Deleted while decoding: the freshly decoded frames have no owner
     closeVideoFrames(result.frames);
-    return { ok: false, reason: 'not-found' };
+    return { ok: false, reason: 'not-found', removed: room.removed };
   }
 
   const meta = compressed.frameMeta;
@@ -1176,11 +1179,13 @@ export function planQueueEviction({
  * @returns {number} MB
  */
 function reclaimableMemoryMB(entry) {
+  // Its masks go with it in any case (clips:released, see evictQueuedClips)
+  const shared = heldForClipMB(entry.id);
   if (entry.status === 'compressing') {
     const inputs = encodeInputs.get(entry);
-    if (!inputs || clipCodec?.isEncodeQueued?.(inputs) !== true) return 0;
+    if (!inputs || clipCodec?.isEncodeQueued?.(inputs) !== true) return shared;
   }
-  return estimateEntryMemoryMB(entry);
+  return estimateEntryMemoryMB(entry) + shared;
 }
 
 /**
@@ -1365,16 +1370,41 @@ export const RING_BUFFER_HOLDER = 'capture-buffer';
 const memoryHolders = new Map();
 
 /**
+ * Per holder: the part of its memory that belongs to one clip and goes
+ * with it (the masks of a removed clip are released on clips:released)
+ * @type {Map<string, (clipId: string) => number>}
+ */
+const clipShares = new Map();
+
+/**
  * Count another holder in the memory total (getHeldMemoryMB)
  * @param {string} name
  * @param {() => number} getMB - Memory held right now, MB
+ * @param {{ forClip?: (clipId: string) => number }} [options] - `forClip`:
+ *   the MB of this holder that is released when that clip is removed;
+ *   removals planned to make room count it as freed
  * @returns {() => void} Unregister
  */
-export function registerMemoryHolder(name, getMB) {
+export function registerMemoryHolder(name, getMB, { forClip } = {}) {
   memoryHolders.set(name, getMB);
+  if (forClip) clipShares.set(name, forClip);
+  else clipShares.delete(name);
   return () => {
-    if (memoryHolders.get(name) === getMB) memoryHolders.delete(name);
+    if (memoryHolders.get(name) !== getMB) return;
+    memoryHolders.delete(name);
+    if (clipShares.get(name) === forClip) clipShares.delete(name);
   };
+}
+
+/**
+ * Memory the holders release with one clip (its masks), MB
+ * @param {string} clipId
+ * @returns {number}
+ */
+function heldForClipMB(clipId) {
+  let total = 0;
+  for (const forClip of clipShares.values()) total += forClip(clipId);
+  return total;
 }
 
 /**

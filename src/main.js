@@ -310,7 +310,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // The memory budget counts what the app holds (memory accounting PR A):
   // besides the clips, the live capture ring buffer and the cutout's masks
   registerMemoryHolder(RING_BUFFER_HOLDER, getRingBufferMemoryMB);
-  registerMemoryHolder('masks', () => getSharedMaskStore().byteLength / BYTES_PER_MB);
+  registerMemoryHolder('masks', () => getSharedMaskStore().byteLength / BYTES_PER_MB, {
+    // A removed clip's masks are released with it (clips:released)
+    forClip: (clipId) => getSharedMaskStore().bytesForClip(clipId) / BYTES_PER_MB,
+  });
   void clipCodec.probeSupport();
   if (window.__TEST_HOOKS__) {
     // Lets E2E specs log/branch on which queue path (compressed vs raw

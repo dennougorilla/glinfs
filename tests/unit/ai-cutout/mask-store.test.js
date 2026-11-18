@@ -12,6 +12,19 @@ function mask(bytes, width = bytes, height = 1) {
 }
 
 describe('createMaskStore', () => {
+  it('reports the bytes one clip holds, every model, without touching recency (#230 review)', () => {
+    const store = createMaskStore();
+    store.set('a:0', mask(100), 'a', 'isnet');
+    store.set('a:1', mask(50), 'a', 'object:1');
+    store.set('b:0', mask(70), 'b', 'isnet');
+    const versionBefore = store.version;
+
+    expect(store.bytesForClip('a')).toBe(150);
+    expect(store.bytesForClip('b')).toBe(70);
+    expect(store.bytesForClip('none')).toBe(0);
+    expect(store.version).toBe(versionBefore);
+  });
+
   it('stores, reads and deletes masks by frame key', () => {
     const store = createMaskStore();
     const m = mask(6, 3, 2);

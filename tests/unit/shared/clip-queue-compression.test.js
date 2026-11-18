@@ -737,7 +737,11 @@ describe('promote of a compressed entry (prepare + decode)', () => {
     const preparePromise = prepareQueuedClipForPromote(entry.id);
     codec.decodeCalls[0].resolve({ ok: false, error: 'bad bitstream' });
 
-    await expect(preparePromise).resolves.toEqual({ ok: false, reason: 'decode-failed' });
+    await expect(preparePromise).resolves.toEqual({
+      ok: false,
+      reason: 'decode-failed',
+      removed: [],
+    });
     expect(entry.status).toBe('compressed');
     expect(entry.compressed.chunks).toBe(chunksBefore);
   });
@@ -773,7 +777,7 @@ describe('promote of a compressed entry (prepare + decode)', () => {
     const decodedFrames = [{ close: vi.fn(), closed: false, timestamp: 0 }];
     codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames });
 
-    await expect(preparePromise).resolves.toEqual({ ok: false, reason: 'not-found' });
+    await expect(preparePromise).resolves.toEqual({ ok: false, reason: 'not-found', removed: [] });
     expect(decodedFrames[0].close).toHaveBeenCalledOnce();
   });
 
