@@ -649,6 +649,51 @@ describe('SegmentationManager.analyzeFrames', () => {
     expect(workers).toHaveLength(2);
   });
 
+  it('a job cancelled while the GPU does not answer tears the worker down after 60 s (audit B11)', async () => {
+    // Nothing else ends a hung WebGPU frame: its sessions stayed until the
+    // next failure or dispose
+    vi.useFakeTimers();
+    try {
+      const { manager, workers } = createHarness({ autoMask: false });
+      const controller = new AbortController();
+      const run = manager
+        .analyzeFrames([makeFrame('a'), makeFrame('b')], { clipId: 'c', signal: controller.signal })
+        .catch((e) => e);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(workers[0].segments.length).toBeGreaterThan(0);
+      controller.abort();
+      expect((await run).name).toBe('AbortError');
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(workers[0].terminated).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(workers[0].terminated).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a cancelled job whose frames settle keeps the worker', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, workers } = createHarness({ autoMask: false });
+      const controller = new AbortController();
+      const run = manager
+        .analyzeFrames([makeFrame('a'), makeFrame('b')], { clipId: 'c', signal: controller.signal })
+        .catch((e) => e);
+      await vi.advanceTimersByTimeAsync(10);
+      controller.abort();
+      await run;
+      // The worker answers the frame it was running and drops the queued one
+      const [running, ...queued] = workers[0].segments;
+      workers[0].mask(running);
+      workers[0].emit({ type: 'dropped', requestIds: queued.map((m) => m.requestId) });
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(workers[0].terminated).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the worker when a job fails for a reason other than inference', async () => {
     const { manager, workers } = createHarness();
     await manager.analyzeFrames([makeFrame('a')]);

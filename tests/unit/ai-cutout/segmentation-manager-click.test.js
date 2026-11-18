@@ -633,6 +633,24 @@ describe('SegmentationManager.analyzeObject: seeds (a correction refines the ear
     expect(h.workers[0].prompts.slice(before)[0].maskInput).toBeNull();
   });
 
+  it("a released clip's image embeddings go from the worker too (forgetClip, audit B8)", async () => {
+    // Each prompt names its clip, so the worker can drop that clip's cached
+    // embeddings (up to 96 MiB) instead of keeping them until its cap evicts them
+    const h = harness();
+    await h.manager.analyzeObject(h.frames, {
+      ...base,
+      currentFrame: 0,
+      clicks: [k0],
+      scope: 'whole',
+      tag: 't1',
+    });
+    expect(h.workers[0].prompts.every((m) => m.clipId === 'clip')).toBe(true);
+    h.manager.forgetClip('clip');
+    expect(h.workers[0].posted.filter((m) => m.type === 'forget-clip')).toEqual([
+      { type: 'forget-clip', clipId: 'clip' },
+    ]);
+  });
+
   it('dispose() drops the seeds', async () => {
     const h = harness();
     await h.manager.analyzeObject(h.frames, {

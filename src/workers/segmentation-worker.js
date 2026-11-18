@@ -51,7 +51,7 @@
 
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import * as ort from 'onnxruntime-web/webgpu';
-import { createByteLru } from '../features/ai-cutout/byte-lru.js';
+import { createEmbeddingCache } from '../features/ai-cutout/embedding-cache.js';
 import { getSpecFiles } from '../features/ai-cutout/model-config.js';
 import {
   evictCachedModel,
@@ -96,6 +96,7 @@ import {
  * @property {number} jobId
  * @property {string} modelId
  * @property {string} frameKey - Embedding cache key (pixel identity of the frame)
+ * @property {string} [clipId] - The clip the frame belongs to ('forget-clip' drops its embeddings)
  * @property {ImageBitmap | null} bitmap - The frame at encoderWidth × encoderHeight
  *   (closed here; unused when the embedding is cached)
  * @property {number} encoderWidth
@@ -200,10 +201,12 @@ const Half = /** @type {Float32ArrayConstructor | undefined} */ (
   /** @type {any} */ (globalThis).Float16Array
 );
 
-/** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
-const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
-  onEvict: (key) => embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key),
-});
+/**
+ * The cached embeddings, indexed by model and by clip: an unloaded model or a
+ * released clip ('forget-clip') drops its own at once, index entries too
+ * (audit B8, Codex round 1 on #229)
+ */
+const embeddings = createEmbeddingCache(EMBEDDING_CACHE_BYTES);
 
 /** @type {OffscreenCanvas | null} */
 let samCanvas = null;
@@ -535,9 +538,7 @@ function unloadModel(modelId) {
   entry.controller.abort();
   const session = /** @type {any} */ (entry.session);
   entry.session = null;
-  if (entry.spec.kind === 'sam') {
-    for (const key of [...embeddingKeys(modelId)]) embeddings.delete(key);
-  }
+  if (entry.spec.kind === 'sam') embeddings.forgetModel(modelId);
   // A session still being created is released by initialize(). A video
   // model's state goes in the queue too: a frame running now may still
   // read it.
@@ -640,22 +641,6 @@ async function segment(request) {
   );
 }
 
-/** Keys of the embeddings of a model @type {Map<string, Set<string>>} */
-const embeddingKeysByModel = new Map();
-
-/**
- * @param {string} modelId
- * @returns {Set<string>}
- */
-function embeddingKeys(modelId) {
-  let keys = embeddingKeysByModel.get(modelId);
-  if (!keys) {
-    keys = new Set();
-    embeddingKeysByModel.set(modelId, keys);
-  }
-  return keys;
-}
-
 /**
  * The reused encoder input canvas and HWC buffer for a size
  * @param {number} width
@@ -711,8 +696,10 @@ async function prompt(request) {
       return result;
     });
     const keep = Half ? new Half(embedding) : embedding;
-    if (embeddings.set(key, keep, keep.byteLength, request.jobId))
-      embeddingKeys(request.modelId).add(key);
+    embeddings.set(key, keep, keep.byteLength, request.jobId, {
+      modelId: request.modelId,
+      clipId: request.clipId,
+    });
   }
   request.bitmap?.close();
   request.bitmap = null;
@@ -843,6 +830,7 @@ self.onmessage = (event) => {
         jobId: message.jobId,
         modelId: message.modelId,
         frameKey: message.frameKey,
+        clipId: message.clipId,
         bitmap: message.bitmap ?? null,
         encoderWidth: message.encoderWidth,
         encoderHeight: message.encoderHeight,
@@ -857,6 +845,9 @@ self.onmessage = (event) => {
       break;
     case 'cancel':
       cancelJob(message.jobId);
+      break;
+    case 'forget-clip':
+      embeddings.forgetClip(message.clipId);
       break;
   }
 };
