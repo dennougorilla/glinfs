@@ -11,19 +11,25 @@
 
 import {
   enqueueClip,
+  estimateQueuedClipMB,
   evictQueuedClips,
-  getClipMemoryEstimateMB,
   getClipQueue,
   getClipQueueLimit,
+  getHeldMemoryMB,
   isClipQueueFull,
   planQueueEviction,
+  RING_BUFFER_HOLDER,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
 import { registerHotkey } from '../../shared/hotkeys.js';
 import { announce } from '../../shared/live-region.js';
 import { showToast } from '../../shared/toast.js';
 import { loadSettings } from '../../shared/user-settings.js';
-import { estimateFramesMemoryMB } from '../../shared/utils/memory-monitor.js';
+import {
+  BYTES_PER_MB,
+  estimateFramesMemoryMB,
+  formatMemory,
+} from '../../shared/utils/memory-monitor.js';
 import { convertBitmapFramesToVideoFrames, getLiveCaptureContext } from './index.js';
 
 /**
@@ -35,21 +41,40 @@ import { convertBitmapFramesToVideoFrames, getLiveCaptureContext } from './index
 /**
  * Would materializing the current buffer as a clip exceed the memory budget?
  *
- * Projected total = frames already held (active clip + queue) + the buffer
- * snapshot about to become VideoFrames, all at conservative raw RGBA (#96).
+ * Projected total = everything held right after the snapshot
+ * (getHeldMemoryMB) + the snapshot as it will be held (#96, memory
+ * accounting PR A):
+ * - The ring buffer is left out: the snapshot drains it. It refills
+ *   afterwards up to its clamp (BUFFER_BUDGET_SHARE of the budget), which is
+ *   what bounds it, not a refusal.
+ * - Create Clip (asActive): the snapshot becomes the active clip (raw RGBA)
+ *   and the current active clip is counted as it will be once queued,
+ *   compressed when the queue compresses it.
+ * - Clip Now: the snapshot goes to the queue, so it is the one counted
+ *   compressed. Its raw frames live on for the ~2 s the encode takes; that
+ *   transient is not guarded.
  * Checked BEFORE requestFrames(): draining the ring buffer only to refuse
  * and close the result would destroy the user's buffered history for
  * nothing.
  *
  * @param {ReturnType<typeof getLiveCaptureContext>} context
- * @returns {{ over: boolean, projectedMB: number, budgetMB: number }}
+ * @param {{ asActive?: boolean }} [options] - asActive: Create Clip
+ * @returns {import('../../shared/app-store.js').MemoryProjection}
  */
-export function projectClipMemory(context) {
+export function projectClipMemory(context, { asActive = false } = {}) {
   const budgetMB = loadSettings().capture.memoryBudgetMB;
   const dims = context?.workerManager?.getEffectiveFrameDimensions?.() ?? null;
   const frameCount = context?.stats?.frameCount ?? 0;
-  const incomingMB = dims ? (frameCount * dims.width * dims.height * 4) / (1024 * 1024) : 0;
-  const heldMB = getClipMemoryEstimateMB();
+  const snapshot = dims
+    ? { frameCount, width: dims.width, height: dims.height, fps: context?.fps ?? 0 }
+    : null;
+  let incomingMB = 0;
+  if (snapshot) {
+    incomingMB = asActive
+      ? (frameCount * snapshot.width * snapshot.height * 4) / BYTES_PER_MB
+      : estimateQueuedClipMB(snapshot);
+  }
+  const heldMB = heldAfterSnapshotMB(asActive);
   const projectedMB = heldMB + incomingMB;
   return {
     over: budgetMB > 0 && projectedMB > budgetMB,
@@ -61,6 +86,15 @@ export function projectClipMemory(context) {
 }
 
 /**
+ * Held memory right after a buffer snapshot, without the clip itself
+ * @param {boolean} asActive - Create Clip: the active clip is demoted
+ * @returns {number} MB
+ */
+function heldAfterSnapshotMB(asActive) {
+  return getHeldMemoryMB({ without: [RING_BUFFER_HOLDER], activeDemotes: asActive });
+}
+
+/**
  * Human-readable refusal for a memory-budget rejection.
  *
  * Names the numbers (what is held vs what the new clip would add vs the
@@ -69,13 +103,14 @@ export function projectClipMemory(context) {
  * delete button that does not exist — the active clip is not deletable.
  *
  * @param {ReturnType<typeof projectClipMemory>} projection
+ * @param {string} [clipLabel='new clip'] - What the incoming clip is
  * @returns {string}
  */
-export function buildMemoryBudgetMessage(projection) {
-  const gb = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb)} MB`);
+export function buildMemoryBudgetMessage(projection, clipLabel = 'new clip') {
+  // "In memory": the held total counts the capture buffer and the masks too
   const summary =
-    `Clips in memory ~${gb(projection.heldMB)} + new clip ~${gb(projection.incomingMB)} ` +
-    `exceeds the ${gb(projection.budgetMB)} budget`;
+    `In memory ~${formatMemory(projection.heldMB)} + ${clipLabel} ~${formatMemory(projection.incomingMB)} ` +
+    `exceeds the ${formatMemory(projection.budgetMB)} budget`;
   // With automatic removal on, a refusal means removing every queued clip
   // was not enough either, so deleting one by hand cannot help (#186)
   const action =
@@ -90,6 +125,33 @@ export function announceMemoryBudget(projection) {
   const message = buildMemoryBudgetMessage(projection);
   emit('clip:memory-budget', { ...projection, message });
   announce(message);
+}
+
+/**
+ * Tell the user what the memory check of opening a queued clip did
+ * (app-store prepareQueuedClipForPromote): which oldest clips were removed
+ * to make room, or why the open was refused. Same surfaces as a new clip:
+ * the editor's Clips banner when it is on screen, else a toast.
+ * @param {{ ok: boolean, reason?: string, removed?: import('../../shared/app-store.js').ClipQueueEntry[],
+ *   projection?: import('../../shared/app-store.js').MemoryProjection }} result
+ */
+export function reportOpenMemory(result) {
+  if (result.ok) {
+    if (result.removed?.length) announceClipsRemoved(result.removed, 'memory-budget');
+    return;
+  }
+  if (result.reason !== 'memory-budget' || !result.projection) return;
+  const message = buildMemoryBudgetMessage(result.projection, 'opened clip');
+  let shownOnScreen = false;
+  emit('clip:memory-budget', {
+    ...result.projection,
+    message,
+    markShown: () => {
+      shownOnScreen = true;
+    },
+  });
+  announce(message);
+  if (!shownOnScreen) showToast(message);
 }
 
 /**
@@ -157,6 +219,7 @@ export function checkClipRoom({ needSlot, projection }) {
     needSlot,
     incomingMB: projection.incomingMB,
     budgetMB: projection.budgetMB,
+    heldMB: projection.heldMB,
   });
   return plan.ok ? { ok: true } : { ok: false, reason: plan.reason };
 }
@@ -188,18 +251,23 @@ export function checkClipRoom({ needSlot, projection }) {
  * @param {Object} need
  * @param {boolean} need.needSlot
  * @param {import('./types.js').Frame[]} need.frames - The new clip's frames
+ * @param {number} [need.fps] - Their frame rate
+ * @param {boolean} [need.asActive] - Create Clip: the frames become the
+ *   active clip (see projectClipMemory)
  * @returns {ClipRoomResult}
  */
-export function makeRoomForClip({ needSlot, frames }) {
+export function makeRoomForClip({ needSlot, frames, fps = 0, asActive = false }) {
   const { autoRemoveOldClips, memoryBudgetMB } = loadSettings().capture;
   if (!autoRemoveOldClips) return { ok: true, removed: [] };
 
-  const incomingMB = estimateFramesMemoryMB(frames);
-  const plan = planQueueEviction({ needSlot, incomingMB, budgetMB: memoryBudgetMB });
+  const incomingMB = asActive
+    ? estimateFramesMemoryMB(frames)
+    : estimateQueuedClipMB({ frames, fps });
+  const heldMB = heldAfterSnapshotMB(asActive);
+  const plan = planQueueEviction({ needSlot, incomingMB, budgetMB: memoryBudgetMB, heldMB });
   if (!plan.ok) {
     const reason = plan.reason ?? 'queue-full';
     if (reason === 'queue-full') return { ok: false, reason, removed: [] };
-    const heldMB = getClipMemoryEstimateMB();
     return {
       ok: false,
       reason,
@@ -262,7 +330,7 @@ export function buildClipsRemovedMessage(removed, reason) {
  * @param {'queue-full'|'memory-budget'} reason
  * @returns {string} The message
  */
-function announceClipsRemoved(removed, reason) {
+export function announceClipsRemoved(removed, reason) {
   const message = buildClipsRemovedMessage(removed, reason);
   let shownOnScreen = false;
   emit('clip:auto-removed', {
@@ -320,7 +388,7 @@ export async function clipNow() {
     return { ok: false, reason: 'no-frames' };
   }
 
-  const room = makeRoomForClip({ needSlot: true, frames: videoFrames });
+  const room = makeRoomForClip({ needSlot: true, frames: videoFrames, fps: context.fps });
   if (!room.ok) {
     // The real snapshot does not fit even after removing every queued clip
     // that may go: nothing was removed, and these frames are still ours

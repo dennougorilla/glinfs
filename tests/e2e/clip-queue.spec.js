@@ -391,7 +391,7 @@ test('codec worker crash during an Undo window keeps the Undo: the deleted clip 
       width: payload ? (store.getClipPayload()?.frames?.[0]?.frame?.codedWidth ?? 0) : 0,
     };
   }, deletedId);
-  expect(promoted.prepared).toEqual({ ok: true });
+  expect(promoted.prepared).toEqual({ ok: true, removed: [] });
   expect(promoted.activeId).toBe(deletedId);
   expect(promoted.width).toBeGreaterThan(0);
 });

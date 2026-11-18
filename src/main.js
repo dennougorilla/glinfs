@@ -4,9 +4,10 @@
  */
 
 import { loadCustomModels } from './features/ai-cutout/custom-model-store.js';
+import { getSharedMaskStore } from './features/ai-cutout/mask-store.js';
 import { cleanupScreenCaptureResources } from './features/capture/api.js';
 import { clipNow, isCaptureLive, registerClipNowHotkey } from './features/capture/clip-service.js';
-import { initCapture } from './features/capture/index.js';
+import { getRingBufferMemoryMB, initCapture } from './features/capture/index.js';
 import {
   deleteActiveClipFromAnywhere,
   initEditor,
@@ -21,7 +22,9 @@ import {
   getClipQueue,
   getEditorPayload,
   isClipCompressionAvailable,
+  RING_BUFFER_HOLDER,
   registerClipCodec,
+  registerMemoryHolder,
   registerScreenCaptureCleanup,
   resetAppStore,
   setClipPayload,
@@ -46,6 +49,7 @@ import {
 } from './shared/test-mode.js';
 import { showToast } from './shared/toast.js';
 import { createElement } from './shared/utils/dom.js';
+import { BYTES_PER_MB } from './shared/utils/memory-monitor.js';
 import {
   createMockClipPayload,
   createMockEditorPayload,
@@ -303,6 +307,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // the queue gracefully keeps entries raw.
   const clipCodec = createClipCodecManager();
   registerClipCodec(clipCodec);
+  // The memory budget counts what the app holds (memory accounting PR A):
+  // besides the clips, the live capture ring buffer and the cutout's masks
+  registerMemoryHolder(RING_BUFFER_HOLDER, getRingBufferMemoryMB);
+  registerMemoryHolder('masks', () => getSharedMaskStore().byteLength / BYTES_PER_MB);
   void clipCodec.probeSupport();
   if (window.__TEST_HOOKS__) {
     // Lets E2E specs log/branch on which queue path (compressed vs raw

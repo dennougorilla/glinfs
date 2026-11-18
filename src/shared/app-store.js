@@ -86,13 +86,14 @@
  */
 
 import { emit } from './bus.js';
+import { estimateCompressedClipBytes } from './clip-bitrate.js';
 import {
   CLIP_QUEUE_LIMIT_DEFAULT_COMPRESSED,
   CLIP_QUEUE_LIMIT_DEFAULT_RAW,
   loadSettings,
 } from './user-settings.js';
 import { createFrameThumbnailDataUrl } from './utils/canvas.js';
-import { estimateFramesMemoryMB } from './utils/memory-monitor.js';
+import { BYTES_PER_MB, estimateFramesMemoryMB } from './utils/memory-monitor.js';
 import { resetThumbnailCache } from './utils/thumbnail-cache.js';
 
 /**
@@ -138,7 +139,7 @@ import { resetThumbnailCache } from './utils/thumbnail-cache.js';
  * @property {import('./clip-codec.js').SerializedChunk[]} chunks
  * @property {import('./clip-codec.js').EncodedClipConfig} config
  * @property {number} byteLength - Total compressed payload bytes
- * @property {{id: string, timestamp: number, width: number, height: number, sharedKey?: string}[]} frameMeta
+ * @property {{id: string, timestamp: number, width: number, height: number, sharedKey?: string, byteLength?: number}[]} frameMeta
  */
 
 /**
@@ -618,6 +619,7 @@ function maybeCompressEntry(entry) {
     /** @type {CompressedClip['frameMeta'][number]} */
     const meta = { id: f.id, timestamp: f.timestamp, width: f.width, height: f.height };
     if (f.sharedKey !== undefined) meta.sharedKey = f.sharedKey;
+    if (f.byteLength !== undefined) meta.byteLength = f.byteLength;
     return meta;
   });
   const videoFrames = wrappers.map((f) => f.frame);
@@ -652,7 +654,7 @@ function maybeCompressEntry(entry) {
           byteLength: result.byteLength,
           frameMeta,
         };
-        entry.byteLengthMB = result.byteLength / (1024 * 1024);
+        entry.byteLengthMB = result.byteLength / BYTES_PER_MB;
         entry.status = 'compressed';
         if (!held) emitQueueChanged('compress');
         return;
@@ -679,6 +681,7 @@ function maybeCompressEntry(entry) {
             height: frameMeta[i].height,
           };
           if (frameMeta[i].sharedKey !== undefined) wrapper.sharedKey = frameMeta[i].sharedKey;
+          if (frameMeta[i].byteLength !== undefined) wrapper.byteLength = frameMeta[i].byteLength;
           return wrapper;
         });
         entry.status = 'raw';
@@ -771,9 +774,12 @@ function restoreSharedFrames(decodedFrames, meta) {
  * - 'decoding': REFUSED — the double-promote guard
  * - deleted at any await point: refused with 'not-found', decoded frames
  *   (if any arrived) are closed because the entry no longer owns anything
+ * - over the memory budget: the oldest queued clips are removed first
+ *   (makeRoomToOpen); when that cannot make room, REFUSED with
+ *   'memory-budget' before anything is decoded
  *
  * @param {string} id - Queue entry id
- * @returns {Promise<{ok: true} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed'}>}
+ * @returns {Promise<{ok: true, removed: ClipQueueEntry[]} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed'} | {ok: false, reason: 'memory-budget', projection: MemoryProjection}>}
  */
 export async function prepareQueuedClipForPromote(id) {
   let entry = state.clipQueue.find((e) => e.id === id);
@@ -786,10 +792,14 @@ export async function prepareQueuedClipForPromote(id) {
     if (!entry) return { ok: false, reason: 'not-found' };
   }
 
-  if (isEntryPromotableNow(entry)) return { ok: true };
+  if (isEntryPromotableNow(entry)) return { ok: true, removed: [] };
   if (entry.status !== 'compressed' || !entry.compressed || !clipCodec) {
     return { ok: false, reason: 'not-found' };
   }
+
+  // Checked before the decode, which is when the memory is taken
+  const room = makeRoomToOpen(entry);
+  if (!room.ok) return { ok: false, reason: 'memory-budget', projection: room.projection };
 
   entry.status = 'decoding';
   entry.openFailed = false;
@@ -831,6 +841,8 @@ export async function prepareQueuedClipForPromote(id) {
       width: meta[i]?.width ?? vf.codedWidth ?? 0,
       height: meta[i]?.height ?? vf.codedHeight ?? 0,
     };
+    const byteLength = measureFrameBytes(vf);
+    if (byteLength !== undefined) wrapper.byteLength = byteLength;
     if (restored.sharedKey !== undefined) wrapper.sharedKey = restored.sharedKey;
     return wrapper;
   });
@@ -838,7 +850,91 @@ export async function prepareQueuedClipForPromote(id) {
   entry.byteLengthMB = undefined;
   entry.status = 'raw';
   emitQueueChanged('decode');
-  return { ok: true };
+  return { ok: true, removed: room.removed };
+}
+
+/**
+ * Bytes per pixel of a decoded clip frame: the codec worker hands back CPU
+ * I420 / NV12 frames (4:2:0, one luma byte plus half a byte of chroma)
+ */
+const DECODED_BYTES_PER_PIXEL = 1.5;
+
+/**
+ * A VideoFrame's real size when it has a CPU layout (allocationSize), else
+ * undefined (counted as RGBA)
+ * @param {VideoFrame} frame
+ * @returns {number|undefined}
+ */
+function measureFrameBytes(frame) {
+  try {
+    if (!frame?.format || typeof frame.allocationSize !== 'function') return undefined;
+    const bytes = frame.allocationSize();
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Memory a compressed entry will take once decoded (MB): its frames at the
+ * decoder's 1.5 bytes per pixel, repeated slots (sharedKey) once
+ * @param {ClipQueueEntry} entry
+ * @returns {number}
+ */
+function estimateDecodedEntryMB(entry) {
+  const meta = entry.compressed?.frameMeta ?? [];
+  return estimateFramesMemoryMB(
+    meta.map((m) => ({
+      sharedKey: m.sharedKey,
+      byteLength: (m.width ?? 0) * (m.height ?? 0) * DECODED_BYTES_PER_PIXEL,
+    })),
+  );
+}
+
+/**
+ * @typedef {Object} MemoryProjection
+ * @property {boolean} over - The projected total exceeds the budget
+ * @property {number} projectedMB - heldMB + incomingMB
+ * @property {number} budgetMB
+ * @property {number} heldMB - Everything else held once the clip is in place
+ * @property {number} incomingMB - The clip, as it will be held
+ */
+
+/**
+ * Make room in the memory budget to open (decode) a compressed queue entry
+ * (memory accounting PR A). After the open the entry holds its decoded
+ * frames instead of its chunks, and the active clip it replaces is in the
+ * queue, compressed when it will compress. When that does not fit, the
+ * oldest queued clips are removed first (setting autoRemoveOldClips, as for
+ * a new clip, #186); when removing every one of them would not be enough,
+ * nothing is removed and the open is refused.
+ * @param {ClipQueueEntry} entry
+ * @returns {{ ok: boolean, removed: ClipQueueEntry[], projection: MemoryProjection }}
+ */
+function makeRoomToOpen(entry) {
+  const { memoryBudgetMB: budgetMB, autoRemoveOldClips } = loadSettings().capture;
+  const incomingMB = estimateDecodedEntryMB(entry);
+  const heldMB = getHeldMemoryMB({ activeDemotes: true }) - estimateEntryMemoryMB(entry);
+  const projectedMB = heldMB + incomingMB;
+  /** @type {MemoryProjection} */
+  const projection = {
+    over: budgetMB > 0 && projectedMB > budgetMB,
+    projectedMB,
+    budgetMB,
+    heldMB,
+    incomingMB,
+  };
+  if (!projection.over) return { ok: true, removed: [], projection };
+  if (!autoRemoveOldClips) return { ok: false, removed: [], projection };
+  const plan = planQueueEviction({
+    needSlot: false,
+    incomingMB,
+    budgetMB,
+    heldMB,
+    exclude: [entry.id],
+  });
+  if (!plan.ok) return { ok: false, removed: [], projection };
+  return { ok: true, removed: evictQueuedClips(plan.ids), projection };
 }
 
 /**
@@ -1032,18 +1128,28 @@ export function deleteQueuedClip(id) {
  *   or setClipPayload demoting the current active clip)
  * @param {number} [need.incomingMB=0] - Memory the new clip adds
  * @param {number} [need.budgetMB=0] - Memory budget; 0 or less = no budget
+ * @param {number} [need.heldMB] - Everything else held once the clip is in
+ *   place (default: getHeldMemoryMB())
+ * @param {string[]} [need.exclude] - Entries that may not go (the one being
+ *   opened)
  * @returns {EvictionPlan}
  */
-export function planQueueEviction({ needSlot, incomingMB = 0, budgetMB = 0 }) {
+export function planQueueEviction({
+  needSlot,
+  incomingMB = 0,
+  budgetMB = 0,
+  heldMB = getHeldMemoryMB(),
+  exclude = [],
+}) {
   const slotsToFree = needSlot ? Math.max(0, state.clipQueue.length + 1 - getClipQueueLimit()) : 0;
-  let overMB = budgetMB > 0 ? getClipMemoryEstimateMB() + incomingMB - budgetMB : 0;
+  let overMB = budgetMB > 0 ? heldMB + incomingMB - budgetMB : 0;
   /** @type {'queue-full'|'memory-budget'|undefined} */
   const reason = slotsToFree > 0 ? 'queue-full' : overMB > 0 ? 'memory-budget' : undefined;
 
   // Oldest capture first. The queue is newest first, so reversing it before
   // the (stable) sort keeps the old order for equal timestamps.
   const candidates = state.clipQueue
-    .filter((entry) => entry.status !== 'decoding')
+    .filter((entry) => entry.status !== 'decoding' && !exclude.includes(entry.id))
     .reverse()
     .sort((a, b) => (a.capturedAt ?? 0) - (b.capturedAt ?? 0));
   /** @type {string[]} */
@@ -1207,11 +1313,13 @@ export function undoDelete() {
 }
 
 /**
- * Memory estimate for the active clip plus every queued clip, exposed for
- * the editor's memory footer. Raw frames count at conservative RGBA w*h*4;
- * compressed entries count at their ACTUAL compressed byteLength (#92) —
- * 'compressing' entries still count raw, since the real frames are alive in
- * the codec worker until the encode finishes. A clip held for Undo counts
+ * Memory estimate for the active clip plus every queued clip (the clip part
+ * of getHeldMemoryMB). Frames count at their known size (a decoded clip at
+ * 1.5 bytes per pixel), else RGBA w*h*4; compressed entries count at their
+ * ACTUAL compressed byteLength (#92), and a decoding one at its chunks plus
+ * the frames being decoded — 'compressing' entries still count raw, since
+ * the real frames are alive in the codec worker until the encode finishes.
+ * A clip held for Undo counts
  * too: its resources stay alive until the grace window ends (#167), and so
  * does a removed clip whose encode is still running in the worker (#186).
  * @returns {number} Estimated MB
@@ -1235,10 +1343,87 @@ export function getClipMemoryEstimateMB() {
  * @returns {number} Estimated MB (see getClipMemoryEstimateMB)
  */
 function estimateEntryMemoryMB(entry) {
-  if (entry.status === 'compressed' || entry.status === 'decoding') {
-    return (entry.compressed?.byteLength ?? 0) / (1024 * 1024);
-  }
+  const chunksMB = (entry.compressed?.byteLength ?? 0) / BYTES_PER_MB;
+  if (entry.status === 'compressed') return chunksMB;
+  // The codec worker holds every decoded frame until the decode ends
+  if (entry.status === 'decoding') return chunksMB + estimateDecodedEntryMB(entry);
   return estimateFramesMemoryMB(entry.frames ?? []);
+}
+
+/**
+ * The capture ring buffer's holder name (registered by main.js). A clip made
+ * from the buffer drains it, so its projection leaves the buffer out.
+ */
+export const RING_BUFFER_HOLDER = 'capture-buffer';
+
+/**
+ * Memory held outside the clip store, by name: the capture ring buffer, the
+ * cutout's masks. Registered by the features that hold it, so this module
+ * never imports a feature.
+ * @type {Map<string, () => number>}
+ */
+const memoryHolders = new Map();
+
+/**
+ * Count another holder in the memory total (getHeldMemoryMB)
+ * @param {string} name
+ * @param {() => number} getMB - Memory held right now, MB
+ * @returns {() => void} Unregister
+ */
+export function registerMemoryHolder(name, getMB) {
+  memoryHolders.set(name, getMB);
+  return () => {
+    if (memoryHolders.get(name) === getMB) memoryHolders.delete(name);
+  };
+}
+
+/**
+ * Memory a clip will take once it sits in the queue: compressed when the
+ * queue will compress it (codec available, no alpha), else raw. Give the
+ * frames, or their count and size before they exist (a buffer snapshot).
+ * @param {{ frames?: Array<{width?: number, height?: number, sharedKey?: string, byteLength?: number}>|null,
+ *   frameCount?: number, width?: number, height?: number, fps?: number, hasAlpha?: boolean }} clip
+ * @returns {number} MB
+ */
+export function estimateQueuedClipMB(clip) {
+  const frames = clip?.frames ?? null;
+  const frameCount = frames ? frames.length : (clip?.frameCount ?? 0);
+  const width = frames ? (frames[0]?.width ?? 0) : (clip?.width ?? 0);
+  const height = frames ? (frames[0]?.height ?? 0) : (clip?.height ?? 0);
+  const rawMB = frames
+    ? estimateFramesMemoryMB(frames)
+    : (frameCount * width * height * 4) / BYTES_PER_MB;
+  const fps = clip?.fps ?? 0;
+  if (frameCount === 0 || clip?.hasAlpha === true || !(fps > 0)) return rawMB;
+  if (!clipCodec?.isCompressionAvailable()) return rawMB;
+  return estimateCompressedClipBytes({ width, height, fps, frameCount }) / BYTES_PER_MB;
+}
+
+/**
+ * Everything the memory budget counts, in MB: the clips
+ * (getClipMemoryEstimateMB) plus every registered holder (the capture ring
+ * buffer, the masks). This is the number the editor's footer shows and the
+ * budget checks compare.
+ * @param {Object} [options]
+ * @param {string[]} [options.without] - Holders to leave out (a buffer
+ *   snapshot drains the ring buffer)
+ * @param {boolean} [options.activeDemotes] - Count the active clip as it
+ *   will be once queued (a new or opened clip replaces it)
+ * @returns {number}
+ */
+export function getHeldMemoryMB({ without = [], activeDemotes = false } = {}) {
+  let total = getClipMemoryEstimateMB();
+  if (activeDemotes && state.clipPayload) {
+    total +=
+      estimateQueuedClipMB(state.clipPayload) -
+      estimateFramesMemoryMB(state.clipPayload.frames ?? []);
+  }
+  for (const [name, getMB] of memoryHolders) {
+    if (without.includes(name)) continue;
+    const mb = getMB();
+    if (Number.isFinite(mb) && mb > 0) total += mb;
+  }
+  return total;
 }
 
 // ============================================================
@@ -1342,7 +1527,7 @@ export function clearEditorPayload() {
 /**
  * Release all VideoFrame resources and clear all payloads, DRAINING the clip
  * queue (closing every queued clip's frames). One of only two paths that
- * close frames. Called when starting a fresh capture session.
+ * close frames. No app path calls it today: tests use it to reset the store.
  */
 export function releaseAllFramesAndReset() {
   finalizePendingDeletion();

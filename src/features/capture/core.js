@@ -4,6 +4,7 @@
  */
 
 import { loadSettings } from '../../shared/user-settings.js';
+import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
 
 /**
  * Valid FPS values
@@ -118,7 +119,7 @@ export function calculateEffectiveMaxFrames(settings, frameDims, memoryBudgetMB)
   }
 
   const bytesPerFrame = frameDims.width * frameDims.height * 4;
-  const budgetBytes = memoryBudgetMB * BUFFER_BUDGET_SHARE * 1024 * 1024;
+  const budgetBytes = memoryBudgetMB * BUFFER_BUDGET_SHARE * BYTES_PER_MB;
   const budgetFrames = Math.max(1, Math.floor(budgetBytes / bytesPerFrame));
   const maxFrames = Math.min(requestedFrames, budgetFrames);
 

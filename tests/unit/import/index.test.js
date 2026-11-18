@@ -324,7 +324,7 @@ describe('reportImportBusy', () => {
 describe('projectImportBudget', () => {
   it('adds unique source frames to the memory already held', () => {
     updateSetting('capture', 'memoryBudgetMB', 1000);
-    const projection = projectImportBudget(4, 1024, 256);
+    const projection = projectImportBudget(4, 1000, 250);
     expect(projection).toMatchObject({ incomingMB: 4, heldMB: 0, budgetMB: 1000, over: false });
   });
 });

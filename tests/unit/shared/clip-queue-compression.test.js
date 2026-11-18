@@ -95,7 +95,7 @@ function createMockCodec({ available = true } = {}) {
   };
 }
 
-function okEncodeResult(byteLength = 2 * 1024 * 1024) {
+function okEncodeResult(byteLength = 2_000_000) {
   return {
     ok: true,
     chunks: [{ type: 'key', timestamp: 0, duration: null, data: new ArrayBuffer(16) }],
@@ -147,16 +147,16 @@ describe('enqueue with codec available', () => {
     expect(codec.encodeCalls[0].frames).toEqual(frames.map((f) => f.frame));
     expect(codec.encodeCalls[0].options).toEqual({ fps: 30, width: 100, height: 100 });
     // While compressing, accounting stays conservative raw RGBA
-    expect(getClipMemoryEstimateMB()).toBeCloseTo((2 * 100 * 100 * 4) / (1024 * 1024), 6);
+    expect(getClipMemoryEstimateMB()).toBeCloseTo((2 * 100 * 100 * 4) / 1_000_000, 6);
 
-    codec.encodeCalls[0].resolve(okEncodeResult(2 * 1024 * 1024));
+    codec.encodeCalls[0].resolve(okEncodeResult(2_000_000));
     await flushJobs();
 
     const entry = getClipQueue()[0];
     expect(entry.status).toBe('compressed');
     expect(entry.frames).toBeNull();
     expect(entry.byteLengthMB).toBeCloseTo(2, 6);
-    expect(entry.compressed.byteLength).toBe(2 * 1024 * 1024);
+    expect(entry.compressed.byteLength).toBe(2_000_000);
     // Accounting switched to the actual compressed size
     expect(getClipMemoryEstimateMB()).toBeCloseTo(2, 6);
     expect(events).toEqual(['enqueue', 'compress']);
@@ -217,7 +217,7 @@ describe('encode failure', () => {
     expect(entry.frames.map((f) => f.id)).toEqual(['0', '1', '2']);
     expect(entry.compressed).toBeNull();
     // Raw accounting again
-    expect(getClipMemoryEstimateMB()).toBeCloseTo((3 * 100 * 100 * 4) / (1024 * 1024), 6);
+    expect(getClipMemoryEstimateMB()).toBeCloseTo((3 * 100 * 100 * 4) / 1_000_000, 6);
     expect(events).toEqual(['compress-error']);
     // Nothing was closed on the failure path
     for (const f of frames) {
@@ -309,7 +309,7 @@ describe('worker crash mid-encode (failure contract)', () => {
       }),
     ]);
     // Accounting no longer counts the lost clip's detached husks
-    expect(getClipMemoryEstimateMB()).toBeCloseTo((2 * 100 * 100 * 4) / (1024 * 1024), 6);
+    expect(getClipMemoryEstimateMB()).toBeCloseTo((2 * 100 * 100 * 4) / 1_000_000, 6);
 
     unsubscribe();
   });
@@ -532,14 +532,14 @@ describe('Undo after delete-while-compressing (#167)', () => {
     expect(entry.status).toBe('compressing');
 
     deleteQueuedClip(entry.id);
-    codec.encodeCalls[0].resolve(okEncodeResult(2 * 1024 * 1024));
+    codec.encodeCalls[0].resolve(okEncodeResult(2_000_000));
     await flushJobs();
 
     expect(undoDelete()).toBe(true);
     expect(getClipQueue()).toEqual([entry]);
     expect(entry.status).toBe('compressed');
     expect(entry.frames).toBeNull();
-    expect(entry.compressed.byteLength).toBe(2 * 1024 * 1024);
+    expect(entry.compressed.byteLength).toBe(2_000_000);
     // Restoring a compressed entry starts no second encode
     expect(codec.encode).toHaveBeenCalledTimes(1);
 
@@ -548,7 +548,7 @@ describe('Undo after delete-while-compressing (#167)', () => {
     expect(entry.status).toBe('decoding');
     const decoded = [0, 1].map((i) => ({ closed: false, close: vi.fn(), timestamp: i }));
     codec.decodeCalls[0].resolve({ ok: true, frames: decoded });
-    await expect(prepared).resolves.toEqual({ ok: true });
+    await expect(prepared).resolves.toEqual({ ok: true, removed: [] });
     expect(promoteQueuedClip(entry.id, null)).not.toBeNull();
     expect(getClipPayload()?.frames.map((f) => f.frame)).toEqual(decoded);
   });
@@ -628,7 +628,7 @@ describe('Undo of a deleted active clip (#167)', () => {
 });
 
 describe('memory estimate during the Undo window (#167)', () => {
-  const rawMB = (count) => (count * 100 * 100 * 4) / (1024 * 1024);
+  const rawMB = (count) => (count * 100 * 100 * 4) / 1_000_000;
 
   it('counts a held raw clip until the hold ends', () => {
     setClipPayload(clipPayloadOf(createMockFrames(2)));
@@ -649,7 +649,7 @@ describe('memory estimate during the Undo window (#167)', () => {
     // Still compressing: the real frames are alive in the worker
     expect(getClipMemoryEstimateMB()).toBeCloseTo(rawMB(2), 6);
 
-    codec.encodeCalls[0].resolve(okEncodeResult(3 * 1024 * 1024));
+    codec.encodeCalls[0].resolve(okEncodeResult(3_000_000));
     await flushJobs();
     expect(getClipMemoryEstimateMB()).toBeCloseTo(3, 6);
   });
@@ -685,8 +685,9 @@ describe('promote of a compressed entry (prepare + decode)', () => {
 
     const preparePromise = prepareQueuedClipForPromote(entry.id);
     expect(entry.status).toBe('decoding');
-    // Decoding entries keep byte accounting (frames are still in the worker)
-    expect(getClipMemoryEstimateMB()).toBeCloseTo(2, 6);
+    // Decoding entries count their chunks plus the frames being decoded in
+    // the worker (2 x 100x100 at 1.5 bytes per pixel)
+    expect(getClipMemoryEstimateMB()).toBeCloseTo(2 + (2 * 100 * 100 * 1.5) / 1_000_000, 6);
 
     const decodedFrames = [
       { close: vi.fn(), closed: false, timestamp: 0, codedWidth: 100, codedHeight: 100 },
@@ -695,7 +696,7 @@ describe('promote of a compressed entry (prepare + decode)', () => {
     codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames });
 
     const prep = await preparePromise;
-    expect(prep).toEqual({ ok: true });
+    expect(prep).toEqual({ ok: true, removed: [] });
     expect(entry.status).toBe('raw');
     expect(entry.frames.map((f) => f.frame)).toEqual(decodedFrames);
     // Original wrapper ids survived the round-trip via frameMeta
@@ -724,7 +725,7 @@ describe('promote of a compressed entry (prepare + decode)', () => {
       ok: true,
       frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
     });
-    await expect(first).resolves.toEqual({ ok: true });
+    await expect(first).resolves.toEqual({ ok: true, removed: [] });
   });
 
   it('returns the entry to compressed when the decode fails (chunks intact)', async () => {
@@ -757,7 +758,7 @@ describe('promote of a compressed entry (prepare + decode)', () => {
       ok: true,
       frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
     });
-    await expect(retry).resolves.toEqual({ ok: true });
+    await expect(retry).resolves.toEqual({ ok: true, removed: [] });
     expect(entry.openFailed).toBe(false);
   });
 
@@ -801,7 +802,7 @@ describe('promote of a compressed entry (prepare + decode)', () => {
       ok: true,
       frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
     });
-    await expect(second).resolves.toEqual({ ok: true });
+    await expect(second).resolves.toEqual({ ok: true, removed: [] });
   });
 
   it('awaits an in-flight encode when promoting a still-compressing entry', async () => {
@@ -823,13 +824,13 @@ describe('promote of a compressed entry (prepare + decode)', () => {
       ok: true,
       frames: [{ close: vi.fn(), closed: false, timestamp: 0 }],
     });
-    await expect(preparePromise).resolves.toEqual({ ok: true });
+    await expect(preparePromise).resolves.toEqual({ ok: true, removed: [] });
   });
 
   it('prepare on a raw entry resolves ok immediately (no codec round-trip)', async () => {
     registerClipCodec(createMockCodec({ available: false }));
     const { entry } = enqueueClip(clipPayloadOf(createMockFrames(1)));
-    await expect(prepareQueuedClipForPromote(entry.id)).resolves.toEqual({ ok: true });
+    await expect(prepareQueuedClipForPromote(entry.id)).resolves.toEqual({ ok: true, removed: [] });
   });
 });
 

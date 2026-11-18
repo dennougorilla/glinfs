@@ -3,6 +3,8 @@
  * Provides persistent storage for all user preferences across the application
  */
 
+import { formatMemory } from './utils/memory-monitor.js';
+
 const STORAGE_KEY = 'glinfs_user_settings';
 
 /** Effective clip queue limit when unset and queued clips are compressed (#92) */
@@ -62,10 +64,11 @@ const REMOVE_SCOPES = ['whole', 'part', 'colour'];
  * @property {number} captureResolutionLimit - Maximum long edge of captured
  *   frames in pixels; 0 = native resolution. Frames are downscaled at grab
  *   time (#96) — Retina fullscreen at native is ~24 MB per raw frame.
- * @property {number} memoryBudgetMB - Total budget for frame memory
- *   (ring buffer + active clip + queue), conservatively estimated at raw
- *   RGBA w*h*4. The buffer is clamped to a share of it and clip creation is
- *   refused beyond it (#96).
+ * @property {number} memoryBudgetMB - Budget for what the app holds, in MB
+ *   of 1,000,000 bytes (BYTES_PER_MB): the capture ring buffer, the active
+ *   clip, the queue and the cutout's masks (app-store getHeldMemoryMB).
+ *   The buffer is clamped to a share of it; a new, imported or opened clip
+ *   is refused beyond it (#96, memory accounting PR A).
  * @property {boolean} autoRemoveOldClips - When the clip queue limit or the
  *   memory budget would refuse a new clip, remove the oldest queued clips
  *   (as few as needed, never the active clip, no Undo) and create it
@@ -185,7 +188,7 @@ export const SETTINGS_METADATA = {
         min: 500,
         max: 16000,
         step: 500,
-        format: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} GB` : `${v} MB`),
+        format: formatMemory,
       },
       autoRemoveOldClips: {
         label: 'Remove oldest clips when full',

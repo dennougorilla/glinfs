@@ -29,22 +29,31 @@ vi.mock('../../../src/features/capture/index.js', () => ({
 }));
 
 import {
+  buildMemoryBudgetMessage,
   checkClipRoom,
   clipNow,
   isCaptureLive,
+  projectClipMemory,
   registerClipNowHotkey,
 } from '../../../src/features/capture/clip-service.js';
-import { convertBitmapFramesToVideoFrames } from '../../../src/features/capture/index.js';
+import {
+  convertBitmapFramesToVideoFrames,
+  getLiveCaptureContext,
+} from '../../../src/features/capture/index.js';
 import {
   enqueueClip,
   getClipPayload,
   getClipQueue,
+  RING_BUFFER_HOLDER,
+  registerClipCodec,
+  registerMemoryHolder,
   resetAppStore,
   setClipPayload,
 } from '../../../src/shared/app-store.js';
 import { on as onBus } from '../../../src/shared/bus.js';
 import { hideToast } from '../../../src/shared/toast.js';
 import { loadSettings, updateSetting } from '../../../src/shared/user-settings.js';
+import { BYTES_PER_MB } from '../../../src/shared/utils/memory-monitor.js';
 
 function createMockFrames(count) {
   return Array.from({ length: count }, (_, i) => ({
@@ -239,7 +248,7 @@ describe('memory budget refusal (#96)', () => {
 });
 
 describe('automatic removal of the oldest clips (#186)', () => {
-  const MB = 1024 * 1024;
+  const MB = BYTES_PER_MB;
 
   /** Frames of about `sizeMB` each (raw RGBA accounting) */
   function createSizedFrames(count, sizeMB) {
@@ -481,6 +490,111 @@ describe('automatic removal of the oldest clips (#186)', () => {
 
   it('is on by default', () => {
     expect(loadSettings().capture.autoRemoveOldClips).toBe(true);
+  });
+});
+
+describe('the budget counts what is held (memory accounting PR A)', () => {
+  const W = 1920;
+  const H = 1080;
+  /** Default settings on a 1080p screen: 4000 MB, 15 s x 30 fps clamped to 60 % */
+  const BUFFER_FRAMES = Math.floor((4000 * 0.6 * BYTES_PER_MB) / (W * H * 4));
+
+  function frames1080(count, tag = 'a') {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `${tag}${i}`,
+      frame: { close: vi.fn(), closed: false, codedWidth: W, codedHeight: H },
+      timestamp: i,
+      width: W,
+      height: H,
+    }));
+  }
+
+  /** A full 1080p buffer; the snapshot is BUFFER_FRAMES frames */
+  function installFullBuffer() {
+    const workerManager = {
+      requestFrames: vi
+        .fn()
+        .mockResolvedValue(Array.from({ length: BUFFER_FRAMES }, (_, i) => ({ i }))),
+      getEffectiveFrameDimensions: vi.fn(() => ({ width: W, height: H, scaled: false })),
+    };
+    captureContext.current = {
+      workerManager,
+      fps: 30,
+      sceneDetection: false,
+      stats: { frameCount: BUFFER_FRAMES, fps: 30 },
+    };
+    vi.mocked(convertBitmapFramesToVideoFrames).mockImplementationOnce(() =>
+      frames1080(BUFFER_FRAMES, 'snap'),
+    );
+    return workerManager;
+  }
+
+  const codec = {
+    isCompressionAvailable: () => true,
+    encode: vi.fn(() => new Promise(() => {})),
+    decode: vi.fn(() => new Promise(() => {})),
+  };
+
+  let offBuffer = () => {};
+  beforeEach(() => {
+    registerClipCodec(codec);
+    // The live buffer, as main.js registers it
+    offBuffer = registerMemoryHolder(
+      RING_BUFFER_HOLDER,
+      () => (BUFFER_FRAMES * W * H * 4) / BYTES_PER_MB,
+    );
+  });
+  afterEach(() => {
+    registerClipCodec(null);
+    offBuffer();
+  });
+
+  it('Create Clip with an active clip at 1080p defaults: not refused (M2)', () => {
+    const context = installFullBuffer();
+    setClipPayload({ frames: frames1080(BUFFER_FRAMES, 'act'), fps: 30, capturedAt: 0 });
+
+    const projection = projectClipMemory(getLiveCaptureContext(), { asActive: true });
+
+    // The new active clip is the snapshot; the old one is counted compressed
+    expect(projection.over).toBe(false);
+    expect(projection.incomingMB).toBeCloseTo((BUFFER_FRAMES * W * H * 4) / BYTES_PER_MB, 3);
+    expect(projection.heldMB).toBeLessThan(20);
+    expect(checkClipRoom({ needSlot: true, projection })).toEqual({ ok: true });
+    expect(context.requestFrames).not.toHaveBeenCalled();
+  });
+
+  it('Clip Now with an active clip at 1080p defaults: queued, not refused', async () => {
+    installFullBuffer();
+    setClipPayload({ frames: frames1080(BUFFER_FRAMES, 'act'), fps: 30, capturedAt: 0 });
+
+    const result = await clipNow();
+
+    expect(result.ok).toBe(true);
+    expect(getClipQueue()).toHaveLength(1);
+  });
+
+  it('does not count the buffer the snapshot drains', () => {
+    installFullBuffer();
+    const projection = projectClipMemory(getLiveCaptureContext());
+    expect(projection.heldMB).toBeCloseTo(0, 6);
+  });
+
+  it('counts the snapshot raw when it will not compress', () => {
+    registerClipCodec(null);
+    installFullBuffer();
+    const projection = projectClipMemory(getLiveCaptureContext());
+    expect(projection.incomingMB).toBeCloseTo((BUFFER_FRAMES * W * H * 4) / BYTES_PER_MB, 3);
+  });
+
+  it('names the numbers in the unit Settings shows', () => {
+    const message = buildMemoryBudgetMessage({
+      over: true,
+      projectedMB: 4600,
+      budgetMB: 4000,
+      heldMB: 2100,
+      incomingMB: 2500,
+    });
+    expect(message).toMatch(/~2\.1 GB \+ new clip ~2\.5 GB exceeds the 4\.0 GB budget/);
   });
 });
 

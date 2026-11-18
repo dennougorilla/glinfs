@@ -11,6 +11,8 @@
  * become repeated slots that the exporter merges back into one GIF frame.
  */
 
+import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
+
 /** Largest file accepted (bytes) */
 export const MAX_IMPORT_FILE_BYTES = 200 * 1024 * 1024;
 
@@ -250,8 +252,8 @@ export function checkSourceFrameCount(sourceFrameCount) {
 }
 
 /**
- * Memory an import holds, at the same conservative raw-RGBA rate as
- * captured clips. Only UNIQUE source frames count: repeated slots are
+ * Memory an import holds (MB, see BYTES_PER_MB), at the same raw-RGBA rate
+ * as captured clips. Only UNIQUE source frames count: repeated slots are
  * clones sharing their source frame's pixels (see Frame.sharedKey).
  * @param {number} sourceFrameCount
  * @param {number} width
@@ -259,7 +261,7 @@ export function checkSourceFrameCount(sourceFrameCount) {
  * @returns {number} MB
  */
 export function projectImportMemoryMB(sourceFrameCount, width, height) {
-  return (sourceFrameCount * width * height * 4) / (1024 * 1024);
+  return (sourceFrameCount * width * height * 4) / BYTES_PER_MB;
 }
 
 /**

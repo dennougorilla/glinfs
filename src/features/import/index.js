@@ -14,8 +14,8 @@
  */
 
 import {
-  getClipMemoryEstimateMB,
   getClipPayload,
+  getHeldMemoryMB,
   isClipQueueFull,
   setClipPayload,
 } from '../../shared/app-store.js';
@@ -83,7 +83,9 @@ function closeOwnedFrames(frames) {
 /**
  * Memory-budget projection for an import, shaped like the capture
  * projection so the capture announcements and message builder apply.
- * Held memory includes the active clip, which will demote and stay alive.
+ * Held memory is everything the budget counts (the capture ring buffer
+ * included), with the active clip as it will be once demoted into the queue
+ * (compressed when the queue compresses it).
  * @param {number} sourceFrameCount
  * @param {number} width
  * @param {number} height
@@ -91,7 +93,7 @@ function closeOwnedFrames(frames) {
  */
 export function projectImportBudget(sourceFrameCount, width, height) {
   const budgetMB = loadSettings().capture.memoryBudgetMB;
-  const heldMB = getClipMemoryEstimateMB();
+  const heldMB = getHeldMemoryMB({ activeDemotes: true });
   const incomingMB = projectImportMemoryMB(sourceFrameCount, width, height);
   const projectedMB = heldMB + incomingMB;
   return {

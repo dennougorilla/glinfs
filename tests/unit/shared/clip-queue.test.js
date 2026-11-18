@@ -427,7 +427,7 @@ describe('memory estimate', () => {
     setClipPayload(clipPayloadOf(createMockFrames(2)));
     enqueueClip(clipPayloadOf(createMockFrames(3)));
 
-    const expectedMB = (5 * 100 * 100 * 4) / (1024 * 1024);
+    const expectedMB = (5 * 100 * 100 * 4) / 1_000_000;
     expect(getClipMemoryEstimateMB()).toBeCloseTo(expectedMB, 6);
   });
 });

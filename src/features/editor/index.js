@@ -53,6 +53,7 @@ import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { reportOpenMemory } from '../capture/clip-service.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import {
@@ -607,12 +608,13 @@ export function initEditor() {
   clipsQueueUnsubs.push(
     onBus('queue:changed', () => refreshClipsPanel(container)),
     onBus('clip:queue-full', () => showQueueFullBanner(container)),
-    onBus('clip:memory-budget', (projection) =>
+    onBus('clip:memory-budget', (projection) => {
       showQueueFullBanner(
         container,
         projection?.message ?? 'Memory budget reached — raise Memory Budget in Settings',
-      ),
-    ),
+      );
+      if (isClipsQueueBannerOnScreen(container)) projection?.markShown?.();
+    }),
     // Oldest clips removed to make room (#186): same surface as a refusal.
     // Claim the notice when the banner is really in view, so the sender
     // skips its toast: one message, one surface.
@@ -2982,6 +2984,7 @@ function handlePromoteClip(id) {
  */
 async function promoteWhenDecoded(id) {
   const prep = await prepareQueuedClipForPromote(id);
+  reportOpenMemory(prep);
   if (!prep.ok) {
     // 'decoding' = double-promote, silently ignored (first click wins);
     // 'not-found' = deleted meanwhile — the queue UI already reflects it
@@ -3108,6 +3111,7 @@ export async function promoteClipFromQueue(id) {
 
   if (entry.status !== 'raw') {
     const prep = await prepareQueuedClipForPromote(id);
+    reportOpenMemory(prep);
     if (!prep.ok) return false;
     // The editor may have mounted while we decoded — finish the promote as
     // an in-place swap there instead of silently replacing its clip

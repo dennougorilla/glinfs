@@ -176,7 +176,7 @@ describe('alpha clips are never codec-compressed', () => {
     registerClipCodec(createMockCodec());
     const { entry } = enqueueClip(alphaPayload());
 
-    await expect(prepareQueuedClipForPromote(entry.id)).resolves.toEqual({ ok: true });
+    await expect(prepareQueuedClipForPromote(entry.id)).resolves.toEqual({ ok: true, removed: [] });
   });
 });
 
@@ -229,7 +229,7 @@ describe('saved editor state carries edits', () => {
 describe('sharedKey memory accounting', () => {
   it('counts each shared key once for the active clip and the queue', () => {
     // 100x100x4 = 40,000 bytes per unique frame
-    const unit = (100 * 100 * 4) / (1024 * 1024);
+    const unit = (100 * 100 * 4) / 1_000_000;
     const shared = [
       createMockFrame('a0', { sharedKey: 'src-a' }),
       createMockFrame('a1', { sharedKey: 'src-a' }),
@@ -288,7 +288,7 @@ describe('sharedKey memory accounting', () => {
       return vf;
     });
     codec.decodeCalls[0].resolve({ ok: true, frames: decoded });
-    await expect(pending).resolves.toEqual({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true, removed: [] });
     return { entry, decoded };
   }
 
@@ -327,7 +327,7 @@ describe('sharedKey memory accounting', () => {
       expect(decoded.map((f) => f.closed)).toEqual([false, true, true, false]);
 
       // Memory counts two unique frames again, not four
-      const unit = (100 * 100 * 4) / (1024 * 1024);
+      const unit = (100 * 100 * 4) / 1_000_000;
       expect(getClipMemoryEstimateMB()).toBeCloseTo(unit * 2, 10);
     } finally {
       vi.unstubAllGlobals();
