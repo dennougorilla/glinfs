@@ -687,7 +687,9 @@ export class SegmentationManager {
     if (this.#slots.has(modelId) || this.#busy.size > 0) return false;
     // A base model preloaded for the clip on screen replaces the one before
     // it, as an analysis does (#ensureReady); otherwise both stay on the GPU
+    const lifecycle = this.#lifecycle;
     await this.#releaseOtherModels(modelId);
+    if (this.#lifecycle !== lifecycle) return false;
     if (this.#slots.has(modelId) || this.#busy.size > 0) return false;
     const slot = this.#loadModel(modelId, allowWasm, { cacheOnly: true });
     try {
@@ -1102,8 +1104,11 @@ export class SegmentationManager {
    */
   #asGpuLoss(error) {
     const code = /** @type {any} */ (error)?.code;
+    // Only a missing adapter: a model that failed on an adapter keeps its
+    // own error (and its "choose another model")
     if (
       this.#gpuLost &&
+      /** @type {any} */ (error)?.noAdapter === true &&
       (code === SegmentationErrorCode.WEBGPU_REQUIRED ||
         code === SegmentationErrorCode.WEBGPU_UNAVAILABLE)
     ) {
@@ -1198,10 +1203,13 @@ export class SegmentationManager {
    * @returns {Promise<ReadyInfo>}
    */
   async #ensureReady(modelId, allowWasm, onProgress, signal, framesTotal) {
+    const lifecycle = this.#lifecycle;
     let slot = this.#slots.get(modelId);
     if (slot?.info) return slot.info;
     if (!slot) {
       await raceAbort(this.#releaseOtherModels(modelId), signal);
+      // Disposed while the old model's frames settled: load nothing
+      if (this.#lifecycle !== lifecycle) throw createAbortError('Segmentation manager disposed');
       slot = this.#slots.get(modelId) ?? this.#loadModel(modelId, allowWasm);
     }
     /** @param {AnalysisProgress} progress */

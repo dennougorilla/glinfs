@@ -510,10 +510,66 @@ describe('SegmentationManager.analyzeFrames', () => {
     workers[1].emit({
       type: 'init-error',
       modelId: 'anime',
-      error: { code: SegmentationErrorCode.WEBGPU_REQUIRED, message: 'needs WebGPU' },
+      error: {
+        code: SegmentationErrorCode.WEBGPU_REQUIRED,
+        message: 'needs WebGPU',
+        noAdapter: true,
+      },
     });
     const error = await run.catch((e) => e);
     expect(error.code).toBe(SegmentationErrorCode.GPU_LOST);
+  });
+
+  it('after a GPU loss, a model that fails on WebGPU with an adapter keeps its own error (Codex round 2)', async () => {
+    // The adapter is there; the model itself could not run on it: its message
+    // (choose another model) must reach the user, not "the GPU was reset"
+    const { manager, workers } = createHarness({ autoMask: false }, { gpuRetryDelayMs: 0 });
+    const run = manager.analyzeFrames([makeFrame('a')], { clipId: 'c' });
+    await flush();
+    workers[0].emit({ type: 'device-lost', message: 'D3D device removed' });
+    for (let i = 0; i < 10 && !(workers[1]?.segments.length > 0); i++) await flush();
+    for (const segment of workers[1].segments) workers[1].mask(segment);
+    await run;
+    // The next model fails to start (the fake answers only what the test says)
+    workers[1].autoReady = false;
+    const other = manager.analyzeFrames([makeFrame('b')], { clipId: 'c', modelId: 'general' });
+    for (let i = 0; i < 10 && !workers[1].inits.some((m) => m.model.id === 'general'); i++)
+      await flush();
+    workers[1].emit({
+      type: 'init-error',
+      modelId: 'general',
+      error: {
+        code: SegmentationErrorCode.WEBGPU_REQUIRED,
+        message:
+          'General could not run on WebGPU in this browser (out of memory). Choose another model.',
+      },
+    });
+    const error = await other.catch((e) => e);
+    expect(error.code).toBe(SegmentationErrorCode.WEBGPU_REQUIRED);
+    expect(error.message).toMatch(/Choose another model/);
+  });
+
+  it('dispose() while a model switch waits for the old model’s frames starts no worker (Codex round 2)', async () => {
+    const { manager, workers } = createHarness({ autoMask: false });
+    const controller = new AbortController();
+    const first = manager
+      .analyzeFrames([makeFrame('a'), makeFrame('b')], { clipId: 'c', signal: controller.signal })
+      .catch((e) => e);
+    await flush();
+    controller.abort();
+    await first;
+    // Another base model: waits until anime's frames in flight have settled
+    const second = manager
+      .analyzeFrames([makeFrame('c')], { clipId: 'c', modelId: 'general' })
+      .catch((e) => e);
+    await flush();
+    manager.dispose();
+    const error = await Promise.race([
+      second,
+      new Promise((resolve) => setTimeout(() => resolve({ name: 'still running' }), 1000)),
+    ]);
+    expect(error.name).toBe('AbortError');
+    expect(workers).toHaveLength(1);
   });
 
   it('dispose() during the GPU retry delay starts no worker; the analysis ends as cancelled', async () => {

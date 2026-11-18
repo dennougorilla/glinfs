@@ -408,6 +408,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
     throw new SegmentationError(
       SegmentationErrorCode.WEBGPU_REQUIRED,
       `${spec.label ?? 'This model'} needs WebGPU, which this browser does not provide, and is too large to run on the CPU. Choose another model.`,
+      { noAdapter: true },
     );
   }
   if (!adapter && !allowWasm) {
@@ -415,6 +416,7 @@ async function initialize(entry, allowWasm, cacheOnly) {
     throw new SegmentationError(
       SegmentationErrorCode.WEBGPU_UNAVAILABLE,
       'WebGPU is not available in this browser',
+      { noAdapter: true },
     );
   }
 
