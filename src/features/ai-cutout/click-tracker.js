@@ -337,6 +337,16 @@ export async function trackClicks({
   const done = new Map();
   /** Frame key → the frame of this run holding its mask @type {Map<string, number>} */
   const doneKeys = new Map();
+  /** Keys of more than one frame in the range (holds): their logits stay for the run */
+  const sharedKeys = new Set();
+  {
+    const seen = new Set();
+    for (let f = range.start; f <= range.end; f++) {
+      const key = keyOf(f);
+      if (seen.has(key)) sharedKeys.add(key);
+      seen.add(key);
+    }
+  }
   /** @type {Set<number>} */
   const lost = new Set();
   /**
@@ -438,10 +448,11 @@ export async function trackClicks({
         return;
       }
       // The step read the previous frame's logits; nothing reads them again
-      // unless that frame starts another pass (an anchor). A frame that
-      // shares its pixels took them over by reference (audit B7: every
-      // frame's logits stayed for the whole run, 75 MiB per 300 frames)
-      if (!anchorFrames.has(from)) {
+      // unless that frame starts another pass (an anchor) or shares its
+      // pixels with other frames (a hold: a later step may copy its entry,
+      // in either pass). Audit B7: every frame's logits stayed for the
+      // whole run, 75 MiB per 300 frames
+      if (!anchorFrames.has(from) && !sharedKeys.has(keyOf(from))) {
         const previous = done.get(from);
         if (previous) previous.lowRes = null;
       }

@@ -655,4 +655,24 @@ describe('trackClicks memory (audit B7)', () => {
     expect(aliveAtEnd).toBeGreaterThanOrEqual(2);
     expect(aliveAtEnd).toBeLessThanOrEqual(6);
   });
+
+  it('frames that share pixels with the anchor keep their logits for the backward pass (Codex on #229)', async () => {
+    // Frames 1-4 are one imported hold (one key), the click is on frame 3:
+    // the forward pass records frame 4 from frame 3, the backward pass takes
+    // frame 2 from the hold's latest frame, and frame 0 must still get logits
+    const { prompt: fake, calls } = fakeSegmenter();
+    const prompt = async (/** @type {number} */ frame, /** @type {any} */ p) => {
+      const candidates = await fake(frame, p);
+      return candidates.map((c) => ({ ...c, lowRes: new Float32Array(16).fill(frame + 1) }));
+    };
+    const { promise } = run({
+      range: { start: 0, end: 5 },
+      currentFrame: 3,
+      keyOf: (f) => (f >= 1 && f <= 4 ? 'hold' : `f${f}`),
+      prompt,
+    });
+    await promise;
+    const toFrame0 = calls.find((c) => c.frame === 0);
+    expect(toFrame0?.prompt.maskInput).toBeInstanceOf(Float32Array);
+  });
 });

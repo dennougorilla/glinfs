@@ -51,7 +51,7 @@
 
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import * as ort from 'onnxruntime-web/webgpu';
-import { createByteLru } from '../features/ai-cutout/byte-lru.js';
+import { createEmbeddingCache } from '../features/ai-cutout/embedding-cache.js';
 import { getSpecFiles } from '../features/ai-cutout/model-config.js';
 import {
   evictCachedModel,
@@ -168,35 +168,12 @@ const Half = /** @type {Float32ArrayConstructor | undefined} */ (
   /** @type {any} */ (globalThis).Float16Array
 );
 
-/** @type {import('../features/ai-cutout/byte-lru.js').ByteLru<Float32Array>} */
-const embeddings = createByteLru(EMBEDDING_CACHE_BYTES, {
-  onEvict: (key) => {
-    embeddingKeysByModel.get(key.slice(0, key.indexOf('\u0000')))?.delete(key);
-    forgetEmbeddingClip(key);
-  },
-});
-
-/** Clip of each cached embedding @type {Map<string, string>} */
-const embeddingClip = new Map();
-/** Embeddings of each clip @type {Map<string, Set<string>>} */
-const embeddingKeysByClip = new Map();
-
-/** @param {string} key - An embedding that left the cache */
-function forgetEmbeddingClip(key) {
-  const clipId = embeddingClip.get(key);
-  embeddingClip.delete(key);
-  if (clipId !== undefined) embeddingKeysByClip.get(clipId)?.delete(key);
-}
-
 /**
- * Handle 'forget-clip': drop the embeddings of a clip released for good
- * (audit B8: they stayed until the cache's cap evicted them)
- * @param {string} clipId
+ * The cached embeddings, indexed by model and by clip: an unloaded model or a
+ * released clip ('forget-clip') drops its own at once, index entries too
+ * (audit B8, Codex round 1 on #229)
  */
-function forgetClip(clipId) {
-  for (const key of [...(embeddingKeysByClip.get(clipId) ?? [])]) embeddings.delete(key);
-  embeddingKeysByClip.delete(clipId);
-}
+const embeddings = createEmbeddingCache(EMBEDDING_CACHE_BYTES);
 
 /** @type {OffscreenCanvas | null} */
 let samCanvas = null;
@@ -518,9 +495,7 @@ function unloadModel(modelId) {
   entry.controller.abort();
   const session = /** @type {any} */ (entry.session);
   entry.session = null;
-  if (entry.spec.kind === 'sam') {
-    for (const key of [...embeddingKeys(modelId)]) embeddings.delete(key);
-  }
+  if (entry.spec.kind === 'sam') embeddings.forgetModel(modelId);
   // A session still being created is released by initialize(). A video
   // model's state goes in the queue too: a frame running now may still
   // read it.
@@ -623,22 +598,6 @@ async function segment(request) {
   );
 }
 
-/** Keys of the embeddings of a model @type {Map<string, Set<string>>} */
-const embeddingKeysByModel = new Map();
-
-/**
- * @param {string} modelId
- * @returns {Set<string>}
- */
-function embeddingKeys(modelId) {
-  let keys = embeddingKeysByModel.get(modelId);
-  if (!keys) {
-    keys = new Set();
-    embeddingKeysByModel.set(modelId, keys);
-  }
-  return keys;
-}
-
 /**
  * The reused encoder input canvas and HWC buffer for a size
  * @param {number} width
@@ -694,18 +653,10 @@ async function prompt(request) {
       return result;
     });
     const keep = Half ? new Half(embedding) : embedding;
-    if (embeddings.set(key, keep, keep.byteLength, request.jobId)) {
-      embeddingKeys(request.modelId).add(key);
-      if (request.clipId !== undefined && request.clipId !== null) {
-        embeddingClip.set(key, request.clipId);
-        let keys = embeddingKeysByClip.get(request.clipId);
-        if (!keys) {
-          keys = new Set();
-          embeddingKeysByClip.set(request.clipId, keys);
-        }
-        keys.add(key);
-      }
-    }
+    embeddings.set(key, keep, keep.byteLength, request.jobId, {
+      modelId: request.modelId,
+      clipId: request.clipId,
+    });
   }
   request.bitmap?.close();
   request.bitmap = null;
@@ -839,7 +790,7 @@ self.onmessage = (event) => {
       cancelJob(message.jobId);
       break;
     case 'forget-clip':
-      forgetClip(message.clipId);
+      embeddings.forgetClip(message.clipId);
       break;
   }
 };
