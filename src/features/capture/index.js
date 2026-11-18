@@ -714,7 +714,7 @@ async function handleCreateClip() {
   // The memory budget (#96): materializing the buffer as VideoFrames must
   // not push held-frame memory past the budget. The user sees the same
   // visible surfaces as a queue-full refusal.
-  const projection = projectClipMemory(getLiveCaptureContext());
+  const projection = projectClipMemory(getLiveCaptureContext() ?? getKeptBufferContext());
   const room = checkClipRoom({ needSlot, projection });
   if (!room.ok && room.reason === 'queue-full') {
     announceQueueFull();
@@ -929,6 +929,25 @@ export function getCaptureState() {
  * @property {15|30|60} fps - Capture FPS of the running session
  * @property {boolean} sceneDetection - Scene detection flag for clips made now
  */
+
+/**
+ * The buffer kept on /capture after the browser stopped the share (B2):
+ * no live session, but its frames can still become a clip through Create
+ * Clip, so its memory is checked the same way
+ * @returns {LiveCaptureContext | null}
+ */
+function getKeptBufferContext() {
+  if (!store || !workerManager) return null;
+  const state = store.getState();
+  if (state.isSharing || (state.stats?.frameCount ?? 0) <= 0) return null;
+  return {
+    workerManager,
+    fps: state.settings.fps,
+    sceneDetection: state.settings.sceneDetection,
+    stats: state.stats,
+    stream: null,
+  };
+}
 
 /**
  * Resolve the live capture session regardless of where its resources

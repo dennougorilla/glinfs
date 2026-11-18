@@ -41,6 +41,10 @@ export class CaptureWorkerManager {
   /** @type {StatsCallback | null} */
   #onStatsUpdate = null;
 
+  /** @type {{ width: number, height: number, scaled: boolean } | null} Size of
+   * the last grabbed frame: still the buffer's size once the video is gone */
+  #lastGrabDims = null;
+
   /** @type {Array<(frames: TransferredFrame[]) => void>} Resolvers for in-flight
    * requestFrames() calls, oldest first. The worker answers each GET_FRAMES with
    * exactly one FRAMES_RESPONSE in order, so responses settle them FIFO (#170). */
@@ -77,6 +81,7 @@ export class CaptureWorkerManager {
     this.#video = video;
     this.#onStatsUpdate = options.onStatsUpdate ?? null;
     this.#maxEdge = options.maxEdge ?? 0;
+    this.#lastGrabDims = null;
 
     // Create worker if not already created
     if (!this.#worker) {
@@ -321,6 +326,7 @@ export class CaptureWorkerManager {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
       const target = this.getEffectiveFrameDimensions();
+      if (target) this.#lastGrabDims = target;
       const bitmap = target?.scaled
         ? await createImageBitmap(this.#video, {
             resizeWidth: target.width,
@@ -351,7 +357,9 @@ export class CaptureWorkerManager {
   getEffectiveFrameDimensions() {
     const w = this.#video?.videoWidth ?? 0;
     const h = this.#video?.videoHeight ?? 0;
-    if (!w || !h) return null;
+    // The share ended and the element was released: the kept buffer still
+    // holds frames of the last grabbed size (B2)
+    if (!w || !h) return this.#lastGrabDims;
     return fitWithinLongEdge(w, h, this.#maxEdge);
   }
 }

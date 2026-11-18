@@ -182,6 +182,29 @@ describe('CaptureWorkerManager', () => {
     await expect(second).resolves.toEqual([]);
   });
 
+  it('keeps reporting the size of the buffered frames after the video is gone (B2)', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ close: vi.fn() }));
+    const video = /** @type {any} */ ({ readyState: 4, videoWidth: 2560, videoHeight: 1440 });
+    const manager = new CaptureWorkerManager();
+    manager.init(video, { maxEdge: 1920 });
+    const worker = MockWorker.instances[0];
+    worker._simulateMessage({ type: 'FRAME_REQUEST', payload: { timestamp: 0 } });
+    await vi.waitFor(() => expect(worker._lastMessage('FRAME_RESPONSE')).toBeDefined());
+
+    // The share ended: the element was released
+    video.videoWidth = 0;
+    video.videoHeight = 0;
+    expect(manager.getEffectiveFrameDimensions()).toEqual({
+      width: 1920,
+      height: 1080,
+      scaled: true,
+    });
+
+    // A new source starts from scratch
+    manager.init(/** @type {any} */ ({ readyState: 0, videoWidth: 0, videoHeight: 0 }));
+    expect(manager.getEffectiveFrameDimensions()).toBeNull();
+  });
+
   it('resolves requestFrames with an empty array when not initialized', async () => {
     const manager = new CaptureWorkerManager();
 

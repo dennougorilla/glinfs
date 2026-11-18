@@ -325,6 +325,48 @@ function hasClipToEdit() {
 }
 
 /**
+ * The Create Clip button: makes the ring buffer the active clip and opens it
+ * @param {CaptureUIHandlers} handlers
+ * @param {(() => void)[]} cleanups
+ * @returns {HTMLElement}
+ */
+function renderCreateClipButton(handlers, cleanups) {
+  const clipBtn = createElement(
+    'button',
+    {
+      className: 'btn btn-primary btn-create-clip',
+      type: 'button',
+      'aria-label': 'Create clip from buffer',
+    },
+    ['Create Clip'],
+  );
+
+  cleanups.push(
+    on(clipBtn, 'click', async () => {
+      clipBtn.setAttribute('disabled', 'true');
+      clipBtn.textContent = 'Creating...';
+      try {
+        const created = await handlers.onCreateClip();
+        if (!created) {
+          clipBtn.removeAttribute('disabled');
+          clipBtn.textContent = 'Create Clip';
+          return;
+        }
+        // Navigate to loading screen if scene detection is enabled, otherwise to editor
+        const settings = handlers.getSettings();
+        const targetRoute = settings?.sceneDetection ? '/loading' : '/editor';
+        navigate(targetRoute);
+      } catch (err) {
+        console.error('[Capture UI] Failed to create clip:', err);
+        clipBtn.removeAttribute('disabled');
+        clipBtn.textContent = 'Create Clip';
+      }
+    }),
+  );
+  return clipBtn;
+}
+
+/**
  * Render capture action buttons (Fglips-style: Select Screen + Create Clip)
  * @param {import('./types.js').CaptureState} state
  * @param {CaptureUIHandlers} handlers
@@ -335,6 +377,11 @@ function renderCaptureActions(state, handlers, cleanups) {
   const actions = createElement('div', { className: 'capture-actions' });
 
   if (!state.isSharing) {
+    // The browser stopped the share and the buffer was kept (B2): it can
+    // still become a clip, so Create Clip stays, first, as the default
+    if ((state.stats?.frameCount ?? 0) > 0) {
+      actions.appendChild(renderCreateClipButton(handlers, cleanups));
+    }
     // Not sharing - show "Select Screen" button
     const selectBtn = createElement(
       'button',
@@ -361,39 +408,7 @@ function renderCaptureActions(state, handlers, cleanups) {
     actions.appendChild(selectBtn);
   } else {
     // Sharing/Recording - show "Create Clip" as primary action
-    const clipBtn = createElement(
-      'button',
-      {
-        className: 'btn btn-primary btn-create-clip',
-        type: 'button',
-        'aria-label': 'Create clip from buffer',
-      },
-      ['Create Clip'],
-    );
-    actions.appendChild(clipBtn);
-
-    cleanups.push(
-      on(clipBtn, 'click', async () => {
-        clipBtn.setAttribute('disabled', 'true');
-        clipBtn.textContent = 'Creating...';
-        try {
-          const created = await handlers.onCreateClip();
-          if (!created) {
-            clipBtn.removeAttribute('disabled');
-            clipBtn.textContent = 'Create Clip';
-            return;
-          }
-          // Navigate to loading screen if scene detection is enabled, otherwise to editor
-          const settings = handlers.getSettings();
-          const targetRoute = settings?.sceneDetection ? '/loading' : '/editor';
-          navigate(targetRoute);
-        } catch (err) {
-          console.error('[Capture UI] Failed to create clip:', err);
-          clipBtn.removeAttribute('disabled');
-          clipBtn.textContent = 'Create Clip';
-        }
-      }),
-    );
+    actions.appendChild(renderCreateClipButton(handlers, cleanups));
 
     if (handlers.onChangeSource) {
       actions.appendChild(renderChangeSourceButton(handlers.onChangeSource, cleanups));
