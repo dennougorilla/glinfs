@@ -140,6 +140,31 @@ describe('createKeyedRegionCache', () => {
 });
 
 describe('createEditorFrameRenderer', () => {
+  it('a draw scheduled before a delete skips the frame Chrome closed meanwhile', () => {
+    // Chrome's VideoFrame has no `closed`: a closed one reports codedWidth 0
+    // and drawImage throws InvalidStateError (a 1080p session logged it from
+    // the editor's scheduled preview draw after a clip was deleted)
+    const f = /** @type {any} */ (frame('a'));
+    f.frame = { fill: GREEN, codedWidth: 20, format: 'RGBA' };
+    const ctx = createFakeContext(20, 10);
+    const draw = ctx.drawImage.bind(ctx);
+    ctx.drawImage = /** @type {any} */ (
+      (/** @type {any} */ source, /** @type {any[]} */ ...rest) => {
+        if (source?.codedWidth === 0) {
+          throw new DOMException('The VideoFrame has been closed', 'InvalidStateError');
+        }
+        return draw(source, ...rest);
+      }
+    );
+    const renderer = createEditorFrameRenderer();
+    const e = edits({ color: '#00ff00', tolerance: 0 });
+    renderer.render(ctx, f, null, e, 0);
+    // The clip is deleted: its frames are closed before the scheduled draw runs
+    Object.assign(f.frame, { codedWidth: 0, format: null });
+    expect(() => renderer.render(ctx, f, null, e, 0)).not.toThrow();
+    expect(() => renderer.render(ctx, f, null, edits({ enabled: false }), 0)).not.toThrow();
+  });
+
   it('matches composeEditorFrame with background removal and text', () => {
     const layer = createTextLayer({ text: 'Hi', color: '#ff0000', y: 0.5 }, 5);
     const e = edits({ color: '#00ff00', tolerance: 0 }, [layer]);

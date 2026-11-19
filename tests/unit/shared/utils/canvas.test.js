@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createFrameThumbnailDataUrl,
   getContext2D,
+  getDrawableSource,
   isFrameValid,
   isVideoFrameValid,
   renderFramePlaceholder,
@@ -80,6 +81,17 @@ describe('syncCanvasSize', () => {
 });
 
 describe('isVideoFrameValid', () => {
+  it("returns false for Chrome's closed VideoFrame (no `closed`; codedWidth 0)", () => {
+    const open = { codedWidth: 64, format: 'RGBA' };
+    const closed = { codedWidth: 0, format: null };
+
+    expect(isVideoFrameValid(open)).toBe(true);
+    expect(isVideoFrameValid(closed)).toBe(false);
+    expect(isFrameValid({ frame: closed })).toBe(false);
+    expect(getDrawableSource(/** @type {any} */ ({ frame: closed }))).toBeNull();
+    expect(getDrawableSource(/** @type {any} */ ({ frame: open }))).toBe(open);
+  });
+
   it('returns true for valid open VideoFrame', () => {
     const videoFrame = { closed: false };
 
