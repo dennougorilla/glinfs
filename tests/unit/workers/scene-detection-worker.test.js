@@ -36,8 +36,10 @@ class FakeOffscreenCanvas {
       },
       getImageData(x, y, w, h) {
         self.getImageDataCalls.push([x, y, w, h]);
-        // Uniform gray image - deterministic, cheap histogram to compute.
-        return { data: new Uint8ClampedArray(w * h * 4).fill(128) };
+        // The bitmap's own pixels when it has some, else uniform gray
+        const drawn = self.drawImageCalls.at(-1)?.[0];
+        if (drawn?.pixels) return { data: drawn.pixels, width: w, height: h };
+        return { data: new Uint8ClampedArray(w * h * 4).fill(128), width: w, height: h };
       },
     };
   }
@@ -95,6 +97,38 @@ describe('scene-detection-worker ImageBitmap readback (issue #99, fix 3)', () =>
     const completeCall = postMessage.mock.calls.find(([msg]) => msg.type === 'COMPLETE');
     expect(completeCall).toBeDefined();
     expect(completeCall[0].payload.totalFrames).toBe(2);
+  });
+
+  it('detects with the method in the DETECT options', async () => {
+    // One shot of 12 frames whose exposure steps up at frame 6: the colours
+    // change, the shapes do not
+    const shot = (/** @type {number} */ gain) => {
+      const pixels = new Uint8ClampedArray(16 * 16 * 4);
+      for (let i = 0; i < 256; i++) {
+        const v = (i % 16 < 6 !== i < 96 ? 60 : 150) + (i % 7) * 4;
+        pixels.set([v * gain, v * gain * 0.9, v * gain * 0.7, 255], i * 4);
+      }
+      return pixels;
+    };
+    const run = async (/** @type {string} */ method) => {
+      postMessage.mockClear();
+      const frameData = Array.from({ length: 12 }, (_, i) => ({
+        index: i,
+        timestamp: i * 33,
+        imageBitmap: { close: vi.fn(), pixels: shot(i < 6 ? 1 : 1.6) },
+        width: 16,
+        height: 16,
+      }));
+      await handleMessage({
+        data: { type: 'DETECT', payload: { frameData, options: { method, minSceneDuration: 1 } } },
+      });
+      const complete = postMessage.mock.calls.find(([msg]) => msg.type === 'COMPLETE');
+      return complete[0].payload.scenes.map((/** @type {any} */ sc) => sc.startFrame);
+    };
+    expect(await run('fixed')).toEqual([0, 6]);
+    expect(await run('combined')).toEqual([0]);
+    // No method: the default (colour and shape)
+    expect(await run(undefined)).toEqual([0]);
   });
 
   it('closes every transferred ImageBitmap after reading it back', async () => {
