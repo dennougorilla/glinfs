@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1](https://github.com/dennougorilla/glinfs/compare/v0.18.0...v0.18.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **capture:** frames of another size go when capture starts again ([#235](https://github.com/dennougorilla/glinfs/issues/235)) ([c9da841](https://github.com/dennougorilla/glinfs/commit/c9da841238768bd9307512a5f5f71ec09e51ce53))
+* **editor:** a closed VideoFrame is never drawn ([#237](https://github.com/dennougorilla/glinfs/issues/237)) ([041d28b](https://github.com/dennougorilla/glinfs/commit/041d28bb9c47ad2e7fe8a4dc682c4fdce894e3d3))
+* **export:** a color maps to the same palette index in every frame ([#226](https://github.com/dennougorilla/glinfs/issues/226)) ([1837a60](https://github.com/dennougorilla/glinfs/commit/1837a609616f63295d5c7cb9031c3cb3eee12159))
+
 ## [0.18.0](https://github.com/dennougorilla/glinfs/compare/v0.17.0...v0.18.0) (2026-11-19)
 
 
