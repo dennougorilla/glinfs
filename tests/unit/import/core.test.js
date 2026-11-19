@@ -235,7 +235,8 @@ describe('limits', () => {
 
 describe('projectImportMemoryMB', () => {
   it('counts unique source frames at raw RGBA', () => {
-    expect(projectImportMemoryMB(4, 1024, 256)).toBe(4);
+    // 4 x 1000 x 250 x 4 bytes = 4 MB of 1,000,000 bytes
+    expect(projectImportMemoryMB(4, 1000, 250)).toBe(4);
     expect(projectImportMemoryMB(0, 1024, 256)).toBe(0);
   });
 });

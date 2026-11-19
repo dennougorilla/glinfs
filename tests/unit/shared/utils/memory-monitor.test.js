@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { estimateFramesMemoryMB } from '../../../../src/shared/utils/memory-monitor.js';
 
-const MB = 1024 * 1024;
+const MB = 1_000_000;
 
 describe('estimateFramesMemoryMB', () => {
   it('counts every frame without a sharedKey at w*h*4', () => {

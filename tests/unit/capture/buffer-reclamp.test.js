@@ -112,11 +112,11 @@ describe('ring buffer re-clamp on a frame-size change (B5)', () => {
     const { captureModule, manager } = await startSharing();
     const { onFrameSizeChange } = manager.init.mock.calls.at(-1)[1];
 
-    // 1920x1080 at the default 4000 MB budget: 60 % fits 303 frames of
-    // 8.29 MB (MiB accounting on main), fewer than 30 fps x 15 s = 450
+    // 1920x1080 at the default 4000 MB budget: 60 % fits 289 frames of
+    // 8.29 MB (MB = 10^6 bytes, #230), fewer than 30 fps x 15 s = 450
     onFrameSizeChange({ width: 1920, height: 1080, scaled: false });
 
-    const expected = Math.floor((4000 * 0.6 * 1024 * 1024) / (1920 * 1080 * 4));
+    const expected = Math.floor((4000 * 0.6 * 1_000_000) / (1920 * 1080 * 4));
     expect(manager.resize).toHaveBeenCalledWith(expected);
     expect(captureModule.getCaptureState()?.bufferLimit).toMatchObject({
       maxFrames: expected,

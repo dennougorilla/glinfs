@@ -16,6 +16,7 @@ import { emit } from '../../shared/bus.js';
 import { announce } from '../../shared/live-region.js';
 import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
+import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
 import { formatImportBusyLabel } from '../import/core.js';
@@ -732,7 +733,7 @@ async function handleCreateClip() {
   // The memory budget (#96): materializing the buffer as VideoFrames must
   // not push held-frame memory past the budget. The user sees the same
   // visible surfaces as a queue-full refusal.
-  const projection = projectClipMemory(getLiveCaptureContext());
+  const projection = projectClipMemory(getLiveCaptureContext(), { asActive: true });
   const room = checkClipRoom({ needSlot, projection });
   if (!room.ok && room.reason === 'queue-full') {
     announceQueueFull();
@@ -774,7 +775,12 @@ async function handleCreateClip() {
   // Remove the oldest queued clips this clip needs room from (setting on).
   // Refused when even removing all of them would not make room for the
   // real snapshot: nothing was removed and the frames are still ours.
-  const made = makeRoomForClip({ needSlot: getClipPayload() !== null, frames: videoFrames });
+  const made = makeRoomForClip({
+    needSlot: getClipPayload() !== null,
+    frames: videoFrames,
+    fps: settings.fps,
+    asActive: true,
+  });
   if (!made.ok) {
     closeRefusedFrames(videoFrames);
     if (made.reason === 'memory-budget' && made.projection) {
@@ -947,6 +953,20 @@ function cleanup() {
  */
 export function getCaptureState() {
   return store?.getState() ?? null;
+}
+
+/**
+ * Memory the live ring buffer holds now (MB): its buffered frames at the
+ * captured size, RGBA ImageBitmaps. Counted in the memory total
+ * (main.js registers it as app-store's RING_BUFFER_HOLDER).
+ * @returns {number}
+ */
+export function getRingBufferMemoryMB() {
+  const context = getLiveCaptureContext();
+  const dims = context?.workerManager?.getEffectiveFrameDimensions?.() ?? null;
+  const frameCount = context?.stats?.frameCount ?? 0;
+  if (!dims || frameCount <= 0) return 0;
+  return (frameCount * dims.width * dims.height * 4) / BYTES_PER_MB;
 }
 
 /**

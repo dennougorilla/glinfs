@@ -4,10 +4,10 @@
  */
 
 import {
-  getClipMemoryEstimateMB,
   getClipPayload,
   getClipQueue,
   getClipQueueLimit,
+  getHeldMemoryMB,
   hasActiveScreenCapture,
 } from '../../shared/app-store.js';
 import { getOrderedClipRows, renderClipEntries } from '../../shared/clip-entries.js';
@@ -17,7 +17,6 @@ import { createElement } from '../../shared/utils/dom.js';
 import { frameToClock, frameToTimecode } from '../../shared/utils/format.js';
 import { formatMemory } from '../../shared/utils/memory-monitor.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { renderFrameOnly, renderOverlay } from './api.js';
 import { calculateSelectionInfo, getOutputDimensions, getPositionInSelection } from './core.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
@@ -554,11 +553,11 @@ export function updateClipsPanel(container, handlers) {
 }
 
 /**
- * Memory footer: conservative raw-RGBA estimate for active + queued frames,
- * shown AGAINST the budget so the user sees the wall before hitting it
- * (a bare "~1.2 GB estimated" gave no sense of remaining headroom). The AI
- * cutout's probability masks count too, so this also runs on its own while
- * an analysis adds masks.
+ * Memory footer: everything the memory budget counts (getHeldMemoryMB: the
+ * clips, the capture ring buffer, the AI cutout's masks), shown AGAINST the
+ * budget so the user sees the wall before hitting it. The same number the
+ * budget checks compare, in the unit Settings shows. It also runs on its own
+ * while an analysis adds masks.
  * @param {ParentNode} container - The editor screen container
  */
 export function updateClipsMemoryFooter(container) {
@@ -566,7 +565,7 @@ export function updateClipsMemoryFooter(container) {
   if (footer instanceof HTMLElement) {
     const queueLength = getClipQueue().length;
     const limit = getClipQueueLimit();
-    const usedMB = getClipMemoryEstimateMB() + getSharedMaskStore().byteLength / (1024 * 1024);
+    const usedMB = getHeldMemoryMB();
     const budgetMB = loadSettings().capture.memoryBudgetMB;
     footer.textContent = `~${formatMemory(usedMB)} / ${formatMemory(budgetMB)} \u00b7 ${queueLength}/${limit} queued`;
     footer.classList.toggle(

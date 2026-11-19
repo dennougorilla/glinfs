@@ -45,6 +45,8 @@ export const DEFAULT_CLIP_ID = '';
  * @property {(key: string) => string | undefined} getMark
  * @property {(key: string) => boolean} delete - The mask and the mark at `key`
  * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip (all models); returns how many
+ * @property {(clipId: string) => number} bytesForClip - Bytes held by a clip's masks (all
+ *   models); does not mark anything used
  * @property {(clipId: string, model?: string) => void} touchClip - Mark a clip's masks of one
  *   model (default: of every model) recently used (e.g. the active clip)
  * @property {(clipId: string) => string[]} keysForClip - Every model's
@@ -326,6 +328,16 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       for (const id of groupsOfClip(clipId)) removed += removeGroup(id);
       if (removed > 0) changed({ type: 'delete-clip', clipId });
       return removed;
+    },
+
+    bytesForClip(clipId) {
+      let bytes = 0;
+      for (const id of groupsOfClip(clipId)) {
+        for (const key of /** @type {{ keys: Set<string> }} */ (groups.get(id)).keys) {
+          bytes += entries.get(key)?.mask.data.byteLength ?? 0;
+        }
+      }
+      return bytes;
     },
 
     touchClip(clipId, model) {

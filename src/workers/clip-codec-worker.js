@@ -26,11 +26,10 @@
  * @module workers/clip-codec-worker
  */
 
+import { clipBitrate } from '../shared/clip-bitrate.js';
+
 /** Emit a keyframe every N frames so decode never depends on one fragile key */
 const KEYFRAME_INTERVAL = 150;
-
-/** Bitrate cap in bits/s (quality-biased: min(20Mbps, w*h*fps*0.15)) */
-const MAX_BITRATE = 20_000_000;
 
 /**
  * @typedef {Object} SerializedChunk
@@ -168,7 +167,7 @@ async function handleEncode({ jobId, frames, codec, fps, width, height }) {
       codec,
       width,
       height,
-      bitrate: Math.min(MAX_BITRATE, Math.round(width * height * fps * 0.15)),
+      bitrate: clipBitrate(width, height, fps),
       framerate: fps,
       latencyMode: 'quality',
     });

@@ -31,7 +31,7 @@ import { updateSetting } from '../../../src/shared/user-settings.js';
  *   resurrects it or leaks returned frames
  */
 
-const MB = 1024 * 1024;
+const MB = 1_000_000;
 
 /** One mock frame of `sizeMB` raw RGBA memory (close() flips .closed) */
 function createMockFrame(id, sizeMB = 1) {

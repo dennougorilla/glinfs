@@ -1,104 +1,30 @@
 /**
- * Memory Monitor
- * Real-time memory monitoring and alerts
+ * Memory accounting units and frame estimates
  * @module shared/utils/memory-monitor
  */
 
-/** @type {number} Warning threshold (MB) */
-const WARNING_THRESHOLD_MB = 400;
-
-/** @type {number} Critical threshold (MB) */
-const CRITICAL_THRESHOLD_MB = 500;
-
 /**
- * Memory status level
- * @typedef {'normal' | 'warning' | 'critical'} MemoryLevel
+ * The one memory unit of the app: the budget setting, every estimate it is
+ * compared with, and every number shown are MB of 1,000,000 bytes, and a GB
+ * is 1000 MB. "4000" in Settings is 4.0 GB in the footer and in refusals.
  */
+export const BYTES_PER_MB = 1_000_000;
 
 /**
- * Memory status
- * @typedef {Object} MemoryStatus
- * @property {number} usedMB - Used memory (MB)
- * @property {number} limitMB - Memory limit (MB)
- * @property {MemoryLevel} level - Status level
- * @property {number} percent - Usage percentage (0-100)
- */
-
-/**
- * Get current memory status
- * @returns {MemoryStatus | null} - null if performance.memory is not available
- */
-export function getMemoryStatus() {
-  // @ts-expect-error - Chrome-specific API
-  const memory = performance.memory;
-
-  if (!memory) {
-    return null;
-  }
-
-  const usedMB = memory.usedJSHeapSize / (1024 * 1024);
-  const limitMB = memory.jsHeapSizeLimit / (1024 * 1024);
-  const percent = Math.round((usedMB / limitMB) * 100);
-
-  /** @type {MemoryLevel} */
-  let level = 'normal';
-  if (usedMB >= CRITICAL_THRESHOLD_MB) {
-    level = 'critical';
-  } else if (usedMB >= WARNING_THRESHOLD_MB) {
-    level = 'warning';
-  }
-
-  return { usedMB, limitMB, level, percent };
-}
-
-/**
- * Start periodic memory monitoring
- * @param {(status: MemoryStatus) => void} callback - Status callback
- * @param {number} [intervalMs=1000] - Monitoring interval (ms)
- * @returns {() => void} - Stop function
- */
-export function startMemoryMonitor(callback, intervalMs = 1000) {
-  const interval = setInterval(() => {
-    const status = getMemoryStatus();
-    if (status) {
-      callback(status);
-    }
-  }, intervalMs);
-
-  return () => clearInterval(interval);
-}
-
-/**
- * Estimate memory usage for VideoFrame buffer
- * VideoFrames are stored in GPU memory, so CPU memory usage is lower
- * @param {number} frameCount - Number of frames
- * @param {number} width - Frame width
- * @param {number} height - Frame height
- * @returns {number} - Estimated MB
- */
-export function estimateBufferMemory(frameCount, width, height) {
-  // VideoFrames are stored in GPU memory
-  // CPU-side overhead is approximately 1/10
-  const bytesPerFrame = (width * height * 4) / 10;
-  return (frameCount * bytesPerFrame) / (1024 * 1024);
-}
-
-/**
- * Conservative raw-RGBA memory estimate for VideoFrames held on the main
- * thread (active clip + clip queue).
+ * Memory estimate for VideoFrames held on the main thread (active clip,
+ * queue).
  *
- * Unlike estimateBufferMemory above — which models the capture worker's
- * ImageBitmap ring buffer with a /10 CPU-side heuristic — clip frames must
- * be budgeted at full w*h*4: they are long-lived, per-clip, and the queue
- * multiplies them, so an optimistic estimate would hide real memory
- * pressure until the tab dies.
+ * A frame counts at its known size when its wrapper carries one
+ * (`byteLength`: a decoded clip's frames are CPU I420 / NV12 at 1.5 bytes
+ * per pixel, measured with allocationSize() when they are made), else at
+ * raw RGBA w*h*4: frames made from the capture buffer are RGBA textures.
  *
  * Frames that share pixels carry the same `sharedKey` (an imported GIF's
  * held frame becomes several slots holding clones of ONE decoded
  * VideoFrame): each distinct key is counted once, so repeated slots do not
  * inflate the estimate. Frames without a key count individually.
  *
- * @param {Array<{width?: number, height?: number, sharedKey?: string}>} frames - Frames with pixel dimensions
+ * @param {Array<{width?: number, height?: number, sharedKey?: string, byteLength?: number}>} frames
  * @returns {number} - Estimated MB
  */
 export function estimateFramesMemoryMB(frames) {
@@ -111,64 +37,19 @@ export function estimateFramesMemoryMB(frames) {
       if (seenKeys.has(key)) continue;
       seenKeys.add(key);
     }
-    bytes += (frame?.width ?? 0) * (frame?.height ?? 0) * 4;
+    bytes += frame?.byteLength ?? (frame?.width ?? 0) * (frame?.height ?? 0) * 4;
   }
-  return bytes / (1024 * 1024);
+  return bytes / BYTES_PER_MB;
 }
 
 /**
- * Format memory usage
+ * Format a memory figure in the app's unit (see BYTES_PER_MB)
  * @param {number} mb - Memory (MB)
  * @returns {string}
  */
 export function formatMemory(mb) {
-  if (mb >= 1024) {
-    return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb >= 1000) {
+    return `${(mb / 1000).toFixed(1)} GB`;
   }
-  return `${mb.toFixed(1)} MB`;
-}
-
-/**
- * Get color for memory level
- * @param {MemoryLevel} level
- * @returns {string} - CSS color
- */
-export function getMemoryLevelColor(level) {
-  switch (level) {
-    case 'critical':
-      return '#ff4444';
-    case 'warning':
-      return '#ffaa00';
-    default:
-      return '#44ff44';
-  }
-}
-
-/**
- * Get message for memory level
- * @param {MemoryLevel} level
- * @returns {string}
- */
-export function getMemoryLevelMessage(level) {
-  switch (level) {
-    case 'critical':
-      return 'Memory usage critical. Please stop recording.';
-    case 'warning':
-      return 'Memory usage increasing. Consider shorter recording.';
-    default:
-      return 'Memory usage normal.';
-  }
-}
-
-/**
- * Estimate maximum frame count based on memory limit
- * @param {number} width - Frame width
- * @param {number} height - Frame height
- * @param {number} [targetMemoryMB=400] - Target memory usage
- * @returns {number} - Estimated maximum frame count
- */
-export function estimateMaxFrames(width, height, targetMemoryMB = WARNING_THRESHOLD_MB) {
-  const bytesPerFrame = (width * height * 4) / 10;
-  const targetBytes = targetMemoryMB * 1024 * 1024;
-  return Math.floor(targetBytes / bytesPerFrame);
+  return `${Math.round(mb)} MB`;
 }

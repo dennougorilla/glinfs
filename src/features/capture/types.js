@@ -14,6 +14,9 @@
  * @property {string} [sharedKey] - Frames with the same key share pixel memory
  *   (clone() slots of one decoded image, see features/import); memory
  *   estimates count each key once
+ * @property {number} [byteLength] - Bytes the frame really holds, when known
+ *   (a decoded clip's I420 / NV12 frames: allocationSize()); memory
+ *   estimates count RGBA w*h*4 without it
  */
 
 /**
