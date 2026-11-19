@@ -3139,6 +3139,16 @@
   );
 }
 
+/* What the fix-up holds, cut out of its frame: tells fix-ups apart */
+.editor-screen .editor-cutout-pick-thumb {
+  width: 28px;
+  height: 20px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: -6px;
+  background: repeating-conic-gradient(#555 0 25%, #333 0 50%) 0 0 / 8px 8px;
+}
+
 .editor-screen .editor-cutout-pick-missing {
   margin-left: 6px;
   padding: 0 5px;

@@ -409,7 +409,10 @@ export function getModelTooltip(modelId) {
 export function getDownloadPrompt(modelId, subject = null) {
   const entry = getModelEntry(modelId);
   const card = SUBJECT_CARDS.find((c) => c.value === getModelSubject(modelId, subject));
-  const name = card?.name ?? card?.label ?? entry.label;
+  // The model's own name, as the Model menu lists it ("Busy backgrounds ·
+  // BiRefNet"); the card's name only for the card's first model, which the
+  // menu lists under that name too
+  const name = entry.label || card?.name || card?.label;
   return {
     title: `Download ${getModelSizeLabel(modelId)}?`,
     detail: `The ${name} model (${entry.shortModelName}) runs in this browser. It downloads once and stays on this device; your frames never leave it.`,
@@ -1645,6 +1648,39 @@ function updateFixUpProgress(list, objects, status) {
 }
 
 /**
+ * Fill each tracked fix-up's thumbnail with what it holds (the editor's
+ * drawer, see setFixUpThumbnailDrawer), redrawn when its masks change
+ * @param {HTMLElement} list
+ * @param {CutoutObject[]} objects
+ * @param {import('../types.js').AiCutoutStatus | null | undefined} status
+ */
+function updateFixUpThumbnails(list, objects, status) {
+  if (!thumbnailDrawer) return;
+  for (const li of list.children) {
+    const id = /** @type {HTMLElement} */ (li).dataset.objectId;
+    const object = id ? objects.find((o) => o.id === id) : null;
+    const canvas = li.querySelector('.editor-cutout-pick-thumb');
+    if (!object || !(canvas instanceof HTMLCanvasElement)) continue;
+    const key = `${object.scope}|${object.clicks.length}|${(object.boxes ?? []).length}|${object.candidate ?? ''}|${status?.storeVersion ?? 0}`;
+    if (canvas.dataset.key === key) continue;
+    if (thumbnailDrawer(canvas, object)) canvas.dataset.key = key;
+  }
+}
+
+/** @type {((canvas: HTMLCanvasElement, object: CutoutObject) => boolean) | null} */
+let thumbnailDrawer = null;
+
+/**
+ * How the chips draw what a fix-up holds (set by the editor, which has the
+ * frames and masks)
+ * @param {((canvas: HTMLCanvasElement, object: CutoutObject) => boolean) | null} drawer -
+ *   returns whether it drew
+ */
+export function setFixUpThumbnailDrawer(drawer) {
+  thumbnailDrawer = drawer;
+}
+
+/**
  * Rebuild the fix-up list: the picks, then the tracked fix-ups with their
  * colour (small: at most 16 + 4 items). Keeps focus inside the list when
  * the focused item goes away.
@@ -1694,6 +1730,13 @@ function updatePickList(list, picks, objects, selectedId, fps, fallbackFocus) {
                 createElement('span', {
                   className: 'editor-cutout-pick-swatch',
                   style: `--swatch: ${tracked.color}`,
+                  'aria-hidden': 'true',
+                }),
+                // What it holds, cut out of its frame (filled in by the editor)
+                createElement('canvas', {
+                  className: 'editor-cutout-pick-thumb',
+                  width: '28',
+                  height: '20',
                   'aria-hidden': 'true',
                 }),
                 label,
@@ -1780,7 +1823,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
  * @param {CleanupSuggestion[]} suggestions
  * @returns {CleanupChip[]}
  */
-export function getCleanupChips(ai, suggestions) {
+export function getCleanupChips(ai, suggestions, fps = 0) {
   /** @type {CleanupChip[]} */
   const chips = [];
   const cleanup = ai.cleanup ?? { minIslandArea: 0, maxHoleArea: 0 };
@@ -1813,6 +1856,16 @@ export function getCleanupChips(ai, suggestions) {
             ? `Remove blob near ${s.where} · on ${plural(s.frames, 'frame', 'frames')}`
             : `Check ${plural(s.frames, 'frame', 'frames')} where the character shrinks`;
     chips.push({ kind: s.kind, label, applied: false, suggestion: s });
+  }
+  // Two blobs in the same part of the frame read the same: each says where
+  // in the clip it is
+  const seen = new Map();
+  for (const chip of chips) seen.set(chip.label, (seen.get(chip.label) ?? 0) + 1);
+  for (const chip of chips) {
+    const pick = chip.suggestion && 'pick' in chip.suggestion ? chip.suggestion.pick : null;
+    if ((seen.get(chip.label) ?? 0) > 1 && pick) {
+      chip.label = `${chip.label} · at ${fps > 0 ? frameToClock(pick.frame, fps) : `frame ${pick.frame + 1}`}`;
+    }
   }
   return chips.slice(0, MAX_SUGGESTIONS);
 }
@@ -2024,9 +2077,10 @@ export function updateBackgroundPanel(container, state, fps) {
   );
   setHidden(list, !isAi || (ai.picks.length === 0 && objects.length === 0));
   if (isAi) updateFixUpProgress(list, objects, status);
+  if (isAi) updateFixUpThumbnails(list, objects, status);
 
   // Clean up chips
-  const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? []) : [];
+  const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? [], fps) : [];
   updateCleanupList(/** @type {HTMLElement} */ (q(root, '#ai-cleanup-list')), chips);
   setHidden(q(root, '#ai-cleanup'), chips.length === 0);
 

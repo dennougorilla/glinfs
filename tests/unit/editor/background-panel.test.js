@@ -35,6 +35,7 @@ import {
   getWebgpuWarning,
   renderBackgroundPanel,
   SUBJECT_CARDS,
+  setFixUpThumbnailDrawer,
   updateBackgroundPanel,
 } from '../../../src/features/editor/panels/background-panel.js';
 import { createAiCutoutStatus, createBrushState } from '../../../src/features/editor/state.js';
@@ -288,7 +289,7 @@ describe('subjects', () => {
 describe('download question', () => {
   it('asks inline before a download, with the asked card shown as chosen', () => {
     expect(getDownloadPrompt('general').title).toBe('Download 90 MB?');
-    expect(getDownloadPrompt('general').detail).toContain('Anything model (ISNet)');
+    expect(getDownloadPrompt('general').detail).toContain('General model (ISNet)');
 
     updateBackgroundPanel(root, makeState({}, { downloadPrompt: 'general' }), 10);
     expect($('#background-download').hidden).toBe(false);
@@ -379,7 +380,7 @@ describe('model choice', () => {
     updateBackgroundPanel(root, makeState({}, { downloadPrompt: 'ben2' }), 10);
     expect($('#subject-general').checked).toBe(true);
     expect($('#background-download-title').textContent).toBe('Download 223 MB?');
-    expect($('#background-download-detail').textContent).toContain('Anything model (BEN2)');
+    expect($('#background-download-detail').textContent).toContain('Hair & detail model (BEN2)');
     expect($('#subject-status-general').textContent).toContain('223 MB');
   });
 
@@ -393,7 +394,7 @@ describe('model choice', () => {
     expect($('#subject-anime').checked).toBe(false);
     expect($('#background-download-title').textContent).toBe('Download 122 MB?');
     expect($('#background-download-detail').textContent).toContain(
-      'Anything model (BiRefNet lite)',
+      'Busy backgrounds, faster model (BiRefNet lite)',
     );
     updateBackgroundPanel(
       root,
@@ -401,7 +402,9 @@ describe('model choice', () => {
       10,
     );
     expect($('#subject-anime').checked).toBe(true);
-    expect($('#background-download-detail').textContent).toContain('Anime model (BiRefNet lite)');
+    expect($('#background-download-detail').textContent).toContain(
+      'Busy backgrounds, faster model (BiRefNet lite)',
+    );
   });
 });
 
@@ -869,6 +872,34 @@ describe('tracked objects', () => {
       },
     );
 
+  it('a tracked fix-up chip shows what it holds, redrawn only when it changes (cutout-ux 6)', () => {
+    const drawn = [];
+    setFixUpThumbnailDrawer((canvas, o) => {
+      drawn.push([canvas.className, o.id]);
+      return true;
+    });
+    try {
+      const objects = [object('a', 'remove', 10), object('b', 'add', 0)];
+      updateBackgroundPanel(root, stateWith(objects), 10);
+      expect(root.querySelectorAll('#ai-pick-list .editor-cutout-pick-thumb')).toHaveLength(2);
+      expect(drawn).toEqual([
+        ['editor-cutout-pick-thumb', 'a'],
+        ['editor-cutout-pick-thumb', 'b'],
+      ]);
+      // Nothing changed: no redraw; one more point on a: only a
+      updateBackgroundPanel(root, stateWith(objects), 10);
+      expect(drawn).toHaveLength(2);
+      const more = {
+        ...objects[0],
+        clicks: [...objects[0].clicks, { frame: 12, x: 0.2, y: 0.2, mode: 'remove' }],
+      };
+      updateBackgroundPanel(root, stateWith([more, objects[1]]), 10);
+      expect(drawn.slice(2)).toEqual([['editor-cutout-pick-thumb', 'a']]);
+    } finally {
+      setFixUpThumbnailDrawer(null);
+    }
+  });
+
   it('labels, finds the lost one (active first) and words its note', () => {
     const a = /** @type {any} */ (object('a', 'remove', 10));
     const b = /** @type {any} */ (object('b', 'add', 0));
@@ -1109,6 +1140,21 @@ describe('Clean up chips', () => {
       { enabled: true, method: 'ai', ai: { model: 'general', ...ai } },
       { aiCutout: { ...createAiCutoutStatus(), cleanupSuggestions: suggestions } },
     );
+
+  it('two blobs that read the same say where in the clip they are (cutout-ux 6)', () => {
+    const ai = createDefaultEdits().background.ai;
+    const other = { ...blob, pick: { frame: 30, x: 0.85, y: 0.1 } };
+    const labels = getCleanupChips(ai, /** @type {any} */ ([blob, other]), 10).map((c) => c.label);
+    expect(labels[0]).not.toBe(labels[1]);
+    expect(labels).toEqual([
+      'Remove blob near top-right · on 2 frames · at 0:00.4',
+      'Remove blob near top-right · on 2 frames · at 0:03.0',
+    ]);
+    // One blob: no position
+    expect(getCleanupChips(ai, /** @type {any} */ ([blob]), 10)[0].label).toBe(
+      'Remove blob near top-right · on 2 frames',
+    );
+  });
 
   it('words each suggestion and puts the clean-ups that are on first', () => {
     const ai = /** @type {any} */ ({

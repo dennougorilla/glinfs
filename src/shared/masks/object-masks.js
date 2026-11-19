@@ -118,8 +118,20 @@ export function getObjectMaskSize(width, height) {
  * @returns {number}
  */
 export function getRemoveGrowRadius(maskWidth) {
-  return Math.max(1, Math.round((OBJECT_REMOVE_GROW_PX * maskWidth) / 1024));
+  return Math.max(
+    OBJECT_REMOVE_MIN_GROW_PX,
+    Math.round((OBJECT_REMOVE_GROW_PX * maskWidth) / 1024),
+  );
 }
+
+/**
+ * A removed object grows by at least this many mask pixels: 2 px of a
+ * 1024-wide mask is 1 px of a 600-wide clip, less than the base model's
+ * soft edge, and left a thin outline of the removed thing (the c24 door
+ * pillar: 2.8-3.8 pixels of it kept along its edge per frame at 1 px, 0-0.2
+ * at 3 px, for 0.12-0.15 % of the character; cutout-ux 6)
+ */
+export const OBJECT_REMOVE_MIN_GROW_PX = 3;
 
 /**
  * Grow radius of an "only this" object in pixels of a mask this wide

@@ -152,7 +152,9 @@ test.describe('General AI model (stub models, WASM fallback)', () => {
     // General chosen for Anything (remembered from an earlier choice)
     await chooseAiModel(page, 'general', { download: false });
     await expect(page.locator('#background-download-title')).toHaveText('Download 90 MB?');
-    await expect(page.locator('#background-download-detail')).toContainText('Anything model');
+    await expect(page.locator('#background-download-detail')).toContainText(
+      'General model (ISNet)',
+    );
     await expect(page.locator('label[for="subject-general"]')).toHaveAttribute(
       'title',
       /ISNet \(general-use\)/,
