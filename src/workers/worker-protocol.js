@@ -54,6 +54,9 @@ export const Events = {
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
  * @property {boolean} [dithering] - Ordered dithering before palette mapping (gifenc)
+ * @property {'bayer' | 'blue-noise'} [ditherPattern] - Threshold map of the dithering
+ * @property {'threshold' | 'matte' | 'dither'} [edge] - How soft alpha becomes 1-bit (transparent)
+ * @property {number[]} [matteColor] - [r, g, b] for edge 'matte'
  * @property {boolean} [frameDifferencing] - Write unchanged pixels as transparency (gifenc, opaque only)
  */
 
@@ -143,6 +146,9 @@ export const Events = {
  * @param {Uint8ClampedArray} [config.paletteSample]
  * @param {boolean} [config.transparent]
  * @param {boolean} [config.dithering]
+ * @param {'bayer' | 'blue-noise'} [config.ditherPattern]
+ * @param {'threshold' | 'matte' | 'dither'} [config.edge]
+ * @param {number[]} [config.matteColor]
  * @param {boolean} [config.frameDifferencing]
  * @returns {InitMessage}
  */
