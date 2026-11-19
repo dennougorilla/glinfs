@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The main-thread client of the I420 converter worker (D3's cheap half):
- * capture bitmaps go to the worker, CPU I420 bytes come back per frame.
+ * RGBA frames (VideoFrame clones or bitmaps) go to the worker, CPU I420
+ * bytes come back per frame.
  */
 
 /** @type {FakeWorker[]} */
@@ -37,7 +38,7 @@ function items(n, w = 4, h = 2) {
   return Array.from({ length: n }, (_, i) => ({
     id: `f${i}`,
     timestamp: i * 33,
-    bitmap: { width: w, height: h, close: vi.fn() },
+    source: { width: w, height: h, close: vi.fn() },
   }));
 }
 
@@ -57,16 +58,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('convertBitmapsToI420', () => {
-  it('hands every bitmap to the worker and returns the bytes in order', async () => {
-    const { convertBitmapsToI420 } = await load();
+describe('convertToI420', () => {
+  it('hands every source to the worker and returns the bytes in order', async () => {
+    const { convertToI420 } = await load();
     const input = items(3);
-    const job = convertBitmapsToI420(input);
+    const job = convertToI420(input);
     const worker = workers[0];
     const { message, transfer } = worker.sent[0];
     expect(message.type).toBe('CONVERT');
     expect(message.frames.map((/** @type {any} */ f) => f.id)).toEqual(['f0', 'f1', 'f2']);
-    expect(transfer).toEqual(input.map((item) => item.bitmap));
+    expect(transfer).toEqual(input.map((item) => item.source));
 
     const jobId = message.jobId;
     for (const index of [1, 0, 2]) {
@@ -89,14 +90,37 @@ describe('convertBitmapsToI420', () => {
       [2, 'f2', 66],
     ]);
     expect(result.rest).toEqual([]);
-    // The bitmaps are the worker's now: this side closes none of them
-    for (const item of input) expect(item.bitmap.close).not.toHaveBeenCalled();
+    // The sources are the worker's now: this side closes none of them
+    for (const item of input) expect(item.source.close).not.toHaveBeenCalled();
   });
 
-  it('gives back the bitmaps the worker could not convert, and stops using it', async () => {
-    const { convertBitmapsToI420, isCpuFrameConversionAvailable } = await load();
+  it('hands each frame to onFrame as it arrives', async () => {
+    const { convertToI420 } = await load();
+    /** @type {number[]} */
+    const seen = [];
+    const job = convertToI420(items(2), { onFrame: (frame) => seen.push(frame.index) });
+    const worker = workers[0];
+    const { jobId } = worker.sent[0].message;
+    const frame = (/** @type {number} */ index) => ({
+      type: 'FRAME',
+      jobId,
+      index,
+      width: 4,
+      height: 2,
+      data: new ArrayBuffer(12),
+    });
+    worker.reply(frame(0));
+    expect(seen).toEqual([0]);
+    worker.reply(frame(1));
+    worker.reply({ type: 'DONE', jobId, engine: 'webgpu' });
+    expect((await job).converted).toHaveLength(2);
+    expect(seen).toEqual([0, 1]);
+  });
+
+  it('gives back the sources the worker could not convert, and stops using it', async () => {
+    const { convertToI420, isCpuFrameConversionAvailable } = await load();
     const input = items(3);
-    const job = convertBitmapsToI420(input);
+    const job = convertToI420(input);
     const worker = workers[0];
     const { jobId } = worker.sent[0].message;
     worker.reply({
@@ -109,23 +133,23 @@ describe('convertBitmapsToI420', () => {
     });
     const back = [1, 2].map((index) => ({
       index,
-      bitmap: { width: 4, height: 2, close: vi.fn() },
+      source: { width: 4, height: 2, close: vi.fn() },
     }));
     worker.reply({ type: 'FAILED', jobId, error: 'context lost', rest: back });
 
     const result = await job;
     expect(result.converted.map((c) => c.index)).toEqual([0]);
-    expect(result.rest.map((r) => [r.index, r.item.id, r.item.bitmap])).toEqual([
-      [1, 'f1', back[0].bitmap],
-      [2, 'f2', back[1].bitmap],
+    expect(result.rest.map((r) => [r.index, r.item.id, r.item.source])).toEqual([
+      [1, 'f1', back[0].source],
+      [2, 'f2', back[1].source],
     ]);
     expect(worker.terminated).toBe(true);
     expect(isCpuFrameConversionAvailable()).toBe(false);
   });
 
   it('settles with what was converted when the worker dies', async () => {
-    const { convertBitmapsToI420, isCpuFrameConversionAvailable } = await load();
-    const job = convertBitmapsToI420(items(2));
+    const { convertToI420, isCpuFrameConversionAvailable } = await load();
+    const job = convertToI420(items(2));
     const worker = workers[0];
     const { jobId } = worker.sent[0].message;
     worker.reply({
@@ -147,22 +171,22 @@ describe('convertBitmapsToI420', () => {
 
   it('converts nothing without workers or OffscreenCanvas', async () => {
     vi.stubGlobal('OffscreenCanvas', undefined);
-    const { convertBitmapsToI420, isCpuFrameConversionAvailable } = await load();
+    const { convertToI420, isCpuFrameConversionAvailable } = await load();
     expect(isCpuFrameConversionAvailable()).toBe(false);
     const input = items(2);
-    const result = await convertBitmapsToI420(input);
+    const result = await convertToI420(input);
     expect(workers).toHaveLength(0);
     expect(result.converted).toEqual([]);
     expect(result.rest.map((r) => r.item)).toEqual(input);
   });
 
   it('warms the worker up ahead of the first clip, once', async () => {
-    const { warmI420Converter, convertBitmapsToI420 } = await load();
+    const { warmI420Converter, convertToI420 } = await load();
     warmI420Converter();
     warmI420Converter();
     expect(workers).toHaveLength(1);
     expect(workers[0].sent.map((s) => s.message.type)).toEqual(['WARM']);
-    void convertBitmapsToI420(items(1));
+    void convertToI420(items(1));
     expect(workers).toHaveLength(1);
   });
 
@@ -174,9 +198,9 @@ describe('convertBitmapsToI420', () => {
   });
 
   it('keeps one worker across jobs', async () => {
-    const { convertBitmapsToI420 } = await load();
+    const { convertToI420 } = await load();
     for (let round = 0; round < 2; round++) {
-      const job = convertBitmapsToI420(items(1));
+      const job = convertToI420(items(1));
       const worker = workers[0];
       const { jobId } = worker.sent[worker.sent.length - 1].message;
       worker.reply({

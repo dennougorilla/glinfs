@@ -9,6 +9,7 @@ import {
   getClipQueueLimit,
   getScreenCaptureState,
   hasActiveScreenCapture,
+  isClipCompressionAvailable,
   setClipPayload,
   setScreenCaptureState,
 } from '../../shared/app-store.js';
@@ -20,10 +21,11 @@ import { qsRequired } from '../../shared/utils/dom.js';
 import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
-import { convertBitmapsToI420, warmI420Converter } from '../../workers/i420-converter.js';
+import { convertToI420, warmI420Converter } from '../../workers/i420-converter.js';
 import { formatImportBusyLabel } from '../import/core.js';
 import { importFile, isImporting, reportImportBusy } from '../import/index.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
+import { convertOpenClipFrames, countAsCpuCopies } from './clip-frames-i420.js';
 // Circular with clip-service (it imports getLiveCaptureContext from here);
 // safe because both sides only call the other's hoisted function declarations
 // at event time, never during module evaluation.
@@ -676,10 +678,27 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
 }
 
 /**
+ * The frames of a Clip Now snapshot, which goes to the queue. When the
+ * queue compresses it, its frames end in the encode within seconds, so
+ * they are made the quick way (GPU RGBA, as before D3): a CPU copy first
+ * cost 0.8-1.2 s at 1080p on win-r9. A snapshot that stays raw is copied to
+ * CPU I420 (convertBitmapFramesToClipFrames).
+ *
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
+ * @returns {Promise<import('./types.js').Frame[]>}
+ */
+export async function makeQueuedClipFrames(imageBitmapFrames) {
+  if (isClipCompressionAvailable()) return convertBitmapFramesToVideoFrames(imageBitmapFrames);
+  return convertBitmapFramesToClipFrames(imageBitmapFrames);
+}
+
+/**
  * Turn the transferred capture bitmaps into the clip's frames: CPU I420
  * VideoFrames (1.5 B/px, off the GPU, like a clip opened from the queue)
- * through the converter worker (D3's cheap half). Frames the worker could
- * not convert are made the old way (GPU RGBA, convertBitmapFramesToVideoFrames).
+ * through the converter worker (D3's cheap half), waiting for every copy.
+ * Frames the worker could not convert are made the old way (GPU RGBA,
+ * convertBitmapFramesToVideoFrames). The open clip does not wait: see
+ * clip-frames-i420.js.
  *
  * Like the old route, only the newest source's frames make the clip, and
  * every bitmap is closed: by the worker once converted, here otherwise.
@@ -699,7 +718,9 @@ export async function convertBitmapFramesToClipFrames(imageBitmapFrames) {
     }
   }
 
-  const { converted, rest, lost } = await convertBitmapsToI420(usable);
+  const { converted, rest, lost } = await convertToI420(
+    usable.map(({ id, timestamp, bitmap }) => ({ id, timestamp, source: bitmap })),
+  );
   if (lost > 0) console.warn(`[Capture] ${lost} frames were lost converting the clip`);
 
   /** @type {Array<{ index: number, frame: import('./types.js').Frame }>} */
@@ -731,7 +752,9 @@ export async function convertBitmapFramesToClipFrames(imageBitmapFrames) {
       },
     });
   }
-  const fallback = convertBitmapFramesToVideoFrames(rest.map(({ item }) => item));
+  const fallback = convertBitmapFramesToVideoFrames(
+    rest.map(({ item }) => ({ id: item.id, timestamp: item.timestamp, bitmap: item.source })),
+  );
   const fallbackIds = new Map(rest.map(({ index, item }) => [item.id, index]));
   for (const frame of fallback) {
     ordered.push({ index: fallbackIds.get(frame.id) ?? Number.MAX_SAFE_INTEGER, frame });
@@ -826,8 +849,9 @@ async function handleCreateClip() {
     return false;
   }
 
-  // The clip's frames: CPU I420 where the converter worker runs (D3)
-  const videoFrames = await convertBitmapFramesToClipFrames(imageBitmapFrames);
+  // GPU RGBA first, so the editor opens at once; they move to CPU I420 in
+  // the background once the clip is open (D3, clip-frames-i420.js)
+  const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
     return false;
@@ -842,6 +866,9 @@ async function handleCreateClip() {
     queueSnapshot(videoFrames, { fps: settings.fps, sceneDetection: settings.sceneDetection });
     return false;
   }
+
+  // Counted as the CPU copies they become, as the early check assumed
+  countAsCpuCopies(videoFrames);
 
   // Remove the oldest queued clips this clip needs room from (setting on).
   // Refused when even removing all of them would not make room for the
@@ -884,6 +911,9 @@ async function handleCreateClip() {
     announceQueueFull();
     return false;
   }
+
+  // Off the GPU in the background, starting now (the editor calls it too)
+  void convertOpenClipFrames();
 
   emit('capture:clip-created', {
     frameCount: videoFrames.length,

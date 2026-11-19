@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
  */
 
 vi.mock('../../../src/workers/i420-converter.js', () => ({
-  convertBitmapsToI420: vi.fn(),
+  convertToI420: vi.fn(),
   isCpuFrameConversionAvailable: vi.fn(() => true),
   warmI420Converter: vi.fn(),
 }));

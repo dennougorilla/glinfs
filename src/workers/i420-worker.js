@@ -1,8 +1,9 @@
 /**
  * I420 converter worker (D3's cheap half)
  *
- * Turns capture ImageBitmaps (RGBA, on the GPU) into CPU I420 bytes for the
- * clip's VideoFrames: 1.5 B/px instead of 4. Three engines give the same
+ * Turns RGBA frames on the GPU (the open clip's VideoFrames, or capture
+ * ImageBitmaps) into CPU I420 bytes for the clip's VideoFrames: 1.5 B/px
+ * instead of 4. Three engines give the same
  * bytes as the CPU reference (shared/i420.js), tried in this order:
  * - WebGPU: a compute pass writes the frame's I420 bytes (Y, then U, then V)
  *   into a buffer, mapped a few frames behind (1080p: ~1.4 ms a frame);
@@ -12,23 +13,36 @@
  * - the CPU reference, where neither runs.
  *
  * Messages:
- * - in  CONVERT { jobId, frames: [{ id, timestamp, bitmap }], engines? } (bitmaps
- *       transferred; `engines` limits and orders the engines, for tests)
+ * - in  CONVERT { jobId, frames: [{ id, timestamp, source }], engines? } (sources,
+ *       VideoFrames or ImageBitmaps, transferred; `engines` limits and orders
+ *       the engines, for tests)
  * - out FRAME { jobId, index, id, timestamp, width, height, data } (data transferred),
  *       once per frame, in order
  * - out DONE { jobId, engine: 'webgpu' | 'webgl2' | 'js' }
  * - in  WARM: get the GPU device and the shader ready before the first clip
- * - out FAILED { jobId, error, rest: [{ index, bitmap }] }: the frames not
- *       converted go back (bitmaps transferred) for the old route
+ * - out FAILED { jobId, error, rest: [{ index, source }] }: the frames not
+ *       converted go back (sources transferred)
  *
- * Every bitmap is closed as soon as its pixels are on the GPU (WebGL) or
- * read (CPU), so the RGBA copy of a frame is released while the rest of the
- * clip converts.
+ * Every source is closed as soon as its pixels are on the GPU (WebGL) or
+ * read (CPU), so its RGBA copy is released while the rest of the clip
+ * converts.
  *
  * @module workers/i420-worker
  */
 
 import { i420Layout, rgbaToI420 } from '../shared/i420.js';
+
+/** @typedef {ImageBitmap | VideoFrame} FrameSource */
+
+/**
+ * A source's pixel size (0 x 0 once closed)
+ * @param {FrameSource} source
+ * @returns {{ width: number, height: number }}
+ */
+function sizeOf(source) {
+  if ('displayWidth' in source) return { width: source.displayWidth, height: source.displayHeight };
+  return { width: source.width, height: source.height };
+}
 
 /** Frames converted ahead of the oldest read */
 const PIPELINE_DEPTH = 8;
@@ -109,8 +123,8 @@ void main() {
 /**
  * @typedef {Object} Converter
  * @property {Engine} engine
- * @property {(items: Array<{ bitmap: ImageBitmap }>, onFrame: (index: number, data: ArrayBuffer) => void) => Promise<void>} convertAll
- *   - Closes each bitmap once its pixels are taken
+ * @property {(items: Array<{ source: FrameSource }>, onFrame: (index: number, data: ArrayBuffer) => void) => Promise<void>} convertAll
+ *   - Closes each source once its pixels are taken
  * @property {() => void} release - Free the size-dependent GPU memory
  */
 
@@ -237,10 +251,10 @@ async function createWebGpuConverter(width, height) {
       };
       for (let index = 0; index < items.length; index++) {
         if (inflight.length === PIPELINE_DEPTH) await readOldest();
-        const { bitmap } = items[index];
-        device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [width, height]);
-        // The copy took the pixels: release the RGBA bitmap
-        bitmap.close();
+        const { source } = items[index];
+        device.queue.copyExternalImageToTexture({ source }, { texture }, [width, height]);
+        // The copy took the pixels: release the RGBA source
+        source.close();
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginComputePass();
         pass.setPipeline(pipeline);
@@ -384,10 +398,10 @@ function createGlConverter(width, height) {
       for (let index = 0; index < items.length; index++) {
         if (inflight.length === PIPELINE_DEPTH) await readOldest();
         if (gl.isContextLost()) throw new Error('WebGL context lost');
-        const { bitmap } = items[index];
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-        // The texture holds the pixels now: release the RGBA bitmap
-        bitmap.close();
+        const { source } = items[index];
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        // The texture holds the pixels now: release the RGBA source
+        source.close();
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         const buffer = packBuffers[index % PIPELINE_DEPTH];
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
@@ -417,12 +431,12 @@ function createGlConverter(width, height) {
 let readContext = null;
 
 /**
- * CPU route: read the bitmap's pixels and convert them in JS
- * @param {ImageBitmap} bitmap
+ * CPU route: read the source's pixels and convert them in JS
+ * @param {FrameSource} source
  * @returns {ArrayBuffer}
  */
-function convertOnCpu(bitmap) {
-  const { width, height } = bitmap;
+function convertOnCpu(source) {
+  const { width, height } = sizeOf(source);
   if (!readContext) {
     readContext = /** @type {OffscreenCanvasRenderingContext2D} */ (
       new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true })
@@ -433,8 +447,8 @@ function convertOnCpu(bitmap) {
     canvas.width = width;
     canvas.height = height;
   }
-  readContext.drawImage(bitmap, 0, 0);
-  bitmap.close();
+  readContext.drawImage(source, 0, 0);
+  source.close();
   const { data } = readContext.getImageData(0, 0, width, height);
   return rgbaToI420(data, width, height).buffer;
 }
@@ -444,7 +458,7 @@ const cpuConverter = {
   engine: 'js',
   async convertAll(items, onFrame) {
     for (let index = 0; index < items.length; index++) {
-      onFrame(index, convertOnCpu(items[index].bitmap));
+      onFrame(index, convertOnCpu(items[index].source));
     }
   },
   release() {},
@@ -475,7 +489,7 @@ async function createConverter(engines, width, height) {
 }
 
 /**
- * @param {{ jobId: number, engines?: Engine[], frames: Array<{ id: string, timestamp: number, bitmap: ImageBitmap, width?: number, height?: number }> }} payload
+ * @param {{ jobId: number, engines?: Engine[], frames: Array<{ id: string, timestamp: number, source: FrameSource, width?: number, height?: number }> }} payload
  */
 async function convert({ jobId, frames, engines = ENGINES }) {
   let next = 0;
@@ -497,10 +511,8 @@ async function convert({ jobId, frames, engines = ENGINES }) {
     );
     next = index + 1;
   };
-  // Remember the sizes: a closed bitmap reports 0 x 0
-  for (const frame of frames) {
-    Object.assign(frame, { width: frame.bitmap.width, height: frame.bitmap.height });
-  }
+  // Remember the sizes: a closed source reports 0 x 0
+  for (const frame of frames) Object.assign(frame, sizeOf(frame.source));
 
   try {
     const first = frames[0];
@@ -515,14 +527,14 @@ async function convert({ jobId, frames, engines = ENGINES }) {
     const engine = converter.engine;
     self.postMessage({ type: 'DONE', jobId, engine });
   } catch (err) {
-    // The frames not sent yet: those still holding their bitmap go back for
-    // the old route; a bitmap already on the GPU was closed and is lost
+    // The frames not sent yet: those whose source is still open go back; a
+    // source already on the GPU was closed and is lost
     const rest = frames
-      .map((frame, index) => ({ index, bitmap: frame.bitmap }))
-      .filter(({ index, bitmap }) => index >= next && bitmap.width > 0);
+      .map((frame, index) => ({ index, source: frame.source }))
+      .filter(({ index, source }) => index >= next && sizeOf(source).width > 0);
     self.postMessage(
       { type: 'FAILED', jobId, error: String(err), rest },
-      rest.map(({ bitmap }) => bitmap),
+      rest.map(({ source }) => source),
     );
   }
 }

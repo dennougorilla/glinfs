@@ -17,7 +17,7 @@ const captureContext = vi.hoisted(() => ({ current: /** @type {any} */ (null) })
 vi.mock('../../../src/features/capture/index.js', () => ({
   getLiveCaptureContext: vi.fn(() => captureContext.current),
   // Pass-through conversion: each "bitmap" item becomes a mock Frame
-  convertBitmapFramesToClipFrames: vi.fn((items) =>
+  makeQueuedClipFrames: vi.fn((items) =>
     items.map((_item, i) => ({
       id: String(i),
       frame: { close: vi.fn(), closed: false },
@@ -44,8 +44,8 @@ import {
   registerClipNowHotkey,
 } from '../../../src/features/capture/clip-service.js';
 import {
-  convertBitmapFramesToClipFrames,
   getLiveCaptureContext,
+  makeQueuedClipFrames,
 } from '../../../src/features/capture/index.js';
 import {
   enqueueClip,
@@ -88,7 +88,7 @@ beforeEach(() => {
   cpuFrames.available = false;
   // Drop one-shot implementations a refused test never consumed, so they
   // cannot leak into the next test (restores the pass-through conversion)
-  vi.mocked(convertBitmapFramesToClipFrames).mockReset();
+  vi.mocked(makeQueuedClipFrames).mockReset();
 });
 
 afterEach(() => {
@@ -167,7 +167,7 @@ describe('clipNow', () => {
 
     expect(result).toEqual({ ok: false, reason: 'queue-full' });
     // The refused frames (returned by the conversion mock) were closed
-    const converted = vi.mocked(convertBitmapFramesToClipFrames).mock.results[0].value;
+    const converted = vi.mocked(makeQueuedClipFrames).mock.results[0].value;
     for (const frame of converted) {
       expect(frame.frame.close).toHaveBeenCalledOnce();
     }
@@ -296,9 +296,7 @@ describe('automatic removal of the oldest clips (#186)', () => {
       sceneDetection: false,
       stats: { frameCount, fps: 30 },
     };
-    vi.mocked(convertBitmapFramesToClipFrames).mockImplementationOnce(() =>
-      createSizedFrames(realCount, 1),
-    );
+    vi.mocked(makeQueuedClipFrames).mockImplementationOnce(() => createSizedFrames(realCount, 1));
     return workerManager;
   }
 
@@ -473,7 +471,7 @@ describe('automatic removal of the oldest clips (#186)', () => {
     expect(budgetEvents.events).toHaveLength(1);
     expect(budgetEvents.events[0].incomingMB).toBeCloseTo(104, 0);
     // The refused snapshot never entered the store: its frames were closed
-    const refused = vi.mocked(convertBitmapFramesToClipFrames).mock.results[0].value;
+    const refused = vi.mocked(makeQueuedClipFrames).mock.results[0].value;
     expect(refused).toHaveLength(104);
     for (const frame of refused) expect(frame.frame.close).toHaveBeenCalledOnce();
     removedEvents.off();
@@ -531,9 +529,7 @@ describe('the budget counts what is held (memory accounting PR A)', () => {
       sceneDetection: false,
       stats: { frameCount: BUFFER_FRAMES, fps: 30 },
     };
-    vi.mocked(convertBitmapFramesToClipFrames).mockImplementationOnce(() =>
-      frames1080(BUFFER_FRAMES, 'snap'),
-    );
+    vi.mocked(makeQueuedClipFrames).mockImplementationOnce(() => frames1080(BUFFER_FRAMES, 'snap'));
     return workerManager;
   }
 

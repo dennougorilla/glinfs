@@ -32,7 +32,7 @@ import {
   formatMemory,
 } from '../../shared/utils/memory-monitor.js';
 import { isCpuFrameConversionAvailable } from '../../workers/i420-converter.js';
-import { convertBitmapFramesToClipFrames, getLiveCaptureContext } from './index.js';
+import { getLiveCaptureContext, makeQueuedClipFrames } from './index.js';
 
 /**
  * @typedef {Object} ClipNowResult
@@ -385,7 +385,8 @@ export async function clipNow() {
     return { ok: false, reason: 'no-frames' };
   }
 
-  const videoFrames = await convertBitmapFramesToClipFrames(imageBitmapFrames);
+  // GPU RGBA when the queue compresses it, CPU I420 when it stays raw (D3)
+  const videoFrames = await makeQueuedClipFrames(imageBitmapFrames);
   if (videoFrames.length === 0) {
     return { ok: false, reason: 'no-frames' };
   }

@@ -1,14 +1,15 @@
 /**
  * Main-thread client of the I420 converter worker (D3's cheap half)
  *
- * Create Clip and Clip Now hand the capture bitmaps to the worker and get
- * CPU I420 bytes back, one frame at a time. The worker is made on first use
+ * The open clip's GPU RGBA frames (clones of them) go to the worker, and
+ * CPU I420 bytes come back one frame at a time (see
+ * features/capture/clip-frames-i420.js). The worker is made on first use
  * and kept: it holds a small WebGL2 context between clips and frees the
  * per-size buffers after each one.
  *
  * When the worker cannot run (no Worker / OffscreenCanvas), fails, or dies,
- * the frames it did not convert are returned for the old RGBA route and the
- * worker is not used again in this session.
+ * the frames it did not convert are returned (their sources still open) and
+ * the worker is not used again in this session.
  *
  * @module workers/i420-converter
  */
@@ -27,7 +28,7 @@
  * @typedef {Object} ConversionResult
  * @property {ConvertedFrame[]} converted - In input order
  * @property {Array<{ index: number, item: any }>} rest - Input items not
- *   converted, still holding a bitmap (the caller's again)
+ *   converted, still holding an open source (the caller's again)
  * @property {number} lost - Frames neither converted nor returned (the
  *   worker died holding them)
  * @property {'webgpu' | 'webgl2' | 'js' | null} engine
@@ -39,7 +40,7 @@ let failed = false;
 let nextJobId = 1;
 
 /**
- * @type {Map<number, { items: any[], converted: ConvertedFrame[], settle: (result: ConversionResult) => void }>}
+ * @type {Map<number, { items: any[], converted: ConvertedFrame[], onFrame?: (frame: ConvertedFrame) => void, settle: (result: ConversionResult) => void }>}
  */
 const jobs = new Map();
 
@@ -96,14 +97,17 @@ function getWorker() {
     if (!job) return;
     if (message.type === 'FRAME') {
       const item = job.items[message.index];
-      job.converted.push({
+      /** @type {ConvertedFrame} */
+      const frame = {
         index: message.index,
         id: item.id,
         timestamp: item.timestamp,
         width: message.width,
         height: message.height,
         data: message.data,
-      });
+      };
+      job.converted.push(frame);
+      job.onFrame?.(frame);
     } else if (message.type === 'DONE') {
       jobs.delete(message.jobId);
       job.settle({
@@ -116,9 +120,9 @@ function getWorker() {
       console.warn('[i420-converter] Conversion failed:', message.error);
       jobs.delete(message.jobId);
       const rest = (message.rest ?? []).map(
-        (/** @type {{ index: number, bitmap: ImageBitmap }} */ back) => ({
+        (/** @type {{ index: number, source: ImageBitmap | VideoFrame }} */ back) => ({
           index: back.index,
-          item: { ...job.items[back.index], bitmap: back.bitmap },
+          item: { ...job.items[back.index], source: back.source },
         }),
       );
       job.settle({
@@ -133,7 +137,7 @@ function getWorker() {
   };
   worker.onerror = (event) => {
     console.error('[i420-converter] Worker error:', event.message);
-    // The bitmaps the worker held are gone with it
+    // The sources the worker held are gone with it
     giveUp(() => []);
   };
   return worker;
@@ -149,15 +153,16 @@ export function warmI420Converter() {
 }
 
 /**
- * Convert capture frames to CPU I420. The bitmaps belong to the worker once
- * sent; those in `rest` are the caller's again.
- * @param {Array<{ id: string, timestamp: number, bitmap: ImageBitmap }>} items
+ * Convert RGBA frames to CPU I420. The sources belong to the worker once
+ * sent (it closes them); those in `rest` are the caller's again.
+ * @param {Array<{ id: string, timestamp: number, source: ImageBitmap | VideoFrame }>} items
  *   - One frame size
- * @param {{ engines?: Array<'webgpu' | 'webgl2' | 'js'> }} [options] - `engines`
- *   limits and orders the worker's engines (tests)
+ * @param {{ engines?: Array<'webgpu' | 'webgl2' | 'js'>, onFrame?: (frame: ConvertedFrame) => void }} [options]
+ *   - `engines` limits and orders the worker's engines (tests); `onFrame`
+ *   is called with each frame as it arrives (the result lists them too)
  * @returns {Promise<ConversionResult>}
  */
-export function convertBitmapsToI420(items, { engines } = {}) {
+export function convertToI420(items, { engines, onFrame } = {}) {
   const target = isCpuFrameConversionAvailable() && items.length > 0 ? getWorker() : null;
   if (!target) {
     return Promise.resolve({
@@ -169,15 +174,15 @@ export function convertBitmapsToI420(items, { engines } = {}) {
   }
   const jobId = nextJobId++;
   return new Promise((settle) => {
-    jobs.set(jobId, { items, converted: [], settle });
+    jobs.set(jobId, { items, converted: [], onFrame, settle });
     target.postMessage(
       {
         type: 'CONVERT',
         jobId,
         ...(engines ? { engines } : {}),
-        frames: items.map(({ id, timestamp, bitmap }) => ({ id, timestamp, bitmap })),
+        frames: items.map(({ id, timestamp, source }) => ({ id, timestamp, source })),
       },
-      items.map((item) => item.bitmap),
+      items.map((item) => item.source),
     );
   });
 }
