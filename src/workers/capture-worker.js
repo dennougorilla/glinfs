@@ -59,6 +59,9 @@ self.onmessage = (e) => {
   switch (type) {
     case 'START':
       fps = payload.fps;
+      // Frames kept from before a pause may be of another size (the window
+      // changed meanwhile): they go, as on RESIZE (#231 review)
+      dropFramesNotSized(payload.width, payload.height);
       resizeBuffer(payload.maxFrames);
       startCapture();
       break;
