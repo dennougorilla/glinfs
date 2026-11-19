@@ -9,17 +9,21 @@ import {
   registerMemoryHolder,
   resetAppStore,
   setClipPayload,
-  undoDelete,
 } from '../../../src/shared/app-store.js';
 import { BYTES_PER_MB } from '../../../src/shared/utils/memory-monitor.js';
 
 /**
- * Review of #230, P1: deleting the open clip keeps the editor on screen
- * while the compressed successor opens. At the default 4 GB budget a full
- * capture buffer plus the deleted clip's Undo hold leave no room for the
- * successor, so its open is refused. The editor must not stay on the
- * deleted clip (its frames close when the hold ends): it shows the opening
- * state and opens the successor once the hold ends.
+ * Deleting the open clip hands the editor to the newest queued clip.
+ *
+ * Review of #230, round 2, item 2: at the defaults (30 fps, 15 s, 4000 MB)
+ * a full 1080p buffer (~2397 MB) plus the deleted clip in its Undo hold
+ * (~2397 MB) left no room for any decoded successor, so every delete waited
+ * 5 s on "Opening clip...". The hold goes when its 5 s end (or the next
+ * deletion replaces it), so the successor's check leaves it out.
+ *
+ * Item 1: an opening screen mounted by the editor itself (after a failed
+ * succession) must not outlive the route: leaving to Capture and then the
+ * clip arriving must not mount the editor over Capture.
  */
 
 const W = 1920;
@@ -81,7 +85,7 @@ function pressDelete() {
   );
 }
 
-describe('deleting the open clip when the successor does not fit yet (#230 review P1)', () => {
+describe('deleting the open clip opens the next one (#230 review)', () => {
   /** @type {(() => void) | null} */
   let cleanup = null;
   let offBuffer = () => {};
@@ -92,6 +96,7 @@ describe('deleting the open clip when the successor does not fit yet (#230 revie
     localStorage.clear();
     window.__TEST_HOOKS__ = /** @type {any} */ ({});
     document.body.innerHTML = '<div id="main-content"></div>';
+    window.location.hash = '#/editor';
     // A full 1080p capture buffer at the defaults: 60 % of 4000 MB
     offBuffer = registerMemoryHolder(RING_BUFFER_HOLDER, () => 2400);
   });
@@ -107,11 +112,10 @@ describe('deleting the open clip when the successor does not fit yet (#230 revie
     vi.useRealTimers();
   });
 
-  it('leaves the deleted clip, then opens the successor when the Undo hold ends', async () => {
-    const codec = createMockCodec();
-    registerClipCodec(codec);
-    enqueueClip({ frames: rgbaFrames(150, 'b'), fps: 30, capturedAt: 1000 });
-    codec.encodeCalls[0].resolve({
+  /** A compressed queued clip of `count` 1080p frames */
+  async function compressedSuccessor(codec, count) {
+    enqueueClip({ frames: rgbaFrames(count, 'b'), fps: 30, capturedAt: 1000 });
+    codec.encodeCalls.at(-1).resolve({
       ok: true,
       chunks: [],
       config: { codec: 'vp8', codedWidth: W, codedHeight: H },
@@ -120,71 +124,80 @@ describe('deleting the open clip when the successor does not fit yet (#230 revie
     await vi.advanceTimersByTimeAsync(0);
     const [successor] = getClipQueue();
     expect(successor.status).toBe('compressed');
+    return successor;
+  }
 
-    const deletedFrames = rgbaFrames(150, 'a');
-    setClipPayload({ frames: deletedFrames, fps: 30, capturedAt: 2000 });
+  it('opens the successor at once, the Undo hold left out of the check (round 2, item 2)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const successor = await compressedSuccessor(codec, 300);
+    // The default 15 s clip: 289 frames of 1080p RGBA, ~2397 MB
+    setClipPayload({ frames: rgbaFrames(289, 'a'), fps: 30, capturedAt: 2000 });
     cleanup = initEditor();
-    const deletedId = getClipPayload()?.id;
 
-    // Held then: buffer 2400 + the deleted clip in its Undo hold (~1244)
-    // + the successor decoded (~467) > 4000: the open is refused
+    // Buffer 2400 + successor decoded ~933 fits 4000; with the hold
+    // (~2397) it would not
     pressDelete();
     await vi.advanceTimersByTimeAsync(0);
-    expect(codec.decode).not.toHaveBeenCalled();
-
-    // The editor does not stay on the deleted clip
-    expect(document.querySelector('.editor-clip-opening')).not.toBeNull();
-    expect(document.querySelector('.editor-canvas')).toBeNull();
-    expect(getClipPayload()?.id).not.toBe(deletedId);
-
-    // The hold ends: its memory is free and the successor opens
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(deletedFrames[0].frame.closed).toBe(true);
     expect(codec.decode).toHaveBeenCalledOnce();
-    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(150) });
+    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(300) });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(getClipPayload()?.id).toBe(successor.id);
     expect(document.querySelector('.editor-clip-opening')).toBeNull();
   });
 
-  it('gives the deleted clip back on Undo while the successor waits', async () => {
+  it('still refuses a successor that does not fit without the hold, and leaves the deleted clip', async () => {
     const codec = createMockCodec();
     registerClipCodec(codec);
-    enqueueClip({ frames: rgbaFrames(150, 'b'), fps: 30, capturedAt: 1000 });
-    codec.encodeCalls[0].resolve({
-      ok: true,
-      chunks: [],
-      config: { codec: 'vp8', codedWidth: W, codedHeight: H },
-      byteLength: 10 * BYTES_PER_MB,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
+    await compressedSuccessor(codec, 300);
+    offBuffer();
+    offBuffer = registerMemoryHolder(RING_BUFFER_HOLDER, () => 3500);
     setClipPayload({ frames: rgbaFrames(150, 'a'), fps: 30, capturedAt: 2000 });
     cleanup = initEditor();
     const deletedId = getClipPayload()?.id;
+
+    // Buffer 3500 + successor ~933 > 4000 whatever the hold
     pressDelete();
     await vi.advanceTimersByTimeAsync(0);
+
+    // The deleted clip is not kept as the open clip; Capture is next
+    expect(codec.decode).not.toHaveBeenCalled();
+    expect(getClipPayload()?.id).not.toBe(deletedId);
+    expect(window.location.hash).toBe('#/capture');
+  });
+
+  it('an opening screen the editor mounted itself goes with the route (round 2, item 1)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const successor = await compressedSuccessor(codec, 150);
+    // Room for everything, the hold included: only the cleanup is tested
+    offBuffer();
+    offBuffer = registerMemoryHolder(RING_BUFFER_HOLDER, () => 1000);
+    setClipPayload({ frames: rgbaFrames(150, 'a'), fps: 30, capturedAt: 2000 });
+    cleanup = initEditor();
+
+    // The successor's decode fails: the editor mounts again on the queue,
+    // which shows the opening screen and tries the successor again
+    pressDelete();
+    await vi.advanceTimersByTimeAsync(0);
+    codec.decodeCalls[0].resolve({ ok: false, error: 'boom' });
+    await vi.advanceTimersByTimeAsync(0);
     expect(document.querySelector('.editor-clip-opening')).not.toBeNull();
+    expect(codec.decode).toHaveBeenCalledTimes(2);
 
-    // The toast's Undo (its root does not survive the DOM reset between tests)
-    expect(undoDelete()).toBe(true);
-    await vi.advanceTimersByTimeAsync(0);
+    // The user goes to Capture: the router runs the first mount's cleanup
+    cleanup?.();
+    cleanup = null;
+    const main = /** @type {HTMLElement} */ (document.querySelector('#main-content'));
+    main.innerHTML = '<p id="capture-screen">capture</p>';
 
-    // Undo puts the clip back at the queue front, where it compresses like
-    // any demoted clip; the editor opens it, not the successor
-    expect(getClipQueue()[0].id).toBe(deletedId);
-    codec.encodeCalls[1].resolve({
-      ok: true,
-      chunks: [],
-      config: { codec: 'vp8', codedWidth: W, codedHeight: H },
-      byteLength: 10 * BYTES_PER_MB,
-    });
+    // The retried decode lands later: nothing mounts over Capture
+    codec.decodeCalls[1].resolve({ ok: true, frames: decodedFrames(150) });
     await vi.advanceTimersByTimeAsync(0);
-    expect(codec.decode).toHaveBeenCalledOnce();
-    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(150) });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(getClipPayload()?.id).toBe(deletedId);
-    expect(document.querySelector('.editor-clip-opening')).toBeNull();
+    expect(document.querySelector('#capture-screen')).not.toBeNull();
+    expect(document.querySelector('.editor-screen')).toBeNull();
+    // The clip still opens (the next editor mount shows it)
+    expect(getClipPayload()?.id).toBe(successor.id);
   });
 });
