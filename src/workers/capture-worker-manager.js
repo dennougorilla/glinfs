@@ -135,10 +135,12 @@ export class CaptureWorkerManager {
     }
 
     this.#isRunning = true;
-    this.#capacitySize = sizeKey(this.getEffectiveFrameDimensions());
+    const dims = this.getEffectiveFrameDimensions();
+    this.#capacitySize = sizeKey(dims);
     this.#worker?.postMessage({
       type: 'START',
-      payload: { fps, maxFrames },
+      // The frame size the capacity is for: kept frames of another size go
+      payload: { fps, maxFrames, ...(dims ? { width: dims.width, height: dims.height } : {}) },
     });
   }
 

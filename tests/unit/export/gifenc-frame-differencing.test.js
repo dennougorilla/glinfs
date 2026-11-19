@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
  * and a frame is only differenced where that is smaller.
  */
 
-import { applyPalette, GIFEncoder, quantize } from 'gifenc';
+import { GIFEncoder, quantize } from 'gifenc';
 import {
   createGifencEncoder,
   differenceFrame,
@@ -356,6 +356,31 @@ function frameBytes(bytes) {
  * @param {number} maxColors
  */
 function oracle(frames, width, height, maxColors) {
+  // The encoder's stable lookup, written out: a pixel takes the palette
+  // color nearest its own color among those in its 5-bit key's range, else
+  // the one nearest the key's centre (the last of equally near wins)
+  const applyPalette = (
+    /** @type {Uint8ClampedArray} */ rgba,
+    /** @type {number[][]} */ palette,
+  ) => {
+    const cell = (/** @type {number[]} */ c) => c.map((v) => v >> 3).join(',');
+    const index = new Uint8Array(rgba.length / 4);
+    for (let p = 0; p < index.length; p++) {
+      const own = [0, 1, 2].map((c) => rgba[p * 4 + c]);
+      const inCell = palette.some((c) => cell(c) === cell(own));
+      const [r, g, b] = inCell ? own : own.map((v) => (v & 0xf8) | 4);
+      let min = Number.POSITIVE_INFINITY;
+      palette.forEach(([pr, pg, pb], j) => {
+        if (inCell && cell([pr, pg, pb]) !== cell(own)) return;
+        const d = (pr - r) ** 2 + (pg - g) ** 2 + (pb - b) ** 2;
+        if (d <= min) {
+          min = d;
+          index[p] = j;
+        }
+      });
+    }
+    return index;
+  };
   const scratch = GIFEncoder({ auto: false });
   const size = (/** @type {Uint8Array} */ index, /** @type {any} */ opts) => {
     scratch.reset();
@@ -367,7 +392,7 @@ function oracle(frames, width, height, maxColors) {
   let previous = null;
   return frames.map((rgba) => {
     const palette = quantize(rgba, maxColors, { format: 'rgb565' });
-    const index = applyPalette(rgba, palette, 'rgb565');
+    const index = applyPalette(rgba, palette);
     const colors = palette.map(([r, g, b]) => (r << 16) | (g << 8) | b);
     const shows = Int32Array.from(index, (i) => colors[i]);
     const opts = { palette, delay: 100, repeat: 0, dispose: 1 };
