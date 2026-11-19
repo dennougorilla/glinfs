@@ -84,4 +84,73 @@ describe('applyPaletteFast', () => {
       expect(c[1]).not.toBe(d[1]);
     },
   );
+
+  describe('stable: an exact palette color is never lost (#226 review)', () => {
+    const stable = { stable: true };
+    const rgba = (colors) => Uint8ClampedArray.from(colors.flatMap((c) => [...c, 255]));
+
+    it('rgb444: black and white stay black and white next to colors nearer the key centre', () => {
+      // (18,12,10) is nearer the centre of black's 4-bit cell (8,8,8) than
+      // black is, and (250,250,239) nearer white's (248,248,248)
+      const palette = [
+        [0, 0, 0],
+        [18, 12, 10],
+        [255, 255, 255],
+        [250, 250, 239],
+      ];
+      const index = applyPaletteFast(
+        rgba([
+          [0, 0, 0],
+          [255, 255, 255],
+          [18, 12, 10],
+          [250, 250, 239],
+        ]),
+        palette,
+        'rgb444',
+        stable,
+      );
+      expect([...index]).toEqual([0, 2, 1, 3]);
+    });
+
+    it('rgb565: a palette color inside the same key wins for its own pixels', () => {
+      const palette = [
+        [0, 0, 0],
+        [6, 6, 6],
+      ];
+      const index = applyPaletteFast(rgba([[0, 0, 0]]), palette, 'rgb565', stable);
+      expect(index[0]).toBe(0);
+    });
+
+    it.each(['rgb565', 'rgb444'])(
+      '%s: every pixel with a palette color gets it, and a color always gets one index',
+      (format) => {
+        const r = rng(format.length * 31);
+        const palette = Array.from({ length: 64 }, () => [
+          (r() * 256) | 0,
+          (r() * 256) | 0,
+          (r() * 256) | 0,
+        ]);
+        // Palette colors, their near neighbours and random colors, shuffled twice
+        const colors = palette.flatMap((c) => [
+          c,
+          c.map((v) => Math.min(255, v + 1)),
+          [(r() * 256) | 0, (r() * 256) | 0, (r() * 256) | 0],
+        ]);
+        const shuffled = [...colors].sort(() => r() - 0.5);
+        const f = /** @type {any} */ (format);
+        const a = applyPaletteFast(rgba(colors), palette, f, stable);
+        const b = applyPaletteFast(rgba(shuffled), palette, f, stable);
+        const key = (c) => c.join(',');
+        const exact = new Set(palette.map(key));
+        const byColor = new Map();
+        colors.forEach((c, i) => {
+          if (exact.has(key(c))) expect(key(palette[a[i]])).toBe(key(c));
+          byColor.set(key(c), a[i]);
+        });
+        shuffled.forEach((c, i) => {
+          expect(b[i]).toBe(byColor.get(key(c)));
+        });
+      },
+    );
+  });
 });

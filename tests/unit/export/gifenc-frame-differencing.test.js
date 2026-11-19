@@ -356,17 +356,22 @@ function frameBytes(bytes) {
  * @param {number} maxColors
  */
 function oracle(frames, width, height, maxColors) {
-  // The encoder's stable lookup, written out: each pixel takes the palette
-  // color nearest its 5-bit key's centre (the last of equally near wins)
+  // The encoder's stable lookup, written out: a pixel takes the palette
+  // color nearest its own color among those in its 5-bit key's range, else
+  // the one nearest the key's centre (the last of equally near wins)
   const applyPalette = (
     /** @type {Uint8ClampedArray} */ rgba,
     /** @type {number[][]} */ palette,
   ) => {
+    const cell = (/** @type {number[]} */ c) => c.map((v) => v >> 3).join(',');
     const index = new Uint8Array(rgba.length / 4);
     for (let p = 0; p < index.length; p++) {
-      const [r, g, b] = [0, 1, 2].map((c) => (rgba[p * 4 + c] & 0xf8) | 4);
+      const own = [0, 1, 2].map((c) => rgba[p * 4 + c]);
+      const inCell = palette.some((c) => cell(c) === cell(own));
+      const [r, g, b] = inCell ? own : own.map((v) => (v & 0xf8) | 4);
       let min = Number.POSITIVE_INFINITY;
       palette.forEach(([pr, pg, pb], j) => {
+        if (inCell && cell([pr, pg, pb]) !== cell(own)) return;
         const d = (pr - r) ** 2 + (pg - g) ** 2 + (pb - b) ** 2;
         if (d <= min) {
           min = d;
