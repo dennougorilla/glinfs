@@ -14,6 +14,9 @@ import {
   promoteClipFromQueue,
 } from './features/editor/index.js';
 import { initLoading } from './features/loading/index.js';
+// Register the Settings → Methods switches before Settings can render
+import './features/export/method.js';
+import './features/scene-detection/method.js';
 import { initSettings } from './features/settings/index.js';
 import {
   deleteQueuedClip,
