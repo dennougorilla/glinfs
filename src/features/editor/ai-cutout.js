@@ -31,6 +31,7 @@ import {
   collectPendingFrames,
   getStaleObjectFrames,
   maskKey,
+  objectMaskGroup,
   objectMaskKey,
 } from '../ai-cutout/segmentation-manager.js';
 
@@ -146,6 +147,23 @@ export function getClipObjectSources(frames, ai, maskStore) {
  */
 export function isColourObject(object) {
   return object.scope === 'colour' && object.mode === 'remove';
+}
+
+/**
+ * Mask store groups the active clip reads now (see MaskStore.setActiveClip):
+ * its base model's and each tracked fix-up's. A Colour fix-up stores no
+ * masks, so it has none (a group for it would be budgeted at the base mask
+ * size and keep unrelated masks alive)
+ * @param {AiCutout} ai
+ * @returns {string[]}
+ */
+export function getActiveMaskGroups(ai) {
+  return [
+    getAiModelId(ai),
+    ...(ai.objects ?? [])
+      .filter((object) => !isColourObject(object))
+      .map((object) => objectMaskGroup(object.id)),
+  ];
 }
 
 /** Frames whose pixels stay read (a build reads each frame once; drafts and Show mask re-read the one on screen) */
@@ -607,6 +625,7 @@ const ERROR_COPY = {
     'The analysis stopped unexpectedly (the browser may be low on memory).',
   [SegmentationErrorCode.FRAME_UNAVAILABLE]:
     'A frame of this clip is no longer available, so it cannot be analyzed.',
+  [SegmentationErrorCode.GPU_LOST]: 'The GPU was reset.',
 };
 
 /**
