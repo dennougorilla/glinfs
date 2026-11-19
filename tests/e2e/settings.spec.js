@@ -288,3 +288,36 @@ test('Frame differencing offers smallest file first, then off', async ({ page })
   await expect(row.locator('select option')).toHaveText(['Smallest file', 'Off']);
   await expect(row.locator('select')).toHaveValue('smallest');
 });
+
+test('Dither pattern offers Bayer first, then blue noise', async ({ page }) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  const row = page.locator('[data-setting-key="gif.dither"]');
+  await expect(row.locator('.settings-item-label')).toHaveText('Dither pattern');
+  await expect(row.locator('select option')).toHaveText(['Bayer', 'Blue noise']);
+  await expect(row.locator('select')).toHaveValue('bayer');
+});
+
+test('Cutout edge offers hard first, then dithered and the two mattes', async ({ page }) => {
+  await gotoCapture(page);
+  await page.evaluate(() => {
+    location.hash = '#/settings';
+  });
+  const row = page.locator('[data-setting-key="gif.edge"]');
+  await expect(row.locator('.settings-item-label')).toHaveText('Cutout edge');
+  await expect(row.locator('select option')).toHaveText([
+    'Hard',
+    'Dithered',
+    'White matte',
+    'Black matte',
+  ]);
+  await expect(row.locator('select')).toHaveValue('threshold');
+  await row.locator('select').selectOption('matte-black');
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('glinfs_user_settings')).methods),
+    )
+    .toMatchObject({ 'gif.edge': 'matte-black' });
+});
