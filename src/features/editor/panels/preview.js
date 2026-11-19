@@ -79,6 +79,9 @@ export function getPreviewToolHint(state) {
   if (state.aiPickTool === 'remove') {
     return 'Click or drag a box over what to remove from every frame · Esc to cancel';
   }
+  if (state.aiPickTool === 'colour') {
+    return 'Click a colour to remove it on every frame · Alt-click a colour to keep · Esc to cancel';
+  }
   if (state.pickingKeyColor) return 'Click the color to remove · Esc to cancel';
   return '';
 }
@@ -87,7 +90,7 @@ export function getPreviewToolHint(state) {
  * The active preview tool, for the canvas cursor (data-tool on the canvas
  * container)
  * @param {import('../types.js').EditorState} state
- * @returns {'keep' | 'remove' | 'eyedropper' | 'brush' | ''}
+ * @returns {'keep' | 'remove' | 'colour' | 'eyedropper' | 'brush' | ''}
  */
 export function getPreviewTool(state) {
   if (isBrushActive(state)) return 'brush';

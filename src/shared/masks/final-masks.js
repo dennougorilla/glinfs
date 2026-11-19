@@ -66,7 +66,7 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  *   probability mask on a frame (any size), or null where it was not
  *   tracked (that frame keeps the base mask). Read once per frame when a
  *   build starts, like getProb.
- * @property {{ clicks: import('../edits/model.js').CutoutPick[], tolerance: number }} [colour] -
+ * @property {{ clicks: import('../edits/model.js').CutoutPick[], tolerance: number, everywhere?: boolean }} [colour] -
  *   A Colour fix-up (not tracked: getMask is not read): its keep points
  *   sample the colours to remove, its remove points the colours to protect
  *   (see shared/masks/colour-fill)
@@ -174,7 +174,7 @@ export function getAiParamsKey(ai) {
   const objects = (ai.objects ?? [])
     .map((o) =>
       o.scope === 'colour' && o.mode === 'remove'
-        ? `${o.id}:${o.mode}:colour:${o.tolerance}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
+        ? `${o.id}:${o.mode}:colour:${o.tolerance}${o.everywhere ? ':everywhere' : ''}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
         : `${o.id}:${o.mode}${o.only ? ':only' : ''}`,
     )
     .join(',');
@@ -655,6 +655,7 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
     return {
       id: object.id ?? '',
       seeds,
+      everywhere: object.colour.everywhere === true,
       pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
       matches: createColourMatcher(samples, protects, object.colour.tolerance),
       /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
@@ -681,12 +682,14 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
         const rgba = framePixels();
         if (!rgba || rgba.length < size * 4) return;
         const { region, queue } = getFillScratch(size);
+        // Everywhere: every pixel of the mask seeds the fill, so a sampled
+        // colour goes wherever it is, not only where it touches the points
         const { count, far } = fillColourRegion(
           out,
           width,
           height,
           rgba,
-          layer.seeds,
+          layer.everywhere ? maskPixels(out, size) : layer.seeds,
           layer.matches,
           region,
           queue,
@@ -719,6 +722,21 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
       return out;
     },
   };
+}
+
+/**
+ * The indices of a mask's set pixels
+ * @param {Uint8Array} mask - 0/1
+ * @param {number} size
+ * @returns {Int32Array}
+ */
+function maskPixels(mask, size) {
+  let n = 0;
+  for (let i = 0; i < size; i++) if (mask[i]) n++;
+  const out = new Int32Array(n);
+  let k = 0;
+  for (let i = 0; i < size; i++) if (mask[i]) out[k++] = i;
+  return out;
 }
 
 /**

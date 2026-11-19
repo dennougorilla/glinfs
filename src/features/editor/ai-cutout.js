@@ -212,7 +212,11 @@ export function getClipObjectSources(frames, ai, maskStore) {
           id: object.id,
           mode: object.mode,
           getMask: () => null,
-          colour: { clicks: object.clicks, tolerance: object.tolerance },
+          colour: {
+            clicks: object.clicks,
+            tolerance: object.tolerance,
+            everywhere: object.everywhere === true,
+          },
         }
       : {
           id: object.id,

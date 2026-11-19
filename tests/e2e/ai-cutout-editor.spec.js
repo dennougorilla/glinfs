@@ -117,9 +117,11 @@ async function pickDisc(page, mode, disc = discA) {
   await expect(page.locator('#preview-tool-hint')).toContainText(/Click (a character|or drag)/);
   const point = await editorFramePointToViewport(page, disc(middle).x, disc(middle).y);
   await page.mouse.click(point.x, point.y);
-  // One pick, the tool is left afterwards
+  // One pick; the tool stays on for more picks until Escape (cutout-ux 4)
   await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
   await expect(page.locator('#ai-pick-list')).toContainText(mode === 'keep' ? 'Keep' : 'Remove');
+  await expect(page.locator(`#ai-pick-${mode}`)).toBeChecked();
+  await page.keyboard.press('Escape');
   await expect(page.locator(`#ai-pick-${mode}`)).not.toBeChecked();
   await waitForAiMasks(page);
 }
@@ -202,8 +204,13 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     await page.keyboard.press('Enter');
     await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
     await expect(page.locator('#ai-pick-list')).toContainText('Keep');
+    // The tool stays on for more picks (cutout-ux 4): the preview keeps
+    // focus for the next one; Escape ends the tool, focus stays off <body>
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
+    await expect(overlay).toBeFocused();
+    await page.keyboard.press('Escape');
     await expect(page.locator('#ai-pick-keep')).not.toBeChecked();
-    await expect(page.locator('#ai-pick-keep')).toBeFocused();
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY');
     await waitForAiMasks(page);
     // Only disc A is kept
     await expect.poll(() => editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(0);
@@ -244,7 +251,7 @@ test.describe('AI cutout in the editor (stub model, WASM fallback)', () => {
     const onDisc = await editorFramePointToViewport(page, discA(middle).x, discA(middle).y);
     await page.mouse.click(onDisc.x, onDisc.y);
     await expect(page.locator('#ai-pick-list li')).toHaveCount(1);
-    await expect(page.locator('#ai-pick-keep')).not.toBeChecked();
+    await expect(page.locator('#ai-pick-keep')).toBeChecked();
     await expect(page.locator('#ai-notice')).not.toContainText('No character here');
     await waitForAiMasks(page);
     await expect.poll(() => editorPreviewAlpha(page, discB(middle).x, discB(middle).y)).toBe(0);

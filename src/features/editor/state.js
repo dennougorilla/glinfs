@@ -556,12 +556,13 @@ export function clearAiPicks(state) {
  * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
  * a tool adds another fix-up. It keeps the largest of the tracker's answers
  * on its frame that getDefaultObjectCandidate picks; the user steps through the
- * others (setAiObjectCandidate). A click with Remove is Colour when Colour
- * was chosen last for a Remove fix-up (state.aiRemoveScope); a box never
- * is (Colour needs points).
+ * others (setAiObjectCandidate). With `colour` a Remove click makes a
+ * Colour fix-up (the Colour tool): never tracked. A Remove click is never
+ * Colour by itself (a scope chosen on another fix-up, or another clip, no
+ * longer carries over).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
- * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean }} selection
  * @param {string} [id]
  * @returns {import('./types.js').EditorState}
  */
@@ -574,7 +575,7 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
     id,
     mode,
     scope:
-      mode === 'remove' && selection.click && !selection.box && state.aiRemoveScope === 'colour'
+      mode === 'remove' && selection.click && !selection.box && selection.colour
         ? 'colour'
         : 'whole',
     candidate: getDefaultObjectCandidate(mode, selection),
@@ -641,9 +642,7 @@ export function setAiObjectScope(state, id, scope) {
   if (!object || object.scope === scope) return state;
   // Colour removes only, by the colours under a point: a box alone has none
   if (scope === 'colour' && !canBeColourObject(object)) return state;
-  const next = updateAiObject(state, id, (o) => ({ ...o, scope }));
-  // The next Remove fix-up starts in it
-  return object.mode === 'remove' ? setAiRemoveScope(next, scope) : next;
+  return updateAiObject(state, id, (o) => ({ ...o, scope }));
 }
 
 /**
@@ -735,7 +734,25 @@ export function removeAiObject(state, id) {
  * @returns {import('./types.js').AiPickTool}
  */
 export function getObjectTool(object) {
+  if (object.mode === 'remove' && object.scope === 'colour') return 'colour';
   return object.mode === 'remove' ? 'remove' : 'keep';
+}
+
+/**
+ * A Colour fix-up removes its colours wherever they are in the mask
+ * (true), or only where they touch its points (false)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {boolean} everywhere
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiObjectEverywhere(state, id, everywhere) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (object?.mode !== 'remove' || (object.everywhere === true) === everywhere) return state;
+  return updateAiObject(state, id, (o) => {
+    const { everywhere: _old, ...rest } = o;
+    return everywhere ? { ...rest, everywhere: true } : rest;
+  });
 }
 
 /**
