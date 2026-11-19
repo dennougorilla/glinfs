@@ -75,6 +75,16 @@ self.onmessage = (e) => {
       sendFrames();
       break;
 
+    case 'RESIZE':
+      // A new capacity while capturing: the frame size changed (B5). The
+      // frames of the old size go first: a clip never takes them (only the
+      // newest source's run), and kept they would hold more than the new
+      // capacity was computed for (#231 review)
+      dropFramesNotSized(payload.width, payload.height);
+      resizeBuffer(payload.maxFrames);
+      sendStats();
+      break;
+
     case 'CLEAR':
       clearBuffer();
       break;
@@ -239,6 +249,25 @@ function getFramesInCaptureOrder() {
   }
 
   return [...frameBuffer.slice(frameBufferStart), ...frameBuffer.slice(0, frameBufferStart)];
+}
+
+/**
+ * Close every buffered frame whose size is not width x height
+ * @param {number | undefined} width
+ * @param {number | undefined} height
+ */
+function dropFramesNotSized(width, height) {
+  if (!(width > 0 && height > 0)) return;
+  const kept = [];
+  for (const frame of getFramesInCaptureOrder()) {
+    if (frame.bitmap?.width === width && frame.bitmap?.height === height) {
+      kept.push(frame);
+    } else {
+      frame.bitmap?.close();
+    }
+  }
+  frameBuffer = kept;
+  frameBufferStart = 0;
 }
 
 /**

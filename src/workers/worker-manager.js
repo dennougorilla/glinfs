@@ -60,6 +60,9 @@ function createWorkerError(message, code, context) {
  * @property {Uint8ClampedArray} [paletteSample] - Pixels sampled across the clip for a global palette (transferred)
  * @property {boolean} [transparent] - Write pixels with alpha < 128 as GIF transparency (gifenc only)
  * @property {boolean} [dithering] - Ordered dithering before palette mapping (gifenc)
+ * @property {'bayer' | 'blue-noise'} [ditherPattern] - Threshold map of the dithering
+ * @property {'threshold' | 'matte' | 'dither'} [edge] - How soft alpha becomes 1-bit (transparent)
+ * @property {number[]} [matteColor] - [r, g, b] for edge 'matte'
  * @property {boolean} [frameDifferencing] - Write unchanged pixels as transparency (gifenc, opaque only)
  */
 
@@ -253,6 +256,9 @@ export class GifEncoderManager {
           transparent: config.transparent,
           frameDifferencing: config.frameDifferencing,
           dithering: config.dithering,
+          ditherPattern: config.ditherPattern,
+          edge: config.edge,
+          matteColor: config.matteColor,
         });
 
         // The sample can be ~1MB; transfer it (detaching the caller's copy)
