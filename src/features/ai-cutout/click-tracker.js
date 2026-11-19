@@ -132,6 +132,9 @@ import {
  *   run with new clicks starts right away (the masks this run had not redone
  *   stay until that run redoes them, instead of flashing off)
  * @property {(progress: TrackProgress) => void} [onProgress]
+ * @property {(frame: number, candidates: SamCandidate[]) => number | null} [pickAnswer] -
+ *   With no stored pick (`candidate` null): the rank (small to large) of the
+ *   clicked frame's answer to keep, or null for the scope rule
  * @property {'resume' | 'stop'} [afterLost] - At a lost frame: try the next
  *   frames from the last frame kept ('resume', default) or end the pass
  * @property {AbortSignal} [signal]
@@ -312,6 +315,7 @@ export async function trackClicks({
   superseded,
   onProgress,
   afterLost = 'resume',
+  pickAnswer,
   signal,
 }) {
   throwIfAborted(signal);
@@ -535,7 +539,7 @@ export async function trackClicks({
           chooseCandidate(candidates, {
             scope: p.box ? 'whole' : scope,
             wholeMinScoreRatio,
-            rank: candidate,
+            rank: candidate ?? (!p.box && pickAnswer ? pickAnswer(anchor.frame, candidates) : null),
           }),
         );
       }

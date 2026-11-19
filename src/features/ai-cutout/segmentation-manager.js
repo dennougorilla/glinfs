@@ -138,6 +138,8 @@ import { buildPromptInputs, getEncoderSize, SAM_LOW_RES_SIZE } from './sam-promp
  * @property {number | null} [candidate] - The user's pick among the clicked
  *   frame's answers (see trackClicks)
  * @property {'resume' | 'stop'} [afterLost] - At a lost frame (see trackClicks)
+ * @property {(frame: number, candidates: import('./sam-prompts.js').SamCandidate[]) => number | null} [pickAnswer] -
+ *   The clicked frame's answer with no stored pick (see trackClicks)
  * @property {(frame: number, candidates: import('./sam-prompts.js').SamCandidate[]) => void} [onAnswers] -
  *   The answers to the first prompt on the frame on screen (see trackClicks)
  * @property {(progress: AnalysisProgress) => void} [onProgress]
@@ -968,6 +970,7 @@ export class SegmentationManager {
         scope: options.scope,
         candidate: options.candidate ?? null,
         afterLost: options.afterLost ?? 'resume',
+        pickAnswer: options.pickAnswer,
         onAnswers: options.onAnswers,
         minScoreRatio: options.minScoreRatio,
         wholeMinScoreRatio: options.wholeMinScoreRatio,

@@ -278,6 +278,21 @@ describe('trackClicks', () => {
     expect([...masks.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 8, 9]);
   });
 
+  it('pickAnswer: with no stored pick the clicked frame takes the rank it returns (Methods: Click answer)', async () => {
+    const pickAnswer = vi.fn(() => 1);
+    const { promise, masks } = run({ pickAnswer });
+    await promise;
+    expect(pickAnswer).toHaveBeenCalledTimes(1);
+    expect(pickAnswer.mock.calls[0][0]).toBe(3);
+    // Rank 1 small to large: the object's top half
+    const top = rect(8, 6, 18, 14).map((v, i) => (Math.floor(i / W) < 10 ? v : 0));
+    expect(masks.get(3)?.data).toEqual(top);
+    // A stored pick wins: pickAnswer is not asked
+    const asked = vi.fn(() => 0);
+    await run({ pickAnswer: asked, candidate: 2 }).promise;
+    expect(asked).not.toHaveBeenCalled();
+  });
+
   it("afterLost 'stop': a pass ends at its first lost frame (Methods: tracker after a lost frame)", async () => {
     const segmenter = fakeSegmenter({
       objectAt: (f) => (f === 6 || f === 7 ? new Uint8Array(W * H) : rect(5 + f, 6, 15 + f, 14)),

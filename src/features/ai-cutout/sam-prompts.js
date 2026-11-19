@@ -543,3 +543,131 @@ export function planAnchors(picks, range, currentFrame, boxes = []) {
         Math.abs(a.frame - currentFrame) - Math.abs(b.frame - currentFrame) || a.frame - b.frame,
     );
 }
+
+/** Probability bytes at the logits -1 and +1 (sigmoid(-1) and sigmoid(1) x 255) */
+const PROB_AT_LOGIT_MINUS_1 = 69;
+const PROB_AT_LOGIT_PLUS_1 = 186;
+
+/**
+ * SAM's stability score of an answer: the share of it that stays when the
+ * threshold moves from logit -1 to +1 (segment-anything's
+ * calculate_stability_score, offset 1), read from its 0..255 probabilities
+ * @param {Uint8Array} data
+ * @returns {number} 0..1 (0 for an empty answer)
+ */
+export function stabilityScore(data) {
+  let loose = 0;
+  let tight = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] > PROB_AT_LOGIT_MINUS_1) {
+      loose++;
+      if (data[i] > PROB_AT_LOGIT_PLUS_1) tight++;
+    }
+  }
+  return loose > 0 ? tight / loose : 0;
+}
+
+/**
+ * Edge pixels of a mask: inside (>= 128) with a 4-neighbour outside or on
+ * the border of the frame
+ * @param {(x: number, y: number) => boolean} inside
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array} 1 on an edge pixel
+ */
+function edgeMap(inside, width, height) {
+  const edges = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!inside(x, y)) continue;
+      if (
+        x === 0 ||
+        y === 0 ||
+        x === width - 1 ||
+        y === height - 1 ||
+        !inside(x - 1, y) ||
+        !inside(x + 1, y) ||
+        !inside(x, y - 1) ||
+        !inside(x, y + 1)
+      ) {
+        edges[y * width + x] = 1;
+      }
+    }
+  }
+  return edges;
+}
+
+/**
+ * How well an answer's outline follows the base mask's: the share of the
+ * answer's edge pixels within `radius` px of the base mask's edge (the base
+ * mask is read at the answer's size, nearest pixel)
+ * @param {{ data: Uint8Array, width: number, height: number }} answer
+ * @param {{ data: Uint8Array, width: number, height: number }} base
+ * @param {number} [radius]
+ * @returns {number} 0..1 (0 for an empty answer)
+ */
+export function borderAgreement(answer, base, radius = 2) {
+  const { width, height } = answer;
+  const sx = base.width / width;
+  const sy = base.height / height;
+  const baseInside = (/** @type {number} */ x, /** @type {number} */ y) =>
+    base.data[
+      Math.min(base.height - 1, Math.floor((y + 0.5) * sy)) * base.width +
+        Math.min(base.width - 1, Math.floor((x + 0.5) * sx))
+    ] >= 128;
+  const answerInside = (/** @type {number} */ x, /** @type {number} */ y) =>
+    answer.data[y * width + x] >= 128;
+  const baseEdges = edgeMap(baseInside, width, height);
+  const answerEdges = edgeMap(answerInside, width, height);
+  let total = 0;
+  let near = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!answerEdges[y * width + x]) continue;
+      total++;
+      let hit = false;
+      for (let dy = -radius; dy <= radius && !hit; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const xx = x + dx;
+          if (xx >= 0 && xx < width && baseEdges[yy * width + xx]) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (hit) near++;
+    }
+  }
+  return total > 0 ? near / total : 0;
+}
+
+/**
+ * The Scored rule's answer on a clicked frame, as a rank small to large
+ * (orderCandidatesBySize), measured on 94 reference frames (task 7 item 2):
+ * - Keep click: border agreement with the base mask x the decoder's score
+ *   (0.752 vs 0.626 for the largest; never worse per target)
+ * - Remove click: stability x the decoder's score (0.436 vs 0.287 for the
+ *   second smallest; mixed per target)
+ * @param {SamCandidate[]} candidates
+ * @param {{ mode: 'keep' | 'remove', base: { data: Uint8Array, width: number, height: number } | null }} options
+ * @returns {number | null} null when the rule has nothing to go on (Keep
+ *   without a base mask): the size rule stays
+ */
+export function scoredAnswerRank(candidates, { mode, base }) {
+  if (candidates.length === 0) return null;
+  if (mode === 'keep' && !base) return null;
+  const ordered = orderCandidatesBySize(candidates);
+  let best = 0;
+  let bestValue = -1;
+  ordered.forEach((c, rank) => {
+    const quality = mode === 'keep' && base ? borderAgreement(c, base) : stabilityScore(c.data);
+    const value = quality * c.score;
+    if (value > bestValue) {
+      bestValue = value;
+      best = rank;
+    }
+  });
+  return best;
+}

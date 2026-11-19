@@ -52,6 +52,7 @@ import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { getClickAnswerRule } from '../ai-cutout/method.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager, objectMaskKey } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
@@ -1396,7 +1397,9 @@ function getPickerObject(state) {
 function getPickerRank(state, object) {
   const kept = aiSession?.getObjectAnswers(object.id);
   const count = kept && kept.frame === state.currentFrame ? kept.answers.length : OBJECT_CANDIDATES;
-  const stored = typeof object.candidate === 'number' ? object.candidate : count - 1;
+  // No stored pick (Click answer = Scored): the answer the tracker chose
+  const stored =
+    typeof object.candidate === 'number' ? object.candidate : (kept?.chosenRank ?? count - 1);
   const rank = state.aiPickerRank ?? stored;
   return { count, rank: Math.min(rank, Math.max(0, count - 1)) };
 }
@@ -2657,7 +2660,9 @@ function addObjectFixUp(mode, selection) {
   }
   const willTrack = !(mode === 'remove' && selection.click && !selection.box && selection.colour);
   if (willTrack) aiSession?.expectAnswer();
-  store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
+  store.setState((s) =>
+    setAiPickTool(addAiObject(s, mode, { ...selection, answer: getClickAnswerRule() }), null),
+  );
   const added = store.getState().edits.background.ai.objects?.at(-1);
   if (added && !isColourObject(added)) {
     startPulse(added.id, selection);

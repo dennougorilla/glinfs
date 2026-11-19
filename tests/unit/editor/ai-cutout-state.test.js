@@ -182,6 +182,14 @@ describe('tracked objects', () => {
   const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
   const box = (frame = 2) => ({ frame, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.5 });
 
+  it("Methods: Click answer = Scored leaves a click fix-up's answer to the tracker; a box keeps the default", () => {
+    let state = addAiObject(makeState(), 'remove', { click: click(), answer: 'scored' }, 'o1');
+    state = addAiObject(state, 'add', { box: box(), answer: 'scored' }, 'o2');
+    const [o1, o2] = state.edits.background.ai.objects;
+    expect('candidate' in o1).toBe(false);
+    expect(o2.candidate).toBe(DEFAULT_OBJECT_CANDIDATE);
+  });
+
   it('adds an object from a click or a box, not selected, keeping the largest answer (cutout-ux 2)', () => {
     let state = addAiObject(makeState(), 'remove', { click: { ...click(), mode: 'remove' } }, 'o1');
     state = addAiObject(state, 'add', { box: box() }, 'o2');

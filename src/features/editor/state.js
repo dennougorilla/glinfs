@@ -562,7 +562,9 @@ export function clearAiPicks(state) {
  * longer carries over).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
- * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean }} selection
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean, answer?: 'size' | 'scored' }} selection -
+ *   answer 'scored' (Methods: Click answer): a click fix-up stores no answer;
+ *   the tracker scores the answers when they arrive
  * @param {string} [id]
  * @returns {import('./types.js').EditorState}
  */
@@ -578,7 +580,9 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
       mode === 'remove' && selection.click && !selection.box && selection.colour
         ? 'colour'
         : 'whole',
-    candidate: getDefaultObjectCandidate(mode, selection),
+    ...(selection.answer === 'scored' && selection.click && !selection.box
+      ? {}
+      : { candidate: getDefaultObjectCandidate(mode, selection) }),
     tolerance: COLOUR_TOLERANCE.default,
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
