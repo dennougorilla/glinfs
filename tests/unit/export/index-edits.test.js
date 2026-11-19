@@ -264,6 +264,30 @@ describe('export dialog: plain screen captures', () => {
     // 15 GIF frames of ~5 KB
     await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(75, 0));
   });
+
+  it('keeps the sample frames of the current frame skip and scale only (B6)', async () => {
+    inject({ count: 30 });
+    vi.mocked(encodeGif).mockImplementation(async (params) => {
+      // The encode caches its rendered frames in the cache it was given
+      params.frameCache.push({ rendered: params.settings.frameSkip });
+      return fakeGifBlob(10_000 * params.frameIndices.length, params.frameIndices.length);
+    });
+    const caches = () => vi.mocked(encodeGif).mock.calls.map(([params]) => params.frameCache);
+    dialog = openExportDialog();
+    await vi.waitFor(() => expect(caches()).toHaveLength(1));
+    await vi.waitFor(() => expect(estimateKB()).toBeCloseTo(300, 0));
+    const firstCache = caches()[0];
+
+    change('#export-frame-skip', '2');
+    await vi.waitFor(() => expect(caches()).toHaveLength(2));
+    // The frame skip 1 samples went when the key changed
+    expect(firstCache).toHaveLength(0);
+
+    change('#export-frame-skip', '1');
+    await vi.waitFor(() => expect(caches()).toHaveLength(3));
+    expect(caches()[2]).not.toBe(firstCache);
+    expect(caches()[1]).toHaveLength(0);
+  });
 });
 
 describe('export dialog: edits', () => {

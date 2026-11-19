@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0](https://github.com/dennougorilla/glinfs/compare/v0.17.0...v0.18.0) (2026-11-19)
+
+
+### Features
+
+* **capture:** Change source while sharing ([#205](https://github.com/dennougorilla/glinfs/issues/205)) ([77fd699](https://github.com/dennougorilla/glinfs/commit/77fd6998e11eaf123dd2d472d03b09e0e007926b))
+* **export:** dither pattern and cutout edge switches (labs L3) ([#225](https://github.com/dennougorilla/glinfs/issues/225)) ([d4388a8](https://github.com/dennougorilla/glinfs/commit/d4388a8b79ec70ed4c8c921d7ce8b5c237e6d363))
+* **export:** frame differencing in gifenc for opaque GIFs ([#209](https://github.com/dennougorilla/glinfs/issues/209)) ([08d4301](https://github.com/dennougorilla/glinfs/commit/08d4301a6cd88578aa1bd46d0fd4c274e53b3f75))
+* **export:** working dithering, faster palette mapping, sampled size estimate ([#210](https://github.com/dennougorilla/glinfs/issues/210)) ([16c57d0](https://github.com/dennougorilla/glinfs/commit/16c57d0f9d46c4f11dcb6df9568ba23364174068))
+* **labs:** scene detection and frame differencing switches (L2) ([#223](https://github.com/dennougorilla/glinfs/issues/223)) ([4ddbc7f](https://github.com/dennougorilla/glinfs/commit/4ddbc7fb4fa1132ba9e50cf120a210292f8435e8))
+* **settings:** a registry of switchable methods with a Settings section ([#219](https://github.com/dennougorilla/glinfs/issues/219)) ([749f935](https://github.com/dennougorilla/glinfs/commit/749f9353c1be7825faff8d204c5c3ccdbc430e91))
+
+
+### Bug Fixes
+
+* **ai-cutout:** four small cutout leaks from the memory audit ([#229](https://github.com/dennougorilla/glinfs/issues/229)) ([573d95a](https://github.com/dennougorilla/glinfs/commit/573d95accc652ab308e07ea13594008b004458fd))
+* **ai-cutout:** release a base model when another loads; recover from a GPU reset ([#222](https://github.com/dennougorilla/glinfs/issues/222)) ([d477bbf](https://github.com/dennougorilla/glinfs/commit/d477bbf3ef7bae9b211baada92b8ba1136516fb0))
+* **ai-cutout:** stop the model worker when the last clip goes ([#227](https://github.com/dennougorilla/glinfs/issues/227)) ([4d9cf8e](https://github.com/dennougorilla/glinfs/commit/4d9cf8eefd431cda7182700995e5fcd68978b0e4))
+* **ai-cutout:** the active clip's masks are never evicted ([#228](https://github.com/dennougorilla/glinfs/issues/228)) ([9979052](https://github.com/dennougorilla/glinfs/commit/9979052c21cce02f22010e41ba6228125aedcb90))
+* **capture:** a clip keeps one frame size when the shared source switches ([#203](https://github.com/dennougorilla/glinfs/issues/203)) ([a925bb8](https://github.com/dennougorilla/glinfs/commit/a925bb8265fbdde4109cdf2b3d0a90c0271d7d2c))
+* **capture:** no frame leaks on leave, resize, worker error or estimate ([#231](https://github.com/dennougorilla/glinfs/issues/231)) ([61af4a4](https://github.com/dennougorilla/glinfs/commit/61af4a4fc40b3d7d6c1bbd9d719d896ca8561e3b))
+* **capture:** the Edit step leads back to the clips from Capture ([#202](https://github.com/dennougorilla/glinfs/issues/202)) ([c843c00](https://github.com/dennougorilla/glinfs/commit/c843c00d4e6077c4a235fbdc81a84ec902995f21))
+* **clips:** queued clips open on hardware decoders, and nothing waits forever ([#220](https://github.com/dennougorilla/glinfs/issues/220)) ([2af6997](https://github.com/dennougorilla/glinfs/commit/2af69976f7e5118d11c7c5e81a40cf22e9d1b34d))
+* **editor:** the clock and ruler show seconds with tenths ([#207](https://github.com/dennougorilla/glinfs/issues/207)) ([2c58be7](https://github.com/dennougorilla/glinfs/commit/2c58be7c76b7cd9581d5b745121c6c07506bb95a))
+* **hotkeys:** Ctrl/Cmd shortcuts work after clicking a panel control ([#204](https://github.com/dennougorilla/glinfs/issues/204)) ([6cdf56d](https://github.com/dennougorilla/glinfs/commit/6cdf56d3be8d1c60281df1df559cdb09ea359019))
+* three findings of the 0.17.0 pre-release review ([#200](https://github.com/dennougorilla/glinfs/issues/200)) ([94ab0ee](https://github.com/dennougorilla/glinfs/commit/94ab0ee30275223424f4e390a2c3f494a96404f0))
+
+
+### Performance Improvements
+
+* **clips:** open queued clips on their own worker; mixed-size clips stay uncompressed ([#221](https://github.com/dennougorilla/glinfs/issues/221)) ([bbf9e05](https://github.com/dennougorilla/glinfs/commit/bbf9e05c25d55150398f20dd03038a0b629ed13b))
+* **export:** frame differencing trials stop early and run on a second worker ([#224](https://github.com/dennougorilla/glinfs/issues/224)) ([7ecb6f2](https://github.com/dennougorilla/glinfs/commit/7ecb6f2c8227aeae90a3cae2a8648ecf29f4dcef))
+* **grid:** draw grid thumbnails within a per-frame budget ([#206](https://github.com/dennougorilla/glinfs/issues/206)) ([3f73e0a](https://github.com/dennougorilla/glinfs/commit/3f73e0a5ed4625841e871744b27b585b6737cb8d))
+
 ## [0.17.0](https://github.com/dennougorilla/glinfs/compare/v0.16.0...v0.17.0) (2026-11-16)
 
 

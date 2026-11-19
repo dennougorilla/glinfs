@@ -550,17 +550,32 @@ function renderStats(stats, bufferLimit = null) {
     createStatItem('FPS', String(stats.fps)),
   ]);
 
-  // The ring buffer was clamped below fps x bufferDuration by the memory
-  // budget (#96) — say so, or the Buffer slider reads as silently broken
-  if (bufferLimit?.clamped) {
-    el.appendChild(
-      createElement('div', { className: 'capture-stats-limit-note', role: 'note' }, [
-        `Buffer limited to ~${Math.round(bufferLimit.effectiveDuration)}s by the memory budget`,
-      ]),
-    );
-  }
-
+  syncBufferLimitNote(el, bufferLimit);
   return el;
+}
+
+/**
+ * The ring buffer was clamped below fps x bufferDuration by the memory
+ * budget (#96): say so, or the Buffer slider reads as silently broken. The
+ * limit changes while sharing (B5 re-clamp), so this adds, updates or
+ * removes the note in place.
+ * @param {Element} statsEl - The .capture-stats element
+ * @param {{ clamped: boolean, effectiveDuration: number } | null | undefined} bufferLimit
+ */
+function syncBufferLimitNote(statsEl, bufferLimit) {
+  const existing = statsEl.querySelector('.capture-stats-limit-note');
+  if (!bufferLimit?.clamped) {
+    existing?.remove();
+    return;
+  }
+  const text = `Buffer limited to ~${Math.round(bufferLimit.effectiveDuration)}s by the memory budget`;
+  if (existing) {
+    if (existing.textContent !== text) existing.textContent = text;
+    return;
+  }
+  statsEl.appendChild(
+    createElement('div', { className: 'capture-stats-limit-note', role: 'note' }, [text]),
+  );
 }
 
 /**
@@ -722,14 +737,18 @@ function renderFooter() {
  * Update buffer status display
  * @param {HTMLElement} container
  * @param {import('./types.js').BufferStats} stats
+ * @param {{ clamped: boolean, effectiveDuration: number } | null} [bufferLimit] - The
+ *   live limit; its note is added, updated or removed
  */
-export function updateBufferStatus(container, stats) {
+export function updateBufferStatus(container, stats, bufferLimit = null) {
   const statValues = container.querySelectorAll('.stat-value');
   if (statValues.length >= 3) {
     statValues[0].textContent = String(stats.frameCount);
     statValues[1].textContent = formatDuration(stats.duration);
     statValues[2].textContent = String(stats.fps);
   }
+  const statsEl = container.querySelector('.capture-stats');
+  if (statsEl) syncBufferLimitNote(statsEl, bufferLimit);
 }
 
 /**

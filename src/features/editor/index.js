@@ -56,6 +56,7 @@ import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/mod
 import { getSegmentationManager, objectMaskKey } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
+import { getSceneMethod } from '../scene-detection/method.js';
 import {
   classifyFixUp,
   clearPixelCache,
@@ -3692,7 +3693,7 @@ async function startSceneDetectionAsync(frames) {
 
     // Run detection with progress updates
     const result = await manager.detect(frames, {
-      threshold: 0.3,
+      method: getSceneMethod(),
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {

@@ -5,7 +5,7 @@ import {
 } from '../../../src/features/scene-detection/algorithms/histogram-detector.js';
 
 function pixel(r, g, b) {
-  return { data: new Uint8ClampedArray([r, g, b, 255]) };
+  return { data: new Uint8ClampedArray([r, g, b, 255]), width: 1, height: 1 };
 }
 
 function createFrames(count, transitionFrame) {
@@ -37,7 +37,6 @@ describe('buildSceneRanges', () => {
 describe('histogram detector scene boundaries', () => {
   it('includes the final frame in the final scene', async () => {
     const result = await createHistogramDetector().detect(createFrames(10, 5), {
-      threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
     });
@@ -50,7 +49,6 @@ describe('histogram detector scene boundaries', () => {
 
   it('does not discard a short leading range', async () => {
     const result = await createHistogramDetector().detect(createFrames(10, 3), {
-      threshold: 0.3,
       minSceneDuration: 5,
       sampleInterval: 1,
     });
