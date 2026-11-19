@@ -15,6 +15,7 @@ import {
 } from './features/editor/index.js';
 import { initLoading } from './features/loading/index.js';
 // Register the Settings → Methods switches before Settings can render
+import './features/ai-cutout/method.js';
 import './features/export/method.js';
 import './features/scene-detection/method.js';
 import { initSettings } from './features/settings/index.js';

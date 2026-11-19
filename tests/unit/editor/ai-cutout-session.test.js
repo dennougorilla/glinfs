@@ -21,6 +21,7 @@ import {
 } from '../../../src/features/editor/ai-cutout-session.js';
 import { normalizeEdits } from '../../../src/shared/edits/model.js';
 import { createFinalMaskCache } from '../../../src/shared/masks/final-masks.js';
+import { setMethodOverridesFromSearch } from '../../../src/shared/methods.js';
 
 const W = 4;
 const H = 2;
@@ -974,6 +975,23 @@ describe('AI cutout session: tracked objects', () => {
     }
     expect(preloadModel).toHaveBeenCalledTimes(1);
     expect(preloadModel).toHaveBeenCalledWith('click', { allowWasm: false });
+  });
+
+  it('Methods: the tracker gets the after-lost choice; re-track after a correction can be the whole selection (cutout-ux 8)', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls[0].afterLost).toBe('resume');
+    setMethodOverridesFromSearch('?method.cutout.retrack=all&method.cutout.track-lost=stop');
+    try {
+      setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0), click(2)] }]);
+      session.syncObjects();
+      await settle();
+      expect(manager.calls[1].range).toEqual({ start: 0, end: 3 });
+      expect(manager.calls[1].afterLost).toBe('stop');
+    } finally {
+      setMethodOverridesFromSearch('');
+    }
   });
 
   it('a correction that adds a point re-tracks only its span; frames outside keep their masks (cutout-ux 5)', async () => {

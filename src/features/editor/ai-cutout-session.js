@@ -56,6 +56,7 @@ import { isAiCutoutActive } from '../../shared/edits/model.js';
 import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { OBJECT_GROUP_PREFIX } from '../ai-cutout/mask-store.js';
+import { getRetrackScope, getTrackAfterLost } from '../ai-cutout/method.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
@@ -1019,7 +1020,7 @@ export function createAiCutoutSession(options) {
     // A correction that only adds a point or a box: re-track the span it
     // can change, never the frames outside it, whose masks (and lost marks)
     // stay and take the new prompts' tag
-    const span = correctionSpan(object, selection);
+    const span = getRetrackScope() === 'all' ? null : correctionSpan(object, selection);
     const range = span ?? selection;
     if (span) {
       const last = /** @type {NonNullable<ReturnType<typeof objectTracked.get>>} */ (
@@ -1059,6 +1060,7 @@ export function createAiCutoutSession(options) {
         boxes: object.boxes ?? [],
         scope: object.scope,
         candidate: typeof object.candidate === 'number' ? object.candidate : null,
+        afterLost: getTrackAfterLost(),
         onAnswers: (frame, candidates) => {
           if (disposed || objectController !== controller) return;
           objectAnswers.set(id, {

@@ -278,6 +278,19 @@ describe('trackClicks', () => {
     expect([...masks.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 8, 9]);
   });
 
+  it("afterLost 'stop': a pass ends at its first lost frame (Methods: tracker after a lost frame)", async () => {
+    const segmenter = fakeSegmenter({
+      objectAt: (f) => (f === 6 || f === 7 ? new Uint8Array(W * H) : rect(5 + f, 6, 15 + f, 14)),
+    });
+    const { promise, masks, cleared } = run({ prompt: segmenter.prompt, afterLost: 'stop' });
+    const result = await promise;
+    expect(result.lost).toEqual([6]);
+    expect([...masks.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+    for (const f of [6, 7, 8, 9]) expect(cleared.has(f)).toBe(true);
+    // Nothing after the lost frame was asked
+    expect(segmenter.calls.some((c) => c.frame > 6)).toBe(false);
+  });
+
   it('with minScoreRatio, stops a pass where the score drops while the area holds', async () => {
     // The object leaves at frame 6, but the box prompt keeps answering the
     // same box, with a lower score

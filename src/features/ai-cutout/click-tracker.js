@@ -132,6 +132,8 @@ import {
  *   run with new clicks starts right away (the masks this run had not redone
  *   stay until that run redoes them, instead of flashing off)
  * @property {(progress: TrackProgress) => void} [onProgress]
+ * @property {'resume' | 'stop'} [afterLost] - At a lost frame: try the next
+ *   frames from the last frame kept ('resume', default) or end the pass
  * @property {AbortSignal} [signal]
  */
 
@@ -309,6 +311,7 @@ export async function trackClicks({
   seedGuard = 'off',
   superseded,
   onProgress,
+  afterLost = 'resume',
   signal,
 }) {
   throwIfAborted(signal);
@@ -455,8 +458,10 @@ export async function trackClicks({
       if (done.has(f) || (anchorFrames.has(f) && !refineOnPass.has(f))) return;
       throwIfAborted(signal);
       if (!(await step(f, from))) {
-        // Lost here: try the next frames from the last frame kept
+        // Lost here: try the next frames from the last frame kept (or, with
+        // the switch on Stop there, end the pass)
         if (!losing) lost.add(f);
+        if (afterLost === 'stop') return;
         losing = true;
         continue;
       }
