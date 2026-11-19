@@ -785,13 +785,10 @@ function restoreSharedFrames(decodedFrames, meta) {
  *   'memory-budget' before anything is decoded
  *
  * @param {string} id - Queue entry id
- * @param {{ undoHold?: boolean }} [options] - `undoHold: false`: the memory
- *   check leaves out the clip held for Undo (opening the successor of the
- *   deleted active clip: the hold goes within 5 s, #230 review)
  * @returns {Promise<{ok: true, removed: ClipQueueEntry[]} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed', removed?: ClipQueueEntry[]} | {ok: false, reason: 'memory-budget', projection: MemoryProjection}>}
  *   `removed`: the clips removed to make room, also when the open then failed
  */
-export async function prepareQueuedClipForPromote(id, { undoHold = true } = {}) {
+export async function prepareQueuedClipForPromote(id) {
   let entry = state.clipQueue.find((e) => e.id === id);
   if (!entry) return { ok: false, reason: 'not-found' };
   if (entry.status === 'decoding') return { ok: false, reason: 'decoding' };
@@ -808,7 +805,7 @@ export async function prepareQueuedClipForPromote(id, { undoHold = true } = {}) 
   }
 
   // Checked before the decode, which is when the memory is taken
-  const room = makeRoomToOpen(entry, { undoHold });
+  const room = makeRoomToOpen(entry);
   if (!room.ok) return { ok: false, reason: 'memory-budget', projection: room.projection };
 
   entry.status = 'decoding';
@@ -920,14 +917,21 @@ function estimateDecodedEntryMB(entry) {
  * oldest queued clips are removed first (setting autoRemoveOldClips, as for
  * a new clip, #186); when removing every one of them would not be enough,
  * nothing is removed and the open is refused.
+ *
+ * What is about to go is left out (#230 review round 3): the clip held for
+ * Undo (it goes within 5 s, or when the next deletion replaces it), and the
+ * raw frames of a clip whose encode is running (it counts compressed, as the
+ * active clip it replaces does). Counting them refused opens main allowed,
+ * and removed queued clips for memory freed seconds later.
  * @param {ClipQueueEntry} entry
- * @param {{ undoHold?: boolean }} [options] - See prepareQueuedClipForPromote
  * @returns {{ ok: boolean, removed: ClipQueueEntry[], projection: MemoryProjection }}
  */
-function makeRoomToOpen(entry, { undoHold = true } = {}) {
+function makeRoomToOpen(entry) {
   const { memoryBudgetMB: budgetMB, autoRemoveOldClips } = loadSettings().capture;
   const incomingMB = estimateDecodedEntryMB(entry);
-  const heldMB = getHeldMemoryMB({ activeDemotes: true, undoHold }) - estimateEntryMemoryMB(entry);
+  const heldMB =
+    getHeldMemoryMB({ activeDemotes: true, undoHold: false, encodesDone: true }) -
+    estimateEntryMemoryMB(entry);
   const projectedMB = heldMB + incomingMB;
   /** @type {MemoryProjection} */
   const projection = {
@@ -1453,11 +1457,25 @@ export function estimateQueuedClipMB(clip) {
  *   will be once queued (a new or opened clip replaces it)
  * @param {boolean} [options.undoHold=true] - false: leave out the clip held
  *   for Undo (it goes within 5 s, or when the next deletion replaces it)
+ * @param {boolean} [options.encodesDone=false] - Count a queued clip whose
+ *   encode is running at its compressed size (its raw frames go when the
+ *   encode ends, in a second or two)
  * @returns {number}
  */
-export function getHeldMemoryMB({ without = [], activeDemotes = false, undoHold = true } = {}) {
+export function getHeldMemoryMB({
+  without = [],
+  activeDemotes = false,
+  undoHold = true,
+  encodesDone = false,
+} = {}) {
   let total = getClipMemoryEstimateMB();
   if (!undoHold && pendingDeletion) total -= estimateEntryMemoryMB(pendingDeletion.entry);
+  if (encodesDone) {
+    for (const entry of state.clipQueue) {
+      if (entry.status !== 'compressing') continue;
+      total += estimateQueuedClipMB(entry) - estimateEntryMemoryMB(entry);
+    }
+  }
   if (activeDemotes && state.clipPayload) {
     total +=
       estimateQueuedClipMB(state.clipPayload) -

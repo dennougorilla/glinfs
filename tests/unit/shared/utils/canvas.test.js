@@ -96,6 +96,17 @@ describe('isVideoFrameValid', () => {
     expect(isVideoFrameValid(null)).toBe(false);
   });
 
+  it('returns false for a closed real VideoFrame: no `closed` property, coded size 0', () => {
+    // What Chrome shows after close(): `closed` does not exist on VideoFrame
+    const videoFrame = { codedWidth: 0, codedHeight: 0, format: null };
+
+    expect(isVideoFrameValid(videoFrame)).toBe(false);
+  });
+
+  it('returns true for an open real VideoFrame (no `closed` property)', () => {
+    expect(isVideoFrameValid({ codedWidth: 1920, codedHeight: 1080, format: 'I420' })).toBe(true);
+  });
+
   it('returns false for undefined', () => {
     expect(isVideoFrameValid(undefined)).toBe(false);
   });
@@ -112,6 +123,10 @@ describe('isFrameValid', () => {
     const frame = { frame: { closed: true } };
 
     expect(isFrameValid(frame)).toBe(false);
+  });
+
+  it('returns false for a frame whose real VideoFrame was closed', () => {
+    expect(isFrameValid({ frame: { codedWidth: 0, codedHeight: 0, format: null } })).toBe(false);
   });
 
   it('returns false for frame with null VideoFrame', () => {

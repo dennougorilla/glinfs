@@ -11,6 +11,13 @@ import { blueNoise64 } from './blue-noise.js';
 import { createFrameEncoding, encodeFrame, encodeSmaller } from './gif-frame.js';
 
 /**
+ * Palette lookup by color key centre: a color maps to the same index in
+ * every frame, so still pixels do not shimmer and frame differencing finds
+ * them unchanged (gifenc's lookup let the first pixel of a key decide)
+ */
+const STABLE_LOOKUP = { stable: true };
+
+/**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
  * @typedef {import('./types.js').EncoderConfig} EncoderConfig
  * @typedef {import('./types.js').FrameData} FrameData
@@ -781,7 +788,7 @@ export function createGifencEncoder({ trials = null } = {}) {
       }
 
       // Map pixels to palette indices with same format
-      let index = applyPalette(source, palette, format);
+      let index = applyPalette(source, palette, format, STABLE_LOOKUP);
 
       // A scene cut or new content between scheduled rebuilds makes the
       // reused palette stale; rebuild early instead of waiting for the
@@ -797,7 +804,7 @@ export function createGifencEncoder({ trials = null } = {}) {
           earlyRebuilds = earlyRebuilds >= perFrameAfter ? perFrameAfter - 1 : 0;
         } else if (isPaletteStale(fit, baseline)) {
           palette = buildPalette(rgba, config);
-          index = applyPalette(source, palette, format);
+          index = applyPalette(source, palette, format, STABLE_LOOKUP);
           baseline = measurePalette(source, index, palette, width, transparent);
           earlyRebuilds++;
         } else {

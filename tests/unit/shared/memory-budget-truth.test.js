@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteActiveClip,
   deleteQueuedClip,
   enqueueClip,
   estimateQueuedClipMB,
@@ -338,5 +339,83 @@ describe('opening a queued clip is checked against the budget', () => {
     codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(300) });
     expect((await prepared).ok).toBe(true);
     expect(getClipPayload()?.capturedAt).toBe(9);
+  });
+});
+
+describe('an open counts what stays held, not what is about to go (#230 review round 3)', () => {
+  /** A compressed queued clip of `count` 1080p frames, captured at `at` */
+  async function compressedEntry(codec, count, at, width = W, height = H) {
+    enqueueClip({ frames: rgbaFrames(count, `c${at}-`, width, height), fps: 30, capturedAt: at });
+    await finishEncode(codec, codec.encodeCalls.length - 1);
+    return getClipQueue().find((entry) => entry.capturedAt === at);
+  }
+
+  it('leaves the clip held for Undo out of any open (item 1)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    updateSetting('capture', 'memoryBudgetMB', 4000);
+    const entry = await compressedEntry(codec, 289, 1);
+    // 1080p defaults: buffer 2397, the deleted 289-frame clip held ~2397
+    unregister.push(registerMemoryHolder('capture-buffer', () => (289 * W * H * 4) / 1e6));
+    setClipPayload({ frames: rgbaFrames(289, 'act'), fps: 30, capturedAt: 9 });
+    deleteActiveClip();
+
+    // Buffer 2397 + decoded 899 fits; with the hold it would be 5693
+    const prepared = prepareQueuedClipForPromote(entry.id);
+    expect(codec.decode).toHaveBeenCalledOnce();
+    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(289) });
+    expect(await prepared).toEqual({ ok: true, removed: [] });
+  });
+
+  it('removes no queued clip to make room for the Undo hold (item 1)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    updateSetting('capture', 'memoryBudgetMB', 4000);
+    const [w, h] = [1280, 720];
+    // An alpha clip stays raw in the queue: 200 x 720p RGBA = 737 MB
+    enqueueClip({
+      frames: rgbaFrames(200, 'alpha', w, h),
+      fps: 30,
+      capturedAt: 1,
+      hasAlpha: true,
+    });
+    const entry = await compressedEntry(codec, 289, 5, w, h);
+    // Budget 2600: buffer 1065 + raw 737 + decoded 400 fits. Counting the
+    // 289-frame hold (1065) as well, it is over, and removing the alpha clip
+    // makes room: lost for a hold that ends in 5 s
+    unregister.push(registerMemoryHolder('capture-buffer', () => (289 * w * h * 4) / 1e6));
+    setClipPayload({ frames: rgbaFrames(289, 'act', w, h), fps: 30, capturedAt: 9 });
+    deleteActiveClip();
+    updateSetting('capture', 'memoryBudgetMB', 2600);
+
+    const prepared = prepareQueuedClipForPromote(entry.id);
+    expect(getClipQueue().map((e) => e.capturedAt)).toEqual([5, 1]);
+    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(289, w, h) });
+    expect(await prepared).toEqual({ ok: true, removed: [] });
+  });
+
+  it('counts a clip whose encode is running at its compressed size (item 2)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    updateSetting('capture', 'memoryBudgetMB', 4000);
+    const c = await compressedEntry(codec, 289, 1);
+    const b = await compressedEntry(codec, 289, 2);
+    unregister.push(registerMemoryHolder('capture-buffer', () => (289 * W * H * 4) / 1e6));
+    // A, opened from the queue: decoded I420 frames
+    const opened = rgbaFrames(289, 'a').map((f) => ({ ...f, byteLength: W * H * 1.5 }));
+    setClipPayload({ frames: opened, fps: 30, capturedAt: 3 });
+
+    // Open B: A goes back to the queue and re-compresses
+    const first = prepareQueuedClipForPromote(b.id);
+    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(289) });
+    expect((await first).ok).toBe(true);
+    promoteQueuedClip(b.id, null);
+    expect(getClipQueue().find((e) => e.capturedAt === 3)?.status).toBe('compressing');
+
+    // Open C within the encode: A counts at its compressed size, not 899 MB
+    const second = prepareQueuedClipForPromote(c.id);
+    expect(codec.decode).toHaveBeenCalledTimes(2);
+    codec.decodeCalls[1].resolve({ ok: true, frames: decodedFrames(289) });
+    expect(await second).toEqual({ ok: true, removed: [] });
   });
 });

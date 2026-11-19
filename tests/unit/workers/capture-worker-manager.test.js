@@ -133,6 +133,22 @@ describe('CaptureWorkerManager', () => {
     expect(started?.message.payload).toEqual({ fps: 30, maxFrames: 450 });
   });
 
+  it('posts START with the frame size the capacity is for, once known (#231 review, round 2)', () => {
+    const manager = new CaptureWorkerManager();
+    manager.init(/** @type {any} */ ({ readyState: 4, videoWidth: 2560, videoHeight: 1440 }), {
+      maxEdge: 1920,
+    });
+
+    manager.start(30, 289);
+
+    expect(MockWorker.instances[0]._lastMessage('START')?.message.payload).toEqual({
+      fps: 30,
+      maxFrames: 289,
+      width: 1920,
+      height: 1080,
+    });
+  });
+
   it('resolves requestFrames with frames from FRAMES_RESPONSE', async () => {
     const manager = new CaptureWorkerManager();
     manager.init(createFakeVideo());

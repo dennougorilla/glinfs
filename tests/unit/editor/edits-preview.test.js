@@ -158,6 +158,22 @@ describe('createEditorFrameRenderer', () => {
     }
   });
 
+  it('draws no closed frame: a real one has no `closed` property (a draw scheduled before a delete)', () => {
+    const renderer = createEditorFrameRenderer();
+    const ctx = createFakeContext(20, 10);
+    const draw = ctx.drawImage.bind(ctx);
+    // Chrome throws "The VideoFrame has been closed" for these
+    ctx.drawImage = (/** @type {any} */ source, ...rest) => {
+      if (source?.codedWidth === 0) throw new Error('The VideoFrame has been closed');
+      return draw(source, ...rest);
+    };
+    const closed = frame('a');
+    closed.frame = { fill: GREEN, codedWidth: 0, codedHeight: 0, format: null };
+
+    expect(() => renderer.render(ctx, closed, null, edits(), 0)).not.toThrow();
+    expect(() => renderer.render(ctx, closed, null, createDefaultEdits(), 0)).not.toThrow();
+  });
+
   it('view option: Original draws the frame unkeyed, Mask tints removed pixels (no text)', () => {
     const layer = createTextLayer({ text: 'Hi', color: '#ff0000', y: 0.5 }, 5);
     const e = edits({ color: '#00ff00', tolerance: 0 }, [layer]);
