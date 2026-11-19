@@ -562,9 +562,10 @@ export function clearAiPicks(state) {
  * longer carries over).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
- * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean, answer?: 'size' | 'scored' }} selection -
+ * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox, colour?: boolean, answer?: 'size' | 'scored', reach?: 'touching' | 'everywhere' | 'pieces' }} selection -
  *   answer 'scored' (Methods: Click answer): a click fix-up stores no answer;
- *   the tracker scores the answers when they arrive
+ *   the tracker scores the answers when they arrive. reach (Methods: Colour
+ *   reach): a Colour fix-up's reach
  * @param {string} [id]
  * @returns {import('./types.js').EditorState}
  */
@@ -572,14 +573,14 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
   const objects = state.edits.background.ai.objects ?? [];
   if (objects.length >= EDIT_LIMITS.aiObjects.max) return state;
   if (!selection.click && !selection.box) return state;
+  const colour = mode === 'remove' && selection.click && !selection.box && selection.colour;
   /** @type {CutoutObject} */
   const object = {
     id,
     mode,
-    scope:
-      mode === 'remove' && selection.click && !selection.box && selection.colour
-        ? 'colour'
-        : 'whole',
+    scope: colour ? 'colour' : 'whole',
+    ...(colour && selection.reach === 'everywhere' ? { everywhere: true } : {}),
+    ...(colour && selection.reach === 'pieces' ? { pieces: true } : {}),
     ...(selection.answer === 'scored' && selection.click && !selection.box
       ? {}
       : { candidate: getDefaultObjectCandidate(mode, selection) }),
@@ -773,8 +774,9 @@ export function setAiObjectEverywhere(state, id, everywhere) {
   const object = state.edits.background.ai.objects?.find((o) => o.id === id);
   if (object?.mode !== 'remove' || (object.everywhere === true) === everywhere) return state;
   return updateAiObject(state, id, (o) => {
-    const { everywhere: _old, ...rest } = o;
-    return everywhere ? { ...rest, everywhere: true } : rest;
+    // On replaces a Detached pieces reach (Methods: Colour reach)
+    const { everywhere: _old, pieces: _pieces, ...rest } = o;
+    return everywhere ? { ...rest, everywhere: true } : _pieces ? { ...rest, pieces: true } : rest;
   });
 }
 

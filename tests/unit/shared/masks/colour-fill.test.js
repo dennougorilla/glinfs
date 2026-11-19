@@ -254,6 +254,24 @@ describe('Colour fix-ups in a build', () => {
     }
   });
 
+  it('Detached pieces removes the small pieces in the clicked piece palette on every frame; the character stays (cutout-ux 8)', async () => {
+    const FLAME = [240, 150, 30];
+    const flames = (/** @type {number} */ f) => [
+      { rect: /** @type {Rect} */ ([2 + f, 2, 3, 6]), color: FLAME },
+      { rect: /** @type {Rect} */ ([10, 20 + (f % 3), 3, 6]), color: FLAME },
+      { rect: /** @type {Rect} */ ([50 - f, 6, 3, 6]), color: FLAME },
+    ];
+    const clip = makeClip(flames);
+    const pieces = colourObject([{ frame: 0, x: 3, y: 4 }]);
+    pieces.input = { ...pieces.input, colour: { ...pieces.input.colour, pieces: true } };
+    const result = await build(clip, pieces);
+    for (let f = 0; f < FRAMES; f++) {
+      for (const flame of flames(f)) expect(keptIn(result.masks[f], flame.rect)).toBe(0);
+      expect(keptIn(result.masks[f], character[1].rect)).toBe(1);
+      expect(keptIn(result.masks[f], character[0].rect)).toBe(1);
+    }
+  });
+
   it('a protect point keeps the hair a pillar of nearly its colour shares', async () => {
     const pillar = [82, 52, 36];
     /** @type {Rect} */

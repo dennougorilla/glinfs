@@ -216,6 +216,7 @@ export function getClipObjectSources(frames, ai, maskStore) {
             clicks: object.clicks,
             tolerance: object.tolerance,
             everywhere: object.everywhere === true,
+            pieces: object.pieces === true && object.everywhere !== true,
           },
         }
       : {

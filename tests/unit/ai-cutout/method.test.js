@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   CUTOUT_METHOD_ENTRIES,
   getClickAnswerRule,
+  getColourReach,
   getRetrackScope,
   getTrackAfterLost,
 } from '../../../src/features/ai-cutout/method.js';
@@ -23,6 +24,7 @@ describe('cutout methods', () => {
     expect(getTrackAfterLost()).toBe('resume');
     expect(getRetrackScope()).toBe('span');
     expect(getClickAnswerRule()).toBe('size');
+    expect(getColourReach()).toBe('touching');
   });
 
   it('a URL override selects an option for the page session', () => {
@@ -31,6 +33,8 @@ describe('cutout methods', () => {
     expect(getRetrackScope()).toBe('all');
     setMethodOverridesFromSearch('?method.cutout.click-answer=scored');
     expect(getClickAnswerRule()).toBe('scored');
+    setMethodOverridesFromSearch('?method.cutout.colour-reach=pieces');
+    expect(getColourReach()).toBe('pieces');
     // An unknown option keeps the default
     setMethodOverridesFromSearch('?method.cutout.track-lost=sometimes');
     expect(getTrackAfterLost()).toBe('resume');

@@ -359,6 +359,28 @@ describe('Colour fix-ups', () => {
     expect('everywhere' in state.edits.background.ai.objects[2]).toBe(false);
   });
 
+  it('Methods: Colour reach sets a new Colour fix-up reach (Everywhere / Detached pieces), kept through normalization; the Everywhere toggle replaces pieces (cutout-ux 8)', () => {
+    const click = { frame: 1, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') };
+    let state = addAiObject(makeState(), 'remove', { click, colour: true, reach: 'pieces' }, 'p');
+    state = addAiObject(state, 'remove', { click, colour: true, reach: 'everywhere' }, 'e');
+    state = addAiObject(state, 'remove', { click, colour: true, reach: 'touching' }, 't');
+    // Not Colour: no reach
+    state = addAiObject(state, 'remove', { click, reach: 'pieces' }, 'w');
+    const [p, e, t, w] = state.edits.background.ai.objects;
+    expect(p.pieces).toBe(true);
+    expect('everywhere' in p).toBe(false);
+    expect(e.everywhere).toBe(true);
+    expect('pieces' in e).toBe(false);
+    expect('pieces' in t || 'everywhere' in t).toBe(false);
+    expect('pieces' in w).toBe(false);
+    const again = normalizeEdits(JSON.parse(JSON.stringify(state.edits)), 10).background.ai.objects;
+    expect(again[0].pieces).toBe(true);
+    // The fix-up's own Everywhere: on replaces pieces
+    state = setAiObjectEverywhere(state, 'p', true);
+    expect(state.edits.background.ai.objects[0].everywhere).toBe(true);
+    expect('pieces' in state.edits.background.ai.objects[0]).toBe(false);
+  });
+
   it('a Colour fix-up takes keep (sample) and remove (protect) points like a tracked one', () => {
     let state = addAiObject(makeState(), 'remove', { click }, 'r');
     state = setAiObjectScope(state, 'r', 'colour');

@@ -22,6 +22,7 @@ import {
   getAnalysisCoverage,
   getAnalysisFraction,
   getBuildParamsKey,
+  getClipObjectSources,
   getClipProbSource,
   getModelSizeLabel,
   getObjectSignature,
@@ -527,5 +528,23 @@ describe('getActiveMaskGroups (#228: the groups the mask store protects for the 
       ],
     });
     expect(getActiveMaskGroups(ai)).toEqual([getAiModelId(ai), 'object:o1', 'object:o3']);
+  });
+});
+
+describe('getClipObjectSources (Colour reach, cutout-ux 8)', () => {
+  it('passes a Colour fix-up reach to the build: pieces, unless its Everywhere is on', () => {
+    const click = { frame: 0, x: 0.5, y: 0.5, mode: /** @type {const} */ ('keep') };
+    const colour = { mode: 'remove', scope: 'colour', clicks: [click], boxes: [], tolerance: 32 };
+    const ai = /** @type {any} */ ({
+      objects: [
+        { ...colour, id: 'p', pieces: true },
+        { ...colour, id: 'e', everywhere: true, pieces: true },
+        { ...colour, id: 't' },
+      ],
+    });
+    const [p, e, t] = getClipObjectSources([], ai, createMaskStore());
+    expect(p.colour).toMatchObject({ pieces: true, everywhere: false });
+    expect(e.colour).toMatchObject({ pieces: false, everywhere: true });
+    expect(t.colour).toMatchObject({ pieces: false, everywhere: false });
   });
 });

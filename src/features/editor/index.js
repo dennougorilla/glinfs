@@ -52,7 +52,7 @@ import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
-import { getClickAnswerRule } from '../ai-cutout/method.js';
+import { getClickAnswerRule, getColourReach } from '../ai-cutout/method.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager, objectMaskKey } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
@@ -2661,7 +2661,10 @@ function addObjectFixUp(mode, selection) {
   const willTrack = !(mode === 'remove' && selection.click && !selection.box && selection.colour);
   if (willTrack) aiSession?.expectAnswer();
   store.setState((s) =>
-    setAiPickTool(addAiObject(s, mode, { ...selection, answer: getClickAnswerRule() }), null),
+    setAiPickTool(
+      addAiObject(s, mode, { ...selection, answer: getClickAnswerRule(), reach: getColourReach() }),
+      null,
+    ),
   );
   const added = store.getState().edits.background.ai.objects?.at(-1);
   if (added && !isColourObject(added)) {

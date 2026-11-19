@@ -31,6 +31,7 @@ import {
   getSampleRadius,
   samplePoint,
 } from './colour-fill.js';
+import { createPiecePalette, removeDetachedPieces } from './detached-pieces.js';
 import {
   createPickTracker,
   fillSmallHoles,
@@ -66,10 +67,12 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  *   probability mask on a frame (any size), or null where it was not
  *   tracked (that frame keeps the base mask). Read once per frame when a
  *   build starts, like getProb.
- * @property {{ clicks: import('../edits/model.js').CutoutPick[], tolerance: number, everywhere?: boolean }} [colour] -
+ * @property {{ clicks: import('../edits/model.js').CutoutPick[], tolerance: number, everywhere?: boolean, pieces?: boolean }} [colour] -
  *   A Colour fix-up (not tracked: getMask is not read): its keep points
  *   sample the colours to remove, its remove points the colours to protect
- *   (see shared/masks/colour-fill)
+ *   (see shared/masks/colour-fill). pieces (Colour reach = Detached pieces):
+ *   instead, the small detached pieces in the palette of the piece under its
+ *   first point go (see shared/masks/detached-pieces)
  */
 
 /**
@@ -174,7 +177,7 @@ export function getAiParamsKey(ai) {
   const objects = (ai.objects ?? [])
     .map((o) =>
       o.scope === 'colour' && o.mode === 'remove'
-        ? `${o.id}:${o.mode}:colour:${o.tolerance}${o.everywhere ? ':everywhere' : ''}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
+        ? `${o.id}:${o.mode}:colour:${o.tolerance}${o.everywhere ? ':everywhere' : ''}${o.pieces ? ':pieces' : ''}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
         : `${o.id}:${o.mode}${o.only ? ':only' : ''}`,
     )
     .join(',');
@@ -630,7 +633,9 @@ export function clearColourSamplings() {
  * @param {number} width - mask size
  * @param {number} height
  * @param {number | undefined} sourceWidth
- * @param {{ guard?: boolean }} [options] - guard: record what each fill takes
+ * @param {{ guard?: boolean, binaryAt?: (f: number) => Uint8Array | null }} [options] -
+ *   guard: record what each fill takes; binaryAt: the frames' thresholded
+ *   masks (any order), for the Detached pieces palette
  */
 function createColourStage(objects, getPixels, width, height, sourceWidth, options = {}) {
   const size = width * height;
@@ -656,6 +661,13 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
       id: object.id ?? '',
       seeds,
       everywhere: object.colour.everywhere === true,
+      // Detached pieces: the palette of the piece under the first point on its
+      // frame, read now (before the frame loop reuses binaryAt's buffer)
+      palette:
+        object.colour.pieces === true
+          ? piecePalette(object.colour, getPixels, options.binaryAt, width, height)
+          : null,
+      pieces: object.colour.pieces === true,
       pointFrames: object.colour.clicks.filter((c) => c.mode === 'keep').map((c) => c.frame),
       matches: createColourMatcher(samples, protects, object.colour.tolerance),
       /** @type {Map<number, import('./colour-fill.js').ColourFrameStats> | null} */
@@ -678,6 +690,19 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
     fillFor(k, f, framePixels) {
       const layer = layers[k];
       if (!layer) return null;
+      if (layer.pieces) {
+        const { palette } = layer;
+        return (out) => {
+          const rgba = framePixels();
+          if (!palette || !rgba || rgba.length < size * 4) return;
+          const removed = removeDetachedPieces(out, width, height, rgba, palette);
+          if (layer.stats) {
+            let mask = 0;
+            for (let i = 0; i < size; i++) if (out[i]) mask++;
+            layer.stats.set(f, { mask: mask + removed, removed, far: 0 });
+          }
+        };
+      }
       return (out) => {
         const rgba = framePixels();
         if (!rgba || rgba.length < size * 4) return;
@@ -725,6 +750,26 @@ function createColourStage(objects, getPixels, width, height, sourceWidth, optio
 }
 
 /**
+ * The Detached pieces palette of a Colour fix-up: from the piece under its
+ * first keep point, on that point's frame (null: no piece there, or no
+ * pixels / mask to read)
+ * @param {{ clicks: import('../edits/model.js').CutoutPick[] }} colour
+ * @param {PixelSource | undefined} getPixels
+ * @param {((f: number) => Uint8Array | null) | undefined} binaryAt
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array | null}
+ */
+function piecePalette(colour, getPixels, binaryAt, width, height) {
+  const point = colour.clicks.find((c) => c.mode === 'keep');
+  if (!point || !getPixels || !binaryAt) return null;
+  const rgba = getPixels(point.frame, width, height);
+  const bin = binaryAt(point.frame);
+  if (!rgba || !bin) return null;
+  return createPiecePalette(rgba, bin.slice(), width, height, point);
+}
+
+/**
  * The indices of a mask's set pixels
  * @param {Uint8Array} mask - 0/1
  * @param {number} size
@@ -753,10 +798,12 @@ export function getColourRegion(options, object, frameIndex) {
   const bin = frameBinary?.binaryAt(frameIndex);
   if (!frameBinary || !bin || !object.colour) return null;
   const { width, height } = frameBinary;
-  const stage = createColourStage([object], options.getPixels, width, height, options.sourceWidth);
+  const out = bin.slice();
+  const stage = createColourStage([object], options.getPixels, width, height, options.sourceWidth, {
+    binaryAt: (f) => frameBinary.binaryAt(f),
+  });
   const fill = stage.fillFor(0, frameIndex, () => options.getPixels(frameIndex, width, height));
   if (!fill) return null;
-  const out = bin.slice();
   fill(out);
   const data = new Uint8Array(width * height);
   for (let i = 0; i < data.length; i++) data[i] = bin[i] && !out[i] ? 255 : 0;
@@ -808,6 +855,7 @@ export async function buildFinalMasks(options) {
   });
   const colour = createColourStage(objects, getPixels, width, height, options.sourceWidth, {
     guard: true,
+    binaryAt: (f) => frameBinary.binaryAt(f),
   });
 
   const size = width * height;
