@@ -283,4 +283,83 @@ describe('gif-encoder-worker session abort (#45)', () => {
     expect(finish).toHaveBeenCalledTimes(1);
     expect(lastPosted('complete')).toBeDefined();
   });
+  describe('frames written after their trial on a second worker', () => {
+    const INIT = {
+      command: 'init',
+      encoderId: 'gifenc-js',
+      width: 2,
+      height: 2,
+      totalFrames: 2,
+      maxColors: 256,
+      frameDelayMs: 100,
+      loopCount: 0,
+      frameDifferencing: true,
+    };
+
+    /** A promise with its resolve and reject */
+    function deferred() {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it('reports a frame once it is written, then completes after finish settles', async () => {
+      const written = deferred();
+      addFrame.mockReturnValueOnce(written.promise);
+      const finished = deferred();
+      finish.mockReturnValueOnce(finished.promise);
+
+      await send(INIT);
+      await send(makeFrame(0));
+      expect(lastPosted('progress')).toBeUndefined();
+
+      const finishing = onmessage({ data: { command: 'finish' } });
+      written.resolve();
+      await Promise.resolve();
+      expect(lastPosted('progress')).toMatchObject({ frameIndex: 0 });
+      expect(lastPosted('complete')).toBeUndefined();
+
+      finished.resolve(new Uint8Array([4, 5]));
+      await finishing;
+      expect(Array.from(new Uint8Array(lastPosted('complete').gifData))).toEqual([4, 5]);
+    });
+
+    it('fails the session when a written frame fails, with one error', async () => {
+      const written = deferred();
+      addFrame.mockReturnValueOnce(written.promise);
+      await send(INIT);
+      await send(makeFrame(0));
+      written.reject(new Error('trial failed'));
+      await Promise.resolve();
+      await Promise.resolve();
+      const errors = postMessage.mock.calls.filter(([m]) => m.event === 'error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0][0]).toMatchObject({ code: 'FRAME_ERROR', message: 'trial failed' });
+
+      await send({ command: 'finish' });
+      expect(lastPosted('error').code).toBe('SESSION_ABORTED');
+    });
+
+    it('sends nothing for a session cancelled while finish waits', async () => {
+      const written = deferred();
+      addFrame.mockReturnValueOnce(written.promise);
+      const finished = deferred();
+      finish.mockReturnValueOnce(finished.promise);
+      await send(INIT);
+      await send(makeFrame(0));
+      const finishing = onmessage({ data: { command: 'finish' } });
+      await send({ command: 'cancel' });
+
+      written.resolve();
+      finished.resolve(new Uint8Array([1]));
+      await finishing;
+      expect(lastPosted('progress')).toBeUndefined();
+      expect(lastPosted('complete')).toBeUndefined();
+      expect(lastPosted('cancelled')).toBeDefined();
+    });
+  });
 });

@@ -271,7 +271,9 @@ SOFTWARE.
 - Copyright: Matt DesLauriers
 - License: MIT
 - Use in Glinfs: bundled into the GIF encoder worker (the JavaScript
-  encoder: quantize, palette mapping and LZW).
+  encoder: quantize, palette mapping and LZW). Its LZW coder is also
+  adapted, to run in steps, in `src/features/export/encoders/gif-frame.js`
+  (encoder worker and GIF trial worker).
 
 ```
 The MIT License (MIT)
