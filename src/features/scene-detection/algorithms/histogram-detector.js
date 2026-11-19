@@ -1,10 +1,18 @@
 /**
  * Histogram-based Scene Detector
- * Detects scene changes by comparing color histograms between frames
+ * Detects scene changes from per-frame colour histograms and perceptual
+ * hashes, with the method chosen in Settings (algorithms/scene-breaks.js)
  * @module features/scene-detection/algorithms/histogram-detector
  */
 
 import { DEFAULT_DETECTOR_OPTIONS } from '../types.js';
+import {
+  computePerceptualHash,
+  findBreaks,
+  hashDistance,
+  isFlatHash,
+  MAX_LAG,
+} from './scene-breaks.js';
 
 /**
  * @typedef {import('../types.js').SceneDetectorInterface} SceneDetectorInterface
@@ -109,6 +117,65 @@ export function buildSceneRanges(sceneBreaks, minSceneDuration) {
 }
 
 /**
+ * What every scene method reads from one frame
+ * @typedef {{ histogram: Float32Array, hash: Uint32Array }} FrameFeatures
+ */
+
+/**
+ * @param {ImageData} imageData
+ * @returns {FrameFeatures}
+ */
+export function computeFrameFeatures(imageData) {
+  return { histogram: computeHistogram(imageData), hash: computePerceptualHash(imageData) };
+}
+
+/**
+ * Scene ranges from per-frame features, with the chosen method. A frame
+ * without pixels (null) starts no scene; the frames around it are compared
+ * with each other as if it were not there.
+ *
+ * @param {(FrameFeatures | null)[]} features - Sampled frames, in order
+ * @param {Object} params
+ * @param {number[]} params.frameIndices - Clip frame of each entry
+ * @param {number} params.totalFrames - Exclusive end of the last scene
+ * @param {number} params.minSceneDuration
+ * @param {string} [params.method] - Scene method option id
+ * @returns {Array<{startFrame: number, endFrame: number}>}
+ */
+export function scenesFromFeatures(features, params) {
+  const { frameIndices, totalFrames, minSceneDuration } = params;
+  const method = params.method ?? DEFAULT_DETECTOR_OPTIONS.method ?? 'combined';
+  /** Positions of the frames with pixels */
+  const present = [];
+  features.forEach((f, i) => {
+    if (f) present.push(i);
+  });
+  const at = (/** @type {number} */ p) => /** @type {FrameFeatures} */ (features[present[p]]);
+  /** @param {number} a @param {number} b */
+  const check = (a, b) => {
+    if (!(a < b && b - a <= MAX_LAG)) throw new RangeError(`frames ${a} and ${b} out of reach`);
+  };
+  const breaks = findBreaks(
+    {
+      length: present.length,
+      histogram: (a, b) => {
+        check(a, b);
+        return compareHistograms(at(a).histogram, at(b).histogram);
+      },
+      hash: (a, b) => {
+        check(a, b);
+        return hashDistance(at(a).hash, at(b).hash);
+      },
+      frameAt: (p) => frameIndices[present[p]],
+      flat: (p) => isFlatHash(at(p).hash),
+    },
+    method,
+  ).map((p) => frameIndices[present[p]]);
+  // First frame always starts a scene; an exclusive end keeps the last frame
+  return buildSceneRanges([0, ...breaks, totalFrames], minSceneDuration);
+}
+
+/**
  * Generate unique scene ID
  * @returns {string}
  */
@@ -150,12 +217,8 @@ export function createHistogramDetector() {
 
     /** @type {Scene[]} */
     const scenes = [];
-    /** @type {number[]} */
-    const sceneBreaks = [0]; // First frame is always a scene start
-
-    // Track previous histogram for comparison
-    /** @type {Float32Array | null} */
-    let prevHistogram = null;
+    /** @type {(FrameFeatures | null)[]} */
+    const features = [];
 
     // Process frames with sampling
     const framesToProcess = [];
@@ -176,24 +239,8 @@ export function createHistogramDetector() {
         });
       }
 
-      // Compute histogram from ImageData
-      if (!data.imageData) {
-        // Skip frames without data
-        continue;
-      }
-      const histogram = computeHistogram(data.imageData);
-
-      // Compare with previous frame
-      if (prevHistogram !== null) {
-        const distance = compareHistograms(prevHistogram, histogram);
-
-        // Scene change detected if distance exceeds threshold
-        if (distance > opts.threshold) {
-          sceneBreaks.push(originalIndex);
-        }
-      }
-
-      prevHistogram = histogram;
+      // A frame without pixels starts nothing (null)
+      features.push(data.imageData ? computeFrameFeatures(data.imageData) : null);
 
       // Yield to event loop periodically to prevent blocking
       if (i % 10 === 0) {
@@ -201,10 +248,12 @@ export function createHistogramDetector() {
       }
     }
 
-    // Add an exclusive end marker so the final frame remains included.
-    sceneBreaks.push(frameData.length);
-
-    const ranges = buildSceneRanges(sceneBreaks, opts.minSceneDuration);
+    const ranges = scenesFromFeatures(features, {
+      frameIndices: framesToProcess.map((f) => f.originalIndex),
+      totalFrames: frameData.length,
+      minSceneDuration: opts.minSceneDuration,
+      method: opts.method,
+    });
     for (const { startFrame, endFrame } of ranges) {
       const startFrameData = frameData[startFrame];
       const endFrameData = frameData[endFrame];

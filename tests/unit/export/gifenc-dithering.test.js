@@ -96,4 +96,19 @@ describe('gifenc dithering', () => {
     const whole = encode(still, { dithering: true });
     expect(bytes.length).toBeLessThan(whole.length * 0.6);
   });
+
+  it('dithers with blue noise too: less banding, and the same offsets in every frame', () => {
+    const source = gradient();
+    const plain = renderGifFrames(encode([source], {}))[0];
+    const blue = renderGifFrames(
+      encode([source], { dithering: true, ditherPattern: 'blue-noise' }),
+    )[0];
+    expect(banding(source, blue)).toBeLessThan(banding(source, plain) * 0.75);
+
+    const a = orderedDither(gradient(), W, 16, new Uint8ClampedArray(W * H * 4), 'blue-noise');
+    const b = orderedDither(gradient(), W, 16, new Uint8ClampedArray(W * H * 4), 'blue-noise');
+    expect(b).toEqual(a);
+    // Not the Bayer pattern
+    expect(a).not.toEqual(orderedDither(gradient(), W, 16, new Uint8ClampedArray(W * H * 4)));
+  });
 });

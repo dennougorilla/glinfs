@@ -190,3 +190,127 @@ test('differenced GIFs decode to the same frames as whole-frame GIFs', async ({ 
   const screen = results.filter((r) => r.kind === 'screen');
   for (const r of screen) expect(r.ratio, `screen / ${r.preset}`).toBeLessThan(0.6);
 });
+
+test('the export worker runs trials on a second worker, with the same bytes', async ({ page }) => {
+  await page.goto('/#/capture');
+  const result = await page.evaluate(async () => {
+    const { createGifencEncoder } = await import(
+      '/glinfs/features/export/encoders/gifenc-encoder.js'
+    );
+    const { GifEncoderManager } = await import('/glinfs/workers/worker-manager.js');
+    const W = 320;
+    const H = 180;
+    const FRAMES = 40;
+    /** A static page with a moving block, and video-like noise every 4th frame */
+    const frame = (/** @type {number} */ f) => {
+      let s = f * 7919 + 1;
+      const r = () => {
+        s = (s * 1103515245 + 12345) % 2147483648;
+        return s / 2147483648;
+      };
+      const px = new Uint8ClampedArray(W * H * 4);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          const block = x >= f * 6 && x < f * 6 + 30 && y >= 60 && y < 110;
+          const n = f % 4 === 3 ? (r() - 0.5) * 60 : 0;
+          px[i] = (block ? 230 : 40 + ((x * 7 + y * 3) % 90)) + n;
+          px[i + 1] = (block ? 70 : 90 + ((x + y * 5) % 60)) + n;
+          px[i + 2] = block ? 90 : 160;
+          px[i + 3] = 255;
+        }
+      }
+      return px;
+    };
+    const config = {
+      width: W,
+      height: H,
+      maxColors: 64,
+      frameDelayMs: 50,
+      loopCount: 0,
+      quantizeFormat: 'rgb565',
+      paletteInterval: 1,
+      frameDifferencing: true,
+    };
+
+    // In this thread, no second worker: every trial runs in the encoder
+    const local = createGifencEncoder();
+    local.init(config);
+    for (let f = 0; f < FRAMES; f++) local.addFrame({ rgba: frame(f), width: W, height: H }, f);
+    const expected = local.finish();
+
+    // Through the export worker, which starts the trial worker
+    const manager = new GifEncoderManager();
+    let processed = 0;
+    /** @type {number[]} */
+    const progressOrder = [];
+    manager.onProgress = (p) => {
+      processed++;
+      progressOrder.push(p.frameIndex);
+    };
+    await manager.init({ encoderId: 'gifenc-js', totalFrames: FRAMES, ...config });
+    for (let f = 0; f < FRAMES; f++) {
+      while (f - processed >= 4) await new Promise((r) => setTimeout(r, 1));
+      manager.addFrame(frame(f), W, H, f, 50);
+    }
+    const blob = await manager.finish();
+    manager.dispose();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const same = bytes.length === expected.length && bytes.every((b, i) => b === expected[i]);
+    return { same, size: bytes.length, progressOrder };
+  });
+
+  expect(result.same).toBe(true);
+  expect(result.progressOrder).toEqual(Array.from({ length: 40 }, (_, i) => i));
+});
+
+test('the trial worker answers a job with the smaller encoding', async ({ page }) => {
+  await page.goto('/#/capture');
+  // The worker the export worker starts, run directly: it must load and
+  // answer (a nested worker that failed to load would only show as a
+  // failed export)
+  const answer = await page.evaluate(async () => {
+    const worker = new Worker('/glinfs/workers/gif-trial-worker.js', { type: 'module' });
+    const index = new Uint8Array(64 * 64);
+    for (let i = 0; i < index.length; i++) index[i] = (i * 7) % 5;
+    const differenced = new Uint8Array(index.length).fill(5);
+    const palette = [
+      [0, 0, 0],
+      [255, 0, 0],
+      [0, 255, 0],
+      [0, 0, 255],
+      [255, 255, 255],
+    ];
+    const reply = await new Promise((resolve, reject) => {
+      worker.onmessage = (e) => resolve(e.data);
+      worker.onerror = (e) => reject(new Error(e.message || 'worker failed'));
+      worker.postMessage(
+        {
+          id: 7,
+          width: 64,
+          height: 64,
+          index: index.buffer,
+          differenced: differenced.buffer,
+          wholeOptions: { palette, delay: 50, dispose: 1 },
+          keptOptions: {
+            palette: [...palette, [0, 0, 0]],
+            delay: 50,
+            dispose: 1,
+            transparent: true,
+            transparentIndex: 5,
+          },
+        },
+        [index.buffer, differenced.buffer],
+      );
+    });
+    worker.terminate();
+    const bytes = new Uint8Array(reply.bytes);
+    // A graphic control extension with the transparency flag: the all-kept frame won
+    return {
+      id: reply.id,
+      transparent: bytes[0] === 0x21 && (bytes[3] & 1) === 1,
+      returned: reply.index.byteLength,
+    };
+  });
+  expect(answer).toEqual({ id: 7, transparent: true, returned: 64 * 64 });
+});

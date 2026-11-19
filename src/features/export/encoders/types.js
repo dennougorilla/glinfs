@@ -41,6 +41,10 @@
  *   transparency (one palette slot reserved, every frame disposed to background).
  *   Only encoders with capabilities.supportsTransparency honor it.
  * @property {boolean} [dithering=false] - Ordered dithering before palette mapping (gifenc)
+ * @property {'bayer' | 'blue-noise'} [ditherPattern='bayer'] - Threshold map of the dithering
+ * @property {'threshold' | 'matte' | 'dither'} [edge='threshold'] - How soft alpha becomes 1-bit
+ *   (transparent exports)
+ * @property {number[]} [matteColor] - [r, g, b] the edge is blended into with edge 'matte'
  * @property {boolean} [frameDifferencing=false] - Write pixels unchanged since
  *   the previous frame as transparency (opaque exports; gifenc only)
  */
@@ -94,8 +98,9 @@
  * @typedef {Object} EncoderInterface
  * @property {EncoderMetadata} metadata - Encoder metadata
  * @property {(config: EncoderConfig) => void | Promise<void>} init - Initialize (sync or async)
- * @property {(frameData: FrameData, frameIndex: number) => void} addFrame - Add frame
- * @property {() => Uint8Array} finish - Complete encoding and get byte array
+ * @property {(frameData: FrameData, frameIndex: number) => void | Promise<void>} addFrame - Add
+ *   frame; a promise when the frame is written later (pending until it is in the GIF)
+ * @property {() => Uint8Array | Promise<Uint8Array>} finish - Complete encoding and get byte array
  * @property {() => void} dispose - Release resources
  */
 
