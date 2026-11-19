@@ -399,6 +399,36 @@ export function getObjectSignature(object) {
 }
 
 /**
+ * The frames a fix-up's gone marks stand for: around each gone frame, the
+ * run of selection frames that have no mask of its current prompts (it is
+ * not there, so nothing is missing)
+ * @param {Frame[]} frames
+ * @param {{ start: number, end: number }} range
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @param {MaskStore} [maskStore]
+ * @returns {Set<number>}
+ */
+export function getGoneFrames(frames, range, object, maskStore = getSharedMaskStore()) {
+  /** @type {Set<number>} */
+  const out = new Set();
+  const gone = object.gone ?? [];
+  if (gone.length === 0) return out;
+  const tag = getObjectSignature(object);
+  const start = Math.max(0, range.start);
+  const end = Math.min(frames.length - 1, range.end);
+  const masked = (/** @type {number} */ f) => {
+    const key = objectMaskKey(frames[f], object.id);
+    return maskStore.has(key) && maskStore.getTag(key) === tag;
+  };
+  for (const g of gone) {
+    if (g < start || g > end || masked(g) || out.has(g)) continue;
+    for (let f = g; f >= start && !masked(f); f--) out.add(f);
+    for (let f = g + 1; f <= end && !masked(f); f++) out.add(f);
+  }
+  return out;
+}
+
+/**
  * @typedef {Object} ObjectCoverage
  * @property {number} covered - Frames of the selection that have a mask of
  *   the fix-up as it is now (its current clicks, boxes and scope)
@@ -429,6 +459,7 @@ export function getObjectCoverage(
   const selection = Math.max(0, end - start + 1);
   const tracked = objects.filter((o) => !isColourObject(o));
   const tags = tracked.map((o) => getObjectSignature(o));
+  const gone = tracked.map((o) => getGoneFrames(frames, range, o, maskStore));
   /** @type {Record<string, ObjectCoverage>} */
   const perObject = {};
   /** @type {Record<string, Uint8Array>} */
@@ -442,7 +473,7 @@ export function getObjectCoverage(
     let all = true;
     tracked.forEach((o, k) => {
       const key = objectMaskKey(frames[f], o.id);
-      if (maskStore.has(key) && maskStore.getTag(key) === tags[k]) {
+      if ((maskStore.has(key) && maskStore.getTag(key) === tags[k]) || gone[k].has(f)) {
         perObject[o.id].covered++;
         if (states) frameStates[o.id][f] = 1;
       } else {

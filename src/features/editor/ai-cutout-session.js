@@ -55,6 +55,7 @@
 import { isAiCutoutActive } from '../../shared/edits/model.js';
 import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
+import { OBJECT_GROUP_PREFIX } from '../ai-cutout/mask-store.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
@@ -74,6 +75,7 @@ import {
   getAiModelId,
   getBuildParamsKey,
   getClipProbSource,
+  getGoneFrames,
   getObjectCoverage,
   getObjectSignature,
   getSharedFinalMaskCache,
@@ -268,7 +270,7 @@ export function createAiCutoutSession(options) {
     maskSource = source;
     if (!(/** @type {any} */ (source).draft)) {
       fullSource = source;
-      scheduleSuggestions(source);
+      scheduleSuggestions();
       report({ colourLevels: source.colourLevels ?? {} });
     }
     report({ maskVersion: source.version });
@@ -280,25 +282,59 @@ export function createAiCutoutSession(options) {
   /** @type {ReturnType<typeof setTimeout> | null} */
   let suggestTimer = null;
 
+  /**
+   * Changes of the base masks (not the fix-ups'): the suggestions read only
+   * those and the AI settings, so a fix-up's new masks never redo them
+   */
+  let baseMaskVersion = 0;
+  /** The inputs of the last suggestion pass that finished @type {string | null} */
+  let suggestedKey = null;
+  /** The inputs of the pass scheduled or running @type {string | null} */
+  let suggestingKey = null;
+
+  /**
+   * What the suggestions are computed from: the base masks (their version)
+   * and the AI settings without the fix-ups
+   * @returns {string | null}
+   */
+  const suggestionsKey = () => {
+    const state = getState();
+    const frames = state?.clip?.frames;
+    if (!state || !frames) return null;
+    const { objects: _objects, ...ai } = state.edits.background.ai;
+    return `${baseMaskVersion}|${frames.length}|${getClipId()}|${JSON.stringify(ai)}`;
+  };
+
   /** Stop the suggestion pass (a new one starts with the next build) */
   const abortSuggestions = () => {
     if (suggestTimer !== null) clearTimeout(suggestTimer);
     suggestTimer = null;
     suggestController?.abort();
     suggestController = null;
+    suggestingKey = null;
   };
 
   /**
    * Find the clean-up suggestions of a full build, a moment after it lands
-   * @param {MaskSource} source
    */
-  const scheduleSuggestions = (source) => {
+  const scheduleSuggestions = () => {
+    const key = suggestionsKey();
+    // Same inputs: done already, or on the way (a build of a fix-up's masks
+    // landed: with the rebuild cooldown that was a whole-clip suggestion
+    // pass every 1.5 s while a fix-up was tracked, recomputing the same)
+    if (key !== null && key === suggestedKey) return;
+    if (key !== null && key === suggestingKey) return;
     abortSuggestions();
+    suggestingKey = key;
     suggestTimer = setTimeout(() => {
       suggestTimer = null;
       const state = getState();
       const frames = state?.clip?.frames;
-      if (disposed || !state || !frames || maskSource !== source) return;
+      if (disposed || !state || !frames || suggestionsKey() !== key) {
+        suggestingKey = null;
+        if (!disposed && fullSource) scheduleSuggestions();
+        return;
+      }
       const { ai } = state.edits.background;
       const controller = new AbortController();
       suggestController = controller;
@@ -313,6 +349,8 @@ export function createAiCutoutSession(options) {
         (suggestions) => {
           if (suggestController !== controller) return;
           suggestController = null;
+          suggestingKey = null;
+          suggestedKey = key;
           report({ cleanupSuggestions: suggestions });
         },
         (error) => {
@@ -359,9 +397,33 @@ export function createAiCutoutSession(options) {
    */
   const requestStoreBuild = () => {
     if (disposed) return;
-    if (analysisController && cooldownTimer !== null) {
+    // A tracked fix-up adds a mask every few frames too: without the
+    // cooldown every store change rebuilt the whole clip on the main thread
+    // (129 builds while one fix-up was tracked through 286 frames, tracking
+    // at 1.4 frames/s with three fix-ups while the GPU idled at 5 %)
+    if ((analysisController || objectController) && cooldownTimer !== null) {
       buildAfterCooldown = true;
       return;
+    }
+    // A fix-up is tracked (no analysis): the frames on screen now, from a
+    // draft; the whole clip once the run ends (its finally). A whole-clip
+    // build applies every fix-up to every frame on the main thread that
+    // also drives the tracker: a second fix-up tracked at half the speed
+    // of the first (0.70 s a frame against 0.33 on 300 frames)
+    if (objectController && !analysisController && !interactive) {
+      const state = getState();
+      if (state?.clip && isAiCutoutActive(state.edits.background) && fullSource) {
+        reportCoverage();
+        publish(
+          createClipDraftMaskSource({
+            frames: state.clip.frames,
+            ai: state.edits.background.ai,
+            maskStore,
+            base: fullSource,
+          }),
+        );
+        return;
+      }
     }
     requestBuild();
   };
@@ -422,7 +484,7 @@ export function createAiCutoutSession(options) {
     buildKey = key;
     rebuildAfterBuild = false;
     startBuildingStatus();
-    if (analysisController) startCooldown();
+    if (analysisController || objectController) startCooldown();
     buildClipMaskSource({ frames, ai, maskStore, clipId, cache, signal: controller.signal }).then(
       (source) => {
         if (buildController !== controller) return;
@@ -453,6 +515,13 @@ export function createAiCutoutSession(options) {
 
   const unsubscribeStore = maskStore.subscribe((change) => {
     if (disposed) return;
+    // A fix-up's masks (and their retag, a set without a key) leave the
+    // suggestions as they are
+    const objectOnly =
+      (change.type === 'set' && !change.key) ||
+      String(change.key ?? '').startsWith(OBJECT_GROUP_PREFIX) ||
+      String(change.model ?? '').startsWith(OBJECT_GROUP_PREFIX);
+    if (!objectOnly) baseMaskVersion++;
     report({ storeVersion: change.version });
     if (storeTimer !== null) return;
     storeTimer = setTimeout(() => {
@@ -749,8 +818,6 @@ export function createAiCutoutSession(options) {
    * @type {Map<string, string>}
    */
   const objectRuns = new Map();
-  /** @type {Record<string, number[]>} */
-  let objectLost = {};
   /**
    * Per fix-up: the tracker's answers on its clicked frame, small to large
    * (what the picker steps through; kept for this mount only)
@@ -772,10 +839,87 @@ export function createAiCutoutSession(options) {
    */
   const findObject = (id) => getState()?.edits.background.ai.objects?.find((o) => o.id === id);
 
-  /** @param {Record<string, number[]>} next */
+  /**
+   * Per object: the lost frames its runs reported, before the frames the
+   * user confirmed as gone are taken out
+   * @type {Record<string, number[]>}
+   */
+  let rawLost = {};
+
+  /**
+   * Report the lost frames: those the runs reported, minus the frames the
+   * user confirmed the object is not on (see getGoneFrames)
+   * @param {Record<string, number[]>} next - raw
+   */
   const reportLost = (next) => {
-    objectLost = next;
-    report({ objectLost: next });
+    rawLost = next;
+    const state = getState();
+    const frames = state?.clip?.frames ?? [];
+    const range = state?.selectedRange ?? { start: 0, end: frames.length - 1 };
+    /** @type {Record<string, number[]>} */
+    const shown = {};
+    for (const [id, lost] of Object.entries(next)) {
+      const object = findObject(id);
+      const gone = object && frames.length ? getGoneFrames(frames, range, object, maskStore) : null;
+      shown[id] = gone && gone.size > 0 ? lost.filter((f) => !gone.has(f)) : lost;
+    }
+    report({ objectLost: shown });
+  };
+
+  /**
+   * Per object: what its last finished run tracked (its prompts and
+   * selection), so a correction that only adds to them re-tracks only the
+   * span it can change
+   * @type {Map<string, { signature: string, object: import('../../shared/edits/model.js').CutoutObject, range: { start: number, end: number } }>}
+   */
+  const objectTracked = new Map();
+
+  /**
+   * Per object: the tags of the runs started since its last finished one. A
+   * run cut short by the next change leaves frames with its tag (those it
+   * tracked, and for a correction those outside its span); the next span
+   * takes them over too, else they match neither run and are never tracked
+   * again
+   * @type {Map<string, Set<string>>}
+   */
+  const objectStarted = new Map();
+
+  /**
+   * The span a correction can change: when `object` only adds clicks or
+   * boxes to what its last run tracked (same scope, pick and selection),
+   * from the frame after the previous anchor to the frame before the next
+   * one around the new prompts; null: everything (a first run, a changed
+   * scope or pick, a removed point)
+   * @param {import('../../shared/edits/model.js').CutoutObject} object
+   * @param {{ start: number, end: number }} range
+   * @returns {{ start: number, end: number } | null}
+   */
+  const correctionSpan = (object, range) => {
+    const last = objectTracked.get(object.id);
+    if (!last) return null;
+    const old = last.object;
+    if (last.range.start !== range.start || last.range.end !== range.end) return null;
+    if (old.scope !== object.scope || old.candidate !== object.candidate) return null;
+    const key = (/** @type {any} */ p) =>
+      'x0' in p
+        ? `b${p.frame}:${p.x0}:${p.y0}:${p.x1}:${p.y1}`
+        : `c${p.frame}:${p.x}:${p.y}:${p.mode}`;
+    const before = [...old.clicks, ...(old.boxes ?? [])].map(key);
+    const now = [...object.clicks, ...(object.boxes ?? [])];
+    const nowKeys = now.map(key);
+    if (!before.every((k) => nowKeys.includes(k)) || nowKeys.length <= before.length) return null;
+    const added = now.filter((p) => !before.includes(key(p))).map((p) => p.frame);
+    const anchors = [...old.clicks, ...(old.boxes ?? [])].map((p) => p.frame);
+    let start = Number.POSITIVE_INFINITY;
+    let end = Number.NEGATIVE_INFINITY;
+    for (const c of added) {
+      const prev = Math.max(range.start - 1, ...anchors.filter((a) => a < c));
+      const next = Math.min(range.end + 1, ...anchors.filter((a) => a > c));
+      start = Math.min(start, anchors.includes(c) ? c : prev + 1);
+      end = Math.max(end, anchors.includes(c) ? c : next - 1);
+    }
+    if (!(start <= end)) return null;
+    return { start, end };
   };
 
   /**
@@ -871,7 +1015,30 @@ export function createAiCutoutSession(options) {
     const controller = new AbortController();
     objectController = controller;
     const signature = getObjectSignature(object);
-    const range = state.selectedRange;
+    const selection = state.selectedRange;
+    // A correction that only adds a point or a box: re-track the span it
+    // can change, never the frames outside it, whose masks (and lost marks)
+    // stay and take the new prompts' tag
+    const span = correctionSpan(object, selection);
+    const range = span ?? selection;
+    if (span) {
+      const last = /** @type {NonNullable<ReturnType<typeof objectTracked.get>>} */ (
+        objectTracked.get(object.id)
+      );
+      const keys = [];
+      for (
+        let f = Math.max(0, selection.start);
+        f <= Math.min(state.clip.frames.length - 1, selection.end);
+        f++
+      ) {
+        if (f < span.start || f > span.end)
+          keys.push(objectMaskKey(state.clip.frames[f], object.id));
+      }
+      for (const from of new Set([last.signature, ...(objectStarted.get(object.id) ?? [])])) {
+        if (from !== signature) maskStore.retag(keys, from, signature);
+      }
+    }
+    objectStarted.set(object.id, new Set([...(objectStarted.get(object.id) ?? []), signature]));
     const runKey = runKeyOf(object, range);
     const { id } = object;
     objectRun = { id, signature, runKey };
@@ -930,7 +1097,11 @@ export function createAiCutoutSession(options) {
         },
       });
       objectRuns.set(id, runKey);
-      reportLost({ ...objectLost, [id]: result.lost });
+      objectTracked.set(id, { signature, object, range: selection });
+      objectStarted.delete(id);
+      // Lost frames outside a correction's span are as the last run left them
+      const kept = span ? (rawLost[id] ?? []).filter((f) => f < span.start || f > span.end) : [];
+      reportLost({ ...rawLost, [id]: [...kept, ...result.lost].sort((a, b) => a - b) });
     } catch (error) {
       if (!isAbortError(error)) {
         const choice = isWasmChoiceError(error) && !isWasmAllowed();
@@ -989,11 +1160,13 @@ export function createAiCutoutSession(options) {
       objectSignatures.delete(id);
       objectRuns.delete(id);
       objectAnswers.delete(id);
+      objectTracked.delete(id);
+      objectStarted.delete(id);
       objectQueue = objectQueue.filter((queued) => queued !== id);
       if (objectRun?.id === id) objectController?.abort();
       dropObjectMasks(id);
-      if (id in objectLost) {
-        const { [id]: _gone, ...rest } = objectLost;
+      if (id in rawLost) {
+        const { [id]: _gone, ...rest } = rawLost;
         reportLost(rest);
       }
     }
@@ -1031,8 +1204,8 @@ export function createAiCutoutSession(options) {
             maskStore.delete(objectMaskKey(frame, object.id));
           }
         });
-        if (object.id in objectLost) {
-          const { [object.id]: _old, ...rest } = objectLost;
+        if (object.id in rawLost && !correctionSpan(object, state.selectedRange)) {
+          const { [object.id]: _old, ...rest } = rawLost;
           reportLost(rest);
         }
       }
@@ -1042,6 +1215,8 @@ export function createAiCutoutSession(options) {
       }
       if (running) objectController?.abort();
     }
+    // Gone frames confirmed since: the lost frames shown follow
+    reportLost(rawLost);
     void runNextObject();
   };
 

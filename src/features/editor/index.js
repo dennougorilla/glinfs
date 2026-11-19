@@ -110,6 +110,7 @@ import {
   addAiObject,
   addAiObjectBox,
   addAiObjectClick,
+  addAiObjectGone,
   addAiPick,
   addTextLayer,
   addTouchUps,
@@ -2705,6 +2706,20 @@ function handleObjectCorrection(object, correction) {
   const own = state.aiPickTool === getObjectTool(object);
   const mode = own !== correction.alt ? 'keep' : 'remove';
   const point = /** @type {{ x: number, y: number }} */ (correction.click);
+  // Taking away where the fix-up has no mask on this frame (tracking lost
+  // it, or it left the frame): "it is not here", from this frame until it
+  // is found again. Nothing is clicked in, nothing re-tracks.
+  const here = state.clip?.frames[state.currentFrame];
+  if (
+    mode === 'remove' &&
+    !isColourObject(object) &&
+    here &&
+    !getSharedMaskStore().has(objectMaskKey(here, object.id))
+  ) {
+    store.setState((s) => addAiObjectGone(s, object.id, s.currentFrame));
+    announce('Not on this frame: done here until it comes back.');
+    return;
+  }
   if (!isColourObject(object)) aiSession?.expectAnswer();
   store.setState((s) =>
     addAiObjectClick(s, object.id, { frame: s.currentFrame, x: point.x, y: point.y, mode }),

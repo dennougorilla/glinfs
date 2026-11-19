@@ -231,32 +231,34 @@ describe('the active clip (task 13: export failed after fix-ups on a 15 s clip)'
     expect(store.keysForClip('A').sort()).toEqual(['anime:a', 'anime:a2', 'anime:a3']);
   });
 
-  it('sizes the cap from the active clip: frames x mask bytes x (1 + objects)', () => {
-    const store = createMaskStore({ capBytes: 8 });
+  it('sizes each pool’s cap from the active clip: frames x mask bytes per group of that pool', () => {
+    const store = createMaskStore({ capBytes: 8, objectCapBytes: 2 });
     store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
     store.set('anime:0', mask(4), 'A', 'anime');
-    // 4 frames x 4 bytes x 2 groups = 32 bytes of room
-    expect(store.capBytes).toBe(32);
-    store.set('b', mask(8), 'B', 'anime');
-    store.set('c', mask(8), 'C', 'anime');
-    expect(store.has('b')).toBe(true); // 4 + 8 + 8 = 20 <= 32
-    store.set('d', mask(16), 'D', 'anime'); // 36 > 32: B goes
+    // Base pool: 4 frames x 4 bytes = 16 bytes of room
+    expect(store.capBytes).toBe(16);
+    store.set('b', mask(4), 'B', 'anime');
+    store.set('c', mask(4), 'C', 'anime');
+    expect(store.has('b')).toBe(true); // 4 + 4 + 4 = 12 <= 16
+    store.set('d', mask(8), 'D', 'anime'); // 20 > 16: B goes
     expect(store.has('b')).toBe(false);
     expect(store.has('c')).toBe(true);
-    // Never below the default cap
+    // Fix-up pool: no fix-up mask yet, so nothing is reserved; then 4 x 1 byte
+    expect(store.objectCapBytes).toBe(2);
+    store.set('object:1:0', mask(1), 'A', 'object:1');
+    expect(store.objectCapBytes).toBe(4);
+    // Never below the defaults
     store.setActiveClip('A', { frames: 1, models: ['anime'] });
     expect(store.capBytes).toBe(8);
+    expect(store.objectCapBytes).toBe(2);
   });
 
-  it('sizes each group of the active clip by its own masks (fix-up masks are small)', () => {
-    const store = createMaskStore({ capBytes: 8 });
-    store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
-    store.set('anime:0', mask(4), 'A', 'anime');
-    // No fix-up mask yet: it may be as large as a base mask
-    expect(store.capBytes).toBe(32);
-    store.set('object:1:0', mask(1), 'A', 'object:1');
-    // 4 frames x 4 bytes + 4 frames x 1 byte
-    expect(store.capBytes).toBe(20);
+  it('a fix-up of the active clip never evicts its base masks, and its own masks stay too', () => {
+    const store = createMaskStore({ capBytes: 8, objectCapBytes: 4 });
+    store.setActiveClip('A', { frames: 3, models: ['anime', 'object:1'] });
+    for (const f of ['0', '1', '2']) store.set(`anime:${f}`, mask(4), 'A', 'anime');
+    for (const f of ['0', '1', '2']) store.set(`object:1:${f}`, mask(2), 'A', 'object:1');
+    expect(store.keysForClip('A')).toHaveLength(6);
   });
 
   it('stops protecting a clip once the active clip is set to null', () => {
@@ -269,8 +271,8 @@ describe('the active clip (task 13: export failed after fix-ups on a 15 s clip)'
   });
 
   it('reclaims at once when the active clip changes to one that needs less (Codex P2 on #228)', () => {
-    // A clip with a fix-up held 4 x 4 x 2 = 32 bytes over a default cap of 8
-    const store = createMaskStore({ capBytes: 8 });
+    // A clip with a fix-up held 16 bytes in each pool, over default caps of 8
+    const store = createMaskStore({ capBytes: 8, objectCapBytes: 8 });
     store.setActiveClip('A', { frames: 4, models: ['anime', 'object:1'] });
     for (const f of ['0', '1', '2', '3']) store.set(`anime:${f}`, mask(4), 'A', 'anime');
     for (const f of ['0', '1', '2', '3']) store.set(`object:1:${f}`, mask(4), 'A', 'object:1');
@@ -282,7 +284,10 @@ describe('the active clip (task 13: export failed after fix-ups on a 15 s clip)'
     // and must not stay over the cap until the next analysis writes a mask
     store.setActiveClip('B', { frames: 4, models: ['anime'] });
 
-    expect(store.byteLength).toBeLessThanOrEqual(8);
+    // Both pools are reclaimed
+    expect(store.byteLength).toBeLessThanOrEqual(16);
+    expect(store.keysForClip('A').filter((k) => k.startsWith('anime:'))).toHaveLength(0);
+    expect(store.keysForClip('A').filter((k) => k.startsWith('object:'))).toHaveLength(0);
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ type: 'evict', clipId: 'A' }));
   });
 });
@@ -311,11 +316,11 @@ describe('mask provenance (tags and unreachable marks)', () => {
   });
 
   it('drops marks with their group on eviction, deleteClip and clear', () => {
-    const store = createMaskStore({ capBytes: 10 });
+    const store = createMaskStore({ capBytes: 10, objectCapBytes: 10 });
     store.set('object:o1:a', mask(4), 'clip', 'object:o1', 't');
     store.mark('object:o1:b', 't', 'clip', 'object:o1');
-    // Another group over the cap evicts the object's group, marks too
-    store.set('general:a', mask(8), 'clip', 'general');
+    // Another fix-up's group over the cap evicts the object's group, marks too
+    store.set('object:o9:a', mask(8), 'clip', 'object:o9');
     expect(store.has('object:o1:a')).toBe(false);
     expect(store.getMark('object:o1:b')).toBeUndefined();
 
@@ -325,5 +330,38 @@ describe('mask provenance (tags and unreachable marks)', () => {
     store.mark('object:o3:a', 't', 'clip', 'object:o3');
     store.clear();
     expect(store.getMark('object:o3:a')).toBeUndefined();
+  });
+});
+
+describe('fix-up masks have their own budget; retag (cutout-ux 5)', () => {
+  /** @param {number} n */
+  const m = (n) => ({ data: new Uint8Array(n), width: n, height: 1 });
+
+  it('a fix-up never evicts a base mask, a base mask never evicts a fix-up', () => {
+    const store = createMaskStore({ capBytes: 10, objectCapBytes: 10 });
+    store.set('anime:a', m(8), 'clip', 'anime');
+    store.set('object:o1:a', m(8), 'clip', 'object:o1');
+    expect(store.has('anime:a')).toBe(true);
+    store.set('object:o2:a', m(8), 'clip', 'object:o2');
+    expect(store.has('object:o1:a')).toBe(false);
+    expect(store.has('anime:a')).toBe(true);
+    store.set('general:a', m(8), 'clip', 'general');
+    expect(store.has('anime:a')).toBe(false);
+    expect(store.has('object:o2:a')).toBe(true);
+  });
+
+  it('retags masks and marks of one tag, once', () => {
+    const store = createMaskStore();
+    store.set('object:o1:a', m(2), 'clip', 'object:o1', 'old');
+    store.set('object:o1:b', m(2), 'clip', 'object:o1', 'other');
+    store.mark('object:o1:c', 'old', 'clip', 'object:o1');
+    const v = store.version;
+    expect(
+      store.retag(['object:o1:a', 'object:o1:b', 'object:o1:c', 'object:o1:x'], 'old', 'new'),
+    ).toBe(2);
+    expect(store.getTag('object:o1:a')).toBe('new');
+    expect(store.getTag('object:o1:b')).toBe('other');
+    expect(store.getMark('object:o1:c')).toBe('new');
+    expect(store.version).toBe(v + 1);
   });
 });

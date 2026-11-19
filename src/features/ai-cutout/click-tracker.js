@@ -24,8 +24,10 @@
  *    first — after a click that re-anchors a lost object, tracking fills
  *    the gap from both sides.
  * 3. Lost: a frame whose mask area jumps by more than half (or is empty)
- *    stops that pass; the frame is reported as needing a click and gets no
- *    mask.
+ *    gets no mask, and the pass tries the next frames from the last frame
+ *    it kept (the object may come back: it left the frame, or was hidden)
+ *    until one is found again; only the first frame of each run of lost
+ *    frames is reported (where a click would re-anchor it).
  * 4. Seeds (`seedOf`, see object-seeds.js): an anchor frame that has an
  *    answer from earlier prompts which these prompts extend (one more click
  *    or box, the same scope) is prompted with that answer: its grown box
@@ -448,14 +450,19 @@ export async function trackClicks({
   const pass = async (anchor, direction) => {
     const stop = direction > 0 ? range.end : range.start;
     let from = anchor;
+    let losing = false;
     for (let f = anchor + direction; direction > 0 ? f <= stop : f >= stop; f += direction) {
       if (done.has(f) || (anchorFrames.has(f) && !refineOnPass.has(f))) return;
       throwIfAborted(signal);
       if (!(await step(f, from))) {
-        lost.add(f);
-        return;
+        // Lost here: try the next frames from the last frame kept
+        if (!losing) lost.add(f);
+        losing = true;
+        continue;
       }
-      // The step read the previous frame's logits; nothing reads them again
+      losing = false;
+      // The step read the previous frame's logits (a lost run keeps `from`
+      // and retries from it, so they go only after a frame is kept); nothing reads them again
       // unless that frame starts another pass (an anchor) or shares its
       // pixels with other frames (a hold: a later step may copy its entry,
       // in either pass). Audit B7: every frame's logits stayed for the

@@ -266,6 +266,18 @@ describe('trackClicks', () => {
     for (const f of [6, 7, 8, 9]) expect(cleared.has(f)).toBe(true);
   });
 
+  it('a lost frame does not end the pass: tracking resumes where the object comes back (cutout-ux 5)', async () => {
+    const segmenter = fakeSegmenter({
+      // Gone on frames 6 and 7 (it left the frame), back from frame 8
+      objectAt: (f) => (f === 6 || f === 7 ? new Uint8Array(W * H) : rect(5 + f, 6, 15 + f, 14)),
+    });
+    const { promise, masks } = run({ prompt: segmenter.prompt });
+    const result = await promise;
+    // One place reported: where it was lost first
+    expect(result.lost).toEqual([6]);
+    expect([...masks.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 8, 9]);
+  });
+
   it('with minScoreRatio, stops a pass where the score drops while the area holds', async () => {
     // The object leaves at frame 6, but the box prompt keeps answering the
     // same box, with a lower score

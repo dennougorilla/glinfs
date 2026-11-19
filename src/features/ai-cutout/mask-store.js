@@ -17,8 +17,20 @@
 
 /** @typedef {import('./preprocess.js').ProbabilityMask} ProbabilityMask */
 
-/** Default memory cap for all stored masks */
+/** Default memory cap for the base models' masks */
 export const MASK_STORE_CAP_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Memory cap of the tracked fix-ups' masks (groups whose model starts with
+ * OBJECT_GROUP_PREFIX), apart from the base masks: a fix-up never evicts a
+ * base mask (which would make the clip analyze again), only another
+ * fix-up's. 300 frames of a fix-up at 256 px long side take 11-16 MB, so
+ * this holds 8 fix-ups of a 300-frame clip.
+ */
+export const OBJECT_MASK_CAP_BYTES = 128 * 1024 * 1024;
+
+/** Groups of tracked fix-ups' masks (see objectMaskGroup) */
+export const OBJECT_GROUP_PREFIX = 'object:';
 
 /** Clip id used when a caller does not name one */
 export const DEFAULT_CLIP_ID = '';
@@ -43,6 +55,9 @@ export const DEFAULT_CLIP_ID = '';
  *   maskless entry in the group: `tag` tried this frame and could not make a
  *   mask (dropped with the group, like its masks; a mask set at `key` replaces it)
  * @property {(key: string) => string | undefined} getMark
+ * @property {(keys: Iterable<string>, from: string, to: string) => number} retag - Give the
+ *   masks and marks at `keys` that carry tag `from` the tag `to` (unchanged
+ *   pixels; one change event); returns how many
  * @property {(key: string) => boolean} delete - The mask and the mark at `key`
  * @property {(clipId: string) => number} deleteClip - Drop every mask of a clip (all models); returns how many
  * @property {(clipId: string, model?: string) => void} touchClip - Mark a clip's masks of one
@@ -57,7 +72,8 @@ export const DEFAULT_CLIP_ID = '';
  * @property {number} version - Bumps on every change
  * @property {number} byteLength - Bytes held by all masks
  * @property {number} size - Number of masks
- * @property {number} capBytes - The cap now: the larger of the default and the active clip's need
+ * @property {number} capBytes - The base masks' cap now: the larger of the default and the active clip's need
+ * @property {number} objectCapBytes - The fix-ups' cap now, the same way
  */
 
 /**
@@ -76,7 +92,10 @@ export const DEFAULT_CLIP_ID = '';
  * @param {{ capBytes?: number }} [options]
  * @returns {MaskStore}
  */
-export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
+export function createMaskStore({
+  capBytes = MASK_STORE_CAP_BYTES,
+  objectCapBytes = OBJECT_MASK_CAP_BYTES,
+} = {}) {
   /** @type {Map<string, { mask: ProbabilityMask, group: string, tag: string }>} */
   const entries = new Map();
   /** @type {Map<string, { group: string, tag: string }>} key -> mark (no mask) */
@@ -90,9 +109,14 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
   let version = 0;
   let byteLength = 0;
+  /** Bytes of the fix-ups' groups (inside byteLength too) */
+  let objectBytes = 0;
   let tick = 0;
   /** @type {{ clipId: string, frames: number, models: Set<string> } | null} */
   let active = null;
+
+  /** @param {string} id - A group id: one of a tracked fix-up's masks */
+  const isObjectGroup = (id) => (groups.get(id)?.model ?? '').startsWith(OBJECT_GROUP_PREFIX);
 
   /**
    * @param {string} clipId
@@ -135,6 +159,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     if (!entry) return false;
     entries.delete(key);
     byteLength -= entry.mask.data.byteLength;
+    if (isObjectGroup(entry.group)) objectBytes -= entry.mask.data.byteLength;
     groups.get(entry.group)?.keys.delete(key);
     dropIfEmpty(entry.group);
     return true;
@@ -197,24 +222,34 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
   }
 
   /**
-   * The cap now: the default, or what the active clip's groups need when
-   * that is more. Each group needs frames x the size of one of its masks; a
-   * group with no mask yet is counted at the largest mask of the clip (a
-   * fix-up's masks are far smaller than the base model's)
+   * Bytes of one pool: the tracked fix-ups' masks, or the base models' masks
+   * @param {boolean} objects
+   */
+  const bytesOf = (objects) => (objects ? objectBytes : byteLength - objectBytes);
+
+  /**
+   * The cap of one pool now: its default, or what the active clip's groups of
+   * that pool need when that is more. Each group needs frames x the size of
+   * one of its masks; a group with no mask yet is counted at the largest mask
+   * of its pool in the clip
+   * @param {boolean} objects - The fix-ups' pool (else the base masks')
    * @returns {number}
    */
-  function currentCap() {
-    if (!active || active.frames <= 0) return capBytes;
+  function currentCap(objects) {
+    const cap = objects ? objectCapBytes : capBytes;
+    if (!active || active.frames <= 0) return cap;
     const { clipId, frames } = active;
     /** @type {(number | null)[]} */
-    const sizes = [...active.models].map((model) => {
-      const key = groups.get(groupId(clipId, model))?.keys.values().next().value;
-      if (key === undefined) return null;
-      return /** @type {{ mask: ProbabilityMask }} */ (entries.get(key)).mask.data.byteLength;
-    });
+    const sizes = [...active.models]
+      .filter((model) => model.startsWith(OBJECT_GROUP_PREFIX) === objects)
+      .map((model) => {
+        const key = groups.get(groupId(clipId, model))?.keys.values().next().value;
+        if (key === undefined) return null;
+        return /** @type {{ mask: ProbabilityMask }} */ (entries.get(key)).mask.data.byteLength;
+      });
     const largest = Math.max(0, ...sizes.map((size) => size ?? 0));
     const need = sizes.reduce((sum, size) => sum + frames * (size ?? largest), 0);
-    return Math.max(capBytes, need);
+    return Math.max(cap, need);
   }
 
   /**
@@ -222,15 +257,16 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
    * the active clip's groups it no longer reads; never `keepGroup` and never
    * a group the active clip reads
    * @param {string | null} keepGroup
+   * @param {boolean} objects - Pick from the fix-ups' pool (else the base masks')
    * @returns {string | null}
    */
-  function pickVictim(keepGroup) {
+  function pickVictim(keepGroup, objects) {
     let other = null;
     let otherUsed = Number.POSITIVE_INFINITY;
     let stale = null;
     let staleUsed = Number.POSITIVE_INFINITY;
     for (const [id, used] of lastUsed) {
-      if (id === keepGroup) continue;
+      if (id === keepGroup || isObjectGroup(id) !== objects) continue;
       const group = /** @type {{ clipId: string, model: string }} */ (groups.get(id));
       if (active && group.clipId === active.clipId) {
         if (!active.models.has(group.model) && used < staleUsed) {
@@ -246,19 +282,26 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
   }
 
   /**
-   * Evict groups (see pickVictim) until under the cap.
+   * Evict groups (see pickVictim) until each pool is under its cap. Fix-ups
+   * and base masks each stay under their own cap, evicting only their own
+   * kind (a fix-up never evicts a base mask); the active clip's groups are
+   * never evicted (#228). Without a group being written (the active clip
+   * changed), both pools are checked.
    * @param {string | null} keepGroup - The group being written, if any
    */
   function evictOverCap(keepGroup) {
-    const cap = currentCap();
-    while (byteLength > cap) {
-      const victim = pickVictim(keepGroup);
-      if (victim === null) return;
-      const { clipId, model } = /** @type {{ clipId: string, model: string }} */ (
-        groups.get(victim)
-      );
-      removeGroup(victim);
-      changed({ type: 'evict', clipId, model });
+    const pools = keepGroup === null ? [false, true] : [isObjectGroup(keepGroup)];
+    for (const objects of pools) {
+      const cap = currentCap(objects);
+      while (bytesOf(objects) > cap) {
+        const victim = pickVictim(keepGroup, objects);
+        if (victim === null) break;
+        const { clipId, model } = /** @type {{ clipId: string, model: string }} */ (
+          groups.get(victim)
+        );
+        removeGroup(victim);
+        changed({ type: 'evict', clipId, model });
+      }
     }
   }
 
@@ -288,6 +331,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       const { id, group } = ensureGroup(clipId, model);
       entries.set(key, { mask, group: id, tag });
       byteLength += mask.data.byteLength;
+      if (isObjectGroup(id)) objectBytes += mask.data.byteLength;
       group.keys.add(key);
       touch(id);
       changed({ type: 'set', key, clipId });
@@ -310,6 +354,24 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
 
     getMark(key) {
       return marks.get(key)?.tag;
+    },
+
+    retag(keys, from, to) {
+      let n = 0;
+      for (const key of keys) {
+        const entry = entries.get(key);
+        if (entry && entry.tag === from) {
+          entry.tag = to;
+          n++;
+        }
+        const mark = marks.get(key);
+        if (mark && mark.tag === from) {
+          mark.tag = to;
+          n++;
+        }
+      }
+      if (n > 0) changed({ type: 'set' });
+      return n;
     },
 
     delete(key) {
@@ -365,6 +427,7 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
       groups.clear();
       lastUsed.clear();
       byteLength = 0;
+      objectBytes = 0;
       changed({ type: 'clear' });
     },
 
@@ -388,7 +451,11 @@ export function createMaskStore({ capBytes = MASK_STORE_CAP_BYTES } = {}) {
     },
 
     get capBytes() {
-      return currentCap();
+      return currentCap(false);
+    },
+
+    get objectCapBytes() {
+      return currentCap(true);
     },
   };
 }
