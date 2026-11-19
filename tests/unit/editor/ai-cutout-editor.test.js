@@ -515,13 +515,20 @@ describe('AI cutout in the mounted editor', () => {
     check('ai-pick-keep');
     await settle();
     expect(getEditorState()?.aiPickTool).toBe('keep');
-    // The active tool is obvious: button, cursor (data-tool) and a hint on the preview
+    // The active tool is obvious from the button and the cursor (data-tool);
+    // nothing covers the preview: its hint is for screen readers only, and
+    // the keys are in the tool's tooltip (cutout-ux 7)
     expect($('label[for="ai-pick-keep"]').classList.contains('is-active')).toBe(true);
     expect($('.editor-canvas-container').dataset.tool).toBe('keep');
     expect($('#preview-tool-hint').hidden).toBe(false);
+    expect($('#preview-tool-hint').classList.contains('sr-only')).toBe(true);
     expect($('#preview-tool-hint').textContent).toContain(
       'Anything not attached to it disappears on every frame',
     );
+    expect($('#ai-preview-note').classList.contains('sr-only')).toBe(true);
+    for (const tool of ['keep', 'remove', 'colour']) {
+      expect($(`label[for="ai-pick-${tool}"]`).title).toMatch(/Alt-click .*· Esc to finish$/);
+    }
     expect($('.editor-canvas-container').classList.contains('editor-ai-picking')).toBe(true);
 
     clickPreview(overlay, 30, 70);

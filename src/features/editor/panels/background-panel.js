@@ -721,9 +721,10 @@ const TOOL_ICONS = {
  * @param {string} label
  * @param {keyof typeof TOOL_ICONS} iconName
  * @param {Record<string, string>} [attrs]
+ * @param {string} [title] - Its tooltip (how to use it, the keys)
  * @returns {{ wrapper: HTMLElement, input: HTMLInputElement }}
  */
-function toolToggle(id, label, iconName, attrs = {}) {
+function toolToggle(id, label, iconName, attrs = {}, title = '') {
   const input = /** @type {HTMLInputElement} */ (
     createElement('input', {
       type: 'checkbox',
@@ -734,7 +735,12 @@ function toolToggle(id, label, iconName, attrs = {}) {
   );
   const wrapper = createElement(
     'label',
-    { className: 'editor-cutout-tool', for: id, 'data-tool': iconName },
+    {
+      className: 'editor-cutout-tool',
+      for: id,
+      'data-tool': iconName,
+      ...(title ? { title } : {}),
+    },
     [input, createElement('span', {}, [icon(TOOL_ICONS[iconName], 16), label])],
   );
   return { wrapper, input };
@@ -1258,17 +1264,30 @@ export function renderBackgroundPanel(handlers) {
   );
 
   // --- Fix-ups: tools on the preview ---
-  const keep = toolToggle('ai-pick-keep', 'Keep', 'keep', {
-    'aria-describedby': 'background-tools-hint',
-  });
-  const remove = toolToggle('ai-pick-remove', 'Remove', 'remove', {
-    'aria-describedby': 'background-tools-hint',
-  });
+  // The keys live in the tooltips (nothing is written over the preview)
+  const keep = toolToggle(
+    'ai-pick-keep',
+    'Keep',
+    'keep',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click what to keep · Alt-click takes away · Esc to finish',
+  );
+  const remove = toolToggle(
+    'ai-pick-remove',
+    'Remove',
+    'remove',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click or drag over what to remove · Alt-click takes away · Esc to finish',
+  );
   // Colour: a click removes the colours under it on every frame (a Colour
   // fix-up, never tracked)
-  const colourTool = toolToggle('ai-pick-colour', 'Colour', 'colour', {
-    'aria-describedby': 'background-tools-hint',
-  });
+  const colourTool = toolToggle(
+    'ai-pick-colour',
+    'Colour',
+    'colour',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click a colour to remove · Alt-click keeps a colour · Esc to finish',
+  );
   cleanups.push(
     on(keep.input, 'change', () =>
       handlers.onSetAiPickTool?.(keep.input.checked ? 'keep' : null, {

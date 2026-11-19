@@ -1919,11 +1919,8 @@
    Scoped under .editor-screen; every class is prefixed editor-ai-
    ───────────────────────────────────────────────────────────────────────────── */
 
-.editor-screen .editor-ai-preview-note[hidden] {
-  display: none;
-}
-
-/* Preview: pick tool active, and the per-frame status note */
+/* Preview: pick tool active (nothing is drawn over the frame: the per-frame
+   status and the tool hint are for screen readers, .sr-only) */
 .editor-screen .editor-ai-picking .editor-canvas-overlay {
   cursor: crosshair;
   outline: 2px dashed var(--color-primary);
@@ -1934,20 +1931,6 @@
 .editor-screen .editor-ai-picking .editor-canvas-overlay:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: -3px;
-}
-
-.editor-screen .editor-ai-preview-note {
-  position: absolute;
-  left: var(--space-3);
-  top: var(--space-3);
-  z-index: 3;
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: var(--font-size-xs);
-  pointer-events: none;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -3265,8 +3248,7 @@
   backdrop-filter: blur(6px);
 }
 
-.editor-screen .editor-compare[hidden],
-.editor-screen .editor-tool-hint[hidden] {
+.editor-screen .editor-compare[hidden] {
   display: none;
 }
 
@@ -3314,26 +3296,6 @@
 .editor-screen .editor-compare-input:focus-visible + span {
   outline: 2px solid var(--color-focus);
   outline-offset: 1px;
-}
-
-.editor-screen .editor-tool-hint {
-  position: absolute;
-  bottom: var(--space-3);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
-  max-width: calc(100% - 2 * var(--space-3));
-  margin: 0;
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-full);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
 }
 
 /* Tool cursors (pick tools and the eyedropper; the brush draws its own) */

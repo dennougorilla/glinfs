@@ -1240,8 +1240,9 @@ function handleHighlightAiObject(id) {
 }
 
 /**
- * The small status note on the preview: with the AI cutout on, a frame
- * without a mask previews unkeyed and says why
+ * The current frame's cutout status, for screen readers (visually hidden:
+ * nothing covers the preview): with the AI cutout on, a frame without a
+ * mask previews unkeyed and says why
  * @param {ParentNode} container
  * @param {import('./types.js').EditorState} state
  */
@@ -1255,8 +1256,8 @@ function updateAiPreviewNote(container, state) {
     const click = getAiModelId(ai) === 'click';
     const analyzed = isFrameAnalyzed(frame, { modelId: getAiModelId(ai) });
     if (click && ai.picks.length === 0) {
-      // With the Keep tool on, the tool hint below the preview says it
-      text = state.aiPickTool ? '' : 'Choose Keep, then click the thing you want to keep';
+      // Nothing picked yet: the Keep / Remove buttons say what to do
+      text = '';
     } else if (click && !analyzed && state.aiCutout.lostFrames?.includes(state.currentFrame)) {
       text = 'Lost track here. Click it to keep going.';
     } else if (click && !analyzed) {
