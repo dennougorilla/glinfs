@@ -386,7 +386,22 @@ export async function clipNow() {
     return { ok: false, reason: 'no-frames' };
   }
 
-  const room = makeRoomForClip({ needSlot: true, frames: videoFrames, fps: context.fps });
+  return queueSnapshot(videoFrames, { fps: context.fps, sceneDetection: context.sceneDetection });
+}
+
+/**
+ * Put converted buffer frames into the clip queue, making room first when
+ * the setting allows it (#186), and tell the user. On a refusal the frames
+ * are closed: they never entered the store. Shared by Clip Now and by a
+ * Create Clip whose screen was left while its frames were on the way (B4).
+ *
+ * @param {import('./types.js').Frame[]} videoFrames - Owned by the caller until queued
+ * @param {{ fps: number, sceneDetection: boolean }} clip
+ * @returns {ClipNowResult & Partial<import('../../shared/app-store.js').QueueResult>}
+ */
+export function queueSnapshot(videoFrames, { fps, sceneDetection }) {
+  // fps: the clip counts at its compressed size when it will compress (#230)
+  const room = makeRoomForClip({ needSlot: true, frames: videoFrames, fps });
   if (!room.ok) {
     // The real snapshot does not fit even after removing every queued clip
     // that may go: nothing was removed, and these frames are still ours
@@ -400,9 +415,9 @@ export async function clipNow() {
   }
   const result = enqueueClip({
     frames: videoFrames,
-    fps: context.fps,
+    fps,
     capturedAt: Date.now(),
-    sceneDetectionEnabled: context.sceneDetection,
+    sceneDetectionEnabled: sceneDetection,
   });
 
   if (!result.ok) {

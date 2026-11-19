@@ -3,6 +3,8 @@
  * @module features/scene-detection/types
  */
 
+import { SCENE_METHOD_DEFAULT } from './algorithms/scene-breaks.js';
+
 /**
  * A detected scene within a clip
  * @typedef {Object} Scene
@@ -35,7 +37,8 @@
 /**
  * Detector configuration options
  * @typedef {Object} DetectorOptions
- * @property {number} threshold - Change detection threshold (0-1), higher = less sensitive
+ * @property {string} [method] - Scene method option (Settings → Methods), see
+ *   algorithms/scene-breaks.js; default SCENE_METHOD_DEFAULT
  * @property {number} minSceneDuration - Minimum scene duration in frames
  * @property {number} sampleInterval - Frame sampling interval (1 = every frame, 3 = every 3rd frame)
  * @property {(progress: DetectionProgress) => void} [onProgress] - Progress callback
@@ -46,7 +49,7 @@
  * @type {DetectorOptions}
  */
 export const DEFAULT_DETECTOR_OPTIONS = {
-  threshold: 0.3,
+  method: SCENE_METHOD_DEFAULT,
   minSceneDuration: 5,
   sampleInterval: 1,
   onProgress: undefined,

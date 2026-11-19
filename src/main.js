@@ -15,6 +15,9 @@ import {
   promoteClipFromQueue,
 } from './features/editor/index.js';
 import { initLoading } from './features/loading/index.js';
+// Register the Settings → Methods switches before Settings can render
+import './features/export/method.js';
+import './features/scene-detection/method.js';
 import { initSettings } from './features/settings/index.js';
 import {
   deleteQueuedClip,
@@ -37,6 +40,7 @@ import { renderClipEntries } from './shared/clip-entries.js';
 import { setupClipLossNotice } from './shared/clip-loss-notice.js';
 import { registerHotkey } from './shared/hotkeys.js';
 import { announce, mountLiveRegion } from './shared/live-region.js';
+import { registerMethod, unregisterMethod } from './shared/methods.js';
 import { initRangeFill } from './shared/range-fill.js';
 import { getCurrentRoute, initRouter, navigate, onRouteChange } from './shared/router.js';
 import { initTabStatus } from './shared/tab-status.js';
@@ -102,6 +106,15 @@ if (IS_TEST_MODE) {
     getEditorPayload,
     /** Reset all app state */
     resetAppStore,
+
+    // ============================================================
+    // Switchable methods (shared/methods.js)
+    // ============================================================
+
+    /** Register a method entry (e2e tests of the Settings section) */
+    registerMethod,
+    /** Remove a method entry */
+    unregisterMethod,
 
     // ============================================================
     // Feature State Setters (populated by each feature on init)
