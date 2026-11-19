@@ -143,6 +143,75 @@ describe('composeOutputFrameRGBA', () => {
     __resetComposeCacheForTests();
   });
 
+  /**
+   * A CPU (I420) clip frame (#233): copyTo converts it to RGBA, writing
+   * `fill` into every pixel of the rect asked for
+   * @param {number} width @param {number} height @param {{ reject?: boolean }} [opts]
+   */
+  function cpuFrame(width, height, { reject = false } = {}) {
+    const vf = {
+      closed: false,
+      format: 'I420',
+      codedWidth: width,
+      codedHeight: height,
+      fill: [10, 20, 30, 255],
+      copyTo: vi.fn(async (/** @type {Uint8ClampedArray} */ dest, /** @type {any} */ options) => {
+        if (reject) throw new DOMException('no', 'NotSupportedError');
+        const { width: w, height: h } = options.rect;
+        for (let i = 0; i < w * h; i++) dest.set(vf.fill, i * 4);
+        return [];
+      }),
+    };
+    return /** @type {any} */ ({ id: 'c', frame: vf, timestamp: 0, width, height });
+  }
+
+  describe('a CPU clip frame converts with copyTo, not through the canvas (#233)', () => {
+    it('full frame, keyed: one copyTo, no canvas draw or readback', async () => {
+      const frame = cpuFrame(4, 2);
+      const edits = makeEdits({ key: true });
+      edits.background.color = '#0a141e';
+      const result = await composeOutputFrameRGBA(frame, null, edits, 0);
+
+      expect(frame.frame.copyTo).toHaveBeenCalledWith(expect.any(Uint8ClampedArray), {
+        format: 'RGBA',
+        rect: { x: 0, y: 0, width: 4, height: 2 },
+      });
+      const names = contexts.flatMap(({ ctx }) => ctx.names());
+      expect(names).not.toContain('drawImage');
+      expect(names).not.toContain('getImageData');
+      expect(result).toMatchObject({ width: 4, height: 2 });
+      // The key ran on the copied pixels: (10,20,30) removed
+      expect(Array.from(result.data.subarray(0, 4))).toEqual([0, 0, 0, 0]);
+    });
+
+    it('a crop reads only its rect', async () => {
+      const frame = cpuFrame(8, 8);
+      const crop = { x: 2, y: 4, width: 4, height: 2 };
+      const result = await composeOutputFrameRGBA(frame, crop, makeEdits({}), 0);
+      expect(frame.frame.copyTo.mock.calls[0][1].rect).toEqual({ x: 2, y: 4, width: 4, height: 2 });
+      expect(result).toMatchObject({ width: 4, height: 2 });
+      expect(Array.from(result.data.subarray(0, 4))).toEqual([10, 20, 30, 255]);
+    });
+
+    it('falls back to the canvas when copyTo refuses (an odd crop of 4:2:0, an old browser)', async () => {
+      const frame = cpuFrame(4, 4, { reject: true });
+      const result = await composeOutputFrameRGBA(frame, null, makeEdits({}), 0);
+      expect(contexts.flatMap(({ ctx }) => ctx.names())).toContain('drawImage');
+      expect(result).toMatchObject({ width: 4, height: 4 });
+    });
+
+    it('keeps the canvas path for text, a downscale, or a GPU frame', async () => {
+      const withText = cpuFrame(10, 10);
+      await composeOutputFrameRGBA(withText, null, makeEdits({ text: true }), 2);
+      const scaled = cpuFrame(8, 8);
+      await composeOutputFrameRGBA(scaled, null, makeEdits({}), 0, null, 0.5);
+      const gpu = cpuFrame(4, 4);
+      gpu.frame.format = 'RGBA';
+      await composeOutputFrameRGBA(gpu, null, makeEdits({}), 0);
+      for (const f of [withText, scaled, gpu]) expect(f.frame.copyTo).not.toHaveBeenCalled();
+    });
+  });
+
   it('uses a cached willReadFrequently context', async () => {
     await composeOutputFrameRGBA(solidFrame(4, 4), null, makeEdits({ key: true }), 0);
     await composeOutputFrameRGBA(solidFrame(6, 2), null, makeEdits({ key: true }), 0);
