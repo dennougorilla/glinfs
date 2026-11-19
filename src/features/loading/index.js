@@ -13,6 +13,7 @@ import { navigate } from '../../shared/router.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { initLiveMonitor } from '../editor/live-monitor.js';
 import { createSceneDetectionManager } from '../scene-detection/manager.js';
+import { getSceneMethod } from '../scene-detection/method.js';
 import { renderLoadingScreen, updateProgress } from './ui.js';
 
 /**
@@ -82,7 +83,7 @@ async function runSceneDetection(container, clipPayload, session) {
     await session.manager.init();
 
     const result = await session.manager.detect(clipPayload.frames, {
-      threshold: 0.3,
+      method: getSceneMethod(),
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {
