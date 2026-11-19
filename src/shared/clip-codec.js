@@ -2,9 +2,11 @@
  * Clip Codec Manager - main-thread bridge to the clip codec worker (#92)
  * @module shared/clip-codec
  *
- * One worker, one job at a time. Jobs are FIFO except that DECODE jobs jump
- * ahead of pending encodes — a user is actively waiting on every decode
- * (promote), while encodes are background housekeeping.
+ * Two workers: one runs the encodes, one the decodes, each one job at a time
+ * in order. A user is waiting on every decode (opening a queued clip), while
+ * encodes are background housekeeping, so a decode never waits for an
+ * encode (a 1080p compression takes seconds). Running both at once adds no
+ * frame memory: the encode's frames are alive until it finishes either way.
  *
  * Results are result-objects, never rejections, so the app-store's entry
  * state machine can branch without try/catch:
@@ -21,16 +23,16 @@
  *   the worker could not transfer every frame back): `frames` is [] (or
  *   short). Frames transferred into a dead worker cannot be recovered — the
  *   caller must drop the clip and tell the user (app-store: 'compress-lost').
- *   Only the job RUNNING at that moment is affected: pending jobs have not
+ *   Only the job RUNNING on that worker is affected: pending jobs have not
  *   transferred anything yet. After a crash they dispatch to a freshly
- *   created worker; after an explicit terminate() (teardown) they are
+ *   created worker (the other worker carries on); after an explicit terminate() (teardown) they are
  *   failed instead, handing their untransferred frames back (RECOVERABLE).
  * Decode never loses data: its input chunks are cloned, not transferred.
  *
  * Nothing waits forever: the worker reports progress (JOB_PROGRESS) while a
  * job runs, at least as often as the codec accepts input or emits output. A
  * running job with neither a reply nor progress for `stallMs` is STALLED
- * (a decoder that stopped handing out frames, a wedged GPU process): the
+ * (a decoder that stopped handing out frames, a wedged GPU process): its
  * worker is terminated, the job fails with error 'stalled' (an encode as
  * LOST, its frames died with the worker) and the queue continues on a
  * fresh worker. The bound is on silence, not on the job's length, so long
@@ -100,12 +102,37 @@ export function crashNextEncodeForTest(manager) {
 }
 
 /**
- * Manager for the clip codec worker
+ * @typedef {{jobId: number, kind: 'encode'|'decode', message: Object, transfer: Transferable[]}} PendingJob
+ */
+
+/**
+ * One worker and its queue
+ * @typedef {Object} Lane
+ * @property {'encode'|'decode'} kind
+ * @property {Worker | null} worker - Created when the first job dispatches
+ * @property {PendingJob[]} pending
+ * @property {number | null} activeJobId - Job running in the worker
+ * @property {ReturnType<typeof setTimeout> | null} watchdog
+ */
+
+/**
+ * @param {'encode'|'decode'} kind
+ * @returns {Lane}
+ */
+function createLane(kind) {
+  return { kind, worker: null, pending: [], activeJobId: null, watchdog: null };
+}
+
+/** @param {Lane} lane */
+function disarm(lane) {
+  if (lane.watchdog !== null) clearTimeout(lane.watchdog);
+  lane.watchdog = null;
+}
+
+/**
+ * Manager for the clip codec workers
  */
 export class ClipCodecManager {
-  /** @type {Worker | null} */
-  #worker = null;
-
   /** @type {() => Worker} */
   #createWorker;
 
@@ -115,11 +142,8 @@ export class ClipCodecManager {
   /** @type {Map<number, {kind: 'encode'|'decode', resolve: (result: any) => void}>} */
   #jobs = new Map();
 
-  /** @type {{jobId: number, kind: 'encode'|'decode', message: Object, transfer: Transferable[]}[]} */
-  #pending = [];
-
-  /** @type {number | null} jobId currently running in the worker */
-  #activeJobId = null;
+  /** @type {Record<'encode'|'decode', Lane>} One worker per kind of job */
+  #lanes = { encode: createLane('encode'), decode: createLane('decode') };
 
   /** @type {boolean | null} null until the probe resolves */
   #available = null;
@@ -132,9 +156,6 @@ export class ClipCodecManager {
 
   /** Silence (ms) after which the running job is stalled */
   #stallMs;
-
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  #watchdog = null;
 
   /**
    * @param {Object} [options]
@@ -223,13 +244,13 @@ export class ClipCodecManager {
     }
     return new Promise((resolve) => {
       this.#jobs.set(jobId, { kind: 'encode', resolve });
-      this.#pending.push({
+      this.#lanes.encode.pending.push({
         jobId,
         kind: 'encode',
         message: { type: 'ENCODE', payload },
         transfer: frames,
       });
-      this.#pump();
+      this.#pump(this.#lanes.encode);
     });
   }
 
@@ -240,7 +261,7 @@ export class ClipCodecManager {
    * @returns {boolean}
    */
   isEncodeQueued(frames) {
-    return this.#pending.some((p) => p.kind === 'encode' && p.transfer === frames);
+    return this.#lanes.encode.pending.some((p) => p.transfer === frames);
   }
 
   /**
@@ -253,9 +274,10 @@ export class ClipCodecManager {
    * @returns {boolean} true if the job was withdrawn
    */
   cancelEncode(frames) {
-    const index = this.#pending.findIndex((p) => p.kind === 'encode' && p.transfer === frames);
+    const { pending } = this.#lanes.encode;
+    const index = pending.findIndex((p) => p.transfer === frames);
     if (index === -1) return false;
-    const [p] = this.#pending.splice(index, 1);
+    const [p] = pending.splice(index, 1);
     const job = this.#jobs.get(p.jobId);
     this.#jobs.delete(p.jobId);
     job?.resolve({ ok: false, error: 'cancelled', frames });
@@ -265,7 +287,8 @@ export class ClipCodecManager {
   /**
    * Decode compressed chunks back into VideoFrames (transferred to main).
    *
-   * Jumps ahead of pending ENCODE jobs. The chunk buffers are structured-
+   * Runs on the decode worker, so it never waits for an encode. The chunk
+   * buffers are structured-
    * CLONED into the worker (not transferred) on purpose: a decode failure
    * must leave the entry's compressed bytes intact, and compressed clips are
    * small enough (tens of MB) that the copy is cheap next to raw frames.
@@ -277,25 +300,18 @@ export class ClipCodecManager {
     const jobId = this.#nextJobId++;
     return new Promise((resolve) => {
       this.#jobs.set(jobId, { kind: 'decode', resolve });
-      const job = {
+      this.#lanes.decode.pending.push({
         jobId,
-        kind: /** @type {'decode'} */ ('decode'),
+        kind: 'decode',
         message: { type: 'DECODE', payload: { jobId, chunks, config } },
         transfer: [],
-      };
-      // Priority: after already-pending decodes, before any pending encode
-      const firstEncode = this.#pending.findIndex((p) => p.kind === 'encode');
-      if (firstEncode === -1) {
-        this.#pending.push(job);
-      } else {
-        this.#pending.splice(firstEncode, 0, job);
-      }
-      this.#pump();
+      });
+      this.#pump(this.#lanes.decode);
     });
   }
 
   /**
-   * Teardown: terminate the worker and fail every job instead of requeueing
+   * Teardown: terminate both workers and fail every job instead of requeueing
    * (unlike the crash path, which keeps pending jobs for a fresh worker).
    * - The RUNNING encode already transferred its frames into the worker:
    *   LOST per the failure contract above (resolved with frames: []).
@@ -305,14 +321,16 @@ export class ClipCodecManager {
    * Not terminal: the next encode/decode lazily creates a fresh worker.
    */
   terminate() {
-    if (this.#worker) {
-      this.#worker.terminate();
-      this.#worker = null;
+    /** @type {PendingJob[]} */
+    const pending = [];
+    for (const lane of Object.values(this.#lanes)) {
+      lane.worker?.terminate();
+      lane.worker = null;
+      pending.push(...lane.pending);
+      lane.pending = [];
+      lane.activeJobId = null;
+      disarm(lane);
     }
-    const pending = this.#pending;
-    this.#pending = [];
-    this.#activeJobId = null;
-    this.#disarm();
     /** @type {[(result: any) => void, EncodeResult|DecodeResult][]} */
     const settled = [];
     for (const p of pending) {
@@ -339,26 +357,33 @@ export class ClipCodecManager {
     for (const [resolve, result] of settled) resolve(result);
   }
 
-  /** Dispatch the next pending job if the worker is idle */
-  #pump() {
-    if (this.#activeJobId !== null) return;
-    const next = this.#pending.shift();
+  /**
+   * Dispatch the lane's next pending job if its worker is idle
+   * @param {Lane} lane
+   */
+  #pump(lane) {
+    if (lane.activeJobId !== null) return;
+    const next = lane.pending.shift();
     if (!next) return;
 
-    if (!this.#worker) {
-      this.#worker = this.#createWorker();
-      this.#worker.onmessage = (e) => this.#handleWorkerMessage(e);
-      this.#worker.onerror = (e) => this.#handleWorkerError(e);
+    if (!lane.worker) {
+      const worker = this.#createWorker();
+      worker.onmessage = (e) => this.#handleWorkerMessage(lane, e);
+      worker.onerror = (e) => {
+        // A replaced worker's late error concerns nothing running now
+        if (lane.worker === worker) this.#handleWorkerError(lane, e);
+      };
+      lane.worker = worker;
     }
 
-    this.#activeJobId = next.jobId;
-    this.#arm();
+    lane.activeJobId = next.jobId;
+    this.#arm(lane);
     try {
-      this.#worker.postMessage(next.message, next.transfer);
+      lane.worker.postMessage(next.message, next.transfer);
     } catch (err) {
       // A throwing postMessage transfers nothing: the frames are still ours
       // to hand back (RECOVERABLE), not lost
-      this.#settle(next.jobId, {
+      this.#settle(lane, next.jobId, {
         ok: false,
         error: err instanceof Error ? err.message : 'postMessage failed',
         ...(next.kind === 'encode' ? { frames: next.transfer } : {}),
@@ -367,60 +392,58 @@ export class ClipCodecManager {
   }
 
   /**
-   * Resolve a job and run the next one
+   * Resolve a job and run the lane's next one
+   * @param {Lane} lane
    * @param {number} jobId
    * @param {EncodeResult|DecodeResult} result
    */
-  #settle(jobId, result) {
+  #settle(lane, jobId, result) {
     const job = this.#jobs.get(jobId);
     this.#jobs.delete(jobId);
-    if (this.#activeJobId === jobId) {
-      this.#activeJobId = null;
-      this.#disarm();
+    if (lane.activeJobId === jobId) {
+      lane.activeJobId = null;
+      disarm(lane);
     }
     job?.resolve(result);
-    this.#pump();
-  }
-
-  /** (Re)start the stall bound for the running job */
-  #arm() {
-    this.#disarm();
-    this.#watchdog = setTimeout(() => this.#handleStall(), this.#stallMs);
-  }
-
-  #disarm() {
-    if (this.#watchdog !== null) clearTimeout(this.#watchdog);
-    this.#watchdog = null;
+    this.#pump(lane);
   }
 
   /**
-   * The running job went silent: end its worker and fail it, like a crash
-   * (the next pending job then starts on a fresh worker)
+   * (Re)start the stall bound for the lane's running job
+   * @param {Lane} lane
    */
-  #handleStall() {
-    this.#watchdog = null;
-    const activeJobId = this.#activeJobId;
+  #arm(lane) {
+    disarm(lane);
+    lane.watchdog = setTimeout(() => this.#handleStall(lane), this.#stallMs);
+  }
+
+  /**
+   * The lane's running job went silent: end its worker and fail it, like a
+   * crash (its next pending job then starts on a fresh worker; the other
+   * lane is not touched)
+   * @param {Lane} lane
+   */
+  #handleStall(lane) {
+    lane.watchdog = null;
+    const activeJobId = lane.activeJobId;
     if (activeJobId === null) return;
-    const job = this.#jobs.get(activeJobId);
-    console.error(
-      `[ClipCodecManager] ${job?.kind ?? 'job'} stalled: no progress for ${this.#stallMs} ms`,
-    );
-    if (this.#worker) {
-      this.#worker.terminate();
-      this.#worker = null;
-    }
+    console.error(`[ClipCodecManager] ${lane.kind} stalled: no progress for ${this.#stallMs} ms`);
+    lane.worker?.terminate();
+    lane.worker = null;
     this.#settle(
+      lane,
       activeJobId,
-      job?.kind === 'encode'
+      lane.kind === 'encode'
         ? { ok: false, error: 'stalled', frames: [] }
         : { ok: false, error: 'stalled' },
     );
   }
 
   /**
+   * @param {Lane} lane
    * @param {MessageEvent} e
    */
-  #handleWorkerMessage(e) {
+  #handleWorkerMessage(lane, e) {
     const { type, payload } = e.data;
     if (
       (type === 'DECODE_RESULT' || type === 'JOB_ERROR') &&
@@ -440,10 +463,10 @@ export class ClipCodecManager {
     }
     switch (type) {
       case 'JOB_PROGRESS':
-        if (payload?.jobId === this.#activeJobId) this.#arm();
+        if (payload?.jobId === lane.activeJobId) this.#arm(lane);
         break;
       case 'ENCODE_RESULT':
-        this.#settle(payload.jobId, {
+        this.#settle(lane, payload.jobId, {
           ok: true,
           chunks: payload.chunks,
           config: payload.config,
@@ -451,11 +474,12 @@ export class ClipCodecManager {
         });
         break;
       case 'DECODE_RESULT':
-        this.#settle(payload.jobId, { ok: true, frames: payload.frames });
+        this.#settle(lane, payload.jobId, { ok: true, frames: payload.frames });
         break;
       case 'JOB_ERROR': {
         const job = this.#jobs.get(payload.jobId);
         this.#settle(
+          lane,
           payload.jobId,
           job?.kind === 'encode'
             ? { ok: false, error: payload.message, frames: payload.frames ?? [] }
@@ -467,23 +491,23 @@ export class ClipCodecManager {
   }
 
   /**
-   * Worker crashed: fail the active job (LOST — its transferred frames are
-   * gone with the worker) and recycle the worker: settling pumps the next
-   * pending job, which lazily creates a fresh worker in #pump().
+   * A worker crashed: fail its running job (LOST for an encode — its
+   * transferred frames are gone with the worker) and recycle the worker:
+   * settling pumps the lane's next pending job, which lazily creates a
+   * fresh worker in #pump()
+   * @param {Lane} lane
    * @param {ErrorEvent} e
    */
-  #handleWorkerError(e) {
+  #handleWorkerError(lane, e) {
     console.error('[ClipCodecManager] Worker error:', e.message);
-    if (this.#worker) {
-      this.#worker.terminate();
-      this.#worker = null;
-    }
-    const activeJobId = this.#activeJobId;
+    lane.worker?.terminate();
+    lane.worker = null;
+    const activeJobId = lane.activeJobId;
     if (activeJobId !== null) {
-      const job = this.#jobs.get(activeJobId);
       this.#settle(
+        lane,
         activeJobId,
-        job?.kind === 'encode'
+        lane.kind === 'encode'
           ? { ok: false, error: e.message || 'worker crashed', frames: [] }
           : { ok: false, error: e.message || 'worker crashed' },
       );

@@ -174,6 +174,21 @@ describe('enqueue with codec available', () => {
     expect(codec.encode).not.toHaveBeenCalled();
   });
 
+  it('stays raw when its frames are not all one size (the encoder would scale them)', () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const frames = createMockFrames(3);
+    frames[2].width = 120;
+    frames[2].height = 80;
+
+    const result = enqueueClip(clipPayloadOf(frames));
+
+    // A VP9 stream has one size: the decode would bring every frame back at
+    // the first one's size while frameMeta keeps the others' sizes
+    expect(result.entry.status).toBe('raw');
+    expect(codec.encode).not.toHaveBeenCalled();
+  });
+
   it('checks the queue-full refusal BEFORE any compression starts', () => {
     const codec = createMockCodec();
     registerClipCodec(codec);

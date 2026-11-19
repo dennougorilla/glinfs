@@ -143,6 +143,32 @@ describe('gif-encoder-worker session abort (#45)', () => {
     expect(addFrame.mock.calls[1][0].delayMs).toBeUndefined();
   });
 
+  it('forwards the dither pattern and cutout edge to encoder.init', async () => {
+    await send({
+      command: 'init',
+      encoderId: 'gifenc-js',
+      width: 2,
+      height: 2,
+      totalFrames: 1,
+      maxColors: 64,
+      frameDelayMs: 100,
+      loopCount: 0,
+      transparent: true,
+      dithering: true,
+      ditherPattern: 'blue-noise',
+      edge: 'matte',
+      matteColor: [0, 0, 0],
+    });
+    expect(init).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dithering: true,
+        ditherPattern: 'blue-noise',
+        edge: 'matte',
+        matteColor: [0, 0, 0],
+      }),
+    );
+  });
+
   it('initializes opaque when INIT carries no transparent flag', async () => {
     await send({
       command: 'init',

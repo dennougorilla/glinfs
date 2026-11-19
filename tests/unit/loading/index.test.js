@@ -22,6 +22,7 @@ import {
   setClipPayload,
 } from '../../../src/shared/app-store.js';
 import { offAll, on } from '../../../src/shared/bus.js';
+import { setMethod } from '../../../src/shared/methods.js';
 
 function createPayload(sceneDetectionEnabled = true) {
   return {
@@ -75,6 +76,19 @@ describe('loading feature production lifecycle', () => {
     expect(cleanup).toBeTypeOf('function');
   });
 
+  it('detects with the scene method chosen in Settings at that moment', async () => {
+    setMethod('scenes', 'adaptive');
+    setClipPayload(createPayload());
+    manager.detect.mockResolvedValue({ scenes: [], totalFrames: 1, processingTimeMs: 1 });
+
+    const cleanup = initLoading();
+
+    await vi.waitFor(() => expect(manager.detect).toHaveBeenCalled());
+    expect(manager.detect.mock.calls[0][1].method).toBe('adaptive');
+    cleanup?.();
+    localStorage.clear();
+  });
+
   it('renders progress, stores detected scenes, emits completion, and navigates', async () => {
     const payload = createPayload();
     const scenes = [{ id: 'scene-1', startFrame: 0, endFrame: 0 }];
@@ -99,7 +113,7 @@ describe('loading feature production lifecycle', () => {
     expect(manager.detect).toHaveBeenCalledWith(
       payload.frames,
       expect.objectContaining({
-        threshold: 0.3,
+        method: 'combined',
         minSceneDuration: 5,
         sampleInterval: 1,
         onProgress: expect.any(Function),
