@@ -250,6 +250,34 @@ describe('capture-worker', () => {
     expect(lastPosted('FRAMES_RESPONSE').payload.frames.map((f) => f.timestamp)).toEqual([3]);
   });
 
+  it('drops the frames of another size when capture starts again (#231 review, round 2)', () => {
+    // Paused at 1920x1080; the window shrank meanwhile, and capture resumes
+    // with a capacity computed for 1280x720 frames
+    const large = [createMockBitmap(1920, 1080), createMockBitmap(1920, 1080)];
+
+    send('START', { fps: 30, maxFrames: 3 });
+    for (const [i, bitmap] of large.entries()) respond(bitmap, i + 1);
+    send('STOP');
+    send('START', { fps: 30, maxFrames: 6, width: 1280, height: 720 });
+
+    for (const bitmap of large) expect(bitmap.close).toHaveBeenCalledOnce();
+    send('GET_FRAMES');
+    expect(lastPosted('FRAMES_RESPONSE').payload.frames).toEqual([]);
+  });
+
+  it('keeps the paused frames when capture starts again at their size', () => {
+    const kept = [createMockBitmap(1280, 720), createMockBitmap(1280, 720)];
+
+    send('START', { fps: 30, maxFrames: 3 });
+    for (const [i, bitmap] of kept.entries()) respond(bitmap, i + 1);
+    send('STOP');
+    send('START', { fps: 30, maxFrames: 6, width: 1280, height: 720 });
+
+    for (const bitmap of kept) expect(bitmap.close).not.toHaveBeenCalled();
+    send('GET_FRAMES');
+    expect(lastPosted('FRAMES_RESPONSE').payload.frames.map((f) => f.timestamp)).toEqual([1, 2]);
+  });
+
   it('closes all buffered frames on CLEAR', () => {
     const first = createMockBitmap();
     const second = createMockBitmap();
