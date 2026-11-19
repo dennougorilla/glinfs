@@ -38,13 +38,58 @@ function createFakeWorker() {
   return worker;
 }
 
-/** Manager wired to a fake worker, with support pre-probed as available */
+/**
+ * Every worker the manager creates (one for encodes, one for decodes, and
+ * replacements), seen as one: `posted` lists what was sent to any of them
+ * in order, `emit` delivers a reply from the worker that received its job,
+ * `crash` crashes the worker that received the last message
+ */
+function createFakeWorkerHub() {
+  /** @type {ReturnType<typeof createFakeWorker>[]} */
+  const workers = [];
+  /** @type {{message: any, transfer: any[], worker: ReturnType<typeof createFakeWorker>}[]} */
+  const posted = [];
+  const hub = {
+    workers,
+    posted,
+    terminate: vi.fn(),
+    /** Make postMessage throw (a failed structured clone) */
+    throwOnPost: false,
+    create() {
+      const w = createFakeWorker();
+      w.postMessage = (message, transfer = []) => {
+        if (hub.throwOnPost) throw new Error('DataCloneError');
+        w.posted.push({ message, transfer });
+        posted.push({ message, transfer, worker: w });
+      };
+      const terminate = w.terminate;
+      w.terminate = vi.fn(() => {
+        terminate();
+        hub.terminate();
+      });
+      workers.push(w);
+      return w;
+    },
+    /** @param {any} data */
+    emit(data) {
+      const jobId = data?.payload?.jobId;
+      const target = posted.find((p) => p.message.payload?.jobId === jobId)?.worker;
+      (target ?? workers.at(-1))?.emit(data);
+    },
+    crash(message = 'worker crashed') {
+      posted.at(-1)?.worker.crash(message);
+    },
+  };
+  return hub;
+}
+
+/** Manager wired to fake workers, with support pre-probed as available */
 async function createProbedManager() {
   vi.stubGlobal('VideoEncoder', {
     isConfigSupported: vi.fn(async () => ({ supported: true })),
   });
-  const worker = createFakeWorker();
-  const manager = createClipCodecManager({ createWorker: () => worker });
+  const worker = createFakeWorkerHub();
+  const manager = createClipCodecManager({ createWorker: () => worker.create() });
   await manager.probeSupport();
   return { manager, worker };
 }
@@ -159,15 +204,53 @@ describe('encode', () => {
 });
 
 describe('job scheduling', () => {
-  it('runs one job at a time, and pending decodes jump pending encodes', async () => {
+  it('runs a decode at once on its own worker while an encode runs', async () => {
     const { manager, worker } = await createProbedManager();
 
     const e1 = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
-    void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
-    void manager.decode({ chunks: [], config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 } });
+    const d1 = manager.decode({
+      chunks: [],
+      config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
+    });
 
-    // Only e1 dispatched so far — e2 and d1 are queued
-    expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE']);
+    // Both dispatched, each to its own worker: opening a clip does not wait
+    // for a background compression
+    expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE', 'DECODE']);
+    expect(worker.posted[0].worker).not.toBe(worker.posted[1].worker);
+
+    worker.emit({
+      type: 'DECODE_RESULT',
+      payload: { jobId: worker.posted[1].message.payload.jobId, frames: [] },
+    });
+    await expect(d1).resolves.toEqual({ ok: true, frames: [] });
+    worker.emit({
+      type: 'ENCODE_RESULT',
+      payload: {
+        jobId: worker.posted[0].message.payload.jobId,
+        chunks: [],
+        config: {},
+        byteLength: 0,
+      },
+    });
+    await expect(e1).resolves.toMatchObject({ ok: true });
+  });
+
+  it('runs encodes one at a time, and decodes one at a time, each in order', async () => {
+    const { manager, worker } = await createProbedManager();
+    const e1 = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    const d1 = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    void manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE', 'DECODE']);
+
+    worker.emit({
+      type: 'DECODE_RESULT',
+      payload: { jobId: worker.posted[1].message.payload.jobId, frames: [] },
+    });
+    await d1;
+    expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE', 'DECODE', 'DECODE']);
+    // The second decode reuses the decode worker
+    expect(worker.posted[2].worker).toBe(worker.posted[1].worker);
 
     worker.emit({
       type: 'ENCODE_RESULT',
@@ -179,17 +262,47 @@ describe('job scheduling', () => {
       },
     });
     await e1;
+    expect(worker.posted.map((p) => p.message.type)).toEqual([
+      'ENCODE',
+      'DECODE',
+      'DECODE',
+      'ENCODE',
+    ]);
+    expect(worker.posted[3].worker).toBe(worker.posted[0].worker);
+  });
 
-    // The decode (a user is waiting) dispatched BEFORE the second encode
-    expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE', 'DECODE']);
-
+  it('a decode that stalls leaves the running encode alone', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('VideoEncoder', { isConfigSupported: vi.fn(async () => ({ supported: true })) });
+    const worker = createFakeWorkerHub();
+    const manager = createClipCodecManager({ createWorker: () => worker.create(), stallMs: 1000 });
+    await manager.probeSupport();
+    const encode = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    const decode = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    const [encodeJob, decodeJob] = worker.posted;
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(400);
+      worker.emit({ type: 'JOB_PROGRESS', payload: { jobId: encodeJob.message.payload.jobId } });
+    }
+    await expect(decode).resolves.toEqual({ ok: false, error: 'stalled' });
+    expect(decodeJob.worker.terminate).toHaveBeenCalled();
+    expect(encodeJob.worker.terminate).not.toHaveBeenCalled();
     worker.emit({
-      type: 'DECODE_RESULT',
-      payload: { jobId: worker.posted[1].message.payload.jobId, frames: [] },
+      type: 'ENCODE_RESULT',
+      payload: { jobId: encodeJob.message.payload.jobId, chunks: [], config: {}, byteLength: 0 },
     });
-    await vi.waitFor(() => {
-      expect(worker.posted.map((p) => p.message.type)).toEqual(['ENCODE', 'DECODE', 'ENCODE']);
-    });
+    await expect(encode).resolves.toMatchObject({ ok: true });
+    vi.useRealTimers();
+  });
+
+  it('terminate() ends both workers and fails every job', async () => {
+    const { manager, worker } = await createProbedManager();
+    const encode = manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
+    const decode = manager.decode({ chunks: [], config: { codec: 'vp8' } });
+    manager.terminate();
+    expect(worker.workers.every((w) => w.terminate.mock.calls.length === 1)).toBe(true);
+    await expect(encode).resolves.toEqual({ ok: false, error: 'terminated', frames: [] });
+    await expect(decode).resolves.toEqual({ ok: false, error: 'terminated' });
   });
 
   it('does not clone/transfer chunk buffers into a decode job', async () => {
@@ -372,13 +485,16 @@ describe('terminate', () => {
       chunks: [],
       config: { codec: 'vp8', codedWidth: 10, codedHeight: 10 },
     });
-    // Only the first job was dispatched (its frames transferred)
+    // The first encode was dispatched (its frames transferred); the decode
+    // runs at once on the decode worker
     expect(workers[0].posted).toHaveLength(1);
     expect(workers[0].posted[0].transfer).toBe(runningFrames);
+    expect(workers[1].posted.map((p) => p.message.type)).toEqual(['DECODE']);
 
     manager.terminate();
 
     expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workers[1].terminate).toHaveBeenCalledTimes(1);
     await expect(running).resolves.toEqual({ ok: false, error: 'terminated', frames: [] });
     const pendingResult = await pendingEncode;
     expect(pendingResult).toMatchObject({ ok: false, error: 'terminated' });
@@ -386,14 +502,14 @@ describe('terminate', () => {
     // (app-store rebuilds the raw entry, or closes the frames if deleted)
     expect(pendingResult.frames).toBe(pendingFrames);
     await expect(pendingDecode).resolves.toEqual({ ok: false, error: 'terminated' });
-    // Nothing was requeued onto the dead worker or a new one
+    // Nothing was requeued onto the dead workers or a new one
     expect(workers[0].posted).toHaveLength(1);
-    expect(workers).toHaveLength(1);
+    expect(workers).toHaveLength(2);
 
     // Not terminal: the next job runs on a fresh worker
     void manager.encode(fakeFrames(1), { fps: 30, width: 10, height: 10 });
-    expect(workers).toHaveLength(2);
-    expect(workers[1].posted[0].message.type).toBe('ENCODE');
+    expect(workers).toHaveLength(3);
+    expect(workers[2].posted[0].message.type).toBe('ENCODE');
   });
 
   it('ignores late messages from the terminated worker', async () => {
@@ -412,9 +528,7 @@ describe('terminate', () => {
 describe('postMessage failure', () => {
   it('hands the untransferred frames back instead of reporting them lost', async () => {
     const { manager, worker } = await createProbedManager();
-    worker.postMessage = () => {
-      throw new Error('DataCloneError');
-    };
+    worker.throwOnPost = true;
     const frames = fakeFrames(2);
     const result = await manager.encode(frames, { fps: 30, width: 10, height: 10 });
     expect(result).toMatchObject({ ok: false, error: 'DataCloneError' });
