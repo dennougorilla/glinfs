@@ -3005,13 +3005,10 @@ function handlePromoteClip(id) {
  * whatever editor session is CURRENT by then.
  *
  * @param {string} id - Queue entry id
- * @param {{ undoHold?: boolean }} [options] - `undoHold: false`: the
- *   successor of the deleted active clip; its memory check leaves the
- *   deleted clip's Undo hold out (prepareQueuedClipForPromote)
  * @returns {Promise<boolean>} true if the clip became active
  */
-async function promoteWhenDecoded(id, { undoHold = true } = {}) {
-  const prep = await prepareQueuedClipForPromote(id, { undoHold });
+async function promoteWhenDecoded(id) {
+  const prep = await prepareQueuedClipForPromote(id);
   if (!prep.ok && prep.reason !== 'decoding' && store && deletedClipOnScreen) {
     // Succession after deleting the open clip failed: the editor must not
     // stay on the deleted clip, whose frames close when its Undo hold ends
@@ -3118,10 +3115,9 @@ function handleDeleteActiveClip() {
     // the new clip the moment its frames arrive.
     deletedClipOnScreen =
       shownId !== undefined && shownFrames ? { id: shownId, frames: shownFrames } : null;
-    // The deleted clip waits in its Undo hold; counted, it would leave no
-    // room for any successor at the defaults with a full capture buffer
-    // (#230 review). It goes within 5 s, so the check leaves it out
-    void promoteWhenDecoded(successor.id, { undoHold: false });
+    // The deleted clip waits in its Undo hold, which the memory check of
+    // every open leaves out (makeRoomToOpen, #230 review)
+    void promoteWhenDecoded(successor.id);
     return;
   }
   cleanup();

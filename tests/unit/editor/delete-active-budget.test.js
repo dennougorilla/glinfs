@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { initEditor } from '../../../src/features/editor/index.js';
+import {
+  deleteActiveClipFromAnywhere,
+  initEditor,
+  promoteClipFromQueue,
+} from '../../../src/features/editor/index.js';
 import {
   enqueueClip,
   getClipPayload,
@@ -145,6 +149,23 @@ describe('deleting the open clip opens the next one (#230 review)', () => {
 
     expect(getClipPayload()?.id).toBe(successor.id);
     expect(document.querySelector('.editor-clip-opening')).toBeNull();
+  });
+
+  it('opens any queued clip outside the editor within 5 s of a delete (round 3, item 1)', async () => {
+    const codec = createMockCodec();
+    registerClipCodec(codec);
+    const queued = await compressedSuccessor(codec, 289);
+    setClipPayload({ frames: rgbaFrames(289, 'a'), fps: 30, capturedAt: 2000 });
+
+    // From the header popover, no editor mounted: delete, then open
+    expect(deleteActiveClipFromAnywhere()).toBe(true);
+    const opened = promoteClipFromQueue(queued.id);
+    await vi.advanceTimersByTimeAsync(0);
+    // Buffer 2400 + decoded ~899 fits; with the hold (~2397) it would not
+    expect(codec.decode).toHaveBeenCalledOnce();
+    codec.decodeCalls[0].resolve({ ok: true, frames: decodedFrames(289) });
+    expect(await opened).toBe(true);
+    expect(getClipPayload()?.id).toBe(queued.id);
   });
 
   it('still refuses a successor that does not fit without the hold, and leaves the deleted clip', async () => {
