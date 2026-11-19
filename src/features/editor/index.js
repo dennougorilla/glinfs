@@ -50,15 +50,17 @@ import { createElement, createErrorScreen, qsRequired } from '../../shared/utils
 import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
-import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
+import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
 import { reportOpenMemory } from '../capture/clip-service.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
+import { getSceneMethod } from '../scene-detection/method.js';
 import {
   classifyFixUp,
   clearPixelCache,
+  getActiveMaskGroups,
   getAiModelId,
   getClipColourRegion,
   getClipObjectSources,
@@ -259,6 +261,13 @@ let aiEditsUnsubscribe = null;
 let deletedClipOnScreen = null;
 
 /**
+ * Disposes the "Opening clip..." screen on screen, if any (its bus
+ * subscriptions must not outlive the route)
+ * @type {(() => void) | null}
+ */
+let disposeOpeningScreen = null;
+
+/**
  * The Export GIF dialog open over this editor, or null
  * @type {import('../export/index.js').ExportDialogHandle | null}
  */
@@ -372,6 +381,9 @@ onBus('clips:released', (/** @type {{ ids?: string[], reset?: boolean }} */ deta
   queueMicrotask(() => {
     if (!getClipPayload() && getClipQueue().length === 0 && !hasPendingDeletion()) {
       getSegmentationManager().dispose();
+      // Masks stored without a clip id belong to no clip; nothing else
+      // removes their group (audit B12)
+      maskStore.deleteClip(DEFAULT_CLIP_ID);
     }
   });
 });
@@ -2464,6 +2476,18 @@ function startAiCutoutSession() {
   if (clipId !== undefined) {
     maskStore.touchClip(clipId, getAiModelId(sessionStore.getState().edits.background.ai));
   }
+  // The masks this clip reads now are never evicted, and the store makes
+  // room for all of them (a 15 s clip's base masks alone fill the default cap)
+  const syncActiveMasks = () => {
+    const id = getActiveClipId();
+    const state = sessionStore.getState();
+    const ai = state.edits.background.ai;
+    maskStore.setActiveClip(id ?? null, {
+      frames: state.clip?.frames.length ?? 0,
+      models: getActiveMaskGroups(ai),
+    });
+  };
+  syncActiveMasks();
 
   // Any change of the background settings (method, on/off, parameters,
   // picks) may need other final masks. Unthrottled, so a build in flight
@@ -2472,6 +2496,7 @@ function startAiCutoutSession() {
   let selectionSyncTimer = null;
   const unsubscribeEdits = sessionStore.subscribe((state, prevState) => {
     if (state.edits.background !== prevState.edits.background) {
+      syncActiveMasks();
       session.requestBuild();
       followClickSelection(session, state, prevState);
       session.syncObjects();
@@ -2980,10 +3005,13 @@ function handlePromoteClip(id) {
  * whatever editor session is CURRENT by then.
  *
  * @param {string} id - Queue entry id
+ * @param {{ undoHold?: boolean }} [options] - `undoHold: false`: the
+ *   successor of the deleted active clip; its memory check leaves the
+ *   deleted clip's Undo hold out (prepareQueuedClipForPromote)
  * @returns {Promise<boolean>} true if the clip became active
  */
-async function promoteWhenDecoded(id) {
-  const prep = await prepareQueuedClipForPromote(id);
+async function promoteWhenDecoded(id, { undoHold = true } = {}) {
+  const prep = await prepareQueuedClipForPromote(id, { undoHold });
   if (!prep.ok && prep.reason !== 'decoding' && store && deletedClipOnScreen) {
     // Succession after deleting the open clip failed: the editor must not
     // stay on the deleted clip, whose frames close when its Undo hold ends
@@ -3014,21 +3042,20 @@ async function promoteWhenDecoded(id) {
 
 /**
  * Leave the deleted clip still on screen when its successor could not be
- * opened (#230 review P1). Refused for memory while the deleted clip waits
- * in its Undo hold: that hold is what is in the way, so the opening state
- * stays up and the editor mounts again when the hold ends (the successor
- * then fits, or Undo brought the deleted clip back). Any other failure is
- * reported and the editor mounts again on what is left.
+ * opened (#230 review): its frames close when the Undo hold ends. Refused
+ * for memory (the hold already left out, so waiting would not help): told
+ * like any refused open, and Capture is where to go. Any other failure:
+ * the editor mounts again on what is left.
  * @param {{ ok: false, reason: string }} prep
  */
 function leaveDeletedClip(prep) {
-  const container = qsRequired('#main-content');
   cleanup();
-  if (prep.reason === 'memory-budget' && hasPendingDeletion()) {
-    renderClipOpeningScreen(container, null);
+  reportOpenMemory(/** @type {any} */ (prep));
+  if (prep.reason === 'memory-budget') {
+    announce('Could not open clip');
+    navigate('/capture');
     return;
   }
-  reportOpenMemory(/** @type {any} */ (prep));
   if (prep.reason === 'decode-failed') announce('Could not open clip — decoding failed');
   initEditor();
 }
@@ -3091,7 +3118,10 @@ function handleDeleteActiveClip() {
     // the new clip the moment its frames arrive.
     deletedClipOnScreen =
       shownId !== undefined && shownFrames ? { id: shownId, frames: shownFrames } : null;
-    void promoteWhenDecoded(successor.id);
+    // The deleted clip waits in its Undo hold; counted, it would leave no
+    // room for any successor at the defaults with a full capture buffer
+    // (#230 review). It goes within 5 s, so the check leaves it out
+    void promoteWhenDecoded(successor.id, { undoHold: false });
     return;
   }
   cleanup();
@@ -3154,9 +3184,7 @@ export async function promoteClipFromQueue(id) {
  * so the only state worth showing is "working on it".
  *
  * @param {HTMLElement} container
- * @param {string | null} entryId - Queue entry being opened; null: open
- *   nothing yet, mount the editor again once the pending Undo hold ends
- *   (its memory was in the way, see leaveDeletedClip)
+ * @param {string} entryId - Queue entry being opened
  * @param {boolean} [openExportDialogOnMount=false] - A `#/export` request
  *   taken by this mount: handed on to the editor that replaces this screen,
  *   and dropped when the clip cannot be opened or the screen is left
@@ -3165,6 +3193,17 @@ export async function promoteClipFromQueue(id) {
 function renderClipOpeningScreen(container, entryId, openExportDialogOnMount = false) {
   updateStepIndicator('editor', { isCapturing: hasActiveScreenCapture() });
   let disposed = false;
+  const dispose = () => {
+    if (disposeOpeningScreen === dispose) disposeOpeningScreen = null;
+    if (disposed) return;
+    disposed = true;
+    unsubscribe();
+  };
+  // The router holds only the first mount's cleanup; a screen the editor
+  // mounts itself (leaveDeletedClip -> initEditor) is disposed through
+  // cleanup() (#230 review, round 2)
+  disposeOpeningScreen?.();
+  disposeOpeningScreen = dispose;
 
   container.innerHTML = '';
   container.appendChild(
@@ -3186,49 +3225,25 @@ function renderClipOpeningScreen(container, entryId, openExportDialogOnMount = f
   const unsubscribe = onBus('queue:changed', () => {
     if (disposed) return;
     if (getClipPayload()) {
-      disposed = true;
-      unsubscribe();
+      dispose();
       pendingExportDialog = openExportDialogOnMount;
       initEditor();
     }
   });
-
-  if (entryId === null) {
-    const remount = () => {
-      if (disposed || hasPendingDeletion()) return;
-      disposed = true;
-      unsubscribe();
-      unsubscribeReleased();
-      pendingExportDialog = openExportDialogOnMount;
-      initEditor();
-    };
-    // Undo (queue:changed above, or here) or the hold ending (clips:released)
-    const unsubscribeReleased = onBus('clips:released', remount);
-    const unsubscribeUndo = onBus('queue:changed', remount);
-    return () => {
-      disposed = true;
-      unsubscribe();
-      unsubscribeReleased();
-      unsubscribeUndo();
-      cleanup();
-    };
-  }
 
   void promoteClipFromQueue(entryId).then((ok) => {
     if (disposed) return;
     if (!ok && !getClipPayload()) {
       // Decode failed and nothing became active — don't strand the user on
       // a spinner; Capture is the only sensible place left
-      disposed = true;
-      unsubscribe();
+      dispose();
       announce('Could not open clip');
       navigate('/capture');
     }
   });
 
   return () => {
-    disposed = true;
-    unsubscribe();
+    dispose();
     cleanup();
   };
 }
@@ -3264,7 +3279,7 @@ async function startSceneDetectionAsync(frames) {
 
     // Run detection with progress updates
     const result = await manager.detect(frames, {
-      threshold: 0.3,
+      method: getSceneMethod(),
       minSceneDuration: 5,
       sampleInterval: 1,
       onProgress: (progress) => {
@@ -3319,6 +3334,8 @@ async function startSceneDetectionAsync(frames) {
  * - Frames are only closed when a new clip is created
  */
 function cleanup() {
+  // An opening screen of this route, however it was mounted
+  disposeOpeningScreen?.();
   // A Keep / Remove click still being judged belongs to this mount
   fixUpClick?.abort();
   fixUpClick = null;

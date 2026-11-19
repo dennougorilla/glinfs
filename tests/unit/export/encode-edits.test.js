@@ -46,6 +46,7 @@ import { calculateFrameDelay } from '../../../src/features/export/core.js';
 import { createGifencEncoder } from '../../../src/features/export/encoders/gifenc-encoder.js';
 import { composeOutputFrameRGBA } from '../../../src/shared/edits/compose.js';
 import { createDefaultEdits, createTextLayer } from '../../../src/shared/edits/model.js';
+import { setMethod } from '../../../src/shared/methods.js';
 import { readGifStructure } from './gif-structure.js';
 
 const W = 4;
@@ -450,6 +451,79 @@ describe('edits', () => {
     // 3 sample extractions + 3 frame extractions
     expect(composeOutputFrameRGBA).toHaveBeenCalledTimes(6);
     expect(frames[0].frame.copyTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('frame differencing switch (Settings → Methods)', () => {
+  const run = () =>
+    encodeGif({
+      frames: framesOf([1, 2]),
+      crop: null,
+      settings: SETTINGS,
+      fps: 30,
+      onProgress: vi.fn(),
+    });
+
+  it('differences opaque gifenc GIFs by default (smallest file)', async () => {
+    localStorage.clear();
+    await run();
+    expect(manager.initConfig.frameDifferencing).toBe(true);
+  });
+
+  it('writes every frame whole when switched off (read at each export: no reload)', async () => {
+    setMethod('gif.differencing', 'off');
+    await run();
+    expect(manager.initConfig.frameDifferencing).toBe(false);
+    localStorage.clear();
+  });
+});
+
+describe('dither pattern and cutout edge switches (Settings → Methods)', () => {
+  const run = (extra = {}) =>
+    encodeGif({
+      frames: framesOf([1, 2]),
+      crop: null,
+      settings: { ...SETTINGS, dither: true },
+      fps: 30,
+      onProgress: vi.fn(),
+      ...extra,
+    });
+
+  it('dithers with the Bayer pattern by default', async () => {
+    localStorage.clear();
+    await run();
+    expect(manager.initConfig).toMatchObject({ dithering: true, ditherPattern: 'bayer' });
+  });
+
+  it('dithers with blue noise when chosen', async () => {
+    setMethod('gif.dither', 'blue-noise');
+    await run();
+    expect(manager.initConfig.ditherPattern).toBe('blue-noise');
+    localStorage.clear();
+  });
+
+  it('keeps hard cutout edges by default', async () => {
+    localStorage.clear();
+    await run({ transparent: true });
+    expect(manager.initConfig.edge).toBe('threshold');
+  });
+
+  it.each([
+    ['matte-white', [255, 255, 255]],
+    ['matte-black', [0, 0, 0]],
+  ])('blends cutout edges into the %s', async (id, matteColor) => {
+    setMethod('gif.edge', id);
+    await run({ transparent: true });
+    expect(manager.initConfig).toMatchObject({ edge: 'matte', matteColor });
+    localStorage.clear();
+  });
+
+  it('stipples cutout edges when dithered', async () => {
+    setMethod('gif.edge', 'dither');
+    await run({ transparent: true });
+    expect(manager.initConfig.edge).toBe('dither');
+    expect(manager.initConfig.matteColor).toBeUndefined();
+    localStorage.clear();
   });
 });
 

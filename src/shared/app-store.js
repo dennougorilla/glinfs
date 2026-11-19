@@ -612,6 +612,12 @@ function maybeCompressEntry(entry) {
   // VP8/VP9 have no alpha channel: compressing a transparent clip would
   // silently turn its transparent pixels opaque. Alpha clips stay raw.
   if (entry.hasAlpha) return;
+  // A VP9 stream has one frame size: the encoder scales every frame to the
+  // first one's, and the decode would bring them all back at that size
+  // while frameMeta keeps the originals. Capture and import make one size
+  // per clip (#203), so this only keeps an odd clip raw instead of resizing it.
+  const [first] = entry.frames;
+  if (entry.frames.some((f) => f.width !== first.width || f.height !== first.height)) return;
 
   const wrappers = entry.frames;
   // Identity metadata survives on this side; the VideoFrames themselves move
@@ -769,7 +775,7 @@ function restoreSharedFrames(decodedFrames, meta) {
  * - 'raw': resolves immediately (also the no-codec fallback path)
  * - 'compressing': awaits the pending encode, then falls through
  * - 'compressed': flips to 'decoding' (visible via queue:changed), decodes
- *   in the worker (decode jobs jump the codec queue), rebuilds the Frame
+ *   in the decode worker (it never waits for a compression), rebuilds the Frame
  *   wrappers from frameMeta and returns the entry to 'raw'
  * - 'decoding': REFUSED — the double-promote guard
  * - deleted at any await point: refused with 'not-found', decoded frames
@@ -779,10 +785,13 @@ function restoreSharedFrames(decodedFrames, meta) {
  *   'memory-budget' before anything is decoded
  *
  * @param {string} id - Queue entry id
+ * @param {{ undoHold?: boolean }} [options] - `undoHold: false`: the memory
+ *   check leaves out the clip held for Undo (opening the successor of the
+ *   deleted active clip: the hold goes within 5 s, #230 review)
  * @returns {Promise<{ok: true, removed: ClipQueueEntry[]} | {ok: false, reason: 'not-found'|'decoding'|'decode-failed', removed?: ClipQueueEntry[]} | {ok: false, reason: 'memory-budget', projection: MemoryProjection}>}
  *   `removed`: the clips removed to make room, also when the open then failed
  */
-export async function prepareQueuedClipForPromote(id) {
+export async function prepareQueuedClipForPromote(id, { undoHold = true } = {}) {
   let entry = state.clipQueue.find((e) => e.id === id);
   if (!entry) return { ok: false, reason: 'not-found' };
   if (entry.status === 'decoding') return { ok: false, reason: 'decoding' };
@@ -799,7 +808,7 @@ export async function prepareQueuedClipForPromote(id) {
   }
 
   // Checked before the decode, which is when the memory is taken
-  const room = makeRoomToOpen(entry);
+  const room = makeRoomToOpen(entry, { undoHold });
   if (!room.ok) return { ok: false, reason: 'memory-budget', projection: room.projection };
 
   entry.status = 'decoding';
@@ -912,12 +921,13 @@ function estimateDecodedEntryMB(entry) {
  * a new clip, #186); when removing every one of them would not be enough,
  * nothing is removed and the open is refused.
  * @param {ClipQueueEntry} entry
+ * @param {{ undoHold?: boolean }} [options] - See prepareQueuedClipForPromote
  * @returns {{ ok: boolean, removed: ClipQueueEntry[], projection: MemoryProjection }}
  */
-function makeRoomToOpen(entry) {
+function makeRoomToOpen(entry, { undoHold = true } = {}) {
   const { memoryBudgetMB: budgetMB, autoRemoveOldClips } = loadSettings().capture;
   const incomingMB = estimateDecodedEntryMB(entry);
-  const heldMB = getHeldMemoryMB({ activeDemotes: true }) - estimateEntryMemoryMB(entry);
+  const heldMB = getHeldMemoryMB({ activeDemotes: true, undoHold }) - estimateEntryMemoryMB(entry);
   const projectedMB = heldMB + incomingMB;
   /** @type {MemoryProjection} */
   const projection = {
@@ -1441,10 +1451,13 @@ export function estimateQueuedClipMB(clip) {
  *   snapshot drains the ring buffer)
  * @param {boolean} [options.activeDemotes] - Count the active clip as it
  *   will be once queued (a new or opened clip replaces it)
+ * @param {boolean} [options.undoHold=true] - false: leave out the clip held
+ *   for Undo (it goes within 5 s, or when the next deletion replaces it)
  * @returns {number}
  */
-export function getHeldMemoryMB({ without = [], activeDemotes = false } = {}) {
+export function getHeldMemoryMB({ without = [], activeDemotes = false, undoHold = true } = {}) {
   let total = getClipMemoryEstimateMB();
+  if (!undoHold && pendingDeletion) total -= estimateEntryMemoryMB(pendingDeletion.entry);
   if (activeDemotes && state.clipPayload) {
     total +=
       estimateQueuedClipMB(state.clipPayload) -

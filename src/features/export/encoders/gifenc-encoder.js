@@ -7,6 +7,8 @@
 import { GIFEncoder, quantize } from 'gifenc';
 import { ALPHA_THRESHOLD } from '../../../shared/edits/color-key.js';
 import { applyPaletteFast as applyPalette } from './apply-palette.js';
+import { blueNoise64 } from './blue-noise.js';
+import { createFrameEncoding, encodeFrame, encodeSmaller } from './gif-frame.js';
 
 /**
  * @typedef {import('./types.js').EncoderInterface} EncoderInterface
@@ -266,14 +268,17 @@ export function differenceFrame(index, colors, shown, transparentIndex, out) {
 }
 
 /**
- * Ordered (Bayer 8x8) dithering, applied to the pixels before they are
- * mapped to the palette: each pixel's RGB moves by a fixed offset that
- * depends only on its position, within +-amplitude/2. Smooth gradients then
- * mix the two nearest palette colors instead of breaking into bands.
- * Being positional (not error diffusion), an unchanged pixel gets the same
- * offset in every frame, so frame differencing still finds it unchanged,
- * and alpha is never touched, so the transparent pixels of a cutout stay
- * exactly the ones the source has.
+ * Ordered dithering, applied to the pixels before they are mapped to the
+ * palette: each pixel's RGB moves by a fixed offset that depends only on
+ * its position, within +-amplitude/2. Smooth gradients then mix the two
+ * nearest palette colors instead of breaking into bands. Being positional
+ * (not error diffusion), an unchanged pixel gets the same offset in every
+ * frame, so frame differencing still finds it unchanged, and alpha is never
+ * touched, so the transparent pixels of a cutout stay exactly the ones the
+ * source has.
+ *
+ * Two threshold maps: Bayer 8x8 (a regular cross-hatch) and a 64x64 blue
+ * noise map (an irregular grain with no visible period; blue-noise.js).
  */
 export const DITHERING = {
   /**
@@ -296,25 +301,117 @@ const BAYER_8 = Uint8Array.from([
 ]);
 
 /**
+ * @typedef {'bayer' | 'blue-noise'} DitherPattern
+ */
+
+/** @type {Map<DitherPattern, { size: number, levels: Float64Array }>} */
+const thresholdMaps = new Map();
+
+/**
+ * A threshold map as levels in [0, 1): `size` x `size` (a power of two),
+ * row-major
+ * @param {DitherPattern} pattern
+ * @returns {{ size: number, levels: Float64Array }}
+ */
+export function thresholdMap(pattern) {
+  let map = thresholdMaps.get(pattern);
+  if (!map) {
+    const values = pattern === 'blue-noise' ? blueNoise64() : BAYER_8;
+    const steps = pattern === 'blue-noise' ? 256 : 64;
+    const levels = Float64Array.from(values, (v) => (v + 0.5) / steps);
+    map = { size: pattern === 'blue-noise' ? 64 : 8, levels };
+    thresholdMaps.set(pattern, map);
+  }
+  return map;
+}
+
+/**
  * Ordered dithering of an RGBA frame into `out` (alpha copied unchanged)
  * @param {Uint8ClampedArray} rgba
  * @param {number} width
  * @param {number} amplitude - Peak-to-peak offset per channel
  * @param {Uint8ClampedArray} out - Same length as rgba
+ * @param {DitherPattern} [pattern='bayer']
  * @returns {Uint8ClampedArray} out
  */
-export function orderedDither(rgba, width, amplitude, out) {
-  const offsets = new Int16Array(64);
-  for (let i = 0; i < 64; i++) offsets[i] = Math.round(((BAYER_8[i] + 0.5) / 64 - 0.5) * amplitude);
+export function orderedDither(rgba, width, amplitude, out, pattern = 'bayer') {
+  const { size, levels } = thresholdMap(pattern);
+  const mask = size - 1;
+  const shift = Math.log2(size);
+  const offsets = Int16Array.from(levels, (l) => Math.round((l - 0.5) * amplitude));
   const height = width > 0 ? rgba.length / 4 / width : 0;
   for (let y = 0; y < height; y++) {
-    const row = (y & 7) << 3;
+    const row = (y & mask) << shift;
     for (let x = 0, p = y * width * 4; x < width; x++, p += 4) {
-      const o = offsets[row | (x & 7)];
+      const o = offsets[row | (x & mask)];
       out[p] = rgba[p] + o;
       out[p + 1] = rgba[p + 1] + o;
       out[p + 2] = rgba[p + 2] + o;
       out[p + 3] = rgba[p + 3];
+    }
+  }
+  return out;
+}
+
+/**
+ * How a transparent export turns soft alpha (1-254: an anti-aliased or
+ * feathered edge) into the GIF's 1-bit transparency:
+ * - 'threshold': kept where alpha >= 128, colors as they are
+ * - 'matte': the edge is blended into a matte color first, then kept where
+ *   alpha >= 128, so the kept edge fades into the color of the page it will
+ *   be shown on instead of the background it was cut from
+ * - 'dither': kept where alpha passes a blue-noise threshold map, so a soft
+ *   edge becomes a stipple whose density follows alpha (positional, so a
+ *   still edge does not flicker)
+ * Alpha 0 and 255 are the same in every mode.
+ * @typedef {'threshold' | 'matte' | 'dither'} EdgeMode
+ */
+
+/**
+ * The frame with every alpha 0 or 255, per the edge mode, into `out`;
+ * returns `rgba` itself when no pixel has soft alpha
+ * @param {Uint8ClampedArray} rgba
+ * @param {number} width
+ * @param {EdgeMode} mode
+ * @param {number[]} matte - [r, g, b], for 'matte'
+ * @param {Uint8ClampedArray} out - Same length as rgba
+ * @returns {Uint8ClampedArray}
+ */
+export function hardenEdges(rgba, width, mode, matte, out) {
+  let soft = false;
+  for (let p = 3; p < rgba.length; p += 4) {
+    if (rgba[p] !== 0 && rgba[p] !== 255) {
+      soft = true;
+      break;
+    }
+  }
+  if (!soft) return rgba;
+  const { size, levels } = thresholdMap('blue-noise');
+  const mask = size - 1;
+  const shift = Math.log2(size);
+  const height = width > 0 ? rgba.length / 4 / width : 0;
+  for (let y = 0; y < height; y++) {
+    const row = (y & mask) << shift;
+    for (let x = 0, p = y * width * 4; x < width; x++, p += 4) {
+      const a = rgba[p + 3];
+      let r = rgba[p];
+      let g = rgba[p + 1];
+      let b = rgba[p + 2];
+      let keep = a >= ALPHA_THRESHOLD;
+      if (a !== 0 && a !== 255) {
+        if (mode === 'matte') {
+          const k = a / 255;
+          r = r * k + matte[0] * (1 - k);
+          g = g * k + matte[1] * (1 - k);
+          b = b * k + matte[2] * (1 - k);
+        } else if (mode === 'dither') {
+          keep = a / 255 > levels[row | (x & mask)];
+        }
+      }
+      out[p] = r;
+      out[p + 1] = g;
+      out[p + 2] = b;
+      out[p + 3] = keep ? 255 : 0;
     }
   }
   return out;
@@ -342,10 +439,20 @@ export function paletteColorCount(maxColors, transparent) {
 }
 
 /**
+ * How many frames' trials may wait on the second worker at once. While it
+ * has one, the next trial runs here, so both work on a frame each.
+ */
+export const TRIALS_AWAY = 1;
+
+/**
  * Create gifenc encoder
+ * @param {{ trials?: import('../../../workers/gif-trial-runner.js').TrialRunner | null }} [options] -
+ *   `trials`: a second worker for frame differencing's trials. With it, a
+ *   frame's addFrame may return a promise that settles once the frame is in
+ *   the GIF, and finish may return a promise; the bytes are the same.
  * @returns {EncoderInterface}
  */
-export function createGifencEncoder() {
+export function createGifencEncoder({ trials = null } = {}) {
   /** @type {ReturnType<typeof GIFEncoder> | null} */
   let encoder = null;
 
@@ -366,6 +473,14 @@ export function createGifencEncoder() {
 
   /** Ordered dithering before mapping (config.dithering) */
   let dithering = false;
+  /** @type {DitherPattern} */
+  let ditherPattern = 'bayer';
+  /** @type {EdgeMode} How soft alpha becomes 1-bit (transparent exports) */
+  let edge = 'threshold';
+  /** @type {number[]} */
+  let matte = [255, 255, 255];
+  /** @type {Uint8ClampedArray | null} Reused buffer of the frame with hard edges */
+  let hardened = null;
   /** @type {Uint8ClampedArray | null} Reused buffer of the dithered frame */
   let dithered = null;
 
@@ -395,11 +510,76 @@ export function createGifencEncoder() {
     return quantize(pixels, paletteColorCount(cfg.maxColors, true), { format });
   };
 
-  /** Scratch encoders (no header) for the frames encoded both ways */
-  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  /** Stepped encodings for the frames encoded both ways */
+  /** @type {ReturnType<typeof createFrameEncoding> | null} */
   let trialWhole = null;
-  /** @type {ReturnType<typeof GIFEncoder> | null} */
+  /** @type {ReturnType<typeof createFrameEncoding> | null} */
   let trialDifferenced = null;
+
+  /**
+   * Frames not yet in the GIF, in order: while a trial runs on the second
+   * worker, the frames after it wait here
+   * @type {Array<{ bytes: Uint8Array | null, written: Promise<void>, resolve: () => void, reject: (error: Error) => void }>}
+   */
+  let queue = [];
+  /** Bumped by init and dispose: a trial from an earlier session is ignored */
+  let session = 0;
+  /**
+   * Index buffers back from the second worker, reused for the next trials
+   * (at most TRIALS_AWAY pairs exist)
+   * @type {Array<{ index: ArrayBuffer, differenced: ArrayBuffer }>}
+   */
+  let spare = [];
+
+  /**
+   * A copy of `data` in a spare buffer of its size, else a new one
+   * @param {Uint8Array} data
+   * @param {'index' | 'differenced'} kind
+   * @param {{ index: ArrayBuffer, differenced: ArrayBuffer } | undefined} pair
+   */
+  const copyOut = (data, kind, pair) => {
+    const buffer =
+      pair?.[kind].byteLength === data.length ? pair[kind] : new ArrayBuffer(data.length);
+    new Uint8Array(buffer).set(data);
+    return buffer;
+  };
+
+  const flush = () => {
+    while (queue.length > 0 && queue[0].bytes) {
+      const entry = /** @type {NonNullable<(typeof queue)[number]>} */ (queue.shift());
+      encoder?.stream.writeBytesView(/** @type {Uint8Array} */ (entry.bytes));
+      entry.resolve();
+    }
+  };
+
+  /** @param {Uint8Array | null} bytes - Null while its trial runs elsewhere */
+  const enqueue = (bytes) => {
+    /** @type {() => void} */
+    let resolve = () => {};
+    /** @type {(error: Error) => void} */
+    let reject = () => {};
+    const written = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const entry = { bytes, written, resolve, reject };
+    queue.push(entry);
+    return entry;
+  };
+
+  /**
+   * Put a frame's bytes in the GIF, after any frame still waiting
+   * @param {Uint8Array} bytes - May be a reused buffer's view
+   * @returns {Promise<void> | undefined}
+   */
+  const put = (bytes) => {
+    if (queue.length === 0) {
+      encoder?.stream.writeBytesView(bytes);
+      return undefined;
+    }
+    return enqueue(bytes.slice()).written;
+  };
+
   /**
    * Write an opaque frame with frame differencing: encoded whole and with
    * unchanged pixels as the transparent index, the smaller one written.
@@ -409,22 +589,31 @@ export function createGifencEncoder() {
    * @param {number} width
    * @param {number} height
    * @param {number} delay
+   * @returns {Promise<void> | undefined} Pending while the frame waits for a trial
    */
   const writeDifferenced = (index, width, height, delay) => {
-    if (!encoder || !config || !palette) return;
+    if (!encoder || !config || !palette) return undefined;
     const colors = packPalette(palette);
     const whole = { palette, delay, repeat: config.loopCount, dispose: 1 };
+    /** Write the whole frame (after any frame still waiting) */
+    const putWhole = () => {
+      if (queue.length === 0) {
+        encoder?.writeFrame(index, width, height, whole);
+        return undefined;
+      }
+      trialWhole ??= createFrameEncoding();
+      return put(encodeFrame(trialWhole, index, width, height, whole));
+    };
     /** Only whole is possible: write it and record what it shows */
     const writeOnlyWhole = () => {
       if (shown?.length !== index.length) shown = new Int32Array(index.length);
       for (let i = 0; i < index.length; i++) shown[i] = colors[index[i]];
-      encoder?.writeFrame(index, width, height, whole);
+      return putWhole();
     };
 
     // The first frame (or one of another size) has nothing to keep
     if (shown?.length !== index.length) {
-      writeOnlyWhole();
-      return;
+      return writeOnlyWhole();
     }
     // A slot appended to the palette while the color table (a power of two)
     // has room for it, else one the frame does not use
@@ -434,8 +623,7 @@ export function createGifencEncoder() {
     const unused = roomInTable ? -1 : findUnusedIndex(index, palette.length);
     const transparentIndex = unused >= 0 ? unused : palette.length;
     if (transparentIndex > 255) {
-      writeOnlyWhole();
-      return;
+      return writeOnlyWhole();
     }
 
     if (differenced?.length !== index.length) differenced = new Uint8Array(index.length);
@@ -447,8 +635,7 @@ export function createGifencEncoder() {
       // same codes no narrower, and resets its dictionary no later. It
       // cannot be smaller, so it is not encoded (`shown` is already this
       // frame's colors)
-      encoder.writeFrame(index, width, height, whole);
-      return;
+      return putWhole();
     }
     const kept = {
       palette: unused >= 0 ? palette : [...palette, [0, 0, 0]],
@@ -458,17 +645,51 @@ export function createGifencEncoder() {
       transparentIndex,
       dispose: 1,
     };
-    // Encode both ways (a frame after the first is written the same with or
-    // without the header, so the scratch bytes go into the GIF as they are)
-    trialWhole ??= GIFEncoder({ auto: false });
-    trialDifferenced ??= GIFEncoder({ auto: false });
-    trialWhole.reset();
-    trialDifferenced.reset();
-    trialWhole.writeFrame(index, width, height, whole);
-    trialDifferenced.writeFrame(differenced, width, height, kept);
-    const a = trialWhole.bytesView();
-    const b = trialDifferenced.bytesView();
-    encoder.stream.writeBytesView(b.length < a.length ? b : a);
+
+    // Encode both ways and write the smaller (the whole frame on a tie).
+    // On the second worker while it is free, else here; either way the
+    // larger is dropped as soon as it cannot be the smaller.
+    if (trials && trials.pending < TRIALS_AWAY) {
+      const entry = enqueue(null);
+      const own = session;
+      const pair = spare.pop();
+      trials
+        .run({
+          width,
+          height,
+          index: copyOut(index, 'index', pair),
+          differenced: copyOut(differenced, 'differenced', pair),
+          wholeOptions: whole,
+          keptOptions: kept,
+        })
+        .then(
+          (result) => {
+            if (own !== session) return;
+            spare.push({ index: result.index, differenced: result.differenced });
+            entry.bytes = result.bytes;
+            flush();
+          },
+          (error) => {
+            if (own !== session) return;
+            entry.reject(error);
+          },
+        );
+      return entry.written;
+    }
+    trialWhole ??= createFrameEncoding();
+    trialDifferenced ??= createFrameEncoding();
+    trialWhole.start(index, width, height, whole);
+    trialDifferenced.start(differenced, width, height, kept);
+    return put(encodeSmaller(trialWhole, trialDifferenced).bytes);
+  };
+
+  /** @returns {Uint8Array} */
+  const finishNow = () => {
+    if (!encoder) {
+      throw new Error('Encoder not initialized. Call init() first.');
+    }
+    encoder.finish();
+    return encoder.bytes();
   };
 
   return {
@@ -481,10 +702,20 @@ export function createGifencEncoder() {
     init(encoderConfig) {
       config = encoderConfig;
       encoder = GIFEncoder();
+      queue = [];
+      spare = [];
+      session++;
       baseline = { error: 0, tail: 0 };
       earlyRebuilds = 0;
       transparent = encoderConfig.transparent === true;
       dithering = encoderConfig.dithering === true;
+      ditherPattern = encoderConfig.ditherPattern === 'blue-noise' ? 'blue-noise' : 'bayer';
+      edge =
+        encoderConfig.edge === 'matte' || encoderConfig.edge === 'dither'
+          ? encoderConfig.edge
+          : 'threshold';
+      matte = encoderConfig.matteColor ?? [255, 255, 255];
+      hardened = null;
       dithered = null;
       // A cutout clears pixels from one frame to the next, which only
       // disposal to the background can show: differencing keeps the
@@ -508,13 +739,23 @@ export function createGifencEncoder() {
      * Add frame
      * @param {FrameData} frameData
      * @param {number} frameIndex
+     * @returns {Promise<void> | undefined} With a second worker: pending
+     *   until the frame is in the GIF
      */
     addFrame(frameData, frameIndex) {
       if (!encoder || !config) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
 
-      const { rgba, width, height } = frameData;
+      const { width, height } = frameData;
+      // A transparent export decides its 1-bit alpha (and, with a matte,
+      // the edge colors) before anything reads the frame; the hard
+      // threshold is what the mapping below does anyway
+      let { rgba } = frameData;
+      if (transparent && edge !== 'threshold') {
+        if (hardened?.length !== rgba.length) hardened = new Uint8ClampedArray(rgba.length);
+        rgba = hardenEdges(rgba, width, edge, matte, hardened);
+      }
       const format = config.quantizeFormat || 'rgb565';
 
       // Palette rebuilding (quantize) dominates encode time (#99); the
@@ -536,7 +777,7 @@ export function createGifencEncoder() {
       let source = rgba;
       if (dithering) {
         if (dithered?.length !== rgba.length) dithered = new Uint8ClampedArray(rgba.length);
-        source = orderedDither(rgba, width, DITHERING.amplitude[format], dithered);
+        source = orderedDither(rgba, width, DITHERING.amplitude[format], dithered, ditherPattern);
       }
 
       // Map pixels to palette indices with same format
@@ -567,8 +808,7 @@ export function createGifencEncoder() {
       const delay = frameData.delayMs ?? config.frameDelayMs;
 
       if (differencing) {
-        writeDifferenced(index, width, height, delay);
-        return;
+        return writeDifferenced(index, width, height, delay);
       }
 
       if (!transparent) {
@@ -602,18 +842,20 @@ export function createGifencEncoder() {
     },
 
     /**
-     * Complete encoding and get byte array
-     * @returns {Uint8Array}
+     * Complete encoding and get byte array (a promise while frames wait for
+     * a trial on the second worker)
+     * @returns {Uint8Array | Promise<Uint8Array>}
      */
     finish() {
       if (!encoder) {
         throw new Error('Encoder not initialized. Call init() first.');
       }
-
-      encoder.finish();
-      const bytes = encoder.bytes();
-
-      return bytes;
+      if (queue.length === 0) return finishNow();
+      const own = session;
+      return Promise.all(queue.map((entry) => entry.written)).then(() => {
+        if (own !== session) throw new Error('Encoder disposed before finishing');
+        return finishNow();
+      });
     },
 
     /**
@@ -627,10 +869,14 @@ export function createGifencEncoder() {
       differencing = false;
       dithering = false;
       dithered = null;
+      hardened = null;
       shown = null;
       differenced = null;
       trialWhole = null;
       trialDifferenced = null;
+      queue = [];
+      spare = [];
+      session++;
     },
   };
 }
