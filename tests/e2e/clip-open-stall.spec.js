@@ -42,13 +42,16 @@ async function queueClipWithShim(page, shim) {
   await page.addInitScript(() => {
     const RealWorker = window.Worker;
     window.__codecReplies = [];
-    window.__shimStats = null;
+    // One report per worker (the encode and the decode worker both run the shim)
+    window.__shimStats = [];
     window.Worker = class extends RealWorker {
       constructor(...args) {
         super(...args);
+        const index = window.__shimStats.length;
+        window.__shimStats.push(null);
         this.addEventListener('message', (e) => {
           const type = e.data?.type;
-          if (type === 'TEST_STATS') window.__shimStats = e.data.stats;
+          if (type === 'TEST_STATS') window.__shimStats[index] = e.data.stats;
           else if (type === 'DECODE_RESULT' || type === 'JOB_ERROR') {
             window.__codecReplies.push(type);
           }
@@ -190,7 +193,10 @@ test('a frame copy that fails ends the open: nothing left open, one reply, the r
 
   // Give any frame the decoder still emits time to arrive, then count
   await page.waitForTimeout(1500);
-  const stats = await page.evaluate(() => window.__shimStats);
+  // The worker that decoded (the encode worker's decoder never ran)
+  const stats = await page.evaluate(() =>
+    window.__shimStats.filter(Boolean).reduce((a, b) => (b.outputs > a.outputs ? b : a)),
+  );
   expect(stats.outputs).toBeGreaterThanOrEqual(6);
   expect(stats).toMatchObject({ decoderOpen: 0, ownedOpen: 0 });
   expect(await page.evaluate(() => window.__codecReplies)).toEqual(['JOB_ERROR']);
