@@ -90,7 +90,10 @@ export function syncCanvasSize(canvas, width, height) {
  */
 export function isVideoFrameValid(videoFrame) {
   if (videoFrame == null) return false;
-  return !videoFrame.closed;
+  // A real VideoFrame has no `closed` property (only the test mocks do):
+  // close() resets its coded size to 0, so a closed one reads 0 x 0
+  if (/** @type {{ closed?: boolean }} */ (videoFrame).closed === true) return false;
+  return videoFrame.codedWidth !== 0;
 }
 
 /**
@@ -108,7 +111,7 @@ export function isVideoFrameValid(videoFrame) {
  */
 export function getDrawableSource(frame) {
   if (!frame?.frame) return null;
-  if (frame.frame.closed) return null;
+  if (!isVideoFrameValid(frame.frame)) return null;
   return frame.frame;
 }
 
