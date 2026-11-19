@@ -29,6 +29,14 @@ import { fitWithinLongEdge } from '../shared/utils/geometry.js';
  */
 
 /**
+ * @param {{ width: number, height: number } | null} dims
+ * @returns {string}
+ */
+function sizeKey(dims) {
+  return dims ? `${dims.width}x${dims.height}` : '';
+}
+
+/**
  * Manager for capture worker
  */
 export class CaptureWorkerManager {
@@ -40,6 +48,13 @@ export class CaptureWorkerManager {
 
   /** @type {StatsCallback | null} */
   #onStatsUpdate = null;
+
+  /** @type {((dims: { width: number, height: number, scaled: boolean }) => void) | null} */
+  #onFrameSizeChange = null;
+
+  /** @type {string} Captured frame size the buffer capacity was set for
+   * ("" = unknown): a grab at another size reports it (B5) */
+  #capacitySize = '';
 
   /** @type {Array<(frames: TransferredFrame[]) => void>} Resolvers for in-flight
    * requestFrames() calls, oldest first. The worker answers each GET_FRAMES with
@@ -71,11 +86,17 @@ export class CaptureWorkerManager {
    *   long edge does not exceed this; 0/omitted captures at native size.
    *   Applied at createImageBitmap time so oversized (Retina) frames never
    *   exist, rather than being shrunk after the memory was already spent.
+   * @param {(dims: { width: number, height: number, scaled: boolean }) => void} [options.onFrameSizeChange]
+   *   - Called when frames are grabbed at a size other than the one the
+   *   buffer capacity was set for (a shared window resized, or a size that
+   *   was unknown at start), so the caller can re-clamp it (resize()).
    */
   init(video, options = {}) {
     this.#generation++;
     this.#video = video;
     this.#onStatsUpdate = options.onStatsUpdate ?? null;
+    this.#onFrameSizeChange = options.onFrameSizeChange ?? null;
+    this.#capacitySize = '';
     this.#maxEdge = options.maxEdge ?? 0;
 
     // Create worker if not already created
@@ -114,9 +135,25 @@ export class CaptureWorkerManager {
     }
 
     this.#isRunning = true;
+    this.#capacitySize = sizeKey(this.getEffectiveFrameDimensions());
     this.#worker?.postMessage({
       type: 'START',
       payload: { fps, maxFrames },
+    });
+  }
+
+  /**
+   * Change the buffer capacity while capturing; the oldest frames beyond it
+   * are closed in the worker, and so are the frames of another size. For a
+   * frame size that changed (B5).
+   * @param {number} maxFrames
+   */
+  resize(maxFrames) {
+    const dims = this.getEffectiveFrameDimensions();
+    this.#capacitySize = sizeKey(dims);
+    this.#worker?.postMessage({
+      type: 'RESIZE',
+      payload: { maxFrames, ...(dims ? { width: dims.width, height: dims.height } : {}) },
     });
   }
 
@@ -176,6 +213,7 @@ export class CaptureWorkerManager {
     }
     this.#video = null;
     this.#onStatsUpdate = null;
+    this.#onFrameSizeChange = null;
     this.#isInitialized = false;
     this.#isRunning = false;
 
@@ -259,7 +297,14 @@ export class CaptureWorkerManager {
       case 'FRAMES_RESPONSE':
         // Each response answers the oldest GET_FRAMES. Only that caller gets
         // the frames: the bitmaps were transferred and must have one owner.
-        this.#pendingFramesCallbacks.shift()?.(payload.frames || []);
+        // A response nobody waits for any more (its waiter was settled by a
+        // worker error or terminate) is closed here, not left to GC (B10).
+        {
+          const callback = this.#pendingFramesCallbacks.shift();
+          const frames = payload.frames || [];
+          if (callback) callback(frames);
+          else for (const frame of frames) frame?.bitmap?.close?.();
+        }
         break;
     }
   }
@@ -278,7 +323,12 @@ export class CaptureWorkerManager {
       callback([]);
     }
 
-    // Mark as uninitialized to prevent further operations
+    // A worker that threw is not trusted again: terminate it, which also
+    // releases the ring buffer it holds (B10). A later init() starts a new one.
+    this.#worker?.terminate();
+    this.#worker = null;
+    this.#generation++;
+    this.#isRunning = false;
     this.#isInitialized = false;
   }
 
@@ -321,6 +371,11 @@ export class CaptureWorkerManager {
       // createImageBitmap works on static screens!
       // This is the key difference from MediaStreamTrackProcessor.read()
       const target = this.getEffectiveFrameDimensions();
+      const size = sizeKey(target);
+      if (target && size !== this.#capacitySize) {
+        this.#capacitySize = size;
+        this.#onFrameSizeChange?.(target);
+      }
       const bitmap = target?.scaled
         ? await createImageBitmap(this.#video, {
             resizeWidth: target.width,
