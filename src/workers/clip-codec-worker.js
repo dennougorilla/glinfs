@@ -1,8 +1,9 @@
 /**
  * Clip Codec Worker - WebCodecs encode/decode off the main thread (#92)
  *
- * Runs one job at a time (the ClipCodecManager serializes jobs and gives
- * decode priority). Encode turns transferred VideoFrames into
+ * Runs one job at a time. The ClipCodecManager starts two of these, one for
+ * encodes and one for decodes, so opening a clip never waits for a
+ * compression. Encode turns transferred VideoFrames into
  * EncodedVideoChunk bytes; decode turns those bytes back into VideoFrames
  * transferred to the main thread.
  *
