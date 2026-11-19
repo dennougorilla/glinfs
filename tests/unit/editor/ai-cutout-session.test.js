@@ -21,6 +21,7 @@ import {
 } from '../../../src/features/editor/ai-cutout-session.js';
 import { normalizeEdits } from '../../../src/shared/edits/model.js';
 import { createFinalMaskCache } from '../../../src/shared/masks/final-masks.js';
+import { setMethodOverridesFromSearch } from '../../../src/shared/methods.js';
 
 const W = 4;
 const H = 2;
@@ -974,6 +975,56 @@ describe('AI cutout session: tracked objects', () => {
     }
     expect(preloadModel).toHaveBeenCalledTimes(1);
     expect(preloadModel).toHaveBeenCalledWith('click', { allowWasm: false });
+  });
+
+  it('Methods: Click answer = Scored: an unpicked fix-up gets pickAnswer, scored against the base mask; the picker sees the rank (cutout-ux 8)', async () => {
+    // The base model's mask on frame 0: the left half
+    const base = prob(0);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W / 2; x++) base.data[y * W + x] = 255;
+    maskStore.set(`anime:${state.clip.frames[0].id}`, base, 'clip-1');
+    setMethodOverridesFromSearch('?method.cutout.click-answer=scored');
+    try {
+      setObjects([{ id: 'o1', mode: 'add', clicks: [click(0)] }]);
+      session.syncObjects();
+      await settle();
+      const { pickAnswer } = manager.calls[0];
+      expect(typeof pickAnswer).toBe('function');
+      // Answers at 40 x 20 (the base mask is read at their size): the left
+      // half follows the base outline, the whole frame only along its border
+      const big = (/** @type {number} */ cols) => {
+        const data = new Uint8Array(40 * 20);
+        for (let y = 0; y < 20; y++) for (let x = 0; x < cols; x++) data[y * 40 + x] = 255;
+        return data;
+      };
+      const half = { data: big(20), width: 40, height: 20, score: 0.8, index: 0 };
+      const all = { data: big(40), width: 40, height: 20, score: 0.9, index: 1 };
+      expect(pickAnswer(0, [all, half])).toBe(0);
+      expect(session.getObjectAnswers('o1')?.chosenRank).toBe(0);
+      // A stored pick: nothing to choose
+      setObjects([{ id: 'o1', mode: 'add', candidate: 3, clicks: [click(0)] }]);
+      session.syncObjects();
+      await settle();
+      expect(manager.calls[1].pickAnswer).toBeUndefined();
+    } finally {
+      setMethodOverridesFromSearch('');
+    }
+  });
+
+  it('Methods: the tracker gets the after-lost choice; re-track after a correction can be the whole selection (cutout-ux 8)', async () => {
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0)] }]);
+    session.syncObjects();
+    await settle();
+    expect(manager.calls[0].afterLost).toBe('resume');
+    setMethodOverridesFromSearch('?method.cutout.retrack=all&method.cutout.track-lost=stop');
+    try {
+      setObjects([{ id: 'o1', mode: 'remove', clicks: [click(0), click(2)] }]);
+      session.syncObjects();
+      await settle();
+      expect(manager.calls[1].range).toEqual({ start: 0, end: 3 });
+      expect(manager.calls[1].afterLost).toBe('stop');
+    } finally {
+      setMethodOverridesFromSearch('');
+    }
   });
 
   it('a correction that adds a point re-tracks only its span; frames outside keep their masks (cutout-ux 5)', async () => {

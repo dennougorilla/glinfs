@@ -107,6 +107,9 @@ import { COLOUR_TOLERANCE } from '../masks/colour-fill.js';
  * @property {boolean} [everywhere] - Colour only: remove the sampled colours
  *   wherever they are in the mask on every frame, not only where they
  *   touch its points (sparkles, flames scattered over the frame)
+ * @property {boolean} [pieces] - Colour only (Methods: Colour reach =
+ *   Detached pieces): remove the small detached pieces in the palette of the
+ *   piece under its first point instead (never with everywhere)
  * @property {boolean} [only] - Keep fix-ups only: "only this". On every
  *   frame where it has its mask the final mask keeps only what lies inside
  *   it (grown a little); frames without its mask keep the base mask. Absent:
@@ -660,6 +663,7 @@ function normalizeObject(object, frameCount) {
     scope: scope === 'colour' && !canBeColourObject({ mode, clicks: kept }) ? 'whole' : scope,
     ...(mode === 'add' && typeof o.only === 'boolean' ? { only: o.only } : {}),
     ...(mode === 'remove' && o.everywhere === true ? { everywhere: true } : {}),
+    ...(mode === 'remove' && o.pieces === true && o.everywhere !== true ? { pieces: true } : {}),
     ...normalizeGone(o.gone, frameCount),
     ...(Number.isInteger(o.candidate) &&
     /** @type {number} */ (o.candidate) >= 0 &&

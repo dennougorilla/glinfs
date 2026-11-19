@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundPoints,
+  borderAgreement,
   buildPromptInputs,
   chooseCandidate,
   expandBox,
@@ -13,7 +14,9 @@ import {
   orderCandidatesBySize,
   planAnchors,
   SAM_LABEL,
+  scoredAnswerRank,
   splitAnchorPrompts,
+  stabilityScore,
   toEncoderPoint,
   trackingPrompt,
 } from '../../../src/features/ai-cutout/sam-prompts.js';
@@ -320,5 +323,57 @@ describe('tracking', () => {
       { points: [keepOut, off], box: null },
     ]);
     expect(splitAnchorPrompts({ points: [off], boxes: [] })).toEqual([]);
+  });
+});
+
+describe('scored answers (Methods: Click answer = Scored, task 7 item 2)', () => {
+  const W = 20;
+  const H = 20;
+  /** A 0..255 answer: `v` inside the rect, `edge` on its one-pixel rim, 0 outside */
+  const answer = (x0, y0, x1, y1, score, v = 255, edge = v) => {
+    const data = new Uint8Array(W * H);
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const rim = x === x0 || y === y0 || x === x1 - 1 || y === y1 - 1;
+        data[y * W + x] = rim ? edge : v;
+      }
+    }
+    return { data, width: W, height: H, score, index: 0 };
+  };
+
+  it('stability: the share of the answer that stays from logit -1 to +1', () => {
+    expect(stabilityScore(answer(2, 2, 12, 12, 0.9).data)).toBe(1);
+    // A soft rim (probability ~0.4: inside at logit -1, outside at +1)
+    const soft = answer(2, 2, 12, 12, 0.9, 255, 100).data;
+    expect(stabilityScore(soft)).toBeCloseTo(64 / 100, 5);
+    expect(stabilityScore(new Uint8Array(10))).toBe(0);
+  });
+
+  it("border agreement: the share of the answer's edge within 2 px of the base mask's edge", () => {
+    const base = answer(4, 4, 16, 16, 1);
+    expect(borderAgreement(answer(4, 4, 16, 16, 1), base)).toBe(1);
+    expect(borderAgreement(answer(5, 5, 15, 15, 1), base)).toBe(1);
+    expect(borderAgreement(answer(0, 0, 20, 20, 1), base)).toBe(0);
+    // A base mask at another size is compared at the answer's size
+    const big = { data: new Uint8Array(40 * 40), width: 40, height: 40 };
+    for (let y = 8; y < 32; y++) for (let x = 8; x < 32; x++) big.data[y * 40 + x] = 255;
+    expect(borderAgreement(answer(4, 4, 16, 16, 1), big)).toBe(1);
+  });
+
+  it('scoredAnswerRank: Keep click by border agreement x score, Remove click by stability x score', () => {
+    const base = answer(4, 4, 16, 16, 1);
+    const small = answer(8, 8, 11, 11, 0.95);
+    const thing = answer(4, 4, 16, 16, 0.8);
+    const all = answer(0, 0, 20, 20, 0.9);
+    const ordered = [small, thing, all];
+    // Keep: the answer that follows the base mask's outline
+    expect(scoredAnswerRank([all, small, thing], { mode: 'keep', base })).toBe(
+      ordered.indexOf(thing),
+    );
+    // Keep without a base mask: no scored choice (the size rule stays)
+    expect(scoredAnswerRank([all, small, thing], { mode: 'keep', base: null })).toBeNull();
+    // Remove: a crisp answer beats a higher-scoring soft one
+    const softAll = answer(0, 0, 20, 20, 0.95, 120);
+    expect(scoredAnswerRank([softAll, thing], { mode: 'remove', base: null })).toBe(0);
   });
 });

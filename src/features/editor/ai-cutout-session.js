@@ -52,14 +52,15 @@
  *   Progress goes to `objectTracking`, lost frames to `objectLost`.
  */
 
-import { isAiCutoutActive } from '../../shared/edits/model.js';
+import { getDefaultObjectCandidate, isAiCutoutActive } from '../../shared/edits/model.js';
 import { suggestCleanups } from '../../shared/masks/cleanup-suggestions.js';
 import { loadSettings } from '../../shared/user-settings.js';
 import { OBJECT_GROUP_PREFIX } from '../ai-cutout/mask-store.js';
+import { getClickAnswerRule, getRetrackScope, getTrackAfterLost } from '../ai-cutout/method.js';
 import { isModelCached as isModelCachedDefault } from '../ai-cutout/model-cache.js';
 import { getModelIds, isSamModelId } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
-import { orderCandidatesBySize } from '../ai-cutout/sam-prompts.js';
+import { orderCandidatesBySize, scoredAnswerRank } from '../ai-cutout/sam-prompts.js';
 import {
   frameKey,
   maskKey,
@@ -1019,7 +1020,7 @@ export function createAiCutoutSession(options) {
     // A correction that only adds a point or a box: re-track the span it
     // can change, never the frames outside it, whose masks (and lost marks)
     // stay and take the new prompts' tag
-    const span = correctionSpan(object, selection);
+    const span = getRetrackScope() === 'all' ? null : correctionSpan(object, selection);
     const range = span ?? selection;
     if (span) {
       const last = /** @type {NonNullable<ReturnType<typeof objectTracked.get>>} */ (
@@ -1059,6 +1060,48 @@ export function createAiCutoutSession(options) {
         boxes: object.boxes ?? [],
         scope: object.scope,
         candidate: typeof object.candidate === 'number' ? object.candidate : null,
+        afterLost: getTrackAfterLost(),
+        // Click answer = Scored and no pick stored: score the clicked frame's
+        // answers (Keep against the base model's mask there); the picker shows
+        // the rank chosen
+        ...(typeof object.candidate !== 'number' && getClickAnswerRule() === 'scored'
+          ? {
+              pickAnswer: (
+                /** @type {number} */ frame,
+                /** @type {import('../ai-cutout/sam-prompts.js').SamCandidate[]} */ candidates,
+              ) => {
+                const baseModel = getAiModelId(state.edits.background.ai);
+                const clipFrame = state.clip?.frames[frame];
+                const base =
+                  clipFrame && !isSamModelId(baseModel)
+                    ? (maskStore.get(maskKey(clipFrame, baseModel)) ?? null)
+                    : null;
+                const rank =
+                  scoredAnswerRank(candidates, {
+                    mode: object.mode === 'remove' ? 'remove' : 'keep',
+                    base,
+                  }) ?? getDefaultObjectCandidate(object.mode, { click: object.clicks[0] });
+                const kept = objectAnswers.get(id);
+                objectAnswers.set(
+                  id,
+                  kept && kept.frame === frame
+                    ? { ...kept, chosenRank: rank }
+                    : {
+                        frame,
+                        answers: orderCandidatesBySize(candidates).map((c) => ({
+                          data: c.data,
+                          width: c.width,
+                          height: c.height,
+                        })),
+                        chosenRank: rank,
+                      },
+                );
+                answersVersion += 1;
+                report({ objectAnswersVersion: answersVersion });
+                return rank;
+              },
+            }
+          : {}),
         onAnswers: (frame, candidates) => {
           if (disposed || objectController !== controller) return;
           objectAnswers.set(id, {
@@ -1234,7 +1277,8 @@ export function createAiCutoutSession(options) {
      * A fix-up's answers on its clicked frame, small to large (null: none
      * kept, e.g. after a reload)
      * @param {string} id
-     * @returns {{ frame: number, answers: import('../../shared/masks/final-masks.js').ProbMask[] } | null}
+     * @returns {{ frame: number, answers: import('../../shared/masks/final-masks.js').ProbMask[], chosenRank?: number } | null}
+     *   chosenRank: the answer the tracker chose (Click answer = Scored)
      */
     getObjectAnswers(id) {
       return objectAnswers.get(id) ?? null;
