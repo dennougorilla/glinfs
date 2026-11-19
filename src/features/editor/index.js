@@ -30,6 +30,7 @@ import {
   isAiCutoutActive,
   isColorKeyActive,
   normalizeEdits,
+  OBJECT_CANDIDATES,
   requiresTransparency,
 } from '../../shared/edits/model.js';
 import {
@@ -130,6 +131,7 @@ import {
   removeTextLayer,
   selectTextLayer,
   setActiveAiObject,
+  setAiObjectCandidate,
   setAiObjectScope,
   setAiObjectTolerance,
   setAiParams,
@@ -660,6 +662,8 @@ export function initEditor() {
     aiPickTool: initialState.aiPickTool,
     aiActiveObjectId: initialState.aiActiveObjectId,
     aiHighlightObjectId: initialState.aiHighlightObjectId,
+    aiPickerId: initialState.aiPickerId,
+    aiPickerRank: initialState.aiPickerRank,
     aiCutout: initialState.aiCutout,
     brush: initialState.brush,
     sidebarTab: initialState.sidebarTab,
@@ -724,7 +728,11 @@ export function initEditor() {
       state.previewView !== lastRendered.previewView ||
       state.comparing !== lastRendered.comparing ||
       state.aiHighlightObjectId !== lastRendered.aiHighlightObjectId ||
-      state.aiActiveObjectId !== lastRendered.aiActiveObjectId;
+      state.aiActiveObjectId !== lastRendered.aiActiveObjectId ||
+      // The picked answer's tint
+      state.aiPickerId !== lastRendered.aiPickerId ||
+      state.aiPickerRank !== lastRendered.aiPickerRank ||
+      state.aiCutout.objectAnswersVersion !== lastRendered.aiCutout.objectAnswersVersion;
     const promptChanged =
       state.downloadPrompt !== lastRendered.downloadPrompt ||
       state.downloadPromptSubject !== lastRendered.downloadPromptSubject;
@@ -759,6 +767,8 @@ export function initEditor() {
     if (viewChanged || editsChanged || pickingChanged || pickToolChanged || brushChanged) {
       updatePreviewTools(container, state);
       lastRendered.previewView = state.previewView;
+      lastRendered.aiPickerId = state.aiPickerId;
+      lastRendered.aiPickerRank = state.aiPickerRank;
       lastRendered.comparing = state.comparing;
     }
     if (frameChanged || editsChanged || aiChanged || pickToolChanged) {
@@ -1029,6 +1039,8 @@ function render(container) {
       onAiPickStart: handleAiPickStart,
       onAiBox: handleAiBox,
       onHighlightAiObject: handleHighlightAiObject,
+      onPickAiAnswer: handlePickAiAnswer,
+      onEndAiPicker: handleEndAiPicker,
       onRemoveAiPick: handleRemoveAiPick,
       onGoToLostFrame: handleGoToLostFrame,
       onGoToObject: handleGoToObject,
@@ -1059,7 +1071,12 @@ function render(container) {
     getClipFps(state.clip),
   );
 
-  uiCleanup = result.cleanup;
+  const pickerCanvas = result.overlayCanvas;
+  pickerCanvas?.addEventListener('wheel', handlePickerWheel, { passive: false });
+  uiCleanup = () => {
+    pickerCanvas?.removeEventListener('wheel', handlePickerWheel);
+    result.cleanup();
+  };
   baseCanvas = result.baseCanvas;
   overlayCanvas = result.overlayCanvas;
 
@@ -1089,6 +1106,7 @@ function drawPreview(state) {
     view: getEffectivePreviewView(state),
   });
   drawObjectRegions(ctx, state, frame);
+  drawPickedAnswer(ctx, state, frame);
 }
 
 /**
@@ -1275,6 +1293,141 @@ function updateAiPulse(container, state) {
     el.style.height = '';
   }
   el.hidden = false;
+}
+
+/**
+ * The answer stepped to, waiting to be stored (a short pause after the last
+ * step stores it, so stepping through four answers starts one tracking run,
+ * not four)
+ * @type {{ id: string, rank: number, timer: ReturnType<typeof setTimeout> } | null}
+ */
+let pickerCommit = null;
+
+/** Pause after the last step before the pick is stored and tracked again */
+const PICKER_SETTLE_MS = 450;
+
+/** Wheel distance (deltaY, pixels) that steps one answer */
+const PICKER_WHEEL_STEP = 60;
+let pickerWheel = 0;
+
+/**
+ * The fix-up whose answers can be stepped through now: the picker's, with
+ * its clicked frame on screen and not Colour
+ * @param {import('./types.js').EditorState} state
+ * @returns {import('../../shared/edits/model.js').CutoutObject | null}
+ */
+function getPickerObject(state) {
+  const id = state.aiPickerId;
+  if (!id) return null;
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || isColourObject(object)) return null;
+  if (getObjectFrame(object) !== state.currentFrame) return null;
+  return object;
+}
+
+/**
+ * How many answers the picker steps through and which one is shown
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../../shared/edits/model.js').CutoutObject} object
+ * @returns {{ count: number, rank: number }}
+ */
+function getPickerRank(state, object) {
+  const kept = aiSession?.getObjectAnswers(object.id);
+  const count = kept && kept.frame === state.currentFrame ? kept.answers.length : OBJECT_CANDIDATES;
+  const stored = typeof object.candidate === 'number' ? object.candidate : count - 1;
+  const rank = state.aiPickerRank ?? stored;
+  return { count, rank: Math.min(rank, Math.max(0, count - 1)) };
+}
+
+/** Store the answer stepped to now (the pause is cut short) */
+function commitPickedAnswer() {
+  const pending = pickerCommit;
+  if (!pending || !store) return;
+  clearTimeout(pending.timer);
+  pickerCommit = null;
+  store.setState((s) => ({
+    ...setAiObjectCandidate(s, pending.id, pending.rank),
+    aiPickerRank: null,
+  }));
+}
+
+/**
+ * Show answer `rank` (small to large) of the picker's fix-up at once, and
+ * store it after a short pause (then it is tracked again)
+ * @param {number} rank
+ * @returns {boolean} The picker took it (else the key means something else)
+ */
+function handlePickAiAnswer(rank) {
+  if (!store) return false;
+  const state = store.getState();
+  const object = getPickerObject(state);
+  if (!object) return false;
+  const { count } = getPickerRank(state, object);
+  const next = Math.min(Math.max(0, rank), Math.max(0, count - 1));
+  if (pickerCommit !== null) clearTimeout(pickerCommit.timer);
+  pickerCommit = {
+    id: object.id,
+    rank: next,
+    timer: setTimeout(commitPickedAnswer, PICKER_SETTLE_MS),
+  };
+  store.setState((s) => (s.aiPickerRank === next ? s : { ...s, aiPickerRank: next }));
+  return true;
+}
+
+/**
+ * The wheel over the preview steps through the answers: up grows (a larger
+ * answer), down shrinks
+ * @param {WheelEvent} e
+ */
+function handlePickerWheel(e) {
+  if (!store) return;
+  const state = store.getState();
+  const object = getPickerObject(state);
+  if (!object) return;
+  e.preventDefault();
+  pickerWheel += e.deltaY;
+  if (Math.abs(pickerWheel) < PICKER_WHEEL_STEP) return;
+  const step = pickerWheel < 0 ? 1 : -1;
+  pickerWheel = 0;
+  handlePickAiAnswer(getPickerRank(state, object).rank + step);
+}
+
+/**
+ * Stop stepping through the answers (Escape, a new fix-up): a pending pick
+ * is stored first
+ * @returns {boolean} There was a picker to end
+ */
+function handleEndAiPicker() {
+  if (!store?.getState().aiPickerId) return false;
+  commitPickedAnswer();
+  store.setState((s) => ({ ...s, aiPickerId: null, aiPickerRank: null }));
+  return true;
+}
+
+/**
+ * The answer kept (or stepped to) of the picker's fix-up, tinted over its
+ * clicked frame in its colour: what the click changed
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../capture/types.js').Frame} frame
+ */
+function drawPickedAnswer(ctx, state, frame) {
+  if (!isAiCutoutActive(state.edits.background)) return;
+  const object = getPickerObject(state);
+  if (!object) return;
+  const kept = aiSession?.getObjectAnswers(object.id);
+  if (!kept || kept.frame !== state.currentFrame || kept.answers.length === 0) return;
+  const { rank } = getPickerRank(state, object);
+  const mask = kept.answers[rank];
+  if (!mask) return;
+  const objects = state.edits.background.ai.objects ?? [];
+  drawRegions(
+    ctx,
+    frame.width,
+    frame.height,
+    [{ mode: object.mode, color: getObjectColor(objects, object.id), mask }],
+    0,
+  );
 }
 
 /**
@@ -2073,6 +2226,11 @@ function handleResetBackground() {
 function handleSetAiPickTool(tool, options = {}) {
   if (!store) return;
   store.setState((state) => setAiPickTool(state, tool));
+  // A new Keep / Remove action: the last fix-up's answers are no longer
+  // stepped through (a selected fix-up keeps its picker)
+  if (tool && !store.getState().aiActiveObjectId && store.getState().aiPickerId) {
+    handleEndAiPicker();
+  }
   // A click may become a tracked fix-up: have the tracker ready by then
   // (only when it is downloaded already; it never downloads here)
   if (tool && getAiModelId(store.getState().edits.background.ai) !== 'click') {
@@ -2324,7 +2482,12 @@ function addObjectFixUp(mode, selection) {
   if (willTrack) aiSession?.expectAnswer();
   store.setState((s) => setAiPickTool(addAiObject(s, mode, selection), null));
   const added = store.getState().edits.background.ai.objects?.at(-1);
-  if (added && !isColourObject(added)) startPulse(added.id, selection);
+  if (added && !isColourObject(added)) {
+    startPulse(added.id, selection);
+    // Its answers on this frame: the wheel and 1-4 step through them
+    commitPickedAnswer();
+    store.setState((s) => ({ ...s, aiPickerId: added.id, aiPickerRank: null }));
+  }
   announce(
     added && isColourObject(added)
       ? 'Removed by colour on every frame. Select its chip to add points or Alt-click what to keep.'
@@ -2392,7 +2555,12 @@ function handleGoToObject(id) {
     store.setState((s) => setAiPickTool(s, null));
     return;
   }
-  store.setState((s) => setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)));
+  commitPickedAnswer();
+  store.setState((s) => ({
+    ...setAiPickTool(setActiveAiObject(s, id), getObjectTool(object)),
+    aiPickerId: isColourObject(object) ? null : id,
+    aiPickerRank: null,
+  }));
   handleFrameChange(getObjectFrame(object));
   announce('Selected. Click to add to it, Alt-click to take away from it. Escape to finish.');
 }
@@ -2418,6 +2586,11 @@ function handleGoToObjectLost(id) {
 /** @param {string} id */
 function handleRemoveAiObject(id) {
   if (!store) return;
+  if (store.getState().aiPickerId === id) {
+    if (pickerCommit !== null) clearTimeout(pickerCommit.timer);
+    pickerCommit = null;
+    store.setState((s) => ({ ...s, aiPickerId: null, aiPickerRank: null }));
+  }
   store.setState((state) => removeAiObject(state, id));
   announce('Object removed');
 }

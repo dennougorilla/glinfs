@@ -11,7 +11,9 @@ import {
   createTextLayer,
   DEFAULT_TOUCH_UP_RADIUS,
   EDIT_LIMITS,
+  getDefaultObjectCandidate,
   normalizeEdits,
+  OBJECT_CANDIDATES,
   OBJECT_SCOPES,
   TOUCH_UP_MODES,
 } from '../../shared/edits/model.js';
@@ -48,6 +50,8 @@ export function initEditorState(clip) {
     aiActiveObjectId: null,
     aiRemoveScope: 'part',
     aiHighlightObjectId: null,
+    aiPickerId: null,
+    aiPickerRank: null,
     aiCutout: createAiCutoutStatus(),
     brush: createBrushState(),
     sidebarTab: 'frame',
@@ -550,11 +554,11 @@ export function clearAiPicks(state) {
 /**
  * Add a tracked object selected by a click or a box (ignored once
  * EDIT_LIMITS.aiObjects.max exist). It is not selected: the next click of
- * a tool adds another fix-up. A click with Remove starts in the scope
- * chosen last for a Remove fix-up (state.aiRemoveScope), Part at first:
- * what is removed is mostly a patch on or beside the subject, and Whole
- * answers with the subject too (measured live, see PR 3). A box is Whole
- * (Colour needs points).
+ * a tool adds another fix-up. It keeps the largest of the tracker's answers
+ * on its frame that getDefaultObjectCandidate picks; the user steps through the
+ * others (setAiObjectCandidate). A click with Remove is Colour when Colour
+ * was chosen last for a Remove fix-up (state.aiRemoveScope); a box never
+ * is (Colour needs points).
  * @param {import('./types.js').EditorState} state
  * @param {import('../../shared/edits/model.js').ObjectMode} mode
  * @param {{ click?: { frame: number, x: number, y: number }, box?: import('../../shared/edits/model.js').CutoutBox }} selection
@@ -570,9 +574,10 @@ export function addAiObject(state, mode, selection, id = createLayerId()) {
     id,
     mode,
     scope:
-      mode === 'remove' && selection.click && !selection.box
-        ? (state.aiRemoveScope ?? 'part')
+      mode === 'remove' && selection.click && !selection.box && state.aiRemoveScope === 'colour'
+        ? 'colour'
         : 'whole',
+    candidate: getDefaultObjectCandidate(mode, selection),
     tolerance: COLOUR_TOLERANCE.default,
     clicks: selection.click ? [{ ...selection.click, mode: 'keep' }] : [],
     boxes: selection.box ? [selection.box] : [],
@@ -639,6 +644,24 @@ export function setAiObjectScope(state, id, scope) {
   const next = updateAiObject(state, id, (o) => ({ ...o, scope }));
   // The next Remove fix-up starts in it
   return object.mode === 'remove' ? setAiRemoveScope(next, scope) : next;
+}
+
+/**
+ * Which of the tracker's answers on its clicked frame a fix-up keeps
+ * (0..OBJECT_CANDIDATES-1, small to large; clamped)
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {number} candidate
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiObjectCandidate(state, id, candidate) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (!object || !Number.isFinite(candidate)) return state;
+  const value = Math.min(OBJECT_CANDIDATES - 1, Math.max(0, Math.round(candidate)));
+  if (object.candidate === value && object.scope !== 'part') return state;
+  // The pick replaces Whole / Part (edits from before it)
+  const scope = object.scope === 'colour' ? 'colour' : 'whole';
+  return updateAiObject(state, id, (o) => ({ ...o, candidate: value, scope }));
 }
 
 /**

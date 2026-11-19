@@ -308,24 +308,51 @@ function countInside(data, threshold = 128) {
 }
 
 /**
+ * The decoder's non-empty answers ordered small to large (SAM's answers
+ * to one prompt are roughly nested: a part, the thing, the thing with its
+ * surroundings); ties keep the decoder's order. Empty answers are left out
+ * unless every answer is empty.
+ * @param {SamCandidate[]} candidates
+ * @returns {SamCandidate[]}
+ */
+export function orderCandidatesBySize(candidates) {
+  const sized = candidates.map((c, i) => ({ c, i, area: countInside(c.data) }));
+  const nonEmpty = sized.filter((s) => s.area > 0);
+  const pool = nonEmpty.length > 0 ? nonEmpty : sized;
+  return pool.sort((a, b) => a.area - b.area || a.i - b.i).map((s) => s.c);
+}
+
+/**
  * Pick one of the decoder's masks.
  * - 'whole' (clicked frame): the largest of the masks that score at least
  *   WHOLE_MIN_SCORE_RATIO of the best (a click on a face gives the person);
  * - 'part' (clicked frame): the best-scoring mask that is smaller than the
  *   whole (the face), or the whole when nothing smaller is non-empty;
- * - with `previous` (tracked frame): the mask overlapping it most.
+ * - with `previous` (tracked frame): the mask overlapping it most;
+ * - with `rank` (clicked frame, the user's pick): the rank-th answer
+ *   ordered small to large (orderCandidatesBySize), the largest when it
+ *   has fewer.
  * Empty masks are never chosen while a non-empty one exists.
  * `wholeMinScoreRatio` replaces WHOLE_MIN_SCORE_RATIO (a stricter one keeps
  * a half-included neighbour out of the whole).
  * @param {SamCandidate[]} candidates
- * @param {{ scope?: 'whole' | 'part', previous?: Uint8Array | null, wholeMinScoreRatio?: number }} [options]
+ * @param {{ scope?: 'whole' | 'part', previous?: Uint8Array | null, wholeMinScoreRatio?: number, rank?: number | null }} [options]
  * @returns {SamCandidate}
  */
 export function chooseCandidate(
   candidates,
-  { scope = 'whole', previous = null, wholeMinScoreRatio = WHOLE_MIN_SCORE_RATIO } = {},
+  {
+    scope = 'whole',
+    previous = null,
+    wholeMinScoreRatio = WHOLE_MIN_SCORE_RATIO,
+    rank = null,
+  } = {},
 ) {
   if (candidates.length === 0) throw new RangeError('No candidate masks');
+  if (!previous && typeof rank === 'number' && rank >= 0) {
+    const ordered = orderCandidatesBySize(candidates);
+    return ordered[Math.min(Math.floor(rank), ordered.length - 1)];
+  }
   const sized = candidates.map((c) => ({ c, area: countInside(c.data) }));
   const nonEmpty = sized.filter((s) => s.area > 0);
   const pool = nonEmpty.length > 0 ? nonEmpty : sized;

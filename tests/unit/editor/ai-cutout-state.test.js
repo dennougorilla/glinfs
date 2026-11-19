@@ -19,6 +19,7 @@ import {
   removeAiObject,
   removeAiPick,
   setActiveAiObject,
+  setAiObjectCandidate,
   setAiObjectScope,
   setAiObjectTolerance,
   setAiParams,
@@ -29,7 +30,12 @@ import {
   setPickingKeyColor,
   updateAiCutoutStatus,
 } from '../../../src/features/editor/state.js';
-import { EDIT_LIMITS } from '../../../src/shared/edits/model.js';
+import {
+  DEFAULT_OBJECT_CANDIDATE,
+  EDIT_LIMITS,
+  normalizeEdits,
+  OBJECT_CANDIDATES,
+} from '../../../src/shared/edits/model.js';
 
 function makeState() {
   const frames = Array.from({ length: 6 }, (_, i) => ({
@@ -175,12 +181,29 @@ describe('tracked objects', () => {
   const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
   const box = (frame = 2) => ({ frame, x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.5 });
 
-  it('adds an object from a click or a box, not selected; a Remove click starts at Part', () => {
+  it('adds an object from a click or a box, not selected, keeping the largest answer (cutout-ux 2)', () => {
     let state = addAiObject(makeState(), 'remove', { click: { ...click(), mode: 'remove' } }, 'o1');
     state = addAiObject(state, 'add', { box: box() }, 'o2');
     expect(state.edits.background.ai.objects).toEqual([
-      { id: 'o1', mode: 'remove', scope: 'part', clicks: [click()], boxes: [], tolerance: 32 },
-      { id: 'o2', mode: 'add', scope: 'whole', clicks: [], boxes: [box()], tolerance: 32 },
+      {
+        id: 'o1',
+        mode: 'remove',
+        scope: 'whole',
+        // A Remove click: the second smallest answer (the larger ones hold the subject)
+        candidate: 1,
+        clicks: [click()],
+        boxes: [],
+        tolerance: 32,
+      },
+      {
+        id: 'o2',
+        mode: 'add',
+        scope: 'whole',
+        candidate: DEFAULT_OBJECT_CANDIDATE,
+        clicks: [],
+        boxes: [box()],
+        tolerance: 32,
+      },
     ]);
     // The next click of a tool adds another fix-up
     expect(state.aiActiveObjectId).toBeNull();
@@ -335,5 +358,33 @@ describe('Colour fix-ups', () => {
       'remove',
     ]);
     expect(removeAiObject(state, 'r').edits.background.ai.objects).toEqual([]);
+  });
+});
+
+describe('picking among the answers (cutout-ux 2)', () => {
+  const click = (frame = 1) => ({ frame, x: 0.6, y: 0.4, mode: /** @type {const} */ ('keep') });
+  it('stores the pick as a rank that survives normalization (reload, export); old Part edits read as before', () => {
+    let state = addAiObject(makeState(), 'remove', { click: click() }, 'o1');
+    state = setAiObjectCandidate(state, 'o1', 1);
+    expect(state.edits.background.ai.objects[0]).toMatchObject({ candidate: 1, scope: 'whole' });
+    const saved = JSON.parse(JSON.stringify(state.edits));
+    expect(normalizeEdits(saved, 10).background.ai.objects[0].candidate).toBe(1);
+    // Clamped to the answers there are
+    expect(setAiObjectCandidate(state, 'o1', 9).edits.background.ai.objects[0].candidate).toBe(
+      OBJECT_CANDIDATES - 1,
+    );
+    // An edit from before the picker: no candidate, Part kept
+    const old = normalizeEdits(
+      {
+        background: {
+          enabled: true,
+          method: 'ai',
+          ai: { objects: [{ id: 'x', mode: 'remove', scope: 'part', clicks: [click()] }] },
+        },
+      },
+      10,
+    );
+    expect(old.background.ai.objects[0].scope).toBe('part');
+    expect('candidate' in old.background.ai.objects[0]).toBe(false);
   });
 });

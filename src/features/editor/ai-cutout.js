@@ -304,7 +304,8 @@ export function countUntrackedObjectFrames(
 export function getObjectSignature(object) {
   const clicks = object.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(',');
   const boxes = (object.boxes ?? []).map((b) => `${b.frame}:${b.x0}:${b.y0}:${b.x1}:${b.y1}`);
-  return `${object.scope}|${clicks}|${boxes.join(',')}`;
+  const pick = typeof object.candidate === 'number' ? `#${object.candidate}` : '';
+  return `${object.scope}${pick}|${clicks}|${boxes.join(',')}`;
 }
 
 /**

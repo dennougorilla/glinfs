@@ -1272,8 +1272,10 @@ export function renderBackgroundPanel(handlers) {
       }),
     ),
   );
+  // A tracked fix-up's shape is the answer picked on the preview (wheel or
+  // 1-4 step through the tracker's answers): no Whole / Part here
   const objectScopes = /** @type {const} */ ([
-    ...scopes,
+    { value: 'whole', label: 'Shape', title: 'Its shape, followed through the clip' },
     { value: 'colour', label: 'Colour', title: 'The colours under the points, on every frame' },
   ]);
   const objectScope = createElement(
@@ -1987,10 +1989,10 @@ export function updateBackgroundPanel(container, state, fps) {
   // chip), lost frames
   const active = isAi ? getActiveAiObject(state) : null;
   const selected = selectedId ? objects.find((o) => o.id === selectedId) : undefined;
-  setHidden(q(root, '#ai-object-scope'), !selected);
+  // Shape or Colour: only a Remove fix-up has the choice
+  setHidden(q(root, '#ai-object-scope'), selected?.mode !== 'remove');
   const scopeOf = selected?.scope ?? 'whole';
-  setChecked(q(root, '#ai-object-scope-whole'), scopeOf === 'whole');
-  setChecked(q(root, '#ai-object-scope-part'), scopeOf === 'part');
+  setChecked(q(root, '#ai-object-scope-whole'), scopeOf !== 'colour');
   setChecked(q(root, '#ai-object-scope-colour'), scopeOf === 'colour');
   // Colour removes only, and needs a point to sample (a box alone has none)
   const colourSegment = q(root, '#ai-object-scope-colour')?.closest('.editor-cutout-segment');

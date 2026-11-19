@@ -979,7 +979,7 @@ describe('tracked objects', () => {
     expect($('#ai-object-scope-colour').disabled).toBe(false);
   });
 
-  it('offers Colour beside Whole / Part for a selected Remove fix-up, with its tolerance', () => {
+  it('offers Shape or Colour (no Whole / Part, cutout-ux 2) for a selected Remove fix-up, with its tolerance', () => {
     const colour = { ...object('a', 'remove', 3), scope: 'colour', tolerance: 44 };
     updateBackgroundPanel(
       root,
@@ -998,15 +998,16 @@ describe('tracked objects', () => {
     expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20, { live: true });
     fire($('#ai-object-tolerance'), 'change');
     expect(handlers.onSetAiObjectTolerance).toHaveBeenLastCalledWith(20);
-    $('#ai-object-scope-part').click();
-    expect(handlers.onSetAiObjectScope).toHaveBeenLastCalledWith('part');
+    expect(document.querySelector('#ai-object-scope-part')).toBeNull();
+    $('#ai-object-scope-whole').click();
+    expect(handlers.onSetAiObjectScope).toHaveBeenLastCalledWith('whole');
     // An Add fix-up: no Colour, no tolerance
     updateBackgroundPanel(
       root,
       stateWith([colour, object('b', 'add', 0)], { aiActiveObjectId: 'b', aiPickTool: 'keep' }),
       10,
     );
-    expect(segment('colour').hidden).toBe(true);
+    expect($('#ai-object-scope').hidden).toBe(true);
     expect($('#ai-object-tolerance-row').hidden).toBe(true);
   });
 

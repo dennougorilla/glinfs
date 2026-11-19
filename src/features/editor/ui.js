@@ -289,11 +289,31 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
   window.addEventListener('keyup', onCompareKeyUp);
   window.addEventListener('blur', onCompareBlur);
 
+  /**
+   * 1-4 pick one of the tracker's answers of the fix-up just made (or
+   * selected) while its frame is on screen; otherwise the keys fall through
+   * to the clip shortcuts (route scope)
+   * @param {number} n - 1-based
+   */
+  const pickAnswer = (n) =>
+    registerHotkey({
+      code: `Digit${n}`,
+      scope: 'overlay',
+      handler: (e) => {
+        if (!handlers.onPickAiAnswer?.(n - 1)) return false;
+        e.preventDefault();
+      },
+    });
+
   const unsubscribers = [
     () => {
       window.removeEventListener('keyup', onCompareKeyUp);
       window.removeEventListener('blur', onCompareBlur);
     },
+    pickAnswer(1),
+    pickAnswer(2),
+    pickAnswer(3),
+    pickAnswer(4),
     registerHotkey({
       key: '\\',
       scope: 'route',
@@ -365,6 +385,10 @@ function setupKeyboardShortcuts(handlers, state, options = {}) {
         if (current.aiPickTool) {
           e.preventDefault();
           handlers.onSetAiPickTool?.(null);
+          return;
+        }
+        if (current.aiPickerId && handlers.onEndAiPicker?.()) {
+          e.preventDefault();
           return;
         }
         if (!current.pickingKeyColor) return false;

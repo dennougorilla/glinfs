@@ -813,6 +813,70 @@ describe('AI cutout in the mounted editor', () => {
     expect(getEditorState()?.aiPickTool).toBeNull();
   });
 
+  it('steps through the answers of the selected fix-up with 1-4, stored after a short pause (cutout-ux 2)', async () => {
+    mount(3);
+    fake.analyzeFrames.mockResolvedValueOnce({ analyzed: 0, skipped: 0, backend: 'wasm' });
+    await chooseAi();
+    window.__TEST_HOOKS__.setEditorState({
+      currentFrame: 0,
+      edits: normalizeEdits(
+        {
+          ...getEditorState()?.edits,
+          background: {
+            ...getEditorState()?.edits.background,
+            ai: {
+              ...getEditorState()?.edits.background.ai,
+              objects: [
+                {
+                  id: 'o1',
+                  mode: 'remove',
+                  scope: 'part',
+                  clicks: [{ frame: 0, x: 0.5, y: 0.5, mode: 'keep' }],
+                },
+              ],
+            },
+          },
+        },
+        3,
+      ),
+    });
+    await settle();
+    /** @type {HTMLElement} */ ($('[data-object-id="o1"] .editor-cutout-pick-go')).click();
+    await settle();
+    expect(getEditorState()?.aiPickerId).toBe('o1');
+    /** @param {string} code */
+    const digit = (code) => {
+      const e = new KeyboardEvent('keydown', {
+        key: code.slice(-1),
+        code,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    // Shown at once, stored (and tracked again) after a pause
+    expect(digit('Digit2')).toBe(true);
+    expect(getEditorState()?.aiPickerRank).toBe(1);
+    expect(getEditorState()?.edits.background.ai.objects[0].candidate).toBeUndefined();
+    expect(digit('Digit1')).toBe(true);
+    vi.advanceTimersByTime(500);
+    await settle();
+    const [object] = getEditorState()?.edits.background.ai.objects ?? [];
+    expect(object.candidate).toBe(0);
+    // The pick replaces Part
+    expect(object.scope).toBe('whole');
+    expect(getEditorState()?.aiPickerRank).toBeNull();
+    // On another frame the digits are the clip shortcuts again
+    window.__TEST_HOOKS__.setEditorState({ currentFrame: 1 });
+    await settle();
+    expect(digit('Digit3')).toBe(false);
+    // Escape ends the tool, then the picker
+    press('Escape');
+    press('Escape');
+    expect(getEditorState()?.aiPickerId).toBeNull();
+  });
+
   it('keeps keyboard focus in the panel when the focused control hides itself', async () => {
     mount(2);
     const held = holdNextAnalysis();

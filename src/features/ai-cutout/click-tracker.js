@@ -98,6 +98,12 @@ import {
  *   box prompt per frame (with that frame's points); a frame with a box is
  *   an anchor like one with a keep point
  * @property {'whole' | 'part'} [scope]
+ * @property {number | null} [candidate] - The user's pick among the clicked
+ *   frames' answers, ordered small to large (see chooseCandidate's rank);
+ *   it replaces `scope` there, and applies to boxes too
+ * @property {(frame: number, candidates: SamCandidate[]) => void} [onAnswers] -
+ *   The answers to the first prompt on the frame on screen (when it is an
+ *   anchor decoded from its own points): what the user picks among
  * @property {number} [wholeMinScoreRatio] - Whole on a clicked frame: see
  *   chooseCandidate (default WHOLE_MIN_SCORE_RATIO)
  * @property {number} [minScoreRatio] - A tracked frame whose chosen mask scores
@@ -288,6 +294,8 @@ export async function trackClicks({
   picks,
   boxes = [],
   scope = 'whole',
+  candidate = null,
+  onAnswers,
   minScoreRatio = 0,
   wholeMinScoreRatio,
   prompt,
@@ -505,11 +513,18 @@ export async function trackClicks({
       // (Part would pick a piece inside it).
       /** @type {SamCandidate[]} */
       const parts = [];
+      let first = true;
       for (const p of splitAnchorPrompts(anchor)) {
         const candidates = await prompt(anchor.frame, p);
         throwIfAborted(signal);
+        if (first && anchor.frame === currentFrame) onAnswers?.(anchor.frame, candidates);
+        first = false;
         parts.push(
-          chooseCandidate(candidates, { scope: p.box ? 'whole' : scope, wholeMinScoreRatio }),
+          chooseCandidate(candidates, {
+            scope: p.box ? 'whole' : scope,
+            wholeMinScoreRatio,
+            rank: candidate,
+          }),
         );
       }
       const joined = joinCandidates(parts);
