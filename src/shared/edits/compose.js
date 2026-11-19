@@ -413,6 +413,34 @@ export function __resetComposeCacheForTests() {
   removalCanvasCache = null;
 }
 
+/** Formats of a VideoFrame whose pixels are in CPU memory (clip frames, #233) */
+const CPU_FRAME_FORMATS = new Set(['I420', 'I420A', 'NV12']);
+
+/**
+ * The RGBA pixels of a CPU clip frame's region, converted by
+ * VideoFrame.copyTo; null for any other source, a fractional region, or a
+ * copyTo that refuses (an odd rect of a 4:2:0 frame, a browser without
+ * format conversion), which then go through the canvas
+ * @param {CanvasImageSource} source
+ * @param {Rect} region
+ * @returns {Promise<Uint8ClampedArray | null>}
+ */
+async function copyCpuFrameRGBA(source, region) {
+  const frame = /** @type {VideoFrame} */ (/** @type {unknown} */ (source));
+  if (typeof frame.copyTo !== 'function' || !CPU_FRAME_FORMATS.has(frame.format ?? '')) {
+    return null;
+  }
+  const { x, y, width, height } = region;
+  if (![x, y, width, height].every(Number.isInteger) || width <= 0 || height <= 0) return null;
+  const data = new Uint8ClampedArray(width * height * 4);
+  try {
+    await frame.copyTo(data, { format: 'RGBA', rect: { x, y, width, height } });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Export extraction path: the composed output of one frame as RGBA.
  *
@@ -483,6 +511,18 @@ export async function composeOutputFrameRGBA(
   }
 
   const { width, height } = full;
+
+  if (layers.length === 0) {
+    // A CPU clip frame (#233) converts to RGBA on the CPU: drawn, it is
+    // uploaded and converted on the GPU and read back again, which cost
+    // ~49 % of the export on a discrete GPU
+    const copied = await copyCpuFrameRGBA(source, region);
+    if (copied) {
+      remove?.(copied, width, height);
+      return { data: copied, width, height };
+    }
+  }
+
   const ctx = getCachedContext('rgba', width, height);
   ctx.imageSmoothingQuality = 'low';
   drawSourceRegion(ctx, source, crop);

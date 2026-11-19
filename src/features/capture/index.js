@@ -9,19 +9,23 @@ import {
   getClipQueueLimit,
   getScreenCaptureState,
   hasActiveScreenCapture,
+  isClipCompressionAvailable,
   setClipPayload,
   setScreenCaptureState,
 } from '../../shared/app-store.js';
 import { emit } from '../../shared/bus.js';
+import { I420_COLOR_SPACE, i420Layout } from '../../shared/i420.js';
 import { announce } from '../../shared/live-region.js';
 import { loadSettings, updateSetting } from '../../shared/user-settings.js';
 import { qsRequired } from '../../shared/utils/dom.js';
 import { BYTES_PER_MB } from '../../shared/utils/memory-monitor.js';
 import { throttle } from '../../shared/utils/performance.js';
 import { CaptureWorkerManager } from '../../workers/capture-worker-manager.js';
+import { convertToI420, warmI420Converter } from '../../workers/i420-converter.js';
 import { formatImportBusyLabel } from '../import/core.js';
 import { importFile, isImporting, reportImportBusy } from '../import/index.js';
 import { createVideoElement, startScreenCapture, stopScreenCapture } from './api.js';
+import { convertOpenClipFrames, countAsCpuCopies } from './clip-frames-i420.js';
 // Circular with clip-service (it imports getLiveCaptureContext from here);
 // safe because both sides only call the other's hoisted function declarations
 // at event time, never during module evaluation.
@@ -437,6 +441,8 @@ function startWorkerOn(manager, video, sessionStore) {
   );
   sessionStore.setState((state) => ({ ...state, bufferLimit }));
   manager.start(sessionStore.getState().settings.fps, bufferLimit.maxFrames);
+  // A clip may follow: start the I420 converter now, not on the first clip
+  warmI420Converter();
 }
 
 /**
@@ -610,7 +616,9 @@ function handleStop(preserveBuffer = true) {
 }
 
 /**
- * Convert transferred ImageBitmap frames into VideoFrames for the Editor.
+ * Convert transferred ImageBitmap frames into GPU RGBA VideoFrames. Clips
+ * use convertBitmapFramesToClipFrames, which comes here only for the frames
+ * the I420 converter could not convert.
  *
  * Closes every source ImageBitmap regardless of outcome: a VideoFrame copies
  * the pixel data at construction time, so keeping the bitmap alive after a
@@ -667,6 +675,92 @@ export function convertBitmapFramesToVideoFrames(imageBitmapFrames) {
   }
 
   return videoFrames;
+}
+
+/**
+ * The frames of a Clip Now snapshot, which goes to the queue. When the
+ * queue compresses it, its frames end in the encode within seconds, so
+ * they are made the quick way (GPU RGBA, as before D3): a CPU copy first
+ * cost 0.8-1.2 s at 1080p on win-r9. A snapshot that stays raw is copied to
+ * CPU I420 (convertBitmapFramesToClipFrames).
+ *
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
+ * @returns {Promise<import('./types.js').Frame[]>}
+ */
+export async function makeQueuedClipFrames(imageBitmapFrames) {
+  if (isClipCompressionAvailable()) return convertBitmapFramesToVideoFrames(imageBitmapFrames);
+  return convertBitmapFramesToClipFrames(imageBitmapFrames);
+}
+
+/**
+ * Turn the transferred capture bitmaps into the clip's frames: CPU I420
+ * VideoFrames (1.5 B/px, off the GPU, like a clip opened from the queue)
+ * through the converter worker (D3's cheap half), waiting for every copy.
+ * Frames the worker could not convert are made the old way (GPU RGBA,
+ * convertBitmapFramesToVideoFrames). The open clip does not wait: see
+ * clip-frames-i420.js.
+ *
+ * Like the old route, only the newest source's frames make the clip, and
+ * every bitmap is closed: by the worker once converted, here otherwise.
+ *
+ * @param {import('../../workers/capture-worker-manager.js').TransferredFrame[]} imageBitmapFrames
+ * @returns {Promise<import('./types.js').Frame[]>}
+ */
+export async function convertBitmapFramesToClipFrames(imageBitmapFrames) {
+  const start = getNewestSourceStart(imageBitmapFrames);
+  for (const item of imageBitmapFrames.slice(0, start)) item.bitmap?.close();
+  const usable = [];
+  for (const item of imageBitmapFrames.slice(start)) {
+    if (item.bitmap && item.bitmap.width > 0 && item.bitmap.height > 0) {
+      usable.push(item);
+    } else {
+      item.bitmap?.close();
+    }
+  }
+
+  const { converted, rest, lost } = await convertToI420(
+    usable.map(({ id, timestamp, bitmap }) => ({ id, timestamp, source: bitmap })),
+  );
+  if (lost > 0) console.warn(`[Capture] ${lost} frames were lost converting the clip`);
+
+  /** @type {Array<{ index: number, frame: import('./types.js').Frame }>} */
+  const ordered = [];
+  for (const entry of converted) {
+    let videoFrame;
+    try {
+      videoFrame = new VideoFrame(entry.data, {
+        format: 'I420',
+        codedWidth: entry.width,
+        codedHeight: entry.height,
+        timestamp: entry.timestamp * 1000,
+        colorSpace: I420_COLOR_SPACE,
+        transfer: [entry.data],
+      });
+    } catch (err) {
+      console.warn('[Capture] Could not make a frame from the converted bytes:', err);
+      continue;
+    }
+    ordered.push({
+      index: entry.index,
+      frame: {
+        id: entry.id,
+        frame: videoFrame,
+        timestamp: entry.timestamp * 1000,
+        width: entry.width,
+        height: entry.height,
+        byteLength: i420Layout(entry.width, entry.height).size,
+      },
+    });
+  }
+  const fallback = convertBitmapFramesToVideoFrames(
+    rest.map(({ item }) => ({ id: item.id, timestamp: item.timestamp, bitmap: item.source })),
+  );
+  const fallbackIds = new Map(rest.map(({ index, item }) => [item.id, index]));
+  for (const frame of fallback) {
+    ordered.push({ index: fallbackIds.get(frame.id) ?? Number.MAX_SAFE_INTEGER, frame });
+  }
+  ordered.sort((a, b) => a.index - b.index);
+  return ordered.map(({ frame }) => frame);
 }
 
 /**
@@ -755,7 +849,8 @@ async function handleCreateClip() {
     return false;
   }
 
-  // Convert ImageBitmaps to VideoFrames for Editor
+  // GPU RGBA first, so the editor opens at once; they move to CPU I420 in
+  // the background once the clip is open (D3, clip-frames-i420.js)
   const videoFrames = convertBitmapFramesToVideoFrames(imageBitmapFrames);
 
   if (videoFrames.length === 0) {
@@ -771,6 +866,9 @@ async function handleCreateClip() {
     queueSnapshot(videoFrames, { fps: settings.fps, sceneDetection: settings.sceneDetection });
     return false;
   }
+
+  // Counted as the CPU copies they become, as the early check assumed
+  countAsCpuCopies(videoFrames);
 
   // Remove the oldest queued clips this clip needs room from (setting on).
   // Refused when even removing all of them would not make room for the
@@ -813,6 +911,9 @@ async function handleCreateClip() {
     announceQueueFull();
     return false;
   }
+
+  // Off the GPU in the background, starting now (the editor calls it too)
+  void convertOpenClipFrames();
 
   emit('capture:clip-created', {
     frameCount: videoFrames.length,

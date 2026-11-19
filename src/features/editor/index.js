@@ -53,6 +53,7 @@ import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
 import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { convertOpenClipFrames } from '../capture/clip-frames-i420.js';
 import { reportOpenMemory } from '../capture/clip-service.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
@@ -446,6 +447,10 @@ export function initEditor() {
     }
     // 0 queued: fall through to the existing invalid-payload screen
   }
+
+  // A clip from the capture buffer (or a raw queued one) may still be on the
+  // GPU: its frames move to CPU I420 copies in the background (D3)
+  convertOpenClipFrames();
 
   // Validate payload structure ONLY if not returning from Export
   // When returning from Export, EditorPayload contains all needed data
