@@ -53,7 +53,7 @@ import { throttle } from '../../shared/utils/performance.js';
 import { updateStepIndicator } from '../../shared/utils/step-indicator.js';
 import { DEFAULT_CLIP_ID, getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { getModelEntry, isModelId, onCustomModelsChange } from '../ai-cutout/model-registry.js';
-import { getSegmentationManager } from '../ai-cutout/segmentation-manager.js';
+import { getSegmentationManager, objectMaskKey } from '../ai-cutout/segmentation-manager.js';
 import { openExportDialog } from '../export/index.js';
 import { createSceneDetectionManager } from '../scene-detection/index.js';
 import { getSceneMethod } from '../scene-detection/method.js';
@@ -65,10 +65,13 @@ import {
   getClipColourRegion,
   getClipObjectSources,
   getModelSizeLabel,
+  getOnlyThisLoss,
   getSharedFinalMaskCache,
+  getShareInsideBase,
   isAbortError,
   isColourObject,
   isFrameAnalyzed,
+  ONLY_THIS_MIN_INSIDE,
 } from './ai-cutout.js';
 import { createAiCutoutSession } from './ai-cutout-session.js';
 import {
@@ -132,6 +135,7 @@ import {
   selectTextLayer,
   setActiveAiObject,
   setAiObjectCandidate,
+  setAiObjectOnly,
   setAiObjectScope,
   setAiObjectTolerance,
   setAiParams,
@@ -774,6 +778,7 @@ export function initEditor() {
     if (frameChanged || editsChanged || aiChanged || pickToolChanged) {
       updateAiPreviewNote(container, state);
       updateAiPulse(container, state);
+      decideOnlyThis(state);
     }
 
     if (frameChanged) {
@@ -1107,6 +1112,7 @@ function drawPreview(state) {
   });
   drawObjectRegions(ctx, state, frame);
   drawPickedAnswer(ctx, state, frame);
+  drawOnlyThisLoss(ctx, state, frame);
 }
 
 /**
@@ -1428,6 +1434,70 @@ function drawPickedAnswer(ctx, state, frame) {
     [{ mode: object.mode, color: getObjectColor(objects, object.id), mask }],
     0,
   );
+}
+
+/**
+ * A new Keep box decides "only this" or "add this" once its answers on its
+ * frame arrive, from what it holds (see getShareInsideBase): around what
+ * the mask keeps, only this; around what it misses, add this. "Only this"
+ * stays selected with Keep on, so a click on what it takes away (tinted,
+ * see drawOnlyThisLoss) adds that back to it.
+ * @param {import('./types.js').EditorState} state
+ */
+function decideOnlyThis(state) {
+  if (!store || !state.clip) return;
+  const id = state.aiPickerId;
+  const object = id ? state.edits.background.ai.objects?.find((o) => o.id === id) : null;
+  if (object?.mode !== 'add' || typeof object.only === 'boolean') return;
+  if ((object.boxes ?? []).length === 0) return;
+  const kept = aiSession?.getObjectAnswers(object.id);
+  if (!kept || kept.answers.length === 0) return;
+  const { rank } = getPickerRank({ ...state, currentFrame: kept.frame }, object);
+  const share = getShareInsideBase({
+    frames: state.clip.frames,
+    ai: state.edits.background.ai,
+    frameIndex: kept.frame,
+    mask: kept.answers[rank],
+  });
+  if (share === null) return;
+  const only = share >= ONLY_THIS_MIN_INSIDE;
+  store.setState((s) => {
+    const next = setAiObjectOnly(s, object.id, only);
+    return only ? setAiPickTool(setActiveAiObject(next, object.id), 'keep') : next;
+  });
+}
+
+/**
+ * What an "only this" fix-up takes away on the frame on screen, tinted red
+ * over the frame while it is selected or just made: a part of the
+ * character outside it is seen as loss here, not found in the export
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {import('./types.js').EditorState} state
+ * @param {import('../capture/types.js').Frame} frame
+ */
+function drawOnlyThisLoss(ctx, state, frame) {
+  if (!isAiCutoutActive(state.edits.background) || !state.clip) return;
+  const id = state.aiActiveObjectId ?? state.aiPickerId;
+  const object = id ? state.edits.background.ai.objects?.find((o) => o.id === id) : null;
+  if (object?.mode !== 'add' || object.only !== true) return;
+  // The answer stepped to on its frame, else its mask on this frame
+  let mask = null;
+  const picked = getPickerObject(state);
+  const kept = aiSession?.getObjectAnswers(object.id);
+  if (picked?.id === object.id && kept && kept.frame === state.currentFrame) {
+    mask = kept.answers[getPickerRank(state, object).rank] ?? null;
+  }
+  const frameData = state.clip.frames[state.currentFrame];
+  mask ??= frameData ? getSharedMaskStore().get(objectMaskKey(frameData, object.id)) : null;
+  if (!mask) return;
+  const loss = getOnlyThisLoss({
+    frames: state.clip.frames,
+    ai: state.edits.background.ai,
+    frameIndex: state.currentFrame,
+    mask,
+  });
+  if (!loss) return;
+  drawRegions(ctx, frame.width, frame.height, [{ mode: 'remove', color: '#ef4444', mask: loss }]);
 }
 
 /**

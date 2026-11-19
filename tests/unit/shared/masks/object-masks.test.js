@@ -3,6 +3,7 @@ import {
   applyObjectMasks,
   createObjectScratch,
   getObjectMaskSize,
+  getOnlyGrowRadius,
   getRemoveGrowRadius,
   OBJECT_MASK_LONG_SIDE,
   OBJECT_MASK_THRESHOLD,
@@ -78,6 +79,27 @@ describe('applyObjectMasks', () => {
     const scratch = createObjectScratch(W * H);
     expect(applyObjectMasks(mask, W, H, [], scratch)).toBe(mask);
     expect(applyObjectMasks(mask, W, H, [{ mode: 'remove', mask: null }], scratch)).toBe(mask);
+  });
+
+  it('only this: keeps only what lies inside the object (grown); a frame without it keeps the mask (cutout-ux 3)', () => {
+    // Two characters side by side: keep only the left one
+    const mask = rectMask(W, H, [0, 0, W, H]);
+    const left = { data: rectMask(W, H, [0, 0, 8, H]).map((v) => v * 255), width: W, height: H };
+    const scratch = createObjectScratch(W * H);
+    const out = applyObjectMasks(mask, W, H, [{ mode: 'add', only: true, mask: left }], scratch);
+    const r = getOnlyGrowRadius(W);
+    expect(r).toBe(1);
+    for (let y = 0; y < H; y++) {
+      expect(out[y * W + 7 + r]).toBe(1);
+      expect(out[y * W + 8 + r]).toBe(0);
+    }
+    expect(count(out)).toBe((8 + r) * H);
+    // Lost on this frame: never an empty frame
+    expect(applyObjectMasks(mask, W, H, [{ mode: 'add', only: true, mask: null }], scratch)).toBe(
+      mask,
+    );
+    // Without "only" the same object adds (nothing new here)
+    expect(count(applyObjectMasks(mask, W, H, [{ mode: 'add', mask: left }], scratch))).toBe(W * H);
   });
 
   it('subtracts a removed object, grown so no fringe stays, and leaves the input alone', () => {

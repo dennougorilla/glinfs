@@ -60,6 +60,8 @@ import { applyObjectMasks, createObjectScratch } from './object-masks.js';
  * @typedef {Object} ObjectMaskInput
  * @property {string} [id] - The fix-up's id (the guard's results are keyed by it)
  * @property {'remove' | 'add'} mode
+ * @property {boolean} [only] - An Add fix-up in "only this": the final mask
+ *   keeps only what lies inside it where it has a mask (see object-masks.js)
  * @property {(frameIndex: number) => ProbMask | null} getMask - The object's
  *   probability mask on a frame (any size), or null where it was not
  *   tracked (that frame keeps the base mask). Read once per frame when a
@@ -173,7 +175,7 @@ export function getAiParamsKey(ai) {
     .map((o) =>
       o.scope === 'colour' && o.mode === 'remove'
         ? `${o.id}:${o.mode}:colour:${o.tolerance}:${o.clicks.map((c) => `${c.frame}:${c.x}:${c.y}:${c.mode}`).join(';')}`
-        : `${o.id}:${o.mode}`,
+        : `${o.id}:${o.mode}${o.only ? ':only' : ''}`,
     )
     .join(',');
   const cleanup = `${ai.cleanup?.minIslandArea ?? 0}:${ai.cleanup?.maxHoleArea ?? 0}`;
@@ -784,7 +786,7 @@ export async function buildFinalMasks(options) {
     /** @type {(ProbMask | null)[]} */
     const masks = [];
     for (let f = 0; f < frameCount; f++) masks.push(object.getMask(f) ?? null);
-    return { mode: object.mode, masks };
+    return { mode: object.mode, only: object.only === true, masks };
   });
   const colour = createColourStage(objects, getPixels, width, height, options.sourceWidth, {
     guard: true,
@@ -831,6 +833,7 @@ export async function buildFinalMasks(options) {
         };
         const layers = objectMasks.map((o, k) => ({
           mode: o.mode,
+          only: o.only,
           mask: objects[k].colour ? null : o.masks[f],
           fill: colour.fillFor(k, f, framePixels),
         }));
@@ -979,6 +982,7 @@ export function createDraftMaskSource({
       };
       const layers = objects.map((o, k) => ({
         mode: o.mode,
+        only: o.only === true,
         mask: o.colour ? null : (o.getMask(frameIndex) ?? null),
         fill: stage.fillFor(k, frameIndex, framePixels),
       }));

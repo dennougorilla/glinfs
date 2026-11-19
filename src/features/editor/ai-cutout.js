@@ -24,6 +24,12 @@ import {
   getSurvivingMask,
   pickFindsComponent,
 } from '../../shared/masks/final-masks.js';
+import { morphMask } from '../../shared/masks/mask-ops.js';
+import {
+  getOnlyGrowRadius,
+  OBJECT_MASK_THRESHOLD,
+  upsampleThreshold,
+} from '../../shared/masks/object-masks.js';
 import { getSharedMaskStore } from '../ai-cutout/mask-store.js';
 import { DEFAULT_MODEL_ID, formatModelSize, getModelEntry } from '../ai-cutout/model-registry.js';
 import { SegmentationErrorCode } from '../ai-cutout/protocol.js';
@@ -113,6 +119,85 @@ export function getClipProbSource(frames, maskStore, modelId = DEFAULT_MODEL_ID)
 }
 
 /**
+ * "Only this" or "add this" for a Keep box, from what it holds: the share
+ * of its answer (on its frame) that the base mask already keeps. A box
+ * around what is kept can only mean "keep only this" (adding it changes
+ * nothing); around what is missing, "add this". The same rule as a Keep
+ * click, which keeps a piece the mask has and adds where it has none.
+ */
+export const ONLY_THIS_MIN_INSIDE = 0.6;
+
+/**
+ * The share of `mask` (0..255 probability, any size) that the base mask of
+ * a frame keeps (its probability at or above the cut-off), or null when the
+ * frame has no base mask
+ * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, mask: { data: Uint8Array, width: number, height: number }, maskStore?: MaskStore }} options
+ * @returns {number | null}
+ */
+export function getShareInsideBase({
+  frames,
+  ai,
+  frameIndex,
+  mask,
+  maskStore = getSharedMaskStore(),
+}) {
+  const prob = getClipProbSource(frames, maskStore, getAiModelId(ai))(frameIndex);
+  if (!prob) return null;
+  const cutoff = Math.round(ai.threshold * 255);
+  let inside = 0;
+  let total = 0;
+  for (let y = 0; y < mask.height; y++) {
+    const py = Math.min(prob.height - 1, Math.floor(((y + 0.5) * prob.height) / mask.height));
+    for (let x = 0; x < mask.width; x++) {
+      if (mask.data[y * mask.width + x] < 128) continue;
+      total++;
+      const px = Math.min(prob.width - 1, Math.floor(((x + 0.5) * prob.width) / mask.width));
+      if (prob.data[py * prob.width + px] >= cutoff) inside++;
+    }
+  }
+  return total === 0 ? null : inside / total;
+}
+
+/**
+ * What an "only this" object takes away on a frame: the base mask's pixels
+ * (at its cut-off) outside the object grown as the build grows it, as a
+ * 0/255 mask at the base mask's size (null: nothing to show)
+ * @param {{ frames: Frame[], ai: AiCutout, frameIndex: number, mask: { data: Uint8Array, width: number, height: number }, maskStore?: MaskStore }} options
+ * @returns {{ data: Uint8Array, width: number, height: number } | null}
+ */
+export function getOnlyThisLoss({
+  frames,
+  ai,
+  frameIndex,
+  mask,
+  maskStore = getSharedMaskStore(),
+}) {
+  const prob = getClipProbSource(frames, maskStore, getAiModelId(ai))(frameIndex);
+  if (!prob) return null;
+  const { width, height } = prob;
+  const inside = upsampleThreshold(
+    mask.data,
+    mask.width,
+    mask.height,
+    width,
+    height,
+    undefined,
+    OBJECT_MASK_THRESHOLD,
+  );
+  const grown = morphMask(inside, width, height, getOnlyGrowRadius(width));
+  const cutoff = Math.round(ai.threshold * 255);
+  const data = new Uint8Array(width * height);
+  let any = false;
+  for (let i = 0; i < data.length; i++) {
+    if (prob.data[i] >= cutoff && !grown[i]) {
+      data[i] = 255;
+      any = true;
+    }
+  }
+  return any ? { data, width, height } : null;
+}
+
+/**
  * The tracked objects' mask lookups by clip frame index, in `ai.objects`
  * order (what a final-mask build composes on top of the base masks)
  * @param {Frame[]} frames - The whole clip
@@ -132,6 +217,7 @@ export function getClipObjectSources(frames, ai, maskStore) {
       : {
           id: object.id,
           mode: object.mode,
+          only: object.mode === 'add' && object.only === true,
           getMask: (frameIndex) => {
             const frame = frames[frameIndex];
             return frame ? maskStore.get(objectMaskKey(frame, object.id)) : null;

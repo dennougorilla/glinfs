@@ -665,6 +665,19 @@ export function setAiObjectCandidate(state, id, candidate) {
 }
 
 /**
+ * "Only this" (true) or "add this" (false) for a Keep fix-up
+ * @param {import('./types.js').EditorState} state
+ * @param {string} id
+ * @param {boolean} only
+ * @returns {import('./types.js').EditorState}
+ */
+export function setAiObjectOnly(state, id, only) {
+  const object = state.edits.background.ai.objects?.find((o) => o.id === id);
+  if (object?.mode !== 'add' || object.only === only) return state;
+  return updateAiObject(state, id, (o) => ({ ...o, only }));
+}
+
+/**
  * The scope a new Remove fix-up starts in (unknown values are ignored)
  * @param {import('./types.js').EditorState} state
  * @param {string} scope
