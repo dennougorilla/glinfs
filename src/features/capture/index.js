@@ -31,6 +31,7 @@ import {
   closeRefusedFrames,
   makeRoomForClip,
   projectClipMemory,
+  queueSnapshot,
 } from './clip-service.js';
 import { calculateEffectiveMaxFrames } from './core.js';
 import {
@@ -163,8 +164,9 @@ export function initCapture(settings) {
   throttledUpdate = throttle(() => {
     if (!store) return; // Guard against cleanup race condition
     const state = store.getState();
-    // Update buffer status without full re-render
-    updateBufferStatus(container, state.stats);
+    // Update buffer status without full re-render (the limit changes while
+    // sharing when the frame size does, B5)
+    updateBufferStatus(container, state.stats, state.bufferLimit ?? null);
   }, 100);
 
   storeUnsubscribe = store.subscribe(throttledUpdate);
@@ -412,6 +414,18 @@ function startWorkerOn(manager, video, sessionStore) {
           fps: stats.fps,
         },
       }));
+    },
+    // A shared window resized (or a size unknown at start): re-clamp the
+    // buffer for the new frame size, so it keeps to its share of the
+    // memory budget (B5, memory audit)
+    onFrameSizeChange: (dims) => {
+      const resized = calculateEffectiveMaxFrames(
+        sessionStore.getState().settings,
+        dims,
+        loadSettings().capture.memoryBudgetMB,
+      );
+      sessionStore.setState((state) => ({ ...state, bufferLimit: resized }));
+      manager.resize(resized.maxFrames);
     },
   });
 
@@ -704,6 +718,10 @@ function announceQueueFull() {
  */
 async function handleCreateClip() {
   if (!store || !workerManager) return false;
+  // The screen this Create Clip started on. Leaving /capture while the
+  // frames are on the way (cleanup() nulls `store`) must neither throw nor
+  // drop them (B4, memory audit)
+  const sessionStore = store;
 
   // A new active clip demotes the current one into the queue, so it needs a
   // queue slot only when there is an active clip. Refuse early while the
@@ -743,7 +761,15 @@ async function handleCreateClip() {
     return false;
   }
 
-  const settings = store.getState().settings;
+  const settings = sessionStore.getState().settings;
+
+  if (store !== sessionStore) {
+    // The screen was left: keep the snapshot as a queued clip, which does
+    // not touch whatever screen is mounted now. Not an active clip, so the
+    // caller does not navigate.
+    queueSnapshot(videoFrames, { fps: settings.fps, sceneDetection: settings.sceneDetection });
+    return false;
+  }
 
   // Remove the oldest queued clips this clip needs room from (setting on).
   // Refused when even removing all of them would not make room for the

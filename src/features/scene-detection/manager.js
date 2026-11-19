@@ -330,7 +330,7 @@ export class SceneDetectionManager {
             payload: {
               frameData,
               options: {
-                threshold: options.threshold,
+                method: options.method,
                 minSceneDuration: options.minSceneDuration,
                 sampleInterval: 1, // Already sampled during extraction
               },

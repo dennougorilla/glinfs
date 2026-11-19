@@ -1051,7 +1051,7 @@ async function estimateRungBytes(rung, estimator) {
   const sample = selectEstimateSample(representatives.length, interval);
   const picks = sample.positions.map((k) => representatives[k]);
   const maskSource = await estimator.masksFor(picks);
-  const key = `${rung.frameSkip}:${rung.scale}`;
+  const key = sampleKeyOf(rung);
   let cached = estimator.samples.get(key);
   if (!cached || cached.maskSource !== maskSource) {
     cached = { maskSource, frames: [] };
@@ -1079,6 +1079,30 @@ async function estimateRungBytes(rung, estimator) {
   );
   const sizes = gifFrameSizes(await blobBytes(blob));
   return extrapolateFromSample(sizes, sample.groups, gifFrames);
+}
+
+/**
+ * Which cached sample frames a rung can reuse: they depend on the frame
+ * skip and the scale only
+ * @param {{ frameSkip: number, scale: number }} rung
+ * @returns {string}
+ */
+function sampleKeyOf(rung) {
+  return `${rung.frameSkip}:${rung.scale}`;
+}
+
+/**
+ * Keep the dialog's cached sample frames for one rung only. Each key holds
+ * a dozen full-size RGBA frames (~99 MB at 1080p), so trying several frame
+ * skips and scales must not pile them up until the dialog closes (B6).
+ * @param {string} keep - sampleKeyOf the rung about to be estimated
+ */
+function pruneDialogSamples(keep) {
+  for (const [key, cached] of dialogEstimate.samples) {
+    if (key === keep) continue;
+    cached.frames.length = 0;
+    dialogEstimate.samples.delete(key);
+  }
 }
 
 /** The AI cutout has not analyzed the frames a size estimate needs */
@@ -1176,6 +1200,8 @@ function scheduleDialogEstimate() {
     return;
   }
   cancelDialogEstimate();
+  const { frameSkip, scale } = dialogStore.getState().settings;
+  pruneDialogSamples(sampleKeyOf({ frameSkip, scale: scale ?? 1 }));
   dialogEstimate.key = key;
   dialogEstimate.status = 'pending';
   dialogEstimate.bytes = null;
