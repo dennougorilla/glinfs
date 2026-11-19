@@ -48,8 +48,9 @@ export function isBrushActive(state) {
 }
 
 /**
- * One-line hint over the preview naming the active preview tool and how to
- * leave it ('' when no tool is on)
+ * The active preview tool and how to leave it, for screen readers (a
+ * visually hidden status: nothing covers the preview while editing; the
+ * keys are also in the tool buttons' tooltips). '' when no tool is on.
  * @param {import('../types.js').EditorState} state
  * @returns {string}
  */
@@ -335,10 +336,11 @@ export function renderEditorPreview(state, handlers, frame) {
     hidden: 'true',
   });
 
-  // AI cutout status of the current frame (e.g. not analyzed yet); filled
-  // by editor/index.js
+  // AI cutout status of the current frame (e.g. not analyzed yet), for
+  // screen readers; filled by editor/index.js. Sighted users see it in the
+  // timeline's analysis marks and the panel (lost frames, with a go-to)
   const aiNote = createElement('p', {
-    className: 'editor-ai-preview-note',
+    className: 'sr-only',
     id: 'ai-preview-note',
     role: 'status',
     hidden: 'true',
@@ -386,7 +388,7 @@ export function renderEditorPreview(state, handlers, frame) {
   canvasContainer.appendChild(aiNote);
   canvasContainer.appendChild(
     createElement('p', {
-      className: 'editor-tool-hint',
+      className: 'sr-only',
       id: 'preview-tool-hint',
       role: 'status',
       hidden: 'true',

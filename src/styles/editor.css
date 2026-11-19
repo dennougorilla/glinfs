@@ -1919,11 +1919,8 @@
    Scoped under .editor-screen; every class is prefixed editor-ai-
    ───────────────────────────────────────────────────────────────────────────── */
 
-.editor-screen .editor-ai-preview-note[hidden] {
-  display: none;
-}
-
-/* Preview: pick tool active, and the per-frame status note */
+/* Preview: pick tool active (nothing is drawn over the frame: the per-frame
+   status and the tool hint are for screen readers, .sr-only) */
 .editor-screen .editor-ai-picking .editor-canvas-overlay {
   cursor: crosshair;
   outline: 2px dashed var(--color-primary);
@@ -1934,20 +1931,6 @@
 .editor-screen .editor-ai-picking .editor-canvas-overlay:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: -3px;
-}
-
-.editor-screen .editor-ai-preview-note {
-  position: absolute;
-  left: var(--space-3);
-  top: var(--space-3);
-  z-index: 3;
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: var(--font-size-xs);
-  pointer-events: none;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -3072,9 +3055,14 @@
 }
 
 /* The tracked fix-up being corrected */
+/* The tracked fix-up being corrected: a ring outside its Keep / Remove
+   border, which stays (the ring adds no size) */
 .editor-screen .editor-cutout-pick.is-active {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+
+.editor-screen .editor-cutout-pick:hover {
+  background: color-mix(in srgb, var(--color-bg-secondary), #fff 10%);
 }
 
 .editor-screen .editor-cutout-pick-go,
@@ -3087,74 +3075,103 @@
   cursor: pointer;
 }
 
+/* Each half keeps the pill's rounded end (the focused ×'s tint follows it) */
 .editor-screen .editor-cutout-pick-go {
   padding: 4px 4px 4px 10px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
   white-space: nowrap;
 }
 
 .editor-screen .editor-cutout-pick-delete {
   padding: 4px 8px 4px 4px;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
 }
 
-/* A tracked fix-up's colour: its region in Show mask has the same. The
-   swatch is a ring that fills with the frames tracked (--progress 0..1):
-   empty and spinning while the tracker starts, full when every frame has
-   its mask, amber when tracking stopped short of some frames. */
+/* A tracked fix-up's colour: its region in Show mask has the same */
 .editor-screen .editor-cutout-pick-swatch {
-  --progress: 1;
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   margin-right: 6px;
-  border-radius: 50%;
-  background: conic-gradient(
-    var(--swatch) calc(var(--progress) * 1turn),
-    color-mix(in srgb, var(--swatch) 25%, transparent) 0
-  );
-  vertical-align: -1px;
-}
-
-.editor-screen .editor-cutout-pick[data-progress="waiting"] .editor-cutout-pick-swatch,
-.editor-screen .editor-cutout-pick[data-progress="starting"] .editor-cutout-pick-swatch {
-  background: conic-gradient(
-    var(--swatch) 0.2turn,
-    color-mix(in srgb, var(--swatch) 25%, transparent) 0
-  );
-  animation: editor-cutout-ring-spin 0.9s linear infinite;
-}
-
-.editor-screen .editor-cutout-pick[data-progress="colour"] .editor-cutout-pick-swatch {
   border-radius: 2px;
   background: var(--swatch);
+  vertical-align: 0;
+}
+
+/* A tracked fix-up's progress, inside the chip's own size, along its bottom
+   edge (inset from the rounded ends): a dotted track of the frames to go and
+   a strip of frame cells that fills with the frames tracked (--progress
+   0..1, set on the chip). While the tracker starts its first cell pulses;
+   while it waits, a dimmer track alone; an amber strip and count when
+   tracking stopped short of some frames (the track shows how many); nothing
+   once every frame has its mask. */
+.editor-screen .editor-cutout-pick[data-progress] {
+  --bar: rgb(34, 197, 94);
+  position: relative;
+}
+
+.editor-screen .editor-cutout-pick--remove[data-progress] {
+  --bar: rgb(255, 61, 113);
 }
 
 .editor-screen .editor-cutout-pick[data-progress="short"] {
-  border-color: var(--color-warning);
+  --bar: var(--color-warning);
 }
 
-.editor-screen .editor-cutout-pick[data-progress="short"] .editor-cutout-pick-swatch {
-  background: conic-gradient(
-    var(--color-warning) calc(var(--progress) * 1turn),
-    color-mix(in srgb, var(--color-warning) 25%, transparent) 0
+.editor-screen .editor-cutout-pick[data-progress]::before,
+.editor-screen .editor-cutout-pick[data-progress]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  bottom: 2px;
+  display: none;
+  height: 2px;
+  pointer-events: none;
+}
+
+.editor-screen .editor-cutout-pick[data-progress]::before {
+  width: calc(100% - 20px);
+  background: repeating-linear-gradient(
+    to right,
+    color-mix(in srgb, var(--bar) 55%, transparent) 0 2px,
+    transparent 2px 4px
   );
 }
 
-/* What the fix-up holds, cut out of its frame: tells fix-ups apart */
-.editor-screen .editor-cutout-pick-thumb {
-  width: 28px;
-  height: 20px;
-  margin-right: 6px;
-  border-radius: 3px;
-  vertical-align: -6px;
-  background: repeating-conic-gradient(#555 0 25%, #333 0 50%) 0 0 / 8px 8px;
+.editor-screen .editor-cutout-pick[data-progress]::after {
+  width: calc((100% - 20px) * var(--progress, 1));
+  background: repeating-linear-gradient(to right, var(--bar) 0 3px, transparent 3px 4px);
+  transition: width 0.25s linear;
 }
 
+.editor-screen .editor-cutout-pick[data-progress="tracking"]::before,
+.editor-screen .editor-cutout-pick[data-progress="tracking"]::after,
+.editor-screen .editor-cutout-pick[data-progress="short"]::before,
+.editor-screen .editor-cutout-pick[data-progress="short"]::after,
+.editor-screen .editor-cutout-pick[data-progress="starting"]::before,
+.editor-screen .editor-cutout-pick[data-progress="starting"]::after,
+.editor-screen .editor-cutout-pick[data-progress="waiting"]::before {
+  display: block;
+}
+
+/* Waiting: the track alone, dimmer than a run's track */
+.editor-screen .editor-cutout-pick[data-progress="waiting"]::before {
+  opacity: 0.7;
+}
+
+/* Starting: the first two frame cells, solid, pulse (the first frame is
+   on its way); still, they read apart from a waiting track */
+.editor-screen .editor-cutout-pick[data-progress="starting"]::after {
+  width: 7px;
+  transition: none;
+  animation: editor-cutout-cell-pulse 1.1s ease-in-out infinite alternate;
+}
+
+/* Frames it does not reach: a count in the chip's line, no badge */
 .editor-screen .editor-cutout-pick-missing {
-  margin-left: 6px;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: var(--color-warning);
-  color: #000;
+  margin-left: 4px;
+  color: var(--color-warning);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3162,28 +3179,52 @@
   display: none;
 }
 
-@keyframes editor-cutout-ring-spin {
+@keyframes editor-cutout-cell-pulse {
+  from {
+    opacity: 1;
+  }
+
   to {
-    transform: rotate(1turn);
+    opacity: 0.45;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .editor-screen .editor-cutout-pick[data-progress="waiting"] .editor-cutout-pick-swatch,
-  .editor-screen .editor-cutout-pick[data-progress="starting"] .editor-cutout-pick-swatch {
+  .editor-screen .editor-cutout-pick[data-progress="starting"]::after {
     animation: none;
+  }
+
+  .editor-screen .editor-cutout-pick[data-progress]::after {
+    transition: none;
   }
 }
 
+.editor-screen .editor-cutout-pick:hover .editor-cutout-pick-go,
 .editor-screen .editor-cutout-pick-go:hover,
 .editor-screen .editor-cutout-pick-delete:hover {
   color: var(--color-text);
 }
 
+/* Keyboard focus rings the whole chip in the focus colour (outside the
+   selection's ring when both); the focused half is the bright one */
 .editor-screen .editor-cutout-pick-go:focus-visible,
 .editor-screen .editor-cutout-pick-delete:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: -2px;
+  outline: none;
+  color: var(--color-text);
+}
+
+.editor-screen .editor-cutout-pick:has(:focus-visible) {
+  box-shadow: 0 0 0 2px var(--color-focus);
+}
+
+.editor-screen .editor-cutout-pick.is-active:has(:focus-visible) {
+  box-shadow:
+    0 0 0 2px var(--color-primary),
+    0 0 0 4px var(--color-focus);
+}
+
+.editor-screen .editor-cutout-pick-delete:focus-visible {
+  background: color-mix(in srgb, var(--color-focus) 25%, transparent);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -3207,8 +3248,7 @@
   backdrop-filter: blur(6px);
 }
 
-.editor-screen .editor-compare[hidden],
-.editor-screen .editor-tool-hint[hidden] {
+.editor-screen .editor-compare[hidden] {
   display: none;
 }
 
@@ -3256,26 +3296,6 @@
 .editor-screen .editor-compare-input:focus-visible + span {
   outline: 2px solid var(--color-focus);
   outline-offset: 1px;
-}
-
-.editor-screen .editor-tool-hint {
-  position: absolute;
-  bottom: var(--space-3);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
-  max-width: calc(100% - 2 * var(--space-3));
-  margin: 0;
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-full);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
 }
 
 /* Tool cursors (pick tools and the eyedropper; the brush draws its own) */

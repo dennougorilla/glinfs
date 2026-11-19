@@ -35,7 +35,6 @@ import {
   getWebgpuWarning,
   renderBackgroundPanel,
   SUBJECT_CARDS,
-  setFixUpThumbnailDrawer,
   updateBackgroundPanel,
 } from '../../../src/features/editor/panels/background-panel.js';
 import { createAiCutoutStatus, createBrushState } from '../../../src/features/editor/state.js';
@@ -872,32 +871,63 @@ describe('tracked objects', () => {
       },
     );
 
-  it('a tracked fix-up chip shows what it holds, redrawn only when it changes (cutout-ux 6)', () => {
-    const drawn = [];
-    setFixUpThumbnailDrawer((canvas, o) => {
-      drawn.push([canvas.className, o.id]);
-      return true;
-    });
-    try {
-      const objects = [object('a', 'remove', 10), object('b', 'add', 0)];
-      updateBackgroundPanel(root, stateWith(objects), 10);
-      expect(root.querySelectorAll('#ai-pick-list .editor-cutout-pick-thumb')).toHaveLength(2);
-      expect(drawn).toEqual([
-        ['editor-cutout-pick-thumb', 'a'],
-        ['editor-cutout-pick-thumb', 'b'],
-      ]);
-      // Nothing changed: no redraw; one more point on a: only a
-      updateBackgroundPanel(root, stateWith(objects), 10);
-      expect(drawn).toHaveLength(2);
-      const more = {
-        ...objects[0],
-        clicks: [...objects[0].clicks, { frame: 12, x: 0.2, y: 0.2, mode: 'remove' }],
-      };
-      updateBackgroundPanel(root, stateWith([more, objects[1]]), 10);
-      expect(drawn.slice(2)).toEqual([['editor-cutout-pick-thumb', 'a']]);
-    } finally {
-      setFixUpThumbnailDrawer(null);
+  it('a tracked fix-up chip stays one line: swatch, label and its progress on the chip itself (cutout-ux 7)', () => {
+    const objects = [object('a', 'remove', 10), object('b', 'add', 0), object('c', 'add', 20)];
+    const state = stateWith(objects);
+    state.aiCutout = {
+      ...state.aiCutout,
+      objectTracking: { id: 'a', phase: 'analyzing', framesDone: 16, framesTotal: 40 },
+      objectCoverage: { b: { covered: 40, selection: 40 }, c: { covered: 28, selection: 40 } },
+      objectLost: { b: [], c: [29] },
+    };
+    updateBackgroundPanel(root, state, 10);
+    const chip = (/** @type {string} */ id) =>
+      /** @type {HTMLElement} */ (root.querySelector(`#ai-pick-list [data-object-id="${id}"]`));
+    // No thumbnail: nothing in a chip is taller than its line
+    expect(root.querySelector('#ai-pick-list canvas')).toBeNull();
+    expect(root.querySelector('.editor-cutout-pick-thumb')).toBeNull();
+    // The progress is the chip's (its bar), not the swatch's (no ring)
+    expect(chip('a').dataset.progress).toBe('tracking');
+    expect(chip('a').style.getPropertyValue('--progress')).toBe('0.400');
+    expect(chip('b').dataset.progress).toBe('done');
+    expect(chip('b').style.getPropertyValue('--progress')).toBe('1.000');
+    expect(chip('c').dataset.progress).toBe('short');
+    expect(chip('c').style.getPropertyValue('--progress')).toBe('0.700');
+    for (const id of ['a', 'b', 'c']) {
+      const swatch = /** @type {HTMLElement} */ (
+        chip(id).querySelector('.editor-cutout-pick-swatch')
+      );
+      expect(swatch.style.getPropertyValue('--progress')).toBe('');
     }
+    const missing = /** @type {HTMLElement} */ (
+      chip('c').querySelector('.editor-cutout-pick-missing')
+    );
+    expect(missing.hidden).toBe(false);
+    expect(missing.textContent).toBe('12');
+    // Screen readers hear what the bar and the count show
+    const go = (/** @type {string} */ id) =>
+      chip(id).querySelector('.editor-cutout-pick-go')?.getAttribute('aria-label');
+    const [la, lb, lc] = state.edits.background.ai.objects.map((/** @type {any} */ o) =>
+      getObjectLabel(o, 10),
+    );
+    expect(go('a')).toBe(`${la}, tracking 40% (go to frame)`);
+    expect(go('b')).toBe(`${lb} (go to frame)`);
+    expect(go('c')).toBe(`${lc}, 12 frames not reached (go to frame)`);
+    // ... and a pointer hears it too (the count has no word next to it)
+    const title = (/** @type {string} */ id) =>
+      chip(id).querySelector('.editor-cutout-pick-go')?.getAttribute('title');
+    expect(title('c')).toBe('12 frames not reached');
+    expect(title('a')).toBe('Tracking 40%');
+    expect(title('b')).toBeNull();
+    state.aiCutout = {
+      ...state.aiCutout,
+      objectTracking: null,
+      objectCoverage: {},
+      objectLost: {},
+    };
+    updateBackgroundPanel(root, state, 10);
+    expect(go('a')).toBe(`${la}, waiting (go to frame)`);
+    expect(chip('a').style.getPropertyValue('--progress')).toBe('0.000');
   });
 
   it('labels, finds the lost one (active first) and words its note', () => {

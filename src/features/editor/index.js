@@ -47,7 +47,6 @@ import {
   rememberAiCutoutModel,
   rememberRemoveScope,
 } from '../../shared/user-settings.js';
-import { getDrawableSource } from '../../shared/utils/canvas.js';
 import { createElement, createErrorScreen, qsRequired } from '../../shared/utils/dom.js';
 import { frameToClock } from '../../shared/utils/format.js';
 import { throttle } from '../../shared/utils/performance.js';
@@ -101,7 +100,6 @@ import {
   getSubject,
   getSubjectModel,
   getSubjectModels,
-  setFixUpThumbnailDrawer,
 } from './panels/background-panel.js';
 import { updateEditsPanel } from './panels/edits-panel.js';
 import { isBrushActive, setOverlayPickMode, updatePreviewTools } from './panels/preview.js';
@@ -1082,7 +1080,6 @@ function render(container) {
     getClipFps(state.clip),
   );
 
-  setFixUpThumbnailDrawer(drawFixUpThumbnail);
   const pickerCanvas = result.overlayCanvas;
   pickerCanvas?.addEventListener('wheel', handlePickerWheel, { passive: false });
   uiCleanup = () => {
@@ -1244,8 +1241,9 @@ function handleHighlightAiObject(id) {
 }
 
 /**
- * The small status note on the preview: with the AI cutout on, a frame
- * without a mask previews unkeyed and says why
+ * The current frame's cutout status, for screen readers (visually hidden:
+ * nothing covers the preview): with the AI cutout on, a frame without a
+ * mask previews unkeyed and says why
  * @param {ParentNode} container
  * @param {import('./types.js').EditorState} state
  */
@@ -1259,8 +1257,8 @@ function updateAiPreviewNote(container, state) {
     const click = getAiModelId(ai) === 'click';
     const analyzed = isFrameAnalyzed(frame, { modelId: getAiModelId(ai) });
     if (click && ai.picks.length === 0) {
-      // With the Keep tool on, the tool hint below the preview says it
-      text = state.aiPickTool ? '' : 'Choose Keep, then click the thing you want to keep';
+      // Nothing picked yet: the Keep / Remove buttons say what to do
+      text = '';
     } else if (click && !analyzed && state.aiCutout.lostFrames?.includes(state.currentFrame)) {
       text = 'Lost track here. Click it to keep going.';
     } else if (click && !analyzed) {
@@ -1556,73 +1554,6 @@ function drawOnlyThisLoss(ctx, state, frame) {
   });
   if (!loss) return;
   drawRegions(ctx, frame.width, frame.height, [{ mode: 'remove', color: '#ef4444', mask: loss }]);
-}
-
-/**
- * A fix-up's chip thumbnail: its frame, only where the fix-up's mask (or,
- * for a Colour fix-up, its region) is, cropped to that region
- * @param {HTMLCanvasElement} canvas
- * @param {import('../../shared/edits/model.js').CutoutObject} object
- * @returns {boolean} It drew
- */
-function drawFixUpThumbnail(canvas, object) {
-  const state = store?.getState();
-  if (!state?.clip) return false;
-  const f = getObjectFrame(object);
-  const frame = state.clip.frames[f];
-  if (!frame) return false;
-  const mask = isColourObject(object)
-    ? getClipColourRegion({
-        frames: state.clip.frames,
-        ai: state.edits.background.ai,
-        object,
-        frameIndex: f,
-      })
-    : getSharedMaskStore().get(objectMaskKey(frame, object.id));
-  if (!mask) return false;
-  // The region's box in mask pixels
-  let x0 = mask.width;
-  let y0 = mask.height;
-  let x1 = -1;
-  let y1 = -1;
-  for (let y = 0; y < mask.height; y++) {
-    for (let x = 0; x < mask.width; x++) {
-      if (mask.data[y * mask.width + x] < 128) continue;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    }
-  }
-  if (x1 < 0) return false;
-  const sx = frame.width / mask.width;
-  const sy = frame.height / mask.height;
-  const bw = (x1 - x0 + 1) * sx;
-  const bh = (y1 - y0 + 1) * sy;
-  const ctx = canvas.getContext('2d');
-  const source = getDrawableSource(frame);
-  if (!ctx || !source) return false;
-  const scale = Math.min(canvas.width / bw, canvas.height / bh);
-  const dw = bw * scale;
-  const dh = bh * scale;
-  const dx = (canvas.width - dw) / 2;
-  const dy = (canvas.height - dh) / 2;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(source, x0 * sx, y0 * sy, bw, bh, dx, dy, dw, dh);
-  // Keep only the fix-up's region
-  const alpha = document.createElement('canvas');
-  alpha.width = mask.width;
-  alpha.height = mask.height;
-  const actx = alpha.getContext('2d');
-  if (actx) {
-    const img = actx.createImageData(mask.width, mask.height);
-    for (let i = 0; i < mask.data.length; i++) img.data[i * 4 + 3] = mask.data[i] >= 128 ? 255 : 0;
-    actx.putImageData(img, 0, 0);
-    ctx.globalCompositeOperation = 'destination-in';
-    ctx.drawImage(alpha, x0, y0, x1 - x0 + 1, y1 - y0 + 1, dx, dy, dw, dh);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-  return true;
 }
 
 /**

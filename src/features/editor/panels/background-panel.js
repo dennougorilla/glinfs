@@ -721,9 +721,10 @@ const TOOL_ICONS = {
  * @param {string} label
  * @param {keyof typeof TOOL_ICONS} iconName
  * @param {Record<string, string>} [attrs]
+ * @param {string} [title] - Its tooltip (how to use it, the keys)
  * @returns {{ wrapper: HTMLElement, input: HTMLInputElement }}
  */
-function toolToggle(id, label, iconName, attrs = {}) {
+function toolToggle(id, label, iconName, attrs = {}, title = '') {
   const input = /** @type {HTMLInputElement} */ (
     createElement('input', {
       type: 'checkbox',
@@ -734,7 +735,12 @@ function toolToggle(id, label, iconName, attrs = {}) {
   );
   const wrapper = createElement(
     'label',
-    { className: 'editor-cutout-tool', for: id, 'data-tool': iconName },
+    {
+      className: 'editor-cutout-tool',
+      for: id,
+      'data-tool': iconName,
+      ...(title ? { title } : {}),
+    },
     [input, createElement('span', {}, [icon(TOOL_ICONS[iconName], 16), label])],
   );
   return { wrapper, input };
@@ -1258,17 +1264,30 @@ export function renderBackgroundPanel(handlers) {
   );
 
   // --- Fix-ups: tools on the preview ---
-  const keep = toolToggle('ai-pick-keep', 'Keep', 'keep', {
-    'aria-describedby': 'background-tools-hint',
-  });
-  const remove = toolToggle('ai-pick-remove', 'Remove', 'remove', {
-    'aria-describedby': 'background-tools-hint',
-  });
+  // The keys live in the tooltips (nothing is written over the preview)
+  const keep = toolToggle(
+    'ai-pick-keep',
+    'Keep',
+    'keep',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click what to keep · Alt-click takes away · Esc to finish',
+  );
+  const remove = toolToggle(
+    'ai-pick-remove',
+    'Remove',
+    'remove',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click or drag over what to remove · Alt-click takes away · Esc to finish',
+  );
   // Colour: a click removes the colours under it on every frame (a Colour
   // fix-up, never tracked)
-  const colourTool = toolToggle('ai-pick-colour', 'Colour', 'colour', {
-    'aria-describedby': 'background-tools-hint',
-  });
+  const colourTool = toolToggle(
+    'ai-pick-colour',
+    'Colour',
+    'colour',
+    { 'aria-describedby': 'background-tools-hint' },
+    'Click a colour to remove · Alt-click keeps a colour · Esc to finish',
+  );
   cleanups.push(
     on(keep.input, 'change', () =>
       handlers.onSetAiPickTool?.(keep.input.checked ? 'keep' : null, {
@@ -1580,9 +1599,10 @@ function setHidden(el, hidden) {
  */
 
 /**
- * What a tracked fix-up's chip shows: a ring that fills while its frames
- * are tracked, full when every frame has its mask, amber with the count of
- * frames it does not reach when tracking stopped short of some
+ * What a tracked fix-up's chip shows: a bar along its bottom edge that
+ * fills while its frames are tracked (a sweep while the tracker starts, a
+ * faint track while it waits), none when every frame has its mask, amber
+ * with the count of frames it does not reach when tracking stopped short
  * @param {CutoutObject} object
  * @param {import('../types.js').AiCutoutStatus | null | undefined} status
  * @returns {FixUpProgress}
@@ -1615,6 +1635,21 @@ export function getFixUpProgress(object, status) {
 }
 
 /**
+ * A tracked fix-up's progress in words, for its chip's accessible name
+ * (nothing when it is done or not tracked)
+ * @param {FixUpProgress} progress
+ * @returns {string}
+ */
+export function describeFixUpProgress(progress) {
+  if (progress.state === 'tracking') return `tracking ${Math.round(progress.fraction * 100)}%`;
+  if (progress.state === 'starting' || progress.state === 'waiting') return progress.state;
+  if (progress.state === 'short') {
+    return `${progress.missing} frame${progress.missing === 1 ? '' : 's'} not reached`;
+  }
+  return '';
+}
+
+/**
  * Patch the tracked fix-ups' chips in place with their progress (the list
  * itself is rebuilt only when the fix-ups change)
  * @param {HTMLElement} list
@@ -1630,13 +1665,26 @@ function updateFixUpProgress(list, objects, status) {
   }
   for (const object of objects) {
     const item = items.get(object.id);
-    const swatch = item?.querySelector('.editor-cutout-pick-swatch');
-    if (!(swatch instanceof HTMLElement) || !(item instanceof HTMLElement)) continue;
+    if (!(item instanceof HTMLElement)) continue;
     const progress = getFixUpProgress(object, status);
     if (item.dataset.progress !== progress.state) item.dataset.progress = progress.state;
+    // The chip's bar (editor.css) fills to this, inside the chip's own size
     const value = progress.fraction.toFixed(3);
-    if (swatch.style.getPropertyValue('--progress') !== value) {
-      swatch.style.setProperty('--progress', value);
+    if (item.style.getPropertyValue('--progress') !== value) {
+      item.style.setProperty('--progress', value);
+    }
+    // Screen readers hear what the bar and the count show
+    const go = item.querySelector('.editor-cutout-pick-go');
+    const name = go instanceof HTMLElement ? go.dataset.label : undefined;
+    if (go && name) {
+      const said = describeFixUpProgress(progress);
+      const aria = `${name}${said ? `, ${said}` : ''} (go to frame)`;
+      if (go.getAttribute('aria-label') !== aria) go.setAttribute('aria-label', aria);
+      const tip = said ? said[0].toUpperCase() + said.slice(1) : null;
+      if (go.getAttribute('title') !== tip) {
+        if (tip) go.setAttribute('title', tip);
+        else go.removeAttribute('title');
+      }
     }
     const count = item.querySelector('.editor-cutout-pick-missing');
     const text = progress.state === 'short' ? String(progress.missing) : '';
@@ -1645,39 +1693,6 @@ function updateFixUpProgress(list, objects, status) {
       count.hidden = text === '';
     }
   }
-}
-
-/**
- * Fill each tracked fix-up's thumbnail with what it holds (the editor's
- * drawer, see setFixUpThumbnailDrawer), redrawn when its masks change
- * @param {HTMLElement} list
- * @param {CutoutObject[]} objects
- * @param {import('../types.js').AiCutoutStatus | null | undefined} status
- */
-function updateFixUpThumbnails(list, objects, status) {
-  if (!thumbnailDrawer) return;
-  for (const li of list.children) {
-    const id = /** @type {HTMLElement} */ (li).dataset.objectId;
-    const object = id ? objects.find((o) => o.id === id) : null;
-    const canvas = li.querySelector('.editor-cutout-pick-thumb');
-    if (!object || !(canvas instanceof HTMLCanvasElement)) continue;
-    const key = `${object.scope}|${object.clicks.length}|${(object.boxes ?? []).length}|${object.candidate ?? ''}|${status?.storeVersion ?? 0}`;
-    if (canvas.dataset.key === key) continue;
-    if (thumbnailDrawer(canvas, object)) canvas.dataset.key = key;
-  }
-}
-
-/** @type {((canvas: HTMLCanvasElement, object: CutoutObject) => boolean) | null} */
-let thumbnailDrawer = null;
-
-/**
- * How the chips draw what a fix-up holds (set by the editor, which has the
- * frames and masks)
- * @param {((canvas: HTMLCanvasElement, object: CutoutObject) => boolean) | null} drawer -
- *   returns whether it drew
- */
-export function setFixUpThumbnailDrawer(drawer) {
-  thumbnailDrawer = drawer;
 }
 
 /**
@@ -1723,6 +1738,7 @@ function updatePickList(list, picks, objects, selectedId, fps, fallbackFocus) {
             type: 'button',
             className: 'editor-cutout-pick-go',
             'aria-label': `${label} (go to frame)`,
+            ...(tracked ? { 'data-label': label } : {}),
             ...(tracked ? { 'aria-pressed': tracked.active ? 'true' : 'false' } : {}),
           },
           tracked
@@ -1730,13 +1746,6 @@ function updatePickList(list, picks, objects, selectedId, fps, fallbackFocus) {
                 createElement('span', {
                   className: 'editor-cutout-pick-swatch',
                   style: `--swatch: ${tracked.color}`,
-                  'aria-hidden': 'true',
-                }),
-                // What it holds, cut out of its frame (filled in by the editor)
-                createElement('canvas', {
-                  className: 'editor-cutout-pick-thumb',
-                  width: '28',
-                  height: '20',
                   'aria-hidden': 'true',
                 }),
                 label,
@@ -2077,7 +2086,6 @@ export function updateBackgroundPanel(container, state, fps) {
   );
   setHidden(list, !isAi || (ai.picks.length === 0 && objects.length === 0));
   if (isAi) updateFixUpProgress(list, objects, status);
-  if (isAi) updateFixUpThumbnails(list, objects, status);
 
   // Clean up chips
   const chips = isAi ? getCleanupChips(ai, status?.cleanupSuggestions ?? [], fps) : [];
