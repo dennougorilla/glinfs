@@ -2069,6 +2069,56 @@
   display: none;
 }
 
+/* A Keep / Remove click or box waiting for its answer on this frame: it
+   pulses where it was made until the answer is drawn */
+.editor-screen .editor-cutout-pulse {
+  position: absolute;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: editor-cutout-pulse 0.9s ease-out infinite;
+}
+
+.editor-screen .editor-cutout-pulse--box {
+  border-radius: 2px;
+  transform: none;
+  animation-name: editor-cutout-pulse-box;
+}
+
+.editor-screen .editor-cutout-pulse[hidden] {
+  display: none;
+}
+
+@keyframes editor-cutout-pulse {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.6);
+  }
+}
+
+@keyframes editor-cutout-pulse-box {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-screen .editor-cutout-pulse,
+  .editor-screen .editor-cutout-pulse--box {
+    animation: none;
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Right sidebar tabs (Frame / Text / Background) and the Touch up mode.
    Scoped under .editor-screen; every class is prefixed editor-side-
@@ -3046,15 +3096,73 @@
   padding: 4px 8px 4px 4px;
 }
 
-/* A tracked fix-up's colour: its region in Show mask has the same */
+/* A tracked fix-up's colour: its region in Show mask has the same. The
+   swatch is a ring that fills with the frames tracked (--progress 0..1):
+   empty and spinning while the tracker starts, full when every frame has
+   its mask, amber when tracking stopped short of some frames. */
 .editor-screen .editor-cutout-pick-swatch {
+  --progress: 1;
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   margin-right: 6px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--swatch) calc(var(--progress) * 1turn),
+    color-mix(in srgb, var(--swatch) 25%, transparent) 0
+  );
+  vertical-align: -1px;
+}
+
+.editor-screen .editor-cutout-pick[data-progress="waiting"] .editor-cutout-pick-swatch,
+.editor-screen .editor-cutout-pick[data-progress="starting"] .editor-cutout-pick-swatch {
+  background: conic-gradient(
+    var(--swatch) 0.2turn,
+    color-mix(in srgb, var(--swatch) 25%, transparent) 0
+  );
+  animation: editor-cutout-ring-spin 0.9s linear infinite;
+}
+
+.editor-screen .editor-cutout-pick[data-progress="colour"] .editor-cutout-pick-swatch {
   border-radius: 2px;
   background: var(--swatch);
-  vertical-align: 0;
+}
+
+.editor-screen .editor-cutout-pick[data-progress="short"] {
+  border-color: var(--color-warning);
+}
+
+.editor-screen .editor-cutout-pick[data-progress="short"] .editor-cutout-pick-swatch {
+  background: conic-gradient(
+    var(--color-warning) calc(var(--progress) * 1turn),
+    color-mix(in srgb, var(--color-warning) 25%, transparent) 0
+  );
+}
+
+.editor-screen .editor-cutout-pick-missing {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-warning);
+  color: #000;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-screen .editor-cutout-pick-missing[hidden] {
+  display: none;
+}
+
+@keyframes editor-cutout-ring-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-screen .editor-cutout-pick[data-progress="waiting"] .editor-cutout-pick-swatch,
+  .editor-screen .editor-cutout-pick[data-progress="starting"] .editor-cutout-pick-swatch {
+    animation: none;
+  }
 }
 
 .editor-screen .editor-cutout-pick-go:hover,

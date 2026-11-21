@@ -175,6 +175,8 @@ export function createAiCutoutStatus() {
     lostFrames: [],
     objectTracking: null,
     objectLost: {},
+    objectCoverage: {},
+    objectShort: 0,
     colourLevels: {},
     cleanupSuggestions: [],
   };

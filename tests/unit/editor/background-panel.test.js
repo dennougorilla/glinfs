@@ -19,6 +19,7 @@ import {
   getCleanupChips,
   getColourGuard,
   getDownloadPrompt,
+  getFixUpProgress,
   getLostFramesInSelection,
   getLostFramesText,
   getLostObject,
@@ -471,6 +472,23 @@ describe('AI status slot', () => {
     expect(describeAiStatus({ running: false, pending: 0, analyzed: 0, total: 0, status })).toEqual(
       { kind: 'empty', text: '' },
     );
+  });
+
+  it('never says every frame is analyzed while a tracked fix-up stops short of some (cutout-ux 1)', () => {
+    // v0.17.0 said "300 of 300 frames analyzed" while a Remove fix-up reached 99
+    expect(
+      describeAiStatus({
+        running: false,
+        pending: 0,
+        analyzed: 300,
+        total: 300,
+        short: 201,
+        status,
+      }),
+    ).toEqual({ kind: 'pending', text: '99 of 300 frames analyzed' });
+    expect(
+      describeAiStatus({ running: false, pending: 0, analyzed: 300, total: 300, short: 0, status }),
+    ).toEqual({ kind: 'done', text: '300 of 300 frames analyzed' });
   });
 
   it('keeps its place and size: states swap content, never insert or remove blocks', () => {
@@ -1138,5 +1156,49 @@ describe('Clean up chips', () => {
     expect(handlers.onClearCleanup).toHaveBeenCalledWith('holes');
     /** @type {HTMLElement} */ (buttons[1]).click();
     expect(handlers.onApplyCleanup).toHaveBeenCalledWith(specks);
+  });
+});
+
+describe('fix-up progress on the chip (cutout-ux 1)', () => {
+  const object = { id: 'o1', mode: 'remove', scope: 'part', tolerance: 32, clicks: [], boxes: [] };
+  const status = createAiCutoutStatus();
+
+  it('fills while tracked, is full when every frame has the mask, amber with the count when short', () => {
+    expect(
+      getFixUpProgress(object, {
+        ...status,
+        objectTracking: { id: 'o1', phase: 'starting', framesDone: 0, framesTotal: 0 },
+      }),
+    ).toEqual({ state: 'starting', fraction: 0, missing: 0 });
+    expect(
+      getFixUpProgress(object, {
+        ...status,
+        objectTracking: { id: 'o1', phase: 'analyzing', framesDone: 30, framesTotal: 120 },
+      }),
+    ).toEqual({ state: 'tracking', fraction: 0.25, missing: 0 });
+    expect(
+      getFixUpProgress(object, {
+        ...status,
+        objectCoverage: { o1: { covered: 120, selection: 120 } },
+        objectLost: { o1: [] },
+      }),
+    ).toEqual({ state: 'done', fraction: 1, missing: 0 });
+    expect(
+      getFixUpProgress(object, {
+        ...status,
+        objectCoverage: { o1: { covered: 99, selection: 300 } },
+        objectLost: { o1: [101] },
+      }),
+    ).toEqual({ state: 'short', fraction: 0.33, missing: 201 });
+  });
+
+  it('waits (not amber) before its run reported, and is a plain swatch in Colour', () => {
+    expect(
+      getFixUpProgress(object, {
+        ...status,
+        objectCoverage: { o1: { covered: 0, selection: 10 } },
+      }),
+    ).toEqual({ state: 'waiting', fraction: 0, missing: 0 });
+    expect(getFixUpProgress({ ...object, scope: 'colour' }, status).state).toBe('colour');
   });
 });

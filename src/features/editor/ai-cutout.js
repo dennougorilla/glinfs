@@ -308,6 +308,62 @@ export function getObjectSignature(object) {
 }
 
 /**
+ * @typedef {Object} ObjectCoverage
+ * @property {number} covered - Frames of the selection that have a mask of
+ *   the fix-up as it is now (its current clicks, boxes and scope)
+ * @property {number} selection - Frames in the selection
+ */
+
+/**
+ * How far each tracked fix-up reaches through the selection: per fix-up the
+ * frames that have a mask of its current prompts, and `short`, the frames
+ * of the selection where at least one tracked fix-up has none (tracking
+ * lost it there, or has not got there yet). Colour fix-ups are not tracked
+ * and do not count. With `states`, also per fix-up and frame 1 (covered) or
+ * 0 (not), for the timeline.
+ * @param {Frame[]} frames - The whole clip
+ * @param {{ start: number, end: number }} range - Selection (inclusive)
+ * @param {import('../../shared/edits/model.js').CutoutObject[]} objects
+ * @param {{ maskStore?: import('../ai-cutout/mask-store.js').MaskStore, states?: boolean }} [options]
+ * @returns {{ perObject: Record<string, ObjectCoverage>, short: number, selection: number, states: Record<string, Uint8Array> }}
+ */
+export function getObjectCoverage(
+  frames,
+  range,
+  objects,
+  { maskStore = getSharedMaskStore(), states = false } = {},
+) {
+  const start = Math.max(0, range.start);
+  const end = Math.min(frames.length - 1, range.end);
+  const selection = Math.max(0, end - start + 1);
+  const tracked = objects.filter((o) => !isColourObject(o));
+  const tags = tracked.map((o) => getObjectSignature(o));
+  /** @type {Record<string, ObjectCoverage>} */
+  const perObject = {};
+  /** @type {Record<string, Uint8Array>} */
+  const frameStates = {};
+  for (const o of tracked) {
+    perObject[o.id] = { covered: 0, selection };
+    if (states) frameStates[o.id] = new Uint8Array(frames.length);
+  }
+  let short = 0;
+  for (let f = start; f <= end; f++) {
+    let all = true;
+    tracked.forEach((o, k) => {
+      const key = objectMaskKey(frames[f], o.id);
+      if (maskStore.has(key) && maskStore.getTag(key) === tags[k]) {
+        perObject[o.id].covered++;
+        if (states) frameStates[o.id][f] = 1;
+      } else {
+        all = false;
+      }
+    });
+    if (!all) short++;
+  }
+  return { perObject, short, selection, states: frameStates };
+}
+
+/**
  * The objects an export must track before it builds: those with a frame
  * of `range` that has neither a mask nor an unreachable mark of the object
  * as it is now (a run still in flight, cancelled, of older clicks or

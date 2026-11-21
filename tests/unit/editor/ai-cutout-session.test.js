@@ -15,6 +15,7 @@ import {
   ANALYSIS_REBUILD_INTERVAL_MS,
   BUILDING_STATUS_DELAY_MS,
   createAiCutoutSession,
+  EXPECT_ANSWER_MAX_MS,
   STORE_REBUILD_DELAY_MS,
   SUGGESTIONS_DELAY_MS,
 } from '../../../src/features/editor/ai-cutout-session.js';
@@ -846,6 +847,125 @@ describe('AI cutout session: tracked objects', () => {
     await settle();
     expect(manager.calls).toHaveLength(1);
     expect(status.objectLost).toEqual({ o1: [3] });
+  });
+
+  it('reports how far each fix-up reaches; frames it does not reach are short (cutout-ux 1)', async () => {
+    manager.lostAt = new Set([3]);
+    setObjects([
+      { id: 'o1', mode: 'remove', clicks: [click()] },
+      { id: 'o2', mode: 'remove', scope: 'colour', clicks: [click()] },
+    ]);
+    session.syncObjects();
+    await settle();
+    expect(status.objectCoverage).toEqual({ o1: { covered: 3, selection: 4 } });
+    expect(status.objectShort).toBe(1);
+    // New prompts: the masks of the old ones no longer count
+    manager.lostAt = new Set();
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click(), click(2)] }]);
+    session.requestBuild();
+    expect(status.objectCoverage).toEqual({ o1: { covered: 0, selection: 4 } });
+    session.syncObjects();
+    await settle();
+    expect(status.objectCoverage).toEqual({ o1: { covered: 4, selection: 4 } });
+    expect(status.objectShort).toBe(0);
+  });
+
+  it('shows the clicked frame from a draft as soon as its answer lands (cutout-ux 1)', async () => {
+    session.dispose();
+    /** @type {any[]} */
+    const published = [];
+    /** @type {any[]} */
+    const atFirstAnswer = [];
+    const tracker = {
+      ...manager,
+      analyzeObject: vi.fn(async (frames, options) => {
+        const key = `object:${options.objectId}:${frames[1].id}`;
+        maskStore.set(key, prob(), options.clipId, `object:${options.objectId}`, options.tag);
+        options.onProgress?.({ phase: 'analyzing', framesDone: 1, framesTotal: 4 });
+        // What the preview has right after the clicked frame's answer
+        atFirstAnswer.push(...published);
+        return { tracked: 1, lost: [], anchors: 1, backend: 'webgpu' };
+      }),
+    };
+    // The base model's masks exist, so a build has something to show
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      onMaskSource: (source) => published.push(source),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...tracker,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
+      }),
+      maskStore,
+      cache: createFinalMaskCache(),
+    });
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.syncObjects();
+    await settle();
+    expect(atFirstAnswer.some((source) => source.draft === true)).toBe(true);
+    const draft = atFirstAnswer.find((source) => source.draft === true);
+    // The removed object is in the draft's frame at once
+    expect(draft.getFinalMask(1)).not.toBeNull();
+    // The whole-clip build follows
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(published.at(-1).draft).toBeUndefined();
+  });
+
+  it('holds whole-clip builds after a click until its first answer, at most a moment (cutout-ux 1)', async () => {
+    session.dispose();
+    /** @type {any[]} */
+    const published = [];
+    for (const frame of state.clip.frames) maskStore.set(`anime:${frame.id}`, prob(), 'clip-1');
+    session = createAiCutoutSession({
+      getState: () => state,
+      setStatus: (patch) => Object.assign(status, patch),
+      onMaskSource: (source) => published.push(source),
+      getClipId: () => 'clip-1',
+      manager: /** @type {any} */ ({
+        ...manager,
+        getCapabilities: async () => ({ webgpu: true }),
+        analyzeFrames: async () => ({ analyzed: 0, skipped: 0, backend: 'wasm' }),
+        // Never answers: the hold ends on its own
+        analyzeObject: () => new Promise(() => {}),
+      }),
+      maskStore,
+      cache: createFinalMaskCache(),
+    });
+    session.expectAnswer();
+    setObjects([{ id: 'o1', mode: 'remove', clicks: [click()] }]);
+    session.requestBuild();
+    session.syncObjects();
+    await vi.advanceTimersByTimeAsync(EXPECT_ANSWER_MAX_MS - 100);
+    expect(published).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(published.length).toBeGreaterThan(0);
+  });
+
+  it('prepares the tracker when asked (a tool turned on), only if it is downloaded (cutout-ux 1)', async () => {
+    const preloadModel = vi.fn(async () => true);
+    for (const cached of [true, false]) {
+      const s = createAiCutoutSession({
+        getState: () => state,
+        setStatus: () => {},
+        getClipId: () => 'clip-1',
+        manager: /** @type {any} */ ({
+          ...manager,
+          preloadModel,
+          getReadyInfo: () => null,
+          getCapabilities: async () => ({ webgpu: true }),
+        }),
+        maskStore,
+        cache: createFinalMaskCache(),
+        isModelCached: async () => cached,
+      });
+      await s.preloadTracker();
+      s.dispose();
+    }
+    expect(preloadModel).toHaveBeenCalledTimes(1);
+    expect(preloadModel).toHaveBeenCalledWith('click', { allowWasm: false });
   });
 
   it('tracks a new object through the selection and reports its lost frames', async () => {

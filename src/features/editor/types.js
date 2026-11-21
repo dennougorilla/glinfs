@@ -210,6 +210,11 @@
  *   being tracked (null: none)
  * @property {Record<string, number[]>} objectLost - Per tracked object: frames
  *   where its last tracking lost it, sorted
+ * @property {Record<string, { covered: number, selection: number }>} objectCoverage -
+ *   Per tracked fix-up: selection frames with a mask of its current prompts
+ *   (see getObjectCoverage)
+ * @property {number} objectShort - Selection frames where some tracked
+ *   fix-up has no mask (0: every fix-up reaches every frame)
  * @property {import('../../shared/masks/cleanup-suggestions.js').CleanupSuggestion[]} cleanupSuggestions
  *   One-tap clean-ups found in the last full build (at most 4)
  * @property {Record<string, number[]>} colourLevels - Per Colour fix-up, from

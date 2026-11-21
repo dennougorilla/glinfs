@@ -73,6 +73,7 @@ import {
   getAiModelId,
   getBuildParamsKey,
   getClipProbSource,
+  getObjectCoverage,
   getObjectSignature,
   getSharedFinalMaskCache,
   isAbortError,
@@ -107,10 +108,30 @@ export const BUILDING_STATUS_DELAY_MS = 300;
 export { getObjectSignature };
 
 /**
+ * A click that starts a tracking run holds whole-clip builds until its
+ * first answer, at most this long (see expectAnswer)
+ */
+export const EXPECT_ANSWER_MAX_MS = 2000;
+
+/**
  * The clean-up suggestion pass starts this long after a full build lands
  * (a quick change of mind aborts it before it starts)
  */
 export const SUGGESTIONS_DELAY_MS = 500;
+
+/**
+ * Run `task` once the preview has painted what was just published: the
+ * editor draws on the animation frame after its (throttled) store update,
+ * so wait two frames, then a task; soon where there are no animation frames
+ * @param {() => void} task
+ */
+function afterNextPaint(task) {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(task, 0)));
+  } else {
+    setTimeout(task, 0);
+  }
+}
 
 /**
  * @typedef {Object} AiCutoutSessionOptions
@@ -213,6 +234,31 @@ export function createAiCutoutSession(options) {
   /** @param {Partial<AiCutoutStatus>} patch */
   const report = (patch) => {
     if (!disposed) setStatus(patch);
+  };
+
+  /** Coverage of the tracked fix-ups last reported (skip identical reports) */
+  let coverageKey = '';
+
+  /**
+   * Report how far each tracked fix-up reaches through the selection (the
+   * chips' rings and the status line read it)
+   */
+  const reportCoverage = () => {
+    if (disposed) return;
+    const state = getState();
+    const frames = state?.clip?.frames;
+    if (!state || !frames) return;
+    const objects = state.edits?.background?.ai?.objects ?? [];
+    const range = state.selectedRange ?? { start: 0, end: frames.length - 1 };
+    const { perObject, short } = getObjectCoverage(frames, range, objects, {
+      maskStore,
+    });
+    const key = `${short}|${Object.entries(perObject)
+      .map(([id, c]) => `${id}:${c.covered}/${c.selection}`)
+      .join(',')}`;
+    if (key === coverageKey) return;
+    coverageKey = key;
+    report({ objectCoverage: perObject, objectShort: short });
   };
 
   /** @param {MaskSource} source */
@@ -336,6 +382,11 @@ export function createAiCutoutSession(options) {
    */
   const requestBuild = () => {
     if (disposed) return;
+    reportCoverage();
+    if (expectTimer !== null) {
+      buildAfterAnswer = true;
+      return;
+    }
     const state = getState();
     if (!state?.clip || !isAiCutoutActive(state.edits.background)) {
       abortBuild();
@@ -407,6 +458,7 @@ export function createAiCutoutSession(options) {
       storeTimer = null;
       if (disposed) return;
       onMasksChanged?.();
+      reportCoverage();
       requestStoreBuild();
     }, STORE_REBUILD_DELAY_MS);
   });
@@ -727,6 +779,76 @@ export function createAiCutoutSession(options) {
     manager.dropObjectSeeds?.(id);
   };
 
+  /** A whole-clip build waiting for the draft to be painted first */
+  let draftBuildRequest = 0;
+
+  /**
+   * A Keep / Remove click is about to start a tracking run: builds wait for
+   * its first answer (then the draft is shown and the build follows), at
+   * most EXPECT_ANSWER_MAX_MS. A build started on the click itself only
+   * rebuilt the whole clip with the masks the run is about to redo, and
+   * held the main thread while the answer arrived.
+   * @type {ReturnType<typeof setTimeout> | null}
+   */
+  let expectTimer = null;
+  let buildAfterAnswer = false;
+
+  const stopExpecting = () => {
+    if (expectTimer !== null) clearTimeout(expectTimer);
+    expectTimer = null;
+    const wanted = buildAfterAnswer;
+    buildAfterAnswer = false;
+    return wanted;
+  };
+
+  /**
+   * Publish a draft of the current parameters and masks at once (the frame
+   * on screen is computed when drawn), then the whole-clip build once the
+   * draft has been painted: a build started at once holds the main thread
+   * for its first slice and replaced the draft before it was ever drawn
+   * (measured: the next paint came 156 ms later, with the build's masks). A
+   * build in flight started before the new masks is dropped, so it cannot
+   * replace the draft with older masks.
+   */
+  const showDraftNow = () => {
+    if (disposed) return;
+    const state = getState();
+    if (!state?.clip || !isAiCutoutActive(state.edits.background)) return;
+    stopExpecting();
+    abortBuild();
+    clearCooldown();
+    publish(
+      createClipDraftMaskSource({
+        frames: state.clip.frames,
+        ai: state.edits.background.ai,
+        maskStore,
+        base: fullSource,
+      }),
+    );
+    const request = ++draftBuildRequest;
+    afterNextPaint(() => {
+      if (request === draftBuildRequest) requestBuild();
+    });
+  };
+
+  /**
+   * Prepare the tracker (MobileSAM) ahead of the first tracked fix-up, e.g.
+   * when Keep or Remove is turned on: only when it is downloaded already
+   * (never a download), and not while another model is busy
+   * @returns {Promise<boolean>} Its session is ready
+   */
+  const preloadTracker = async () => {
+    if (disposed) return false;
+    if (manager.getReadyInfo?.('click')) return true;
+    if (!(await isModelCached('click').catch(() => false))) return false;
+    if (disposed) return false;
+    const ready =
+      (await manager.preloadModel?.('click', { allowWasm: isWasmAllowed() }).catch(() => false)) ??
+      false;
+    void refreshModels();
+    return ready;
+  };
+
   /** Track the next queued object that still exists (one at a time) */
   const runNextObject = async () => {
     if (disposed || objectController) return;
@@ -766,10 +888,11 @@ export function createAiCutoutSession(options) {
         onProgress: (progress) => {
           if (disposed || objectController !== controller) return;
           if (!firstMaskShown && progress.framesDone > 0) {
-            // The clicked frame's object: show it now
+            // The clicked frame's object: show it now, from a draft that
+            // computes only the frames drawn (a few ms), not after a
+            // whole-clip build; the full build follows
             firstMaskShown = true;
-            clearCooldown();
-            requestBuild();
+            showDraftNow();
           }
           report({
             objectTracking: {
@@ -809,8 +932,10 @@ export function createAiCutoutSession(options) {
         objectController = null;
         objectRun = null;
       }
+      stopExpecting();
       clearCooldown();
       requestBuild();
+      reportCoverage();
       void refreshModels();
       if (!disposed) {
         if (objectQueue.length > 0) {
@@ -904,7 +1029,21 @@ export function createAiCutoutSession(options) {
     clearClickMasks,
     syncObjects,
     preload,
+    preloadTracker,
     refreshModels,
+
+    /**
+     * A Keep / Remove click is about to (re)track a fix-up: hold whole-clip
+     * builds until its first answer (shown from a draft), or for at most
+     * EXPECT_ANSWER_MAX_MS
+     */
+    expectAnswer() {
+      if (disposed) return;
+      if (expectTimer !== null) clearTimeout(expectTimer);
+      expectTimer = setTimeout(() => {
+        if (stopExpecting()) requestBuild();
+      }, EXPECT_ANSWER_MAX_MS);
+    },
     requestBuild,
 
     /**
@@ -978,6 +1117,7 @@ export function createAiCutoutSession(options) {
         storeTimer = null;
       }
       clearCooldown();
+      stopExpecting();
       if (buildingTimer !== null) clearTimeout(buildingTimer);
       buildingTimer = null;
       unsubscribeStore();
